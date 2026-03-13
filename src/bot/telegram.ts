@@ -18,14 +18,15 @@ const ipv4Agent = new https.Agent({
 export const bot = new Bot(config.TELEGRAM_BOT_TOKEN, {
     client: {
         // @ts-ignore
-        fetch: (url, options) => {
+        fetch: (url, options = {}) => {
+            const headers = {
+                ...(options.headers || {}),
+                'User-Agent': 'Mozilla/5.0'
+            };
             return nodeFetch(url, {
                 ...options,
                 agent: ipv4Agent as any,
-                headers: {
-                    ...options.headers,
-                    'User-Agent': 'Mozilla/5.0'
-                }
+                headers
             });
         }
     }
