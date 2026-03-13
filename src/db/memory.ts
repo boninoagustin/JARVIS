@@ -27,7 +27,7 @@ try {
     console.error('[DATABASE] Error initializing Firebase:', err.message);
 }
 
-const db = admin.apps.length > 0 ? admin.firestore() : null;
+export const db = admin.apps.length > 0 ? admin.firestore() : null;
 
 export interface Message {
   role: 'user' | 'model' | 'system';
