@@ -14,6 +14,7 @@ export const config = {
   // GEMINI API KEY is read automatically by @google/genai if set as GEMINI_API_KEY.
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || './service-account.json',
+  GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
 };
 
