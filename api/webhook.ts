@@ -6,4 +6,7 @@ import { bot } from '../src/bot/telegram.js';
  * This endpoint will be called by Telegram whenever a message is sent.
  * It uses grammatical's webhookCallback to bridge Between HTTP and Grammy.
  */
+export const maxDuration = 60; // 60 seconds is the maximum for Vercel Hobby tier
+export const dynamic = 'force-dynamic';
+
 export default webhookCallback(bot, "next-js"); // works for Vercel/Next routes
