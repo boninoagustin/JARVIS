@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { Groq } from 'groq-sdk';
+import { Groq, toFile } from 'groq-sdk';
 import { config } from '../config.js';
 import { getToolsForLLM } from '../agent/tools.js';
 
@@ -117,11 +117,10 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string = 'a
 
     try {
         console.log('[GROQ] Transcribing audio...');
+        const fileObj = await toFile(audioBuffer, filename);
+        
         const transcription = await groqClient.audio.transcriptions.create({
-            file: {
-                url: filename, // Not exactly used as URL but required by some polyfills or typings
-                buffer: audioBuffer,
-            } as any, // The SDK usually expects a file object or buffer
+            file: fileObj,
             model: 'whisper-large-v3-turbo',
             language: 'es', // Force Spanish as requested
             response_format: 'text',
