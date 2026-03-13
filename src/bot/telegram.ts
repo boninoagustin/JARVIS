@@ -48,22 +48,65 @@ bot.command('start', async (ctx) => {
     await ctx.reply("🔥 JARVIS is ONLINE (Cloud Mode). How can I help you?");
 });
 
-// Global message handling
+// Global text message handling
 bot.on('message:text', async (ctx) => {
     const userId = ctx.from!.id;
     const userText = ctx.message!.text!;
+    await handleIncomingText(ctx, userId, userText);
+});
 
-    console.log(`[AGENT] Processing from ${userId}: "${userText}"`);
+// Voice message handling
+bot.on('message:voice', async (ctx) => {
+    const userId = ctx.from!.id;
+    console.log(`[BOT] Voice note received from ${userId}`);
+    
+    await ctx.replyWithChatAction('typing');
+    
+    try {
+        // 1. Get file path from Telegram
+        const file = await ctx.getFile();
+        const fileUrl = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+        
+        // 2. Download the file
+        console.log('[BOT] Downloading voice note...');
+        // @ts-ignore
+        const response = await nodeFetch(fileUrl);
+        const buffer = await response.buffer();
+
+        // 3. Transcribe using Groq
+        const transcription = await import('../llm/client.js').then(m => m.transcribeAudio(buffer, 'voice.ogg'));
+        console.log(`[BOT] Transcription result: "${transcription}"`);
+
+        if (!transcription || transcription.length < 2) {
+            await ctx.reply("No pude entender el audio, ¿podrías repetirlo?");
+            return;
+        }
+
+        // 4. Process as normal text
+        await ctx.reply(`🎤 _Escuché:_ "${transcription}"`, { parse_mode: 'Markdown' });
+        await handleIncomingText(ctx, userId, transcription);
+
+    } catch (error: any) {
+        console.error('[VOICE ERROR]', error);
+        await ctx.reply(`⚠️ No pude procesar tu audio: ${error.message}`);
+    }
+});
+
+/**
+ * Shared logic for processing text (either raw or transcribed)
+ */
+async function handleIncomingText(ctx: Context, userId: number, text: string) {
+    console.log(`[AGENT] Processing from ${userId}: "${text}"`);
     await ctx.replyWithChatAction('typing');
 
     try {
-       const replyText = await processUserMessage(userId, userText);
+       const replyText = await processUserMessage(userId, text);
        await ctx.reply(replyText, { parse_mode: 'Markdown' });
     } catch (error: any) {
         console.error('[AGENT ERROR]', error);
-        await ctx.reply(`⚠️ Processing error: ${error.message || 'Unknown'}`);
+        await ctx.reply(`⚠️ Error de procesamiento: ${error.message || 'Desconocido'}`);
     }
-});
+}
 
 bot.catch((err) => {
   console.error('[TELEGRAM FATAL]', err.error);
