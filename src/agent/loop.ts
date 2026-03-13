@@ -19,22 +19,26 @@ Sé educado, conciso y profesional.`
 export async function processUserMessage(userId: number, text: string): Promise<string> {
     console.log(`[JARVIS] Procesando mensaje de ${userId}: "${text}"`);
     
-    // 1. Guardar mensaje del usuario en memoria
-    console.log('[JARVIS] Guardando mensaje en memoria...');
-    await memory.addMessage(userId, 'user', text);
-
-    // 2. Obtener historial (últimos 10 mensajes)
+    // 1. Obtener historial (últimos 10 mensajes, ANTES de insertar el actual)
     console.log('[JARVIS] Obteniendo historial...');
     const dbHistory = await memory.getHistory(userId, 10);
     
+    // 2. Guardar mensaje del usuario en memoria async
+    console.log('[JARVIS] Guardando mensaje en memoria...');
+    await memory.addMessage(userId, 'user', text);
+
     // Mapear historial al formato ChatMessage
     const chatHistory: ChatMessage[] = dbHistory.map(h => ({
         role: h.role === 'model' ? 'model' : 'user',
         content: h.content
     }));
 
-    // 3. Preparar contexto
-    const conversation: ChatMessage[] = [SYSTEM_PROMPT, ...chatHistory];
+    // 3. Preparar contexto añadiendo explícitamente el mensaje actual
+    const conversation: ChatMessage[] = [
+        SYSTEM_PROMPT, 
+        ...chatHistory, 
+        { role: 'user', content: text }
+    ];
     console.log(`[JARVIS] Contexto de conversación preparado con ${conversation.length} mensajes.`);
     
     let iterations = 0;
