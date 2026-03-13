@@ -9,4 +9,6 @@ import { bot } from '../src/bot/telegram.js';
 export const maxDuration = 60; // 60 seconds is the maximum for Vercel Hobby tier
 export const dynamic = 'force-dynamic';
 
-export default webhookCallback(bot, "next-js"); // works for Vercel/Next routes
+export default webhookCallback(bot, "next-js", {
+    timeoutMilliseconds: 60000,
+}); // works for Vercel/Next routes
