@@ -51,17 +51,17 @@ export async function processTradingAlert(alertText: string) {
 
             await bot.api.sendMessage(targetUserId, `👀 *Radar SMC*: Toma de liquidez en *${ticker}*. Posible manipulación institucional.`, { parse_mode: 'Markdown' });
         } 
-        else if (prefix === 'MASTER_STRUCT') {
-            // Fase 2 - Confirmación de giro (CHoCH)
+        else if (prefix === 'MASTER_STRUCT' || prefix === 'BOS') {
+            // Fase 2 - Confirmación de giro (CHoCH o BOS)
             if (state && state.phase1) {
                 // Actualizamos DB para marcar fase 2 y extendemos el timestamp
                 await docRef.update({
                     phase2: true,
                     timestamp: now 
                 });
-                await bot.api.sendMessage(targetUserId, `🔄 *Giro Confirmado*: *${ticker}* hizo CHoCH tras barrer liquidez. Esperando retroceso.`, { parse_mode: 'Markdown' });
+                await bot.api.sendMessage(targetUserId, `🔄 *Confirmación de Estructura*: *${ticker}* hizo CHoCH o BOS tras barrer liquidez. Esperando retroceso.`, { parse_mode: 'Markdown' });
             } else {
-                console.log(`[TRADING] Se ignoró MASTER_STRUCT en ${ticker} porque no hay Fase 1 previa válida en las últimas 2 horas.`);
+                console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no hay Fase 1 previa válida en las últimas 2 horas.`);
             }
         } 
         else if (prefix === 'MASTER_SIGNAL') {
