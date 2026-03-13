@@ -64,16 +64,16 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no hay Fase 1 previa válida en las últimas 2 horas.`);
             }
         } 
-        else if (prefix === 'MASTER_SIGNAL') {
+        else if (prefix === 'MASTER_SIGNAL' || prefix === 'ENGULFING' || prefix === 'PIN_BAR') {
             // Fase 3 - Gatillo / Entrada 
             // Evaluamos si el precio está en zona o si viene de la progresión SMC correcta
             const inZone = message.includes('MASTER_ZONE') || alertText.includes('MASTER_ZONE');
             const hasConfluences = (state && state.phase1 && state.phase2);
 
             if (hasConfluences || inZone) {
-                await bot.api.sendMessage(targetUserId, `🚀 *DISPARO A+*: Gatillo activado en *${ticker}* con todas las confluencias. Considerar entrada.`, { parse_mode: 'Markdown' });
+                await bot.api.sendMessage(targetUserId, `🚀 *DISPARO A+*: Gatillo detectado en *${ticker}* con todas las confluencias. Considerar entrada.`, { parse_mode: 'Markdown' });
             } else {
-                console.log(`[TRADING] Se ignoró MASTER_SIGNAL en ${ticker} porque no cumple condiciones suficientes.`);
+                console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no cumple condiciones suficientes.`);
             }
         } 
         else if (prefix === 'CONTEXT_EXIT') {
