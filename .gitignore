@@ -6,3 +6,5 @@ dist
 service-account.json
 .firebase
 .vercel
+client_secret.json
+credentials*.json
