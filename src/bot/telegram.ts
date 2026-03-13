@@ -1,4 +1,4 @@
-import { Bot, Context, NextFunction, HttpError } from 'grammy';
+import { Bot, Context, NextFunction, HttpError, InputFile } from 'grammy';
 import { config } from '../config.js';
 import { processUserMessage } from '../agent/loop.js';
 import nodeFetch from 'node-fetch';
@@ -83,9 +83,9 @@ bot.on('message:voice', async (ctx) => {
             return;
         }
 
-        // 4. Process as normal text
+        // 4. Process as normal text but reply as audio
         await ctx.reply(`🎤 _Escuché:_ "${transcription}"`, { parse_mode: 'Markdown' });
-        await handleIncomingText(ctx, userId, transcription);
+        await handleIncomingText(ctx, userId, transcription, true);
 
     } catch (error: any) {
         console.error('[VOICE ERROR]', error);
@@ -96,12 +96,28 @@ bot.on('message:voice', async (ctx) => {
 /**
  * Shared logic for processing text (either raw or transcribed)
  */
-async function handleIncomingText(ctx: Context, userId: number, text: string) {
+async function handleIncomingText(ctx: Context, userId: number, text: string, replyAsAudio: boolean = false) {
     console.log(`[AGENT] Processing from ${userId}: "${text}"`);
     await ctx.replyWithChatAction('typing');
 
     try {
        const replyText = await processUserMessage(userId, text);
+       
+       if (replyAsAudio) {
+           await ctx.replyWithChatAction('record_voice');
+           const { generateVoice } = await import('../llm/elevenlabs.js');
+           const audioBuffer = await generateVoice(replyText);
+           
+           if (audioBuffer) {
+               // Provide to Telegram as voice note
+               await ctx.replyWithVoice(new InputFile(audioBuffer, 'jarvis.mp3'));
+               return; // Exit here since we responded
+           } else {
+               await ctx.reply("⚠️ Error deElevenLabs, respondiendo con texto.");
+           }
+       }
+
+       // Text fallback or raw text processing
        await ctx.reply(replyText, { parse_mode: 'Markdown' });
     } catch (error: any) {
         console.error('[AGENT ERROR]', error);
