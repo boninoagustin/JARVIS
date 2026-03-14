@@ -22,7 +22,16 @@ export async function processTradingAlert(alertText: string) {
     const ticker = parts[1];
     const message = parts.slice(2).join(' | ');
 
-    console.log(`[TRADING] Procesando Alerta SMC -> Prefijo: ${prefix}, Par: ${ticker}`);
+    // Extraer dirección desde el texto completo de la alerta
+    const upperText = alertText.toUpperCase();
+    let currentDirection: 'BUY' | 'SELL' | null = null;
+    if (upperText.includes('BUY') || upperText.includes('BULLISH')) {
+        currentDirection = 'BUY';
+    } else if (upperText.includes('SELL') || upperText.includes('BEARISH')) {
+        currentDirection = 'SELL';
+    }
+
+    console.log(`[TRADING] Procesando Alerta SMC -> Prefijo: ${prefix}, Par: ${ticker}, Dir: ${currentDirection}`);
 
     const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
     const docRef = db.collection('market_states').doc(ticker);
@@ -46,14 +55,24 @@ export async function processTradingAlert(alertText: string) {
             await docRef.set({
                 phase1: true,
                 phase1_trigger: prefix,
+                direction: currentDirection, // Guardar la dirección
                 timestamp: now
             }, { merge: false }); // merge = false to reset old phase 2 states
 
-            await bot.api.sendMessage(targetUserId, `👀 *Radar SMC*: Toma de liquidez en *${ticker}*. Posible manipulación institucional.`, { parse_mode: 'Markdown' });
+            const dirText = currentDirection ? ` (${currentDirection})` : '';
+            await bot.api.sendMessage(targetUserId, `👀 *Radar SMC*: Toma de liquidez en *${ticker}*${dirText}. Posible manipulación institucional.`, { parse_mode: 'Markdown' });
         } 
         else if (prefix === 'MASTER_STRUCT' || prefix === 'BOS') {
             // Fase 2 - Confirmación de giro (CHoCH o BOS)
             if (state && state.phase1) {
+                // Verificar direccionalidad
+                if (currentDirection && state.direction && currentDirection !== state.direction) {
+                    console.log(`[TRADING] Invalidez en ${ticker}: Dirección Fase 2 (${currentDirection}) opuesta a Fase 1 (${state.direction}).`);
+                    await docRef.delete();
+                    await bot.api.sendMessage(targetUserId, `⚠️ *Secuencia Invalidada*: Estructura en contra en *${ticker}* (Esperaba ${state.direction}, llegó ${currentDirection}). Setup SMC abortado.`, { parse_mode: 'Markdown' });
+                    return;
+                }
+
                 // Actualizamos DB para marcar fase 2 y extendemos el timestamp
                 await docRef.update({
                     phase2: true,
@@ -66,9 +85,20 @@ export async function processTradingAlert(alertText: string) {
         } 
         else if (prefix === 'MASTER_SIGNAL' || prefix === 'ENGULFING' || prefix === 'PIN_BAR') {
             // Fase 3 - Gatillo / Entrada 
+            
             // Evaluamos si el precio está en zona o si viene de la progresión SMC correcta
             const inZone = message.includes('MASTER_ZONE') || alertText.includes('MASTER_ZONE');
             const hasConfluences = (state && state.phase1 && state.phase2);
+
+            if (hasConfluences) {
+                // Verificar direccionalidad antes de dar el Disparo A+ de la progresión de las fases
+                if (currentDirection && state.direction && currentDirection !== state.direction) {
+                    console.log(`[TRADING] Invalidez en ${ticker}: Dirección Fase 3 Gatillo (${currentDirection}) opuesta a la secuencia (${state.direction}).`);
+                    await docRef.delete();
+                    await bot.api.sendMessage(targetUserId, `⚠️ *Secuencia Invalidada*: Gatillo en contra en *${ticker}* (Esperaba ${state.direction}, llegó ${currentDirection}). Setup SMC abortado.`, { parse_mode: 'Markdown' });
+                    return;
+                }
+            }
 
             if (hasConfluences || inZone) {
                 await bot.api.sendMessage(targetUserId, `🚀 *DISPARO A+*: Gatillo detectado en *${ticker}* con todas las confluencias. Considerar entrada.`, { parse_mode: 'Markdown' });
