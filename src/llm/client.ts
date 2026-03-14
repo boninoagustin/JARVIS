@@ -12,6 +12,7 @@ export interface ChatMessage {
     content: string;
     toolCalls?: any[]; // Groq/OpenAI compatible tool calls
     toolCallId?: string; // Groq/OpenAI compatible tool response ID
+    inlineData?: { data: string; mimeType: string };
 }
 
 export interface LLMResponse {
@@ -34,9 +35,13 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
                 if (m.toolCalls) {
                     return { role: 'model', parts: [{ text: m.content || '[Tool Invocation]' }] };
                 }
+                const parts: any[] = [{ text: m.content }];
+                if (m.inlineData) {
+                    parts.push({ inlineData: m.inlineData });
+                }
                 return {
                     role: m.role === 'system' ? 'user' : m.role,
-                    parts: [{ text: m.content }]
+                    parts: parts
                 }
             });
 

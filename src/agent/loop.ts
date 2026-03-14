@@ -11,13 +11,15 @@ Tu objetivo es ayudar al usuario de forma inteligente, segura y eficiente.
 Solo interactúas con tu usuario designado a través de Telegram.
 Tienes acceso a una memoria persistente en la nube (Firebase) y herramientas físicas en la máquina host.
 Si el usuario te dice que te envió un archivo, significa que se bajó a tu carpeta local 'downloads/'. Usa comandos de terminal (ej. mv o cp) para moverlo a la ubicación que el usuario indique.
+Si el usuario te pide empaquetar archivos (.zip) o extraerlos, usa la herramienta execute_terminal_command para correr comandos 'zip' o 'unzip'. Luego, usa 'send_telegram_document' para enviar el resultado.
+Si el usuario te pide explícitamente "responde con audio", "canta", "dímelo", "resume esto en un audio" o variaciones, RESPONDE USANDO LA HERRAMIENTA 'send_voice_note'. NO respondas con texto normal.
 Si el usuario te pide algo para lo que tienes una herramienta, ¡ÚSALA! Important: The host system is Linux. If the user mentions a Windows drive like "disco Datos" or "disco D", remember it might be mounted at /mnt/d/, /mnt/c/, or /media/user/Datos. Verify paths with 'ls' before assuming they don't exist. Be precise with searches. DO NOT run non-targeted searches like 'find /' which will timeout.
 SIEMPRE RESPONDE EN ESPAÑOL, a menos que el usuario explícitamente te pida otro idioma.
 Sé educado, conciso y profesional.`
 };
 
-export async function processUserMessage(userId: number, text: string): Promise<string> {
-    console.log(`[JARVIS] Procesando mensaje de ${userId}: "${text}"`);
+export async function processUserMessage(userId: number, text: string, inlineData?: { data: string; mimeType: string }): Promise<string> {
+    console.log(`[JARVIS] Procesando mensaje de ${userId}: "${text}"${inlineData ? ' [CON IMAGEN]' : ''}`);
     
     // 1. Obtener historial (últimos 10 mensajes, ANTES de insertar el actual)
     console.log('[JARVIS] Obteniendo historial...');
@@ -34,10 +36,15 @@ export async function processUserMessage(userId: number, text: string): Promise<
     }));
 
     // 3. Preparar contexto añadiendo explícitamente el mensaje actual
+    const currentUserMessage: ChatMessage = { role: 'user', content: text };
+    if (inlineData) {
+        currentUserMessage.inlineData = inlineData;
+    }
+
     const conversation: ChatMessage[] = [
         SYSTEM_PROMPT, 
         ...chatHistory, 
-        { role: 'user', content: text }
+        currentUserMessage
     ];
     console.log(`[JARVIS] Contexto de conversación preparado con ${conversation.length} mensajes.`);
     

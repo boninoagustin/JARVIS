@@ -104,7 +104,16 @@ async function handleIncomingMedia(ctx: Context) {
         
         const systemMsg = `[Sistema: El usuario te ha enviado un archivo. Se ha guardado localmente en: ${filePath}]\n\nMensaje o notas del usuario adjuntas al archivo: ${caption}`;
         
-        await handleIncomingText(ctx, userId, systemMsg);
+        // If it's a photo, extract inlineData to pass along
+        let inlineData = undefined;
+        if (ctx.message?.photo) {
+            inlineData = {
+                data: buffer.toString('base64'),
+                mimeType: 'image/jpeg'
+            };
+        }
+        
+        await handleIncomingText(ctx, userId, systemMsg, false, inlineData);
         
     } catch (error: any) {
         console.error('[MEDIA ERROR]', error);
@@ -156,12 +165,12 @@ bot.on('message:voice', async (ctx) => {
 /**
  * Shared logic for processing text (either raw or transcribed)
  */
-async function handleIncomingText(ctx: Context, userId: number, text: string, replyAsAudio: boolean = false) {
+async function handleIncomingText(ctx: Context, userId: number, text: string, replyAsAudio: boolean = false, inlineData?: { data: string; mimeType: string }) {
     console.log(`[AGENT] Processing from ${userId}: "${text}"`);
     await ctx.replyWithChatAction('typing');
 
     try {
-       const replyText = await processUserMessage(userId, text);
+       const replyText = await processUserMessage(userId, text, inlineData);
        
        if (replyAsAudio) {
            await ctx.replyWithChatAction('record_voice');

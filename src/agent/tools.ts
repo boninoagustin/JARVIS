@@ -95,6 +95,66 @@ export const tools: Record<string, ToolSchema> = {
         return `Error al enviar el archivo a Telegram: ${err.message}`;
       }
     }
+  },
+  set_reminder: {
+    name: 'set_reminder',
+    description: 'Programa un recordatorio o alarma para enviarle un mensaje al usuario en una cantidad específica de minutos. Úsalo cuando el usuario te pida "recuérdame en X tiempo".',
+    parameters: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Cantidad de minutos a esperar antes de enviar el recordatorio.' },
+        message: { type: 'string', description: 'El mensaje que debes enviarle al usuario cuando se cumpla el tiempo.' }
+      },
+      required: ['minutes', 'message']
+    },
+    handler: async (args: { minutes: number; message: string }) => {
+      const { bot } = await import('../bot/telegram.js');
+      const { config } = await import('../config.js');
+      const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
+      
+      const milliseconds = Math.max(1, args.minutes) * 60 * 1000;
+      
+      // Lanzar el timer sin await para no bloquear
+      setTimeout(async () => {
+        try {
+          await bot.api.sendMessage(targetUserId, `⏰ **Recordatorio:**\n\n${args.message}`, { parse_mode: 'Markdown' });
+        } catch (e: any) {
+          console.error('[REMINDER ERROR]', e.message);
+        }
+      }, milliseconds);
+      
+      return `Recordatorio agendado exitosamente para dentro de ${args.minutes} minutos.`;
+    }
+  },
+  send_voice_note: {
+    name: 'send_voice_note',
+    description: 'Genera y envía una nota de voz al usuario. Úsalo SÓLO cuando el usuario explícitamente pida "responde con audio", "canta", "dimelo en un audio". No lo uses por defecto.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'El texto que debe ser hablado (sintetizado a voz). Máximo ~1000 caracteres.' }
+      },
+      required: ['text']
+    },
+    handler: async (args: { text: string }) => {
+      const { generateVoice } = await import('../llm/elevenlabs.js');
+      const { bot } = await import('../bot/telegram.js');
+      const { config } = await import('../config.js');
+      const { InputFile } = await import('grammy');
+      const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
+      
+      try {
+        const audioBuffer = await generateVoice(args.text);
+        if (audioBuffer) {
+           await bot.api.sendVoice(targetUserId, new InputFile(audioBuffer, 'voice.mp3'));
+           return 'El audio fue generado y enviado exitosamente.';
+        } else {
+           return 'Error: No se pudo generar el audio (Buffer nulo).';
+        }
+      } catch (err: any) {
+        return `Error al generar/enviar el audio: ${err.message}`;
+      }
+    }
   }
 };
 
