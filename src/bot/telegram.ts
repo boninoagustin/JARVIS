@@ -56,6 +56,66 @@ bot.on('message:text', async (ctx) => {
     await handleIncomingText(ctx, userId, userText);
 });
 
+async function handleIncomingMedia(ctx: Context) {
+    const userId = ctx.from!.id;
+    const caption = ctx.message?.caption || '';
+    
+    await ctx.replyWithChatAction('typing');
+    
+    try {
+        let fileId = '';
+        let fileName = 'file_unknown';
+        
+        if (ctx.message?.photo) {
+            // Photos come in arrays of different sizes, get the largest one
+            const photo = ctx.message.photo[ctx.message.photo.length - 1];
+            fileId = photo.file_id;
+            fileName = `photo_${Date.now()}.jpg`;
+        } else if (ctx.message?.video) {
+            fileId = ctx.message.video.file_id;
+            fileName = ctx.message.video.file_name || `video_${Date.now()}.mp4`;
+        } else if (ctx.message?.document) {
+            fileId = ctx.message.document.file_id;
+            fileName = ctx.message.document.file_name || `document_${Date.now()}`;
+        }
+        
+        if (!fileId) return;
+        
+        const file = await ctx.api.getFile(fileId);
+        const fileUrl = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+        
+        console.log(`[BOT] Downloading media to: ${fileName}`);
+        
+        // @ts-ignore
+        const response = await nodeFetch(fileUrl);
+        const buffer = await response.buffer();
+        
+        const fs = await import('fs');
+        const path = await import('path');
+        
+        const downloadsDir = path.join(process.cwd(), 'downloads');
+        if (!fs.existsSync(downloadsDir)) {
+            fs.mkdirSync(downloadsDir, { recursive: true });
+        }
+        
+        const filePath = path.join(downloadsDir, fileName);
+        fs.writeFileSync(filePath, buffer);
+        console.log(`[BOT] Saved media to: ${filePath}`);
+        
+        const systemMsg = `[Sistema: El usuario te ha enviado un archivo. Se ha guardado localmente en: ${filePath}]\n\nMensaje o notas del usuario adjuntas al archivo: ${caption}`;
+        
+        await handleIncomingText(ctx, userId, systemMsg);
+        
+    } catch (error: any) {
+        console.error('[MEDIA ERROR]', error);
+        await ctx.reply(`⚠️ No pude descargar tu archivo: ${error.message}`);
+    }
+}
+
+bot.on('message:photo', handleIncomingMedia);
+bot.on('message:video', handleIncomingMedia);
+bot.on('message:document', handleIncomingMedia);
+
 // Voice message handling
 bot.on('message:voice', async (ctx) => {
     const userId = ctx.from!.id;
