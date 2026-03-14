@@ -8,27 +8,23 @@ let authClient: any = null;
 function getAuthClient() {
     if (authClient) return authClient;
 
-    const credPath = config.GOOGLE_APPLICATION_CREDENTIALS;
-    if (!credPath) {
-        throw new Error('GOOGLE_APPLICATION_CREDENTIALS is not defined');
+    const credentialsPath = config.GOOGLE_APPLICATION_CREDENTIALS;
+
+    if (!credentialsPath || !fs.existsSync(credentialsPath)) {
+        throw new Error('No se encontró el archivo de credenciales de Google (service-account.json). Asegúrate de que GOOGLE_APPLICATION_CREDENTIALS esté bien configurado.');
     }
 
     try {
-        let credentials;
-        if (credPath.startsWith('{')) {
-            credentials = JSON.parse(credPath);
-        } else if (fs.existsSync(credPath)) {
-            credentials = JSON.parse(fs.readFileSync(credPath, 'utf8'));
-        }
-
+        console.log('[DRIVE] Inicializando cliente con Cuenta de Servicio...');
         const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: ['https://www.googleapis.com/auth/drive.file']
+            keyFile: credentialsPath,
+            scopes: ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
         });
+
         authClient = auth;
         return authClient;
     } catch (err: any) {
-        throw new Error('Error parseando credenciales para Google Drive: ' + err.message);
+        throw new Error('Error inicializando Google Auth client: ' + err.message);
     }
 }
 
@@ -63,7 +59,8 @@ export async function uploadToDrive(filename: string, content: string): Promise<
         const file = await drive.files.create({
             requestBody: fileMetadata,
             media: media,
-            fields: 'id, webViewLink'
+            fields: 'id, webViewLink',
+            supportsAllDrives: true,
         });
 
         console.log(`[DRIVE] Archivo subido exitosamente: ${file.data.webViewLink}`);

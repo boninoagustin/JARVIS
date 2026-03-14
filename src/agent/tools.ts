@@ -36,9 +36,12 @@ export const tools: Record<string, ToolSchema> = {
     },
     handler: (args: { command: string }) => {
       try {
-          return execSync(args.command, { encoding: 'utf-8', timeout: 5000 });
+          const stdout = execSync(args.command, { encoding: 'utf-8', timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
+          return stdout.length > 2500 ? stdout.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. IF YOU NEED MORE DETAIL, REफाइन YOUR SEARCH]' : stdout;
       } catch (err: any) {
-          return `Error executing command: ${err.message}\nOutput: ${err.stdout || err.stderr}`;
+          const output = err.stdout?.toString() || err.stderr?.toString() || '';
+          const msg = `Error executing command: ${err.message}\nOutput: ${output}`;
+          return msg.length > 2500 ? msg.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. COMMAND FAILED OR TIMED OUT]' : msg;
       }
     }
   },
