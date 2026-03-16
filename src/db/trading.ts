@@ -71,77 +71,97 @@ export async function processTradingAlert(alertText: string) {
         }
         else if (prefix === 'MASTER_STRUCT' || prefix === 'BOS' || prefix === 'CHOCH') {
             // Fase 2 - Confirmación de giro
+            let handled = false;
+            
+            // Evaluar secuencia Fase 1 (CRT) -> Fase 2 (Struct)
             if (state && state.phase1) {
-                // Si la Fase 1 tenía un Bias (dirección), la Fase 2 debe ser obligatoriamente en esa dirección
                 if (state.direction) {
                     if (!currentDirection) {
-                        console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} - Se requiere dirección explícita (BOS SELL o CHoCH SELL) para validar Fase 2.`);
-                        return; // No validamos Fase 2 sin dirección si Fase 1 tiene Bias
-                    }
+                        console.log(`[TRADING] Se requiere dirección explícita (BOS SELL o CHoCH SELL) para validar Fase 2. Se ignora para la Fase 1.`);
+                    } else if (currentDirection !== state.direction) {
+                        console.log(`[TRADING] Alerta ignorada en ${ticker} (Fase 1): Dirección Struct (${currentDirection}) opuesta a CRT (${state.direction}).`);
+                    } else {
+                        await docRef.update({ phase2: true, timestamp: now });
 
-                    if (currentDirection !== state.direction) {
-                        console.log(`[TRADING] Alerta ignorada en ${ticker}: Dirección Fase 2 (${currentDirection}) opuesta a Fase 1 (${state.direction}). Esperando estructura a favor.`);
-                        return;
+                        const isChoch = prefix === 'CHOCH' || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'));
+                        const isBos = prefix === 'BOS' || (prefix === 'MASTER_STRUCT' && upperText.includes('BOS'));
+                        const dirText = currentDirection ? ` ${currentDirection}` : '';
+                        const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+                        if (isChoch && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
+                            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+                            const sniperMsg = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.\n📊 [Ver en TradingView](${tvLink})`;
+                            
+                            console.log(`[TRADING] Ingresando orden Sniper, tomando captura de ${ticker}...`);
+                            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
+                            
+                            if (screenshotBuffer) {
+                                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_sniper.jpg`), { caption: sniperMsg, parse_mode: 'Markdown' });
+                            } else {
+                                await bot.api.sendMessage(targetUserId, sniperMsg, { parse_mode: 'Markdown' });
+                            }
+                            handled = true;
+                        } else if (isBos && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
+                            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+                            const continuationMsg = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento (o meter una re-entrada).\n📊 [Ver en TradingView](${tvLink})`;
+                            
+                            console.log(`[TRADING] Ingresando orden de Continuación, tomando captura de ${ticker}...`);
+                            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
+                            
+                            if (screenshotBuffer) {
+                                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_continuation.jpg`), { caption: continuationMsg, parse_mode: 'Markdown' });
+                            } else {
+                                await bot.api.sendMessage(targetUserId, continuationMsg, { parse_mode: 'Markdown' });
+                            }
+                            handled = true;
+                        }
                     }
                 } else if (currentDirection) {
-                    // Si Fase 1 no tenía Bias, lo adoptamos de la Fase 2
                     await docRef.update({ direction: currentDirection });
                 }
+            }
 
-                await docRef.update({
-                    phase2: true,
-                    timestamp: now // Refrescamos el timestamp global
-                });
-
-                const isChoch = prefix === 'CHOCH' || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'));
-                const isBos = prefix === 'BOS' || (prefix === 'MASTER_STRUCT' && upperText.includes('BOS'));
-                const dirText = currentDirection ? ` ${currentDirection}` : '';
-
-                if (isChoch) {
-                    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-                    if (state && state.phase1 && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
+            // Evaluar secuencia MASTER_ZONE -> MASTER_STRUCT
+            if (state && state.zone_active) {
+                if (currentDirection) {
+                    if (currentDirection === state.zone_direction) {
+                        const dirText = currentDirection ? ` ${currentDirection}` : '';
                         const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-                        const sniperMsg = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.\n📊 [Ver en TradingView](${tvLink})`;
+                        const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
                         
-                        console.log(`[TRADING] Ingresando orden Sniper, tomando captura de ${ticker}...`);
+                        console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Tomando captura...`);
                         const screenshotBuffer = await takeTradingViewScreenshot(ticker);
                         
                         if (screenshotBuffer) {
-                            await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_sniper.jpg`), { 
-                                caption: sniperMsg, 
-                                parse_mode: 'Markdown' 
-                            });
+                            await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone_struct.jpg`), { caption: zoneStructMsg, parse_mode: 'Markdown' });
                         } else {
-                            // Fallback if screenshot fails
-                            await bot.api.sendMessage(targetUserId, sniperMsg, { parse_mode: 'Markdown' });
+                            await bot.api.sendMessage(targetUserId, zoneStructMsg, { parse_mode: 'Markdown' });
                         }
-                    }
-                } else if (isBos) {
-                    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-                    if (state && state.phase1 && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
-                        const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-                        const continuationMsg = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento (o meter una re-entrada).\n📊 [Ver en TradingView](${tvLink})`;
                         
-                        console.log(`[TRADING] Ingresando orden de Continuación, tomando captura de ${ticker}...`);
-                        const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                        
-                        if (screenshotBuffer) {
-                            await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_continuation.jpg`), { 
-                                caption: continuationMsg, 
-                                parse_mode: 'Markdown' 
-                            });
-                        } else {
-                            // Fallback if screenshot fails
-                            await bot.api.sendMessage(targetUserId, continuationMsg, { parse_mode: 'Markdown' });
-                        }
+                        // Una vez ejecutada la entrada de la zona, la anulamos
+                        await docRef.update({ zone_active: false });
+                        handled = true;
+                    } else {
+                        console.log(`[TRADING] Invalidez de ZONA en ${ticker}: Estructura (${currentDirection}) opuesta a la dirección de la zona (${state.zone_direction}). Se anula memoria de la zona.`);
+                        await docRef.update({ zone_active: false });
+                        handled = true;
                     }
                 }
-            } else {
-                console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no hay Fase 1 previa.`);
             }
-        } 
+
+            if (!handled) {
+                console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no disparó ni lógica de Fase 1 ni lógica de Zona.`);
+            }
+        }  
         else if (prefix === 'MASTER_ZONE') {
             // Alerta independiente - Precio en zona (OB/FVG)
+            if (currentDirection) {
+                await docRef.set({
+                    zone_active: true,
+                    zone_direction: currentDirection,
+                    zone_timestamp: now
+                }, { merge: true });
+            }
             
             let zoneType = 'Zona de Interés';
             if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
