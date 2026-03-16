@@ -100,7 +100,8 @@ export async function processTradingAlert(alertText: string) {
                 if (isChoch) {
                     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
                     if (state && state.phase1 && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
-                        const sniperMsg = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.`;
+                        const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+                        const sniperMsg = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.\n📊 [Ver en TradingView](${tvLink})`;
                         
                         console.log(`[TRADING] Ingresando orden Sniper, tomando captura de ${ticker}...`);
                         const screenshotBuffer = await takeTradingViewScreenshot(ticker);
@@ -118,7 +119,8 @@ export async function processTradingAlert(alertText: string) {
                 } else if (isBos) {
                     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
                     if (state && state.phase1 && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
-                        const continuationMsg = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento (o meter una re-entrada).`;
+                        const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+                        const continuationMsg = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento (o meter una re-entrada).\n📊 [Ver en TradingView](${tvLink})`;
                         
                         console.log(`[TRADING] Ingresando orden de Continuación, tomando captura de ${ticker}...`);
                         const screenshotBuffer = await takeTradingViewScreenshot(ticker);
@@ -147,7 +149,8 @@ export async function processTradingAlert(alertText: string) {
             else if (upperText.includes('GOLDEN') || upperText.includes('GOLDEN ZONE')) zoneType = 'Golden Zone';
 
             const dirText = currentDirection ? ` ${currentDirection}` : (state?.direction ? ` ${state.direction}` : '');
-            const zoneMsg = `📍 *PRECIO EN ZONA DE ALTA PROBABILIDAD*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Zona Detectada*: El precio entró en un *${zoneType}*.\n⚡ *Acción*: Válido para observar acción del precio.`;
+            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+            const zoneMsg = `📍 *PRECIO EN ZONA DE ALTA PROBABILIDAD*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Zona Detectada*: El precio entró en un *${zoneType}*.\n⚡ *Acción*: Válido para observar acción del precio.\n📊 [Ver en TradingView](${tvLink})`;
 
             console.log(`[TRADING] MASTER_ZONE Registrada para ${ticker}. Tomando captura...`);
             const screenshotBuffer = await takeTradingViewScreenshot(ticker);
