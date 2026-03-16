@@ -1,7 +1,7 @@
 import puppeteer from 'puppeteer';
 
 export async function takeTradingViewScreenshot(symbol: string): Promise<Buffer | null> {
-    const url = `https://www.tradingview.com/chart/?symbol=${symbol}`;
+    const url = `https://www.tradingview.com/chart/?symbol=${symbol}&interval=15`;
     console.log(`[PUPPETEER] Abriendo navegador para capturar ${symbol}...`);
     
     let browser = null;
