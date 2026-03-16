@@ -21,7 +21,8 @@
     "googleapis": "^171.4.0",
     "grammy": "^1.41.1",
     "groq-sdk": "^1.1.1",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "puppeteer": "^24.39.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
