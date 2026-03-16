@@ -51,8 +51,6 @@ export async function processTradingAlert(alertText: string) {
             state = null;
         }
     }
-    const FIFTY_MINUTES_MS = 50 * 60 * 1000;
-
     try {
         if (prefix === 'LOCAL_CRT' || prefix === 'LOCAL_CRT_SCALP') {
             // Fase 1 - Activación oficial de la secuencia operativa
@@ -60,9 +58,7 @@ export async function processTradingAlert(alertText: string) {
                 phase1: true,
                 direction: currentDirection,
                 timestamp: now,
-                phase2: false, // Reset phases posteriores si re-inicia Fase 1
-                phase3: false,
-                phase3_timestamp: 0
+                phase2: false // Reset phases posteriores si re-inicia Fase 1
             }, { merge: true });
 
             const dirText = currentDirection ? ` ${currentDirection}` : '';
@@ -84,8 +80,7 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     if (currentDirection !== state.direction) {
-                        console.log(`[TRADING] Invalidez en ${ticker}: Dirección Fase 2 (${currentDirection}) opuesta a Fase 1 (${state.direction}).`);
-                        await docRef.delete();
+                        console.log(`[TRADING] Alerta ignorada en ${ticker}: Dirección Fase 2 (${currentDirection}) opuesta a Fase 1 (${state.direction}). Esperando estructura a favor.`);
                         return;
                     }
                 } else if (currentDirection) {
@@ -145,10 +140,6 @@ export async function processTradingAlert(alertText: string) {
         } 
         else if (prefix === 'MASTER_ZONE') {
             // Alerta independiente - Precio en zona (OB/FVG)
-            await docRef.set({
-                phase3: true,
-                phase3_timestamp: now
-            }, { merge: true });
             
             let zoneType = 'Zona de Interés';
             if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
@@ -169,43 +160,6 @@ export async function processTradingAlert(alertText: string) {
             } else {
                 // Fallback
                 await bot.api.sendMessage(targetUserId, zoneMsg, { parse_mode: 'Markdown' });
-            }
-        }
-        else if (prefix === 'MASTER_SIGNAL' || prefix === 'ENGULFING') {
-            // Gatillo Final
-            
-            // Validar caducidad de Fase 3
-            let isPhase3Valid = false;
-            if (state && state.phase3 && state.phase3_timestamp) {
-                const zoneDiff = now - state.phase3_timestamp;
-                if (zoneDiff <= FIFTY_MINUTES_MS) {
-                    isPhase3Valid = true;
-                } else {
-                    console.log(`[TRADING] Fase 3 de ${ticker} caducada (${Math.round(zoneDiff/60000)} min).`);
-                    await docRef.update({ phase3: false });
-                }
-            }
-
-            const hasAllPhases = (state && state.phase1 && state.phase2 && isPhase3Valid);
-
-            if (hasAllPhases) {
-                // Verificar direccionalidad final
-                if (currentDirection && state.direction && currentDirection !== state.direction) {
-                    console.log(`[TRADING] Invalidez en ${ticker}: Gatillo (${currentDirection}) opuesto a secuencia (${state.direction}).`);
-                    await docRef.delete();
-                    return;
-                }
-
-                console.log(`[TRADING] Disparo A+ procesado internamente para ${ticker}`);
-                // Aquí podrías resetear el estado tras el disparo o mantenerlo para TP
-            } else {
-                console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} - Faltan confluencias (1, 2 o 3 válida).`);
-                let missing = [];
-                if (!state?.phase1) missing.push("Fase 1");
-                if (!state?.phase2) missing.push("Fase 2");
-                if (!isPhase3Valid) missing.push("Fase 3 (o caducada)");
-                // Opcional: Avisar por qué no disparó
-                // await bot.api.sendMessage(targetUserId, `❌ *Disparo denegado* en ${ticker}: Falta ${missing.join(', ')}.`);
             }
         } 
         else if (prefix === 'CONTEXT_EXIT') {
