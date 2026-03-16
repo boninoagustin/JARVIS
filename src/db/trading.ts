@@ -144,35 +144,31 @@ export async function processTradingAlert(alertText: string) {
             }
         } 
         else if (prefix === 'MASTER_ZONE') {
-            // Fase 3 - Precio en zona (OB/FVG) con caducidad de 50 min
-            if (state && state.phase1 && state.phase2) {
-                await docRef.update({
-                    phase3: true,
-                    phase3_timestamp: now
+            // Alerta independiente - Precio en zona (OB/FVG)
+            await docRef.set({
+                phase3: true,
+                phase3_timestamp: now
+            }, { merge: true });
+            
+            let zoneType = 'Zona de Interés';
+            if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
+            else if (upperText.includes('OB') || upperText.includes('ORDER BLOCK') || upperText.includes('ORDERBLOCK')) zoneType = 'Order Block (OB)';
+            else if (upperText.includes('GOLDEN') || upperText.includes('GOLDEN ZONE')) zoneType = 'Golden Zone';
+
+            const dirText = currentDirection ? ` ${currentDirection}` : (state?.direction ? ` ${state.direction}` : '');
+            const zoneMsg = `📍 *PRECIO EN ZONA DE ALTA PROBABILIDAD*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Zona Detectada*: El precio entró en un *${zoneType}*.\n⚡ *Acción*: Válido para observar acción del precio.`;
+
+            console.log(`[TRADING] MASTER_ZONE Registrada para ${ticker}. Tomando captura...`);
+            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
+            
+            if (screenshotBuffer) {
+                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone.jpg`), { 
+                    caption: zoneMsg, 
+                    parse_mode: 'Markdown' 
                 });
-                
-                let zoneType = 'Zona de Interés';
-                if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
-                else if (upperText.includes('OB') || upperText.includes('ORDER BLOCK') || upperText.includes('ORDERBLOCK')) zoneType = 'Order Block (OB)';
-                else if (upperText.includes('GOLDEN') || upperText.includes('GOLDEN ZONE')) zoneType = 'Golden Zone';
-
-                const dirText = currentDirection ? ` ${currentDirection}` : (state.direction ? ` ${state.direction}` : '');
-                const zoneMsg = `📍 *PRECIO EN ZONA DE ALTA PROBABILIDAD*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Zona Detectada*: El precio entró en un *${zoneType}* validando la estructura previa.\n⚡ *Acción*: Preparar el gatillo (Fase 3 activa). El setup SMC es válido por los próximos 50 min. Esperar señal final.`;
-
-                console.log(`[TRADING] Fase 3 Registrada para ${ticker}. Tomando captura...`);
-                const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                
-                if (screenshotBuffer) {
-                    await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone.jpg`), { 
-                        caption: zoneMsg, 
-                        parse_mode: 'Markdown' 
-                    });
-                } else {
-                    // Fallback
-                    await bot.api.sendMessage(targetUserId, zoneMsg, { parse_mode: 'Markdown' });
-                }
             } else {
-                console.log(`[TRADING] Se ignoró MASTER_ZONE en ${ticker} por falta de Fase 1 o 2.`);
+                // Fallback
+                await bot.api.sendMessage(targetUserId, zoneMsg, { parse_mode: 'Markdown' });
             }
         }
         else if (prefix === 'MASTER_SIGNAL' || prefix === 'ENGULFING') {
