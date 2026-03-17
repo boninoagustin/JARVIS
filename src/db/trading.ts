@@ -28,9 +28,9 @@ export async function processTradingAlert(alertText: string) {
     // Extraer dirección desde el texto completo de la alerta
     const upperText = alertText.toUpperCase();
     let currentDirection: 'BUY' | 'SELL' | null = null;
-    if (upperText.includes('BUY') || upperText.includes('BULLISH')) {
+    if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('ALCISTA') || upperText.includes('COMPRA') || upperText.includes('LONG')) {
         currentDirection = 'BUY';
-    } else if (upperText.includes('SELL') || upperText.includes('BEARISH')) {
+    } else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('BAJISTA') || upperText.includes('VENTA') || upperText.includes('SHORT')) {
         currentDirection = 'SELL';
     }
 
@@ -134,30 +134,33 @@ export async function processTradingAlert(alertText: string) {
 
             // Evaluar secuencia MASTER_ZONE -> MASTER_STRUCT
             if (state && state.zone_active) {
-                if (currentDirection) {
-                    if (currentDirection === state.zone_direction) {
-                        const dirText = currentDirection ? ` ${currentDirection}` : '';
-                        const zoneType = state.zone_type || 'Zona de Interés';
-                        const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-                        const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés (*${zoneType}*) y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
-                        
-                        console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Tomando captura...`);
-                        const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                        
-                        if (screenshotBuffer) {
-                            await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone_struct.jpg`), { caption: zoneStructMsg, parse_mode: 'Markdown' });
-                        } else {
-                            await bot.api.sendMessage(targetUserId, zoneStructMsg, { parse_mode: 'Markdown' });
-                        }
-                        
-                        // Una vez ejecutada la entrada de la zona, la anulamos
-                        await docRef.update({ zone_active: false });
-                        handled = true;
+                // Si la estructura no trae dirección en el texto, hereda la de la zona para confirmar.
+                // Si la trae, DEBE ser igual a la de la zona, de lo contrario invalida.
+                const structDirection = currentDirection || state.zone_direction;
+                
+                if (structDirection === state.zone_direction) {
+                    const dirText = structDirection ? ` ${structDirection}` : '';
+                    const zoneType = state.zone_type || 'Zona de Interés';
+                    const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+                    const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés (*${zoneType}*) y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
+                    
+                    console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Tomando captura...`);
+                    const screenshotBuffer = await takeTradingViewScreenshot(ticker);
+                    
+                    if (screenshotBuffer) {
+                        await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone_struct.jpg`), { caption: zoneStructMsg, parse_mode: 'Markdown' });
                     } else {
-                        console.log(`[TRADING] Invalidez de ZONA en ${ticker}: Estructura (${currentDirection}) opuesta a la dirección de la zona (${state.zone_direction}). Se anula memoria de la zona.`);
-                        await docRef.update({ zone_active: false });
-                        handled = true;
+                        await bot.api.sendMessage(targetUserId, zoneStructMsg, { parse_mode: 'Markdown' });
                     }
+                    
+                    // Una vez ejecutada la entrada de la zona, la anulamos
+                    await docRef.update({ zone_active: false });
+                    handled = true;
+                } else if (currentDirection) {
+                    // Si trae una dirección explícita y es opuesta, se anula.
+                    console.log(`[TRADING] Invalidez de ZONA en ${ticker}: Estructura (${currentDirection}) opuesta a la dirección de la zona (${state.zone_direction}). Se anula memoria de la zona.`);
+                    await docRef.update({ zone_active: false });
+                    handled = true;
                 }
             }
 
