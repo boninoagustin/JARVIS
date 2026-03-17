@@ -1,4 +1,5 @@
 import { processTradingAlert } from '../src/db/trading.js';
+import { waitUntil } from '@vercel/functions';
 
 export const maxDuration = 10; 
 
@@ -22,10 +23,12 @@ export default async function handler(req: any, res: any) {
         // Devolver un código HTTP 200 OK de forma inmediata (antes de procesar nada).
         res.status(200).json({ ok: true, message: 'Alerta SMC encolada' });
 
-        // Ejecución no bloqueante (fire-and-forget)
-        processTradingAlert(alertText).catch((err: any) => {
-            console.error('[WEBHOOK BACKGROUND ERROR]', err);
-        });
+        // Ejecución no bloqueante protegida contra suspensión de Vercel
+        waitUntil(
+            processTradingAlert(alertText).catch((err: any) => {
+                console.error('[WEBHOOK BACKGROUND ERROR]', err);
+            })
+        );
 
     } catch (e: any) {
         console.error('[WEBHOOK TRADINGVIEW] Error inicial:', e.message);

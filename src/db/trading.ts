@@ -14,9 +14,10 @@ export async function processTradingAlert(alertText: string) {
     }
 
     // Esperamos que text.body sea String con el formato: PREFIJO | TICKER | MENSAJE
-    const parts = alertText.split('|').map(p => p.trim());
+    // O separado por comas, ej: "MASTER_STRUCT", TICKER, "Tipo: BOS | ..."
+    const parts = alertText.split(/[,|]/).map(p => p.replace(/"/g, '').trim());
     if (parts.length < 2) {
-        console.error('[TRADING] Formato de alerta inválido (Faltan separadores |)', alertText);
+        console.error('[TRADING] Formato de alerta inválido (Faltan separadores | o ,)', alertText);
         return;
     }
 
@@ -69,7 +70,7 @@ export async function processTradingAlert(alertText: string) {
             const dirText = currentDirection ? ` (${currentDirection})` : '';
             console.log(`[TRADING] Alerta informativa ${prefix} en ${ticker}${dirText}`);
         }
-        else if (prefix === 'MASTER_STRUCT' || prefix === 'BOS' || prefix === 'CHOCH') {
+        else if (prefix === 'MASTER_STRUCT' || prefix.startsWith('BOS') || prefix.startsWith('CHOCH')) {
             // Fase 2 - Confirmación de giro
             let handled = false;
             
@@ -79,12 +80,14 @@ export async function processTradingAlert(alertText: string) {
                     if (!currentDirection) {
                         console.log(`[TRADING] Se requiere dirección explícita (BOS SELL o CHoCH SELL) para validar Fase 2. Se ignora para la Fase 1.`);
                     } else if (currentDirection !== state.direction) {
-                        console.log(`[TRADING] Alerta ignorada en ${ticker} (Fase 1): Dirección Struct (${currentDirection}) opuesta a CRT (${state.direction}).`);
+                        console.log(`[TRADING] Invalidez de Fase 1 en ${ticker}: Dirección Struct (${currentDirection}) opuesta a CRT (${state.direction}). Se anula memoria.`);
+                        await docRef.update({ phase1: false, phase2: false });
+                        handled = true;
                     } else {
-                        await docRef.update({ phase2: true, timestamp: now });
+                        await docRef.update({ phase2: true, phase2_timestamp: now });
 
-                        const isChoch = prefix === 'CHOCH' || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'));
-                        const isBos = prefix === 'BOS' || (prefix === 'MASTER_STRUCT' && upperText.includes('BOS'));
+                        const isChoch = prefix.startsWith('CHOCH') || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'));
+                        const isBos = prefix.startsWith('BOS') || (prefix === 'MASTER_STRUCT' && upperText.includes('BOS'));
                         const dirText = currentDirection ? ` ${currentDirection}` : '';
                         const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -126,8 +129,9 @@ export async function processTradingAlert(alertText: string) {
                 if (currentDirection) {
                     if (currentDirection === state.zone_direction) {
                         const dirText = currentDirection ? ` ${currentDirection}` : '';
+                        const zoneType = state.zone_type || 'Zona de Interés';
                         const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-                        const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
+                        const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés (*${zoneType}*) y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
                         
                         console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Tomando captura...`);
                         const screenshotBuffer = await takeTradingViewScreenshot(ticker);
@@ -154,35 +158,22 @@ export async function processTradingAlert(alertText: string) {
             }
         }  
         else if (prefix === 'MASTER_ZONE') {
-            // Alerta independiente - Precio en zona (OB/FVG)
+            // Se guarda silenciosamente en memoria esperando su MASTER_STRUCT confirmatorio
             if (currentDirection) {
+                let zoneType = 'Zona de Interés';
+                if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
+                else if (upperText.includes('OB') || upperText.includes('ORDER BLOCK') || upperText.includes('ORDERBLOCK')) zoneType = 'Order Block (OB)';
+                else if (upperText.includes('GOLDEN') || upperText.includes('GOLDEN ZONE')) zoneType = 'Golden Zone';
+
                 await docRef.set({
                     zone_active: true,
                     zone_direction: currentDirection,
+                    zone_type: zoneType,
                     zone_timestamp: now
                 }, { merge: true });
-            }
-            
-            let zoneType = 'Zona de Interés';
-            if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
-            else if (upperText.includes('OB') || upperText.includes('ORDER BLOCK') || upperText.includes('ORDERBLOCK')) zoneType = 'Order Block (OB)';
-            else if (upperText.includes('GOLDEN') || upperText.includes('GOLDEN ZONE')) zoneType = 'Golden Zone';
-
-            const dirText = currentDirection ? ` ${currentDirection}` : (state?.direction ? ` ${state.direction}` : '');
-            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-            const zoneMsg = `📍 *PRECIO EN ZONA DE ALTA PROBABILIDAD*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Zona Detectada*: El precio entró en un *${zoneType}*.\n⚡ *Acción*: Válido para observar acción del precio.\n📊 [Ver en TradingView](${tvLink})`;
-
-            console.log(`[TRADING] MASTER_ZONE Registrada para ${ticker}. Tomando captura...`);
-            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-            
-            if (screenshotBuffer) {
-                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone.jpg`), { 
-                    caption: zoneMsg, 
-                    parse_mode: 'Markdown' 
-                });
+                console.log(`[TRADING] MASTER_ZONE Registrada para ${ticker} esperando confirmación. Tipo: ${zoneType}, Dir: ${currentDirection}`);
             } else {
-                // Fallback
-                await bot.api.sendMessage(targetUserId, zoneMsg, { parse_mode: 'Markdown' });
+                console.log(`[TRADING] MASTER_ZONE ignorada en ${ticker} al no especificar dirección identificable.`);
             }
         } 
         else if (prefix === 'CONTEXT_EXIT') {
