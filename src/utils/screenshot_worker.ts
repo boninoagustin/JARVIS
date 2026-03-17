@@ -27,7 +27,6 @@ export function startScreenshotWorker() {
             if (!db) return;
             const snapshot = await db.collection('screenshot_requests')
                 .where('status', '==', 'pending')
-                .orderBy('timestamp', 'asc')
                 .limit(1)
                 .get();
 
