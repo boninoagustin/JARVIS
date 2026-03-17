@@ -15,22 +15,7 @@ const ipv4Agent = new https.Agent({
  * Exported for modular use in both local index.ts (Long Polling)
  * and Vercel serverless functions (Webhooks).
  */
-export const bot = new Bot(config.TELEGRAM_BOT_TOKEN, {
-    client: {
-        // @ts-ignore
-        fetch: (url, options = {}) => {
-            const headers = {
-                ...(options.headers || {}),
-                'User-Agent': 'Mozilla/5.0'
-            };
-            return nodeFetch(url, {
-                ...options,
-                agent: ipv4Agent as any,
-                headers
-            });
-        }
-    }
-});
+export const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 
 // Whitelist Security
 const whitelistMiddleware = async (ctx: Context, next: NextFunction) => {

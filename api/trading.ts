@@ -19,12 +19,18 @@ export default async function handler(req: any, res: any) {
 
         console.log(`[WEBHOOK TRADINGVIEW] Alerta recibida:`, alertText);
         
-        // Ejecución no bloqueante para no penalizar a TradingView
-        await processTradingAlert(alertText);
+        // Devolver un código HTTP 200 OK de forma inmediata (antes de procesar nada).
+        res.status(200).json({ ok: true, message: 'Alerta SMC encolada' });
 
-        return res.status(200).json({ ok: true, message: 'Alerta SMC encolada' });
+        // Ejecución no bloqueante (fire-and-forget)
+        processTradingAlert(alertText).catch((err: any) => {
+            console.error('[WEBHOOK BACKGROUND ERROR]', err);
+        });
+
     } catch (e: any) {
-        console.error('[WEBHOOK TRADINGVIEW] Error interno:', e.message);
-        return res.status(500).json({ error: 'Error procesando alerta' });
+        console.error('[WEBHOOK TRADINGVIEW] Error inicial:', e.message);
+        if (!res.headersSent) {
+            return res.status(500).json({ error: 'Error procesando alerta' });
+        }
     }
 }
