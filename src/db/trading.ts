@@ -72,6 +72,14 @@ export async function processTradingAlert(alertText: string) {
         }
         else if (prefix === 'MASTER_STRUCT' || prefix.startsWith('BOS') || prefix.startsWith('CHOCH')) {
             // Fase 2 - Confirmación de giro
+            // Anti Race-Condition: Si TradingView manda Fase 1 y Fase 2 al mismo milisegundo en la misma vela, 
+            // le damos 2 segundos de ventaja a la Fase 1 para que escriba en BBDD antes de que Fase 2 lea.
+            console.log(`[TRADING] Estructura recibida en ${ticker}. Esperando 2s para sincronía concurrente...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            const rcSnap = await docRef.get();
+            state = rcSnap.exists ? rcSnap.data() : null;
+
             let handled = false;
             
             // Evaluar secuencia Fase 1 (CRT) -> Fase 2 (Struct)
