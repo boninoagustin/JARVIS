@@ -7,6 +7,8 @@ import nodeFetch from 'node-fetch';
 global.fetch = nodeFetch;
 
 import { bot } from './bot/telegram.js';
+import { startScreenshotWorker } from './utils/screenshot_worker.js';
+import { startCleanupTimer } from './db/cleanup.js';
 
 console.log('[SYSTEM] --- FINAL CLEAN START ---');
 
@@ -21,6 +23,10 @@ async function main() {
         console.log('[TELEGRAM] Fetching bot info...');
         const botInfo = await bot.api.getMe();
         console.log(`[SYSTEM] JARVIS is online as @${botInfo.username}`);
+
+        // Iniciar worker de screenshots y limpieza automática
+        startScreenshotWorker();
+        startCleanupTimer();
 
         console.log('[TELEGRAM] Starting long polling...');
         await bot.start({

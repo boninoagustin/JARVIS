@@ -1,11 +1,22 @@
 import { db } from './memory.js';
-import admin from 'firebase-admin';
-import { bot } from '../bot/telegram.js';
-import { config } from '../config.js';
-import { InputFile } from 'grammy';
-import { takeTradingViewScreenshot } from '../utils/screenshot.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Encola un pedido de screenshot en Firestore para que el worker local lo procese
+ * y luego Vercel lo envíe a Telegram.
+ */
+async function enqueueScreenshotRequest(ticker: string, message: string) {
+    if (!db) return;
+    const requestRef = db.collection('screenshot_requests').doc();
+    await requestRef.set({
+        ticker,
+        message,
+        status: 'pending',
+        timestamp: Date.now()
+    });
+    console.log(`[TRADING] Screenshot encolado (${requestRef.id}) para ${ticker}`);
+}
 
 export async function processTradingAlert(alertText: string) {
     if (!db) {
@@ -36,7 +47,6 @@ export async function processTradingAlert(alertText: string) {
 
     console.log(`[TRADING] Procesando Alerta SMC -> Prefijo: ${prefix}, Par: ${ticker}, Dir: ${currentDirection}`);
 
-    const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
     const docRef = db.collection('market_states').doc(ticker);
     
     // Checkear estado actual para caducidad y contexto
@@ -98,32 +108,19 @@ export async function processTradingAlert(alertText: string) {
                         const isBos = prefix.startsWith('BOS') || (prefix === 'MASTER_STRUCT' && upperText.includes('BOS'));
                         const dirText = currentDirection ? ` ${currentDirection}` : '';
                         const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+                        const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
 
                         if (isChoch && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
-                            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
                             const sniperMsg = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.\n📊 [Ver en TradingView](${tvLink})`;
                             
-                            console.log(`[TRADING] Ingresando orden Sniper, tomando captura de ${ticker}...`);
-                            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                            
-                            if (screenshotBuffer) {
-                                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_sniper.jpg`), { caption: sniperMsg, parse_mode: 'Markdown' });
-                            } else {
-                                await bot.api.sendMessage(targetUserId, sniperMsg, { parse_mode: 'Markdown' });
-                            }
+                            console.log(`[TRADING] Entrada Sniper detectada en ${ticker}. Encolando screenshot...`);
+                            await enqueueScreenshotRequest(ticker, sniperMsg);
                             handled = true;
                         } else if (isBos && state.timestamp && (now - state.timestamp) <= TWO_HOURS_MS) {
-                            const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
                             const continuationMsg = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento (o meter una re-entrada).\n📊 [Ver en TradingView](${tvLink})`;
                             
-                            console.log(`[TRADING] Ingresando orden de Continuación, tomando captura de ${ticker}...`);
-                            const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                            
-                            if (screenshotBuffer) {
-                                await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_continuation.jpg`), { caption: continuationMsg, parse_mode: 'Markdown' });
-                            } else {
-                                await bot.api.sendMessage(targetUserId, continuationMsg, { parse_mode: 'Markdown' });
-                            }
+                            console.log(`[TRADING] Entrada Continuación detectada en ${ticker}. Encolando screenshot...`);
+                            await enqueueScreenshotRequest(ticker, continuationMsg);
                             handled = true;
                         }
                     }
@@ -144,14 +141,8 @@ export async function processTradingAlert(alertText: string) {
                     const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
                     const zoneStructMsg = `🔥 *REACCIÓN EN ZONA CONFIRMADA*\n🎯 *Activo*: ${ticker}${dirText}\n🧠 *Contexto*: El precio llegó a una zona de interés (*${zoneType}*) y acaba de confirmar un quiebre estructural a favor.\n⚡ *Acción*: Buscar posicionamiento en el retroceso para tomar el movimiento largo o corto.\n📊 [Ver en TradingView](${tvLink})`;
                     
-                    console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Tomando captura...`);
-                    const screenshotBuffer = await takeTradingViewScreenshot(ticker);
-                    
-                    if (screenshotBuffer) {
-                        await bot.api.sendPhoto(targetUserId, new InputFile(screenshotBuffer, `${ticker}_zone_struct.jpg`), { caption: zoneStructMsg, parse_mode: 'Markdown' });
-                    } else {
-                        await bot.api.sendMessage(targetUserId, zoneStructMsg, { parse_mode: 'Markdown' });
-                    }
+                    console.log(`[TRADING] MASTER_ZONE + Struct confirmado en ${ticker}. Encolando screenshot...`);
+                    await enqueueScreenshotRequest(ticker, zoneStructMsg);
                     
                     // Una vez ejecutada la entrada de la zona, la anulamos
                     await docRef.update({ zone_active: false });

@@ -1,7 +1,7 @@
 import { processTradingAlert } from '../src/db/trading.js';
 import { waitUntil } from '@vercel/functions';
 
-export const maxDuration = 10; 
+export const maxDuration = 10;
 
 export default async function handler(req: any, res: any) {
     if (req.method !== 'POST') {
@@ -19,7 +19,7 @@ export default async function handler(req: any, res: any) {
         }
 
         console.log(`[WEBHOOK TRADINGVIEW] Alerta recibida:`, alertText);
-        
+
         // Devolver un código HTTP 200 OK de forma inmediata (antes de procesar nada).
         res.status(200).json({ ok: true, message: 'Alerta SMC encolada' });
 

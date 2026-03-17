@@ -17,7 +17,8 @@ try {
 
     if (serviceAccount) {
         admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
+            credential: admin.credential.cert(serviceAccount),
+            storageBucket: 'jarvis-67f66.firebasestorage.app'
         });
         console.log('[DATABASE] Firebase Cloud Memory initialized.');
     } else {
@@ -28,6 +29,7 @@ try {
 }
 
 export const db = admin.apps.length > 0 ? admin.firestore() : null;
+export const storageBucket = admin.apps.length > 0 ? admin.storage().bucket() : null;
 
 export interface Message {
   role: 'user' | 'model' | 'system';
