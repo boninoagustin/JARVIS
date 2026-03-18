@@ -148,9 +148,9 @@ export async function processTradingAlert(alertText: string) {
                     await docRef.update({ zone_active: false });
                     handled = true;
                 } else if (currentDirection) {
-                    // Si trae una dirección explícita y es opuesta, se anula.
-                    console.log(`[TRADING] Invalidez de ZONA en ${ticker}: Estructura (${currentDirection}) opuesta a la dirección de la zona (${state.zone_direction}). Se anula memoria de la zona.`);
-                    await docRef.update({ zone_active: false });
+                    // Dirección opuesta: se ignora, la zona sigue activa esperando
+                    // Solo un BREAKER_BLOCK o un nuevo MASTER_ZONE pueden cambiar la dirección esperada
+                    console.log(`[TRADING] Struct (${currentDirection}) opuesta a zona (${state.zone_direction}) en ${ticker}. Se ignora, zona sigue activa.`);
                     handled = true;
                 }
             }
@@ -160,8 +160,19 @@ export async function processTradingAlert(alertText: string) {
             }
         }  
         else if (prefix === 'MASTER_ZONE') {
-            // Se guarda silenciosamente en memoria esperando su MASTER_STRUCT confirmatorio
-            if (currentDirection) {
+            const isBreakerBlock = upperText.includes('BREAKER_BLOCK') || upperText.includes('BREAKER BLOCK');
+
+            if (isBreakerBlock && currentDirection) {
+                // Breaker Block: invierte la dirección esperada en la zona activa
+                await docRef.set({
+                    zone_active: true,
+                    zone_direction: currentDirection,
+                    zone_type: 'Breaker Block',
+                    zone_timestamp: state?.zone_timestamp || now
+                }, { merge: true });
+                console.log(`[TRADING] BREAKER BLOCK en ${ticker}: Dirección esperada invertida a ${currentDirection}. Esperando MASTER_STRUCT ${currentDirection}.`);
+            } else if (!isBreakerBlock && currentDirection) {
+                // MASTER_ZONE normal: setea la zona y dirección desde cero
                 let zoneType = 'Zona de Interés';
                 if (upperText.includes('FVG')) zoneType = 'Fair Value Gap (FVG)';
                 else if (upperText.includes('OB') || upperText.includes('ORDER BLOCK') || upperText.includes('ORDERBLOCK')) zoneType = 'Order Block (OB)';
