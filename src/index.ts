@@ -13,10 +13,15 @@ import { startCleanupTimer } from './db/cleanup.js';
 console.log('[SYSTEM] --- FINAL CLEAN START ---');
 
 async function main() {
-    try {
-        console.log('[DEBUG] Memory check (Firebase)...');
-        // Firebase initialization is done in memory.ts side-effect
+    console.log('[DEBUG] Memory check (Firebase)...');
+    // Firebase initialization is done in memory.ts side-effect
 
+    // Iniciar worker de screenshots y limpieza (NO dependen de Telegram)
+    startScreenshotWorker();
+    startCleanupTimer();
+
+    // Intentar conectar al bot de Telegram (puede fallar si el ISP lo bloquea)
+    try {
         console.log('[TELEGRAM] Cleaning webhooks...');
         await bot.api.deleteWebhook({ drop_pending_updates: true });
 
@@ -24,20 +29,15 @@ async function main() {
         const botInfo = await bot.api.getMe();
         console.log(`[SYSTEM] JARVIS is online as @${botInfo.username}`);
 
-        // Iniciar worker de screenshots y limpieza automática
-        startScreenshotWorker();
-        startCleanupTimer();
-
         console.log('[TELEGRAM] Starting long polling...');
         await bot.start({
             drop_pending_updates: true,
             allowed_updates: ['message'],
             onStart: () => console.log('[SYSTEM] --- POLLING ESTABLISHED. Ready for messages ---')
         });
-
     } catch (err: any) {
-        console.error('[CRITICAL]', err.message);
-        if (err.stack) console.error(err.stack);
+        console.warn(`[TELEGRAM] No se pudo conectar al bot (ISP bloqueado?): ${err.message}`);
+        console.log('[SYSTEM] Screenshot Worker y Cleanup siguen activos. Telegram se maneja vía Vercel.');
     }
 }
 

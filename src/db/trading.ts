@@ -74,6 +74,28 @@ export async function processTradingAlert(alertText: string) {
 
             const dirText = currentDirection ? ` ${currentDirection}` : '';
             console.log(`[TRADING] Fase 1 Registrada internamente para ${ticker}${dirText}`);
+
+            // Check retrospectivo: ¿Hubo un MASTER_STRUCT hace muy poco (< 5s) que calce con esta dirección?
+            // Esto resuelve el caso donde TV manda STRUCT antes que CRT en la misma vela.
+            if (currentDirection && state && state.last_struct_time) {
+                const diffStruct = now - state.last_struct_time;
+                if (diffStruct < 5000 && state.last_struct_dir === currentDirection) {
+                    console.log(`[TRADING] Detectado MASTER_STRUCT previo (${diffStruct}ms). Disparando notificación retroactiva...`);
+                    const isChoch = state.last_struct_type === 'CHOCH';
+                    const isBos = state.last_struct_type === 'BOS';
+                    const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+
+                    if (isChoch) {
+                        const message = `🚨 *POSIBLE ENTRADA SNIPER*\n🎯 *Activo*: ${ticker} ${currentDirection}\n🧠 *Setup Armado*: Tuvimos el barrido de liquidez (CRT) y acaba de confirmar reversión con un CHoCH.\n⚡ *Acción*: Poner orden Limit en el Order Block / FVG que dejó la ruptura y esperar el retroceso.\n📊 [Ver en TradingView](${tvLink})`;
+                        await enqueueScreenshotRequest(ticker, message);
+                        await docRef.update({ phase2: true, phase2_timestamp: now });
+                    } else if (isBos) {
+                        const message = `🚀 *POSIBLE ENTRADA DE CONTINUACIÓN*\n🎯 *Activo*: ${ticker} ${currentDirection}\n🧠 *Contexto*: El precio rompió estructura (BOS) a favor de la tendencia tras tomar liquidez.\n⚡ *Acción*: Buscar el FVG o Order Block fresco que acaba de dejar este impulso para sumarse al movimiento.\n📊 [Ver en TradingView](${tvLink})`;
+                        await enqueueScreenshotRequest(ticker, message);
+                        await docRef.update({ phase2: true, phase2_timestamp: now });
+                    }
+                }
+            }
         } 
         else if (prefix === 'GLOBAL_CRT' || prefix === 'RADAR_AVISO' || prefix === 'CONTEXT_LIQ' || prefix === 'MASTER_SWEEP') {
             // Información / Notificación sin activar secuencia oficial
@@ -158,6 +180,14 @@ export async function processTradingAlert(alertText: string) {
             if (!handled) {
                 console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no disparó ni lógica de Fase 1 ni lógica de Zona.`);
             }
+
+            // Guardar este struct como "último visto" para que un CRT lento pueda consumirlo retroactivamente
+            const structType = prefix.startsWith('CHOCH') || upperText.includes('CHOCH') ? 'CHOCH' : 'BOS';
+            await docRef.update({
+                last_struct_time: now,
+                last_struct_dir: currentDirection,
+                last_struct_type: structType
+            });
         }  
         else if (prefix === 'MASTER_ZONE') {
             const isBreakerBlock = upperText.includes('BREAKER_BLOCK') || upperText.includes('BREAKER BLOCK');

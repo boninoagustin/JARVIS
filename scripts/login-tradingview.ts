@@ -20,7 +20,7 @@ async function main() {
         headless: false, // Navegador VISIBLE para que puedas hacer login
         userDataDir: PROFILE_DIR,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        defaultViewport: { width: 1920, height: 1080 }
+        defaultViewport: { width: 1366, height: 768 }
     });
 
     const page = await browser.newPage();
