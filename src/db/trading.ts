@@ -1,6 +1,18 @@
 import { db } from './memory.js';
+import { bot } from '../bot/telegram.js';
+import { config } from '../config.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+async function sendTelegramAlert(message: string) {
+    for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+        try {
+            await bot.api.sendMessage(userId, message, { parse_mode: 'Markdown' });
+        } catch (err: any) {
+            console.error(`[TRADING] Error enviando alerta a ${userId}:`, err.message);
+        }
+    }
+}
 
 /**
  * Encola un pedido de screenshot en Firestore para que el worker local lo procese
@@ -146,7 +158,6 @@ export async function processTradingAlert(alertText: string) {
                             handled = true;
                         }
                     }
-                } else if (currentDirection) {
                     await docRef.update({ direction: currentDirection });
                 }
             }
@@ -172,23 +183,116 @@ export async function processTradingAlert(alertText: string) {
                 } else if (currentDirection) {
                     // Dirección opuesta: se ignora, la zona sigue activa esperando
                     // Solo un BREAKER_BLOCK o un nuevo MASTER_ZONE pueden cambiar la dirección esperada
-                    console.log(`[TRADING] Struct (${currentDirection}) opuesta a zona (${state.zone_direction}) en ${ticker}. Se ignora, zona sigue activa.`);
+                    console.log(`[TRADING] Struct (${currentDirection}) opuesta a zona (${state.zone_direction}) in ${ticker}. Se ignora, zona sigue activa.`);
                     handled = true;
                 }
             }
+
+            // --- LÓGICA ALERTA GOD TIER ---
+            const isChoch = prefix.startsWith('CHOCH') || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'));
+            if (isChoch && currentDirection && state) {
+                const isDirAligned = (tfDir: string | null | undefined, tradeDir: 'BUY' | 'SELL'): boolean => {
+                    if (!tfDir) return false;
+                    const normalizedTfDir = tfDir.toUpperCase();
+                    if (tradeDir === 'BUY') return normalizedTfDir === 'BULLISH';
+                    if (tradeDir === 'SELL') return normalizedTfDir === 'BEARISH';
+                    return false;
+                };
+
+                // 1. Macro: D, 4H y 1H alineados con el trade
+                const macroAligned = isDirAligned(state.tf_D, currentDirection) && 
+                                     isDirAligned(state.tf_4H, currentDirection) && 
+                                     isDirAligned(state.tf_1H, currentDirection);
+                
+                if (macroAligned) {
+                    // 2. Contexto/Trampa: Zona activa O CRT registrado (Fase 1)
+                    const zoneMatch = state.zone_active && (state.zone_direction === currentDirection);
+                    const trapMatch = state.phase1 && (state.direction === currentDirection);
+
+                    if (zoneMatch || trapMatch) {
+                        const buySellText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+                        const zoneIcon = zoneMatch ? '✅' : '➖';
+                        const trapIcon = trapMatch ? '✅' : '➖';
+                        
+                        const godTierMsg = `🚀 *ALERTA GOD TIER*: ${ticker} | *${buySellText}*\n\n` +
+                                           `💎 *Confluencia Confirmada*:\n` +
+                                           `✅ Macro: Barridos D1 + 4H + 1H Alineados.\n` +
+                                           `${zoneIcon} Zona: Apoyo en MASTER_ZONE.\n` +
+                                           `${trapIcon} Trampa: Barrido de liquidez (CRT Local).\n` +
+                                           `✅ Gatillo: CHoCH Confirmado.`;
+                        
+                        await sendTelegramAlert(godTierMsg);
+                        console.log(`[TRADING] ALERTA GOD TIER ENVIADA para ${ticker}`);
+                    }
+                }
+            }
+            // ------------------------------
 
             if (!handled) {
                 console.log(`[TRADING] Se ignoró ${prefix} en ${ticker} porque no disparó ni lógica de Fase 1 ni lógica de Zona.`);
             }
 
             // Guardar este struct como "último visto" para que un CRT lento pueda consumirlo retroactivamente
-            const structType = prefix.startsWith('CHOCH') || upperText.includes('CHOCH') ? 'CHOCH' : 'BOS';
+            const structType = isChoch ? 'CHOCH' : 'BOS';
             await docRef.update({
                 last_struct_time: now,
                 last_struct_dir: currentDirection,
                 last_struct_type: structType
             });
         }  
+        else if (prefix === 'PO3_LIVE') {
+            // Formato esperado: PO3_LIVE | TF: [X] | [Activo] | Tipo: CRT_[DIR] | Estado: [ESTADO]
+            const tfPart = parts[1]?.split(':')[1]?.trim() || ''; // Ej: "1H"
+            const ticker = parts[2]?.trim();
+            const typePart = parts[3]?.split(':')[1]?.trim() || ''; // Ej: "CRT_BULLISH"
+            const estadoPart = parts[4]?.split(':')[1]?.trim() || ''; // Ej: "ACTIVO"
+            
+            if (!ticker || !tfPart || !estadoPart) {
+                console.error('[TRADING] PO3_LIVE alerta incompleta:', alertText);
+                return;
+            }
+
+            const direction = typePart.toUpperCase().includes('BULLISH') ? 'BULLISH' : 
+                             (typePart.toUpperCase().includes('BEARISH') ? 'BEARISH' : null);
+            const isActivo = estadoPart.toUpperCase() === 'ACTIVO';
+            
+            // 1. Actualización Silenciosa en DB
+            const tfKey = `tf_${tfPart}`; // Guardará en tf_D, tf_4H, tf_1H, etc.
+            const updateObj: any = {};
+            updateObj[tfKey] = isActivo ? direction : null;
+            updateObj.timestamp = now; // Para evitar caducidad de 6h
+            
+            await docRef.set(updateObj, { merge: true });
+            console.log(`[TRADING] PO3_LIVE ${tfKey} actualizado a ${isActivo ? direction : 'NULL'} para ${ticker}`);
+
+            // 2. Evaluar Triggers (después de actualizar)
+            const freshSnap = await docRef.get();
+            const freshState = freshSnap.data();
+
+            if (freshState) {
+                const d = freshState.tf_D;
+                const h4 = freshState.tf_4H;
+                const h1 = freshState.tf_1H;
+                const oldSniperMode = freshState.sniper_mode || false;
+
+                const isAligned = d && h4 && h1 && (d === h4) && (h4 === h1);
+                
+                // A. Activación Sniper (Alineación D+4H+1H)
+                if (isAligned && !oldSniperMode) {
+                    await docRef.update({ sniper_mode: true });
+                    const msg = `🟢 *ALERTA SNIPER*: ${ticker} - Confluencia D+4H+1H *${d}*. Listo para buscar gatillo en 5M.`;
+                    await sendTelegramAlert(msg);
+                    console.log(`[TRADING] SNIPER_MODE ACTIVADO en ${ticker}`);
+                } 
+                // B. Cancelación Sniper (Ruptura por CANCELADO en temporalidades clave)
+                else if (oldSniperMode && !isActivo && ['D', '4H', '1H'].includes(tfPart)) {
+                    await docRef.update({ sniper_mode: false });
+                    const msg = `🔴 *ALERTA ABORTADA*: ${ticker} - Se perdió el CRT en *${tfPart}*. Cancelar búsqueda en 5M.`;
+                    await sendTelegramAlert(msg);
+                    console.log(`[TRADING] SNIPER_MODE CANCELADO en ${ticker}`);
+                }
+            }
+        }
         else if (prefix === 'MASTER_ZONE') {
             const isBreakerBlock = upperText.includes('BREAKER_BLOCK') || upperText.includes('BREAKER BLOCK');
 
