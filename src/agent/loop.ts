@@ -94,7 +94,8 @@ export async function processUserMessage(userId: number, text: string, inlineDat
                conversation.push({
                    role: 'tool',
                    content: result,
-                   toolCallId: call.id
+                   toolCallId: call.id,
+                   toolName: call.name // Guardamos el nombre para el historial de Gemini
                });
            }
            

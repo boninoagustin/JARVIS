@@ -10,6 +10,7 @@ const groqClient = config.GROQ_API_KEY ? new Groq({ apiKey: config.GROQ_API_KEY 
 export interface ChatMessage {
     role: 'user' | 'model' | 'system' | 'tool';
     content: string;
+    toolName?: string; // Original name of the tool (required for Gemini)
     toolCalls?: any[]; // Groq/OpenAI compatible tool calls
     toolCallId?: string; // Groq/OpenAI compatible tool response ID
     inlineData?: { data: string; mimeType: string };
@@ -26,52 +27,81 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
     // 1. Try Gemini
     if (geminiClient) {
         try {
-            console.log('[LLM] Attempting Gemini...');
-            // Convert messages to Gemini format
-            const geminiMessages = messages.map(m => {
-                if (m.role === 'tool') {
-                    return { role: 'user', parts: [{ text: `[Tool Result for ${m.toolCallId}]:\n${m.content}` }] };
-                }
-                if (m.toolCalls) {
-                    return { role: 'model', parts: [{ text: m.content || '[Tool Invocation]' }] };
-                }
-                const parts: any[] = [{ text: m.content }];
-                if (m.inlineData) {
-                    parts.push({ inlineData: m.inlineData });
-                }
-                return {
-                    role: m.role === 'system' ? 'user' : m.role,
-                    parts: parts
-                }
-            });
+            console.log('[LLM] Attempting Gemini Native...');
+            
+            // Extract and clean system instruction
+            const systemMsg = messages.find(m => m.role === 'system');
+            const history = messages.filter(m => m.role !== 'system');
 
-            // The new generic genai SDK expects format. We use gemini-2.5-flash as default 
-            // but let's emulate function calling by appending tool descriptions to system prompt 
-            // for simplicity, or leverage their specific native tool calling types if needed.
-            // We'll use a standard prompt approach for high fallback compatibility.
-
-            // Since we are building an agent from scratch, let's inject tool schemas 
-            // into the system message and request JSON responses when tools are needed.
-
-            console.log('[GEMINI] Calling gemini-flash-latest...');
-            const response = await geminiClient.models.generateContent({
-                model: 'gemini-flash-latest',
-                contents: geminiMessages,
-            });
-            console.log('[GEMINI] Response received.');
-
-            // Temporary logic: the new @google/genai syntax might differ slightly on tool calls,
-            // so we catch errors to fallback gracefully if it fails parsing tools.
-            return {
-                content: response.text || null,
-                toolCalls: response.functionCalls?.map((f: any) => ({
-                    id: `call_${Math.random().toString(36).substr(2, 9)}`,
-                    name: f.name,
-                    args: f.args
+            // Map tools to Gemini format
+            const geminiTools = tools.length > 0 ? [{ 
+                functionDeclarations: tools.map(t => ({
+                    name: t.function.name,
+                    description: t.function.description,
+                    parameters: t.function.parameters
                 }))
-            }
+            }] : [];
+
+            // Map history to Gemini content parts
+            const contents = history.map(m => {
+                if (m.role === 'tool') {
+                    return {
+                        role: 'user' as const, // Gemini uses 'user' for tool response content in this SDK version
+                        parts: [{
+                            functionResponse: {
+                                name: m.toolName!,
+                                response: { result: m.content }
+                            }
+                        }]
+                    };
+                }
+                
+                const parts: any[] = [];
+                if (m.content) parts.push({ text: m.content });
+                if (m.inlineData) parts.push({ inlineData: m.inlineData });
+                
+                if (m.toolCalls) {
+                    m.toolCalls.forEach(tc => {
+                        parts.push({
+                            functionCall: {
+                                name: tc.function.name,
+                                args: JSON.parse(tc.function.arguments)
+                            }
+                        });
+                    });
+                }
+
+                return {
+                    role: m.role === 'model' ? 'model' as const : 'user' as const,
+                    parts: parts
+                };
+            });
+
+            const response = await geminiClient.models.generateContent({
+                model: 'gemini-1.5-flash-latest',
+                contents,
+                config: {
+                    systemInstruction: systemMsg?.content,
+                    tools: geminiTools as any
+                }
+            });
+
+            const text = response.candidates?.[0]?.content?.parts?.find((p: any) => 'text' in p)?.text || null;
+            const functionCalls = response.candidates?.[0]?.content?.parts
+                ?.filter((p: any) => 'functionCall' in p)
+                .map((p: any) => ({
+                    id: `call_${Math.random().toString(36).substr(2, 9)}`,
+                    name: (p as any).functionCall.name,
+                    args: (p as any).functionCall.args
+                }));
+
+            return {
+                content: text,
+                toolCalls: functionCalls?.length ? functionCalls : undefined
+            };
+
         } catch (error: any) {
-            console.error('[LLM] Gemini request failed:', error.message);
+            console.error('[LLM] Gemini Native failed:', error.message);
         }
     }
 
