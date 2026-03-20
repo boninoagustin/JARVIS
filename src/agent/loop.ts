@@ -59,9 +59,10 @@ export async function processUserMessage(userId: number, text: string, inlineDat
         let response: LLMResponse;
         try {
             response = await generateResponse(conversation);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('[Bucle Agente] Error LLM:', err);
-            finalResponseText = `Encontré un error interno mientras pensaba: ${err.message}`;
+            const message = err instanceof Error ? err.message : String(err);
+            finalResponseText = `Encontré un error interno mientras pensaba: ${message}`;
             break;
         }
 
@@ -75,14 +76,14 @@ export async function processUserMessage(userId: number, text: string, inlineDat
         if (response.toolCalls && response.toolCalls.length > 0) {
            const toolCallRecords = response.toolCalls.map(tc => ({
               id: tc.id,
-              type: 'function',
+              type: 'function' as const,
               function: { name: tc.name, arguments: JSON.stringify(tc.args) }
            }));
-           
-           conversation.push({ 
-               role: 'model', 
-               content: response.content || '', 
-               toolCalls: toolCallRecords as any 
+
+           conversation.push({
+               role: 'model',
+               content: response.content || '',
+               toolCalls: toolCallRecords
            });
 
            for (const call of response.toolCalls) {
@@ -108,8 +109,8 @@ export async function processUserMessage(userId: number, text: string, inlineDat
             break;
         }
 
-        // Failsafe si no hay nada
-        if (!response.content && (!response.toolCalls || response.toolCalls.length === 0)) {
+        // Failsafe si no hay contenido ni herramientas
+        if (!response.toolCalls || response.toolCalls.length === 0) {
              finalResponseText = "Procesé tu solicitud pero no tengo una respuesta específica.";
              break;
         }

@@ -3,6 +3,8 @@ import { db } from './memory.js';
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
+let cleanupInterval: NodeJS.Timeout | null = null;
+
 /**
  * Limpia datos antiguos de Firebase:
  * - screenshot_requests con status 'sent' o 'failed' de más de 24h
@@ -60,9 +62,24 @@ async function cleanupOldData() {
  * Inicia el timer de limpieza automática (cada 1 hora)
  */
 export function startCleanupTimer() {
+    if (cleanupInterval) {
+        console.log('[CLEANUP] Timer ya está corriendo.');
+        return;
+    }
     console.log('[CLEANUP] Timer de limpieza iniciado (cada 1 hora).');
     cleanupOldData().catch(err => console.error('[CLEANUP] Error en limpieza inicial:', err.message));
-    setInterval(() => {
+    cleanupInterval = setInterval(() => {
         cleanupOldData().catch(err => console.error('[CLEANUP] Error:', err.message));
     }, ONE_HOUR_MS);
+}
+
+/**
+ * Detiene el timer de limpieza automática
+ */
+export function stopCleanupTimer() {
+    if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+        cleanupInterval = null;
+        console.log('[CLEANUP] Timer de limpieza detenido.');
+    }
 }

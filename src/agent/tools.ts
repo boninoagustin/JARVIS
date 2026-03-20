@@ -1,15 +1,18 @@
 import { execSync } from 'child_process';
 
+// Tipo para los argumentos de herramientas
+type ToolArgs = Record<string, unknown>;
+
 // The interface expected by our custom LLM routing
 export interface ToolSchema {
   name: string;
   description: string;
   parameters: {
     type: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required?: string[];
   };
-  handler: (args: any) => Promise<string> | string;
+  handler: (args: ToolArgs) => Promise<string> | string;
 }
 
 export const tools: Record<string, ToolSchema> = {
@@ -35,12 +38,44 @@ export const tools: Record<string, ToolSchema> = {
       required: ['command']
     },
     handler: (args: { command: string }) => {
+      // Whitelist de comandos permitidos por seguridad
+      const ALLOWED_COMMANDS = [
+        'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc', 'du',
+        'pwd', 'whoami', 'date', 'echo', 'which', 'dirname', 'basename',
+        'git status', 'git log', 'git diff', 'git branch', 'git remote',
+        'npm run', 'npm test', 'npm list', 'npx tsc --noEmit',
+        'node --version', 'npm --version',
+        'curl', 'wget'
+      ];
+
+      const cmdStart = args.command.trim().split(' ')[0];
+      const isAllowed = ALLOWED_COMMANDS.some(allowed =>
+        args.command.trim().startsWith(allowed) || cmdStart === allowed.split(' ')[0]
+      );
+
+      // Bloquear comandos peligrosos
+      const DANGEROUS_PATTERNS = [
+        /rm\s+-rf/, /rm\s+--/, /rm\s+\/$/,
+        />\s*\/dev/, /mkfs/, /dd\s+if=/,
+        /chmod\s+777/, /chown\s+root/,
+        /\|\s*bash/, /\|\s*sh/, /\|\s*zsh/,
+        /sudo/, /su\s+/, /passwd/,
+        /eval\s*\(/, /exec\s*\(/
+      ];
+
+      const isDangerous = DANGEROUS_PATTERNS.some(pattern => pattern.test(args.command));
+
+      if (!isAllowed || isDangerous) {
+        return `Error: Comando no permitido por seguridad: "${args.command}". Comandos permitidos: ls, cat, head, tail, grep, find, git status/log/diff, npm run/test.`;
+      }
+
       try {
-          const stdout = execSync(args.command, { encoding: 'utf-8', timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
-          return stdout.length > 2500 ? stdout.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. IF YOU NEED MORE DETAIL, REफाइन YOUR SEARCH]' : stdout;
-      } catch (err: any) {
-          const output = err.stdout?.toString() || err.stderr?.toString() || '';
-          const msg = `Error executing command: ${err.message}\nOutput: ${output}`;
+          const stdout = execSync(args.command as string, { encoding: 'utf-8', timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
+          return stdout.length > 2500 ? stdout.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. IF YOU NEED MORE DETAIL, REFINE YOUR SEARCH]' : stdout;
+      } catch (err: unknown) {
+          const error = err as { stdout?: Buffer; stderr?: Buffer; message: string };
+          const output = error.stdout?.toString() || error.stderr?.toString() || '';
+          const msg = `Error executing command: ${error.message}\nOutput: ${output}`;
           return msg.length > 2500 ? msg.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. COMMAND FAILED OR TIMED OUT]' : msg;
       }
     }
@@ -61,8 +96,9 @@ export const tools: Record<string, ToolSchema> = {
       try {
         const link = await uploadToDrive(args.filename, args.content);
         return `Archivo subido exitosamente. Puedes verlo aquí: ${link}`;
-      } catch (err: any) {
-        return `Error al subir a Google Drive: ${err.message}`;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return `Error al subir a Google Drive: ${message}`;
       }
     }
   },
@@ -78,10 +114,30 @@ export const tools: Record<string, ToolSchema> = {
     },
     handler: async (args: { filePath: string }) => {
       const fs = await import('fs');
+      const path = await import('path');
+
+      // Whitelist de directorios permitidos para evitar path traversal
+      const ALLOWED_DIRS = [
+        '/home/agustinbonino/Descargas/JARVIS',
+        '/home/agustinbonino/Descargas',
+        '/tmp'
+      ];
+
+      const resolvedPath = path.resolve(args.filePath);
+
+      const isAllowed = ALLOWED_DIRS.some(allowedDir => {
+        const normalized = path.resolve(allowedDir);
+        return resolvedPath.startsWith(normalized + path.sep) || resolvedPath === normalized;
+      });
+
+      if (!isAllowed) {
+        return `Error: Acceso denegado. El archivo debe estar en: ${ALLOWED_DIRS.join(', ')}`;
+      }
+
       if (!fs.existsSync(args.filePath)) {
         return `Error: El archivo no existe en la ruta especificada (${args.filePath}).`;
       }
-      
+
       const { bot } = await import('../bot/telegram.js');
       const { InputFile } = await import('grammy');
       const { config } = await import('../config.js');
@@ -91,8 +147,9 @@ export const tools: Record<string, ToolSchema> = {
       try {
         await bot.api.sendDocument(targetUserId, new InputFile(args.filePath));
         return `El archivo ${args.filePath} fue enviado con éxito a Telegram.`;
-      } catch (err: any) {
-        return `Error al enviar el archivo a Telegram: ${err.message}`;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return `Error al enviar el archivo a Telegram: ${message}`;
       }
     }
   },
@@ -118,8 +175,9 @@ export const tools: Record<string, ToolSchema> = {
       setTimeout(async () => {
         try {
           await bot.api.sendMessage(targetUserId, `⏰ **Recordatorio:**\n\n${args.message}`, { parse_mode: 'Markdown' });
-        } catch (e: any) {
-          console.error('[REMINDER ERROR]', e.message);
+        } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : String(e);
+          console.error('[REMINDER ERROR]', message);
         }
       }, milliseconds);
       
@@ -151,8 +209,9 @@ export const tools: Record<string, ToolSchema> = {
         } else {
            return 'Error: No se pudo generar el audio (Buffer nulo).';
         }
-      } catch (err: any) {
-        return `Error al generar/enviar el audio: ${err.message}`;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return `Error al generar/enviar el audio: ${message}`;
       }
     }
   }
@@ -169,13 +228,14 @@ export const getToolsForLLM = () => {
   }));
 };
 
-export const executeTool = async (name: string, args: any): Promise<string> => {
+export const executeTool = async (name: string, args: ToolArgs): Promise<string> => {
   if (!tools[name]) {
     return `Error: Tool ${name} not found.`;
   }
   try {
     return await tools[name].handler(args);
-  } catch (err: any) {
-    return `Error executing internal tool ${name}: ${err.message}`;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return `Error executing internal tool ${name}: ${message}`;
   }
 };
