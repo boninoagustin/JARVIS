@@ -3,7 +3,7 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-const TWO_HOURS_MS = 4 * 60 * 60 * 1000;
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // <-- Aumentado a 4 horas de memoria
 const LATENCY_WINDOW_MS = 5000; // 5 segundos de ventana de latencia
 
 interface PendingStruct {
@@ -14,8 +14,8 @@ interface PendingStruct {
 interface LaneState {
     setupReady: boolean;
     setupTimestamp: number | null;
-    setupType: 'CRT' | 'ZONE' | 'BREAKER' | 'PO3' | null;
-    pendingStruct: PendingStruct | null; // <-- Ahora la sala de espera es individual por carril
+    activeSetups: string[]; // <-- Acumulador de confluencias (Ej: ['PO3', 'ZONE'])
+    pendingStruct: PendingStruct | null;
 }
 
 interface MarketState {
@@ -28,7 +28,7 @@ interface MarketState {
 const emptyLane = (): LaneState => ({
     setupReady: false,
     setupTimestamp: null,
-    setupType: null,
+    activeSetups: [],
     pendingStruct: null
 });
 
@@ -108,7 +108,7 @@ export async function processTradingAlert(alertText: string) {
                 if (lane.setupTimestamp && (now - lane.setupTimestamp > FOUR_HOURS_MS)) {
                     lane.setupReady = false;
                     lane.setupTimestamp = null;
-                    lane.setupType = null;
+                    lane.activeSetups = [];
                     console.log(`[TRADING] Setup ${dirName} caducado en ${ticker}`);
                 }
                 // Caducidad de la sala de espera de structs (5 segundos)
@@ -134,18 +134,19 @@ export async function processTradingAlert(alertText: string) {
                     state.macroTimestamp = now;
                     console.log(`[TRADING] Fase 1: MacroBias ${state.macroBias} en ${ticker}`);
 
-                    // NUEVO: PO3 también funciona como Setup local
+                    // NUEVO: PO3 se suma al acumulador de Setups
                     const lane = isBullish ? state.bullishLane : state.bearishLane;
                     lane.setupReady = true;
                     lane.setupTimestamp = now;
-                    lane.setupType = 'PO3';
-                    console.log(`[TRADING] Fase 2 Automática: PO3 activó SetupReady en carril ${direction} para ${ticker}`);
+                    if (!lane.activeSetups.includes('PO3')) lane.activeSetups.push('PO3');
 
-                    // REGLA DE LATENCIA INVERSA (Si el CHOCH se adelantó)
+                    console.log(`[TRADING] Fase 2 Automática: PO3 activó SetupReady en carril ${direction} para ${ticker}. Setups activos: ${lane.activeSetups.join(' + ')}`);
+
+                    // REGLA DE LATENCIA INVERSA
                     if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
                         console.log(`[TRADING] Latencia: PO3 capturó un struct pendiente ${lane.pendingStruct.type}`);
                         await handleTrigger(ticker, state, direction, lane.pendingStruct.type, transaction, docRef);
-                        lane.pendingStruct = null; // Limpiamos después de usar
+                        lane.pendingStruct = null;
                     }
                 }
             }
@@ -167,15 +168,17 @@ export async function processTradingAlert(alertText: string) {
                 const lane = (effectiveDirection === 'BUY') ? state.bullishLane : state.bearishLane;
                 lane.setupReady = true;
                 lane.setupTimestamp = now;
-                lane.setupType = prefix === 'MASTER_ZONE' ? (isBreaker ? 'BREAKER' : 'ZONE') : 'CRT';
 
-                console.log(`[TRADING] Fase 2: SetupReady en carril ${effectiveDirection} (${lane.setupType}) para ${ticker}`);
+                const newSetup = prefix === 'MASTER_ZONE' ? (isBreaker ? 'BREAKER' : 'ZONE') : 'CRT';
+                if (!lane.activeSetups.includes(newSetup)) lane.activeSetups.push(newSetup);
+
+                console.log(`[TRADING] Fase 2: SetupReady en carril ${effectiveDirection} para ${ticker}. Setups activos: ${lane.activeSetups.join(' + ')}`);
 
                 // REGLA DE LATENCIA INVERSA
                 if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
                     console.log(`[TRADING] Latencia: Setup capturó un struct pendiente ${lane.pendingStruct.type}`);
                     await handleTrigger(ticker, state, effectiveDirection, lane.pendingStruct.type, transaction, docRef);
-                    lane.pendingStruct = null; // Limpiamos después de usar
+                    lane.pendingStruct = null;
                 }
             }
 
@@ -248,28 +251,29 @@ async function handleTrigger(
     const lane = isBullish ? state.bullishLane : state.bearishLane;
     const dirText = isBullish ? 'COMPRA' : 'VENTA';
     const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
+    const setupsText = lane.activeSetups.join(' + ');
 
     let alertType: 'GOD' | 'SNIPER' | 'CONTINUATION' | null = null;
     let message = '';
 
     // JERARQUÍA DE EJECUCIÓN (Evalúa de mayor a menor probabilidad)
-
     const macroAligned = (state.macroBias === 'BULLISH' && isBullish) || (state.macroBias === 'BEARISH' && !isBullish);
+    const hasValidContinuationSetup = lane.activeSetups.includes('CRT') || lane.activeSetups.includes('ZONE') || lane.activeSetups.includes('PO3');
 
-    // P1: GOD TIER - CHOCH + Setup Activo (PO3, CRT o ZONE) + MacroBias a favor
+    // P1: GOD TIER - CHOCH + Setup Activo + MacroBias a favor
     if (type === 'CHOCH' && macroAligned && lane.setupReady) {
         alertType = 'GOD';
-        message = `🚀 *ALERTA GOD TIER*: ${ticker} | *${dirText}*\n\n💎 *Confluencia Total Confirmada*\n✅ MacroBias a Favor\n✅ Setup Activo (${lane.setupType})\n✅ Gatillo CHOCH\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🚀 *ALERTA GOD TIER*: ${ticker} | *${dirText}*\n\n💎 *Confluencia Total Confirmada*\n✅ MacroBias a Favor\n🔥 Setups Activos: *${setupsText}*\n✅ Gatillo CHOCH\n\n📊 [Ver en TradingView](${tvLink})`;
     }
     // P2: SNIPER - CHOCH + Setup Activo (MacroBias en contra o neutro)
     else if (type === 'CHOCH' && lane.setupReady) {
         alertType = 'SNIPER';
-        message = `🎯 *ALERTA SNIPER*: ${ticker} | *${dirText}*\n\n🧠 *Contexto Intradía*\n✅ Setup Activo (${lane.setupType})\n⚡ Gatillo CHOCH\n⚠️ MacroBias: ${state.macroBias || 'Neutro'}\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🎯 *ALERTA SNIPER*: ${ticker} | *${dirText}*\n\n🧠 *Contexto Intradía*\n🔥 Setups Activos: *${setupsText}*\n⚡ Gatillo CHOCH\n⚠️ MacroBias: ${state.macroBias || 'Neutro'}\n\n📊 [Ver en TradingView](${tvLink})`;
     }
-    // P3: CONTINUACIÓN - BOS + Setup Activo (Pero solo válido en CRT, ZONE o PO3; excluye Breakers para continuación directa)
-    else if (type === 'BOS' && lane.setupReady && (lane.setupType === 'CRT' || lane.setupType === 'ZONE' || lane.setupType === 'PO3')) {
+    // P3: CONTINUACIÓN - BOS + Setup Activo (Excluye Breakers para continuación directa)
+    else if (type === 'BOS' && lane.setupReady && hasValidContinuationSetup) {
         alertType = 'CONTINUATION';
-        message = `🛤️ *ALERTA CONTINUACIÓN*: ${ticker} | *${dirText}*\n\n🏃 *Movimiento en Tendencia*\n✅ Setup de Continuación (${lane.setupType})\n⚡ Gatillo BOS\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🛤️ *ALERTA CONTINUACIÓN*: ${ticker} | *${dirText}*\n\n🏃 *Movimiento en Tendencia*\n🔥 Setups Activos: *${setupsText}*\n⚡ Gatillo BOS\n\n📊 [Ver en TradingView](${tvLink})`;
     }
 
     if (alertType) {
@@ -283,8 +287,8 @@ async function handleTrigger(
         if (isBullish) state.bullishLane = emptyLane();
         else state.bearishLane = emptyLane();
 
-        console.log(`[TRADING] ✅ ALERTA ${alertType} enviada para ${ticker} | ${dirText} | Gatillo: ${type}`);
+        console.log(`[TRADING] ✅ ALERTA ${alertType} enviada para ${ticker} | ${dirText} | Gatillo: ${type} | Setups: ${setupsText}`);
     } else {
-        console.log(`[TRADING] ⚠️ Gatillo ${type} ignorado por falta de confluencias. Setup actual: ${lane.setupType}`);
+        console.log(`[TRADING] ⚠️ Gatillo ${type} ignorado por falta de confluencias. Setups actuales: ${setupsText}`);
     }
 }
