@@ -3,7 +3,7 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const TWO_HOURS_MS = 4 * 60 * 60 * 1000;
 const LATENCY_WINDOW_MS = 5000; // 5 segundos de ventana de latencia
 
 interface PendingStruct {
@@ -104,8 +104,8 @@ export async function processTradingAlert(alertText: string) {
             }
 
             const cleanLane = (lane: LaneState, dirName: string) => {
-                // Caducidad del Setup (2 horas)
-                if (lane.setupTimestamp && (now - lane.setupTimestamp > TWO_HOURS_MS)) {
+                // Caducidad del Setup (4 horas)
+                if (lane.setupTimestamp && (now - lane.setupTimestamp > FOUR_HOURS_MS)) {
                     lane.setupReady = false;
                     lane.setupTimestamp = null;
                     lane.setupType = null;
