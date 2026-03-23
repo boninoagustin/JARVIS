@@ -3,8 +3,8 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // <-- Aumentado a 4 horas de memoria
-const LATENCY_WINDOW_MS = 5000; // 5 segundos de ventana de latencia
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+const LATENCY_WINDOW_MS = 5000;
 
 interface PendingStruct {
     type: 'CHOCH' | 'BOS';
@@ -14,7 +14,7 @@ interface PendingStruct {
 interface LaneState {
     setupReady: boolean;
     setupTimestamp: number | null;
-    activeSetups: string[]; // <-- Acumulador de confluencias (Ej: ['PO3', 'ZONE'])
+    activeSetups: string[];
     pendingStruct: PendingStruct | null;
 }
 
@@ -49,10 +49,6 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
-/**
- * Encola un pedido de screenshot en Firestore para que el worker local lo procese
- * y luego Vercel lo envíe a Telegram.
- */
 async function enqueueScreenshotRequest(ticker: string, message: string) {
     if (!db) return;
     const requestRef = db.collection('screenshot_requests').doc();
@@ -96,7 +92,7 @@ export async function processTradingAlert(alertText: string) {
             const docSnap = await transaction.get(docRef);
             let state: MarketState = docSnap.exists ? (docSnap.data() as MarketState) : emptyState();
 
-            // 1. LIMPIEZA POR CADUCIDAD (Mantenimiento de Memoria)
+            // 1. LIMPIEZA POR CADUCIDAD
             if (state.macroTimestamp && (now - state.macroTimestamp > SIX_HOURS_MS)) {
                 state.macroBias = null;
                 state.macroTimestamp = null;
@@ -104,14 +100,12 @@ export async function processTradingAlert(alertText: string) {
             }
 
             const cleanLane = (lane: LaneState, dirName: string) => {
-                // Caducidad del Setup (4 horas)
                 if (lane.setupTimestamp && (now - lane.setupTimestamp > FOUR_HOURS_MS)) {
                     lane.setupReady = false;
                     lane.setupTimestamp = null;
                     lane.activeSetups = [];
                     console.log(`[TRADING] Setup ${dirName} caducado en ${ticker}`);
                 }
-                // Caducidad de la sala de espera de structs (5 segundos)
                 if (lane.pendingStruct && (now - lane.pendingStruct.timestamp > LATENCY_WINDOW_MS)) {
                     lane.pendingStruct = null;
                 }
@@ -120,9 +114,7 @@ export async function processTradingAlert(alertText: string) {
             cleanLane(state.bullishLane, 'BULLISH');
             cleanLane(state.bearishLane, 'BEARISH');
 
-            // 2. PROCESAMIENTO POR PREFIJO
-
-            // --- FASE 1: MACRO CONTEXT & PO3 (Fusión de Permiso y Setup) ---
+            // --- FASE 1: MACRO CONTEXT & PO3 ---
             if (prefix === 'PO3_LIVE') {
                 const typePart = parts[3]?.split(':')[1]?.trim().toUpperCase() || '';
                 const isBullish = typePart.includes('BULLISH');
@@ -132,38 +124,38 @@ export async function processTradingAlert(alertText: string) {
                     const direction = isBullish ? 'BUY' : 'SELL';
                     state.macroBias = isBullish ? 'BULLISH' : 'BEARISH';
                     state.macroTimestamp = now;
-                    console.log(`[TRADING] Fase 1: MacroBias ${state.macroBias} en ${ticker}`);
 
-                    // NUEVO: PO3 se suma al acumulador de Setups
+                    // SOBREESCRITURA DE ESTADO: Borramos la memoria del carril opuesto
+                    const oppositeDirection = direction === 'BUY' ? 'SELL' : 'BUY';
+                    if (oppositeDirection === 'BUY') state.bullishLane = emptyLane();
+                    else state.bearishLane = emptyLane();
+
                     const lane = isBullish ? state.bullishLane : state.bearishLane;
                     lane.setupReady = true;
                     lane.setupTimestamp = now;
                     if (!lane.activeSetups.includes('PO3')) lane.activeSetups.push('PO3');
 
-                    console.log(`[TRADING] Fase 2 Automática: PO3 activó SetupReady en carril ${direction} para ${ticker}. Setups activos: ${lane.activeSetups.join(' + ')}`);
+                    console.log(`[TRADING] Fase 1: PO3 activó carril ${direction}. Carril ${oppositeDirection} limpiado.`);
 
-                    // REGLA DE LATENCIA INVERSA
                     if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
-                        console.log(`[TRADING] Latencia: PO3 capturó un struct pendiente ${lane.pendingStruct.type}`);
                         await handleTrigger(ticker, state, direction, lane.pendingStruct.type, transaction, docRef);
                         lane.pendingStruct = null;
                     }
                 }
             }
 
-            // --- FASE 2: SETUP LOCAL (Zonas o Trampas Menores) ---
+            // --- FASE 2: SETUP LOCAL Y BREAKER BLOCKS (Sobre-escritura) ---
             else if (prefix === 'LOCAL_CRT' || prefix === 'LOCAL_CRT_SCALP' || prefix === 'MASTER_ZONE') {
-                if (!currentDirection) {
-                    console.log(`[TRADING] Alerta ${prefix} sin dirección clara en ${ticker}. Ignorada.`);
-                    return;
-                }
+                if (!currentDirection) return;
 
-                let effectiveDirection = currentDirection;
+                // TradingView ya manda la dirección invertida para los Breakers, no hace falta invertirla en Node.
+                const effectiveDirection = currentDirection;
                 const isBreaker = upperText.includes('BREAKER_BLOCK') || upperText.includes('BREAKER BLOCK');
-                if (isBreaker) {
-                    effectiveDirection = (currentDirection === 'BUY') ? 'SELL' : 'BUY';
-                    console.log(`[TRADING] BREAKER detectado. Invirtiendo ${currentDirection} -> ${effectiveDirection}`);
-                }
+
+                // SOBREESCRITURA DE ESTADO: Llegó un OB/Breaker nuevo, borramos el carril contrario
+                const oppositeDirection = effectiveDirection === 'BUY' ? 'SELL' : 'BUY';
+                if (oppositeDirection === 'BUY') state.bullishLane = emptyLane();
+                else state.bearishLane = emptyLane();
 
                 const lane = (effectiveDirection === 'BUY') ? state.bullishLane : state.bearishLane;
                 lane.setupReady = true;
@@ -172,70 +164,47 @@ export async function processTradingAlert(alertText: string) {
                 const newSetup = prefix === 'MASTER_ZONE' ? (isBreaker ? 'BREAKER' : 'ZONE') : 'CRT';
                 if (!lane.activeSetups.includes(newSetup)) lane.activeSetups.push(newSetup);
 
-                console.log(`[TRADING] Fase 2: SetupReady en carril ${effectiveDirection} para ${ticker}. Setups activos: ${lane.activeSetups.join(' + ')}`);
+                console.log(`[TRADING] Fase 2: Setup ${newSetup} activó carril ${effectiveDirection}. Carril ${oppositeDirection} limpiado.`);
 
-                // REGLA DE LATENCIA INVERSA
                 if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
-                    console.log(`[TRADING] Latencia: Setup capturó un struct pendiente ${lane.pendingStruct.type}`);
                     await handleTrigger(ticker, state, effectiveDirection, lane.pendingStruct.type, transaction, docRef);
                     lane.pendingStruct = null;
                 }
             }
 
-            // --- FASE 3: GATILLO (MASTER_STRUCT / CHOCH / BOS) ---
+            // --- FASE 3: GATILLO ESTRUCTURAL (Ignora ruido contrario) ---
             else if (prefix === 'MASTER_STRUCT' || prefix.startsWith('BOS') || prefix.startsWith('CHOCH')) {
                 const triggerType: 'CHOCH' | 'BOS' = (prefix.startsWith('CHOCH') || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'))) ? 'CHOCH' : 'BOS';
 
-                if (!currentDirection) {
-                    console.log(`[TRADING] Gatillo ${triggerType} sin dirección en ${ticker}. Ignorado.`);
-                    return;
-                }
+                if (!currentDirection) return;
 
                 console.log(`[TRADING] Fase 3: Gatillo ${triggerType} ${currentDirection} recibido en ${ticker}`);
 
-                // KILL SWITCH: Invalidación lógica por estructura opuesta
-                const oppositeDirection = (currentDirection === 'BUY') ? 'SELL' : 'BUY';
-                const oppositeLane = (oppositeDirection === 'BUY') ? state.bullishLane : state.bearishLane;
-
-                if (oppositeLane.setupReady || oppositeLane.pendingStruct) {
-                    console.log(`[TRADING] KILL SWITCH: Gatillo ${currentDirection} anula operaciones del carril ${oppositeDirection}.`);
-                    if (oppositeDirection === 'BUY') state.bullishLane = emptyLane();
-                    else state.bearishLane = emptyLane();
-                }
-
-                // Procesamiento en el carril correcto
+                // Procesamiento EXCLUSIVO en el carril de la misma dirección (Ignora el opuesto)
                 const currentLane = (currentDirection === 'BUY') ? state.bullishLane : state.bearishLane;
 
                 if (currentLane.setupReady) {
-                    // HAY SETUP ACTIVO → Disparar inmediatamente
                     await handleTrigger(ticker, state, currentDirection, triggerType, transaction, docRef);
                     currentLane.pendingStruct = null;
                 } else {
-                    // NO HAY SETUP → Guardar en la sala de espera de SU carril
-                    currentLane.pendingStruct = {
-                        type: triggerType,
-                        timestamp: now
-                    };
-                    console.log(`[TRADING] Gatillo ${triggerType} guardado como pendiente en carril ${currentDirection} (Latencia iniciada).`);
+                    currentLane.pendingStruct = { type: triggerType, timestamp: now };
+                    console.log(`[TRADING] Gatillo ${triggerType} pendiente en carril ${currentDirection}.`);
                 }
             }
 
-            // --- RESET TOTAL MANUAl ---
+            // --- RESET TOTAL MANUAL ---
             else if (prefix === 'MASTER_INVALID') {
                 state.bullishLane = emptyLane();
                 state.bearishLane = emptyLane();
                 state.macroBias = null;
                 state.macroTimestamp = null;
-                console.log(`[TRADING] Memoria completamente reseteada para ${ticker}`);
-            } else {
-                console.log(`[TRADING] Alerta ignorada: ${prefix}`);
+                console.log(`[TRADING] Memoria reseteada manualmente para ${ticker}`);
             }
 
-            // Guardar el estado actualizado en Firebase
             transaction.set(docRef, state);
         });
     } catch (e: any) {
-        console.error(`[TRADING] Error crítico en la transacción de Firebase:`, e.message);
+        console.error(`[TRADING] Error crítico en Firebase:`, e.message);
     }
 }
 
@@ -256,24 +225,24 @@ async function handleTrigger(
     let alertType: 'GOD' | 'SNIPER' | 'CONTINUATION' | null = null;
     let message = '';
 
-    // JERARQUÍA DE EJECUCIÓN (Evalúa de mayor a menor probabilidad)
     const macroAligned = (state.macroBias === 'BULLISH' && isBullish) || (state.macroBias === 'BEARISH' && !isBullish);
-    const hasValidContinuationSetup = lane.activeSetups.includes('CRT') || lane.activeSetups.includes('ZONE') || lane.activeSetups.includes('PO3');
+    // Agregamos 'BREAKER' a la lista para que el BOS lo active correctamente
+    const hasValidContinuationSetup = lane.activeSetups.includes('CRT') || lane.activeSetups.includes('ZONE') || lane.activeSetups.includes('PO3') || lane.activeSetups.includes('BREAKER');
 
-    // P1: GOD TIER - CHOCH + Setup Activo + MacroBias a favor
+    // P1: GOD TIER
     if (type === 'CHOCH' && macroAligned && lane.setupReady) {
         alertType = 'GOD';
-        message = `🚀 *ALERTA GOD TIER*: ${ticker} | *${dirText}*\n\n💎 *Confluencia Total Confirmada*\n✅ MacroBias a Favor\n🔥 Setups Activos: *${setupsText}*\n✅ Gatillo CHOCH\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🚀 *ALERTA GOD TIER*: ${ticker} | *${dirText}*\n\n💎 *Confluencia Confirmada*\n✅ MacroBias a Favor\n🔥 Setups: *${setupsText}*\n✅ Gatillo CHOCH\n\n📊 [TradingView](${tvLink})`;
     }
-    // P2: SNIPER - CHOCH + Setup Activo (MacroBias en contra o neutro)
+    // P2: SNIPER
     else if (type === 'CHOCH' && lane.setupReady) {
         alertType = 'SNIPER';
-        message = `🎯 *ALERTA SNIPER*: ${ticker} | *${dirText}*\n\n🧠 *Contexto Intradía*\n🔥 Setups Activos: *${setupsText}*\n⚡ Gatillo CHOCH\n⚠️ MacroBias: ${state.macroBias || 'Neutro'}\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🎯 *ALERTA SNIPER*: ${ticker} | *${dirText}*\n\n🧠 *Contexto Intradía*\n🔥 Setups: *${setupsText}*\n⚡ Gatillo CHOCH\n⚠️ MacroBias: ${state.macroBias || 'Neutro'}\n\n📊 [TradingView](${tvLink})`;
     }
-    // P3: CONTINUACIÓN - BOS + Setup Activo (Excluye Breakers para continuación directa)
+    // P3: CONTINUACIÓN (Se activa si el Setup es BREAKER y llega un BOS)
     else if (type === 'BOS' && lane.setupReady && hasValidContinuationSetup) {
         alertType = 'CONTINUATION';
-        message = `🛤️ *ALERTA CONTINUACIÓN*: ${ticker} | *${dirText}*\n\n🏃 *Movimiento en Tendencia*\n🔥 Setups Activos: *${setupsText}*\n⚡ Gatillo BOS\n\n📊 [Ver en TradingView](${tvLink})`;
+        message = `🛤️ *ALERTA CONTINUACIÓN*: ${ticker} | *${dirText}*\n\n🏃 *Movimiento en Tendencia*\n🔥 Setups: *${setupsText}*\n⚡ Gatillo BOS\n\n📊 [TradingView](${tvLink})`;
     }
 
     if (alertType) {
@@ -283,12 +252,12 @@ async function handleTrigger(
             await enqueueScreenshotRequest(ticker, message);
         }
 
-        // VACIADO DE CARRIL: Borramos toda la memoria del setup usado para evitar que vuelva a disparar
+        // Vaciamos ÚNICAMENTE el carril usado.
         if (isBullish) state.bullishLane = emptyLane();
         else state.bearishLane = emptyLane();
 
-        console.log(`[TRADING] ✅ ALERTA ${alertType} enviada para ${ticker} | ${dirText} | Gatillo: ${type} | Setups: ${setupsText}`);
+        console.log(`[TRADING] ✅ ALERTA ${alertType} para ${ticker} | ${dirText} | Gatillo: ${type}`);
     } else {
-        console.log(`[TRADING] ⚠️ Gatillo ${type} ignorado por falta de confluencias. Setups actuales: ${setupsText}`);
+        console.log(`[TRADING] ⚠️ Gatillo ${type} ignorado por falta de confluencias.`);
     }
 }
