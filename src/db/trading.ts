@@ -2,41 +2,27 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-const LATENCY_WINDOW_MS = 5000;
-
-interface PendingStruct {
-    type: 'CHOCH' | 'BOS';
-    timestamp: number;
+// --- INTERFACES DEL RADAR JSON ---
+interface RadarZone {
+    dir: 'BUY' | 'SELL';
+    top: number;
+    btm: number;
+    lvl: string;
+    medal?: string;
 }
 
-interface LaneState {
-    setupReady: boolean;
-    setupTimestamp: number | null;
-    activeSetups: string[];
-    pendingStruct: PendingStruct | null;
+interface RadarState {
+    lastSyncDate: string | null; // Para reiniciar el mapa cada día (ej: '2026-03-24')
+    zones: RadarZone[];          // El gran mapa de cajas superpuestas
+    activeLocks: string[];       // Candados para evitar spam (ej: 'BUY_1.1550_1.1500')
+    lastPrice: number | null;
 }
 
-interface MarketState {
-    macroBias: 'BULLISH' | 'BEARISH' | null;
-    macroTimestamp: number | null;
-    bullishLane: LaneState;
-    bearishLane: LaneState;
-}
-
-const emptyLane = (): LaneState => ({
-    setupReady: false,
-    setupTimestamp: null,
-    activeSetups: [],
-    pendingStruct: null
-});
-
-const emptyState = (): MarketState => ({
-    macroBias: null,
-    macroTimestamp: null,
-    bullishLane: emptyLane(),
-    bearishLane: emptyLane()
+const emptyState = (): RadarState => ({
+    lastSyncDate: null,
+    zones: [],
+    activeLocks: [],
+    lastPrice: null
 });
 
 async function sendTelegramAlert(message: string) {
@@ -58,7 +44,6 @@ async function enqueueScreenshotRequest(ticker: string, message: string) {
         status: 'pending',
         timestamp: Date.now()
     });
-    console.log(`[TRADING] Screenshot encolado (${requestRef.id}) para ${ticker}`);
 }
 
 export async function processTradingAlert(alertText: string) {
@@ -67,197 +52,141 @@ export async function processTradingAlert(alertText: string) {
         return;
     }
 
-    const parts = alertText.split(/[,|]/).map(p => p.replace(/"/g, '').trim());
-    if (parts.length < 2) {
-        console.error('[TRADING] Formato de alerta inválido:', alertText);
-        return;
-    }
+    // Extracción segura del prefijo y ticker sin romper un posible JSON
+    const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
+    const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
+
+    if (parts.length < 2) return;
 
     const prefix = parts[0].toUpperCase();
-    const ticker = parts[1];
+    const ticker = parts[1].replace(/"/g, '');
     const upperText = alertText.toUpperCase();
 
+    // Determinar dirección del gatillo
     let currentDirection: 'BUY' | 'SELL' | null = null;
-    if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('ALCISTA') || upperText.includes('COMPRA') || upperText.includes('LONG')) {
+    if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('ALCISTA') || upperText.includes('COMPRA')) {
         currentDirection = 'BUY';
-    } else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('BAJISTA') || upperText.includes('VENTA') || upperText.includes('SHORT')) {
+    } else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('BAJISTA') || upperText.includes('VENTA')) {
         currentDirection = 'SELL';
     }
 
-    const docRef = db.collection('market_states').doc(ticker);
-    const now = Date.now();
+    const docRef = db.collection('radar_states').doc(ticker);
+    const todayStr = new Date().toISOString().split('T')[0]; // Fecha actual YYYY-MM-DD
 
     try {
         await db.runTransaction(async (transaction) => {
             const docSnap = await transaction.get(docRef);
-            let state: MarketState = docSnap.exists ? (docSnap.data() as MarketState) : emptyState();
+            let state: RadarState = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
 
-            // 1. LIMPIEZA POR CADUCIDAD
-            if (state.macroTimestamp && (now - state.macroTimestamp > SIX_HOURS_MS)) {
-                state.macroBias = null;
-                state.macroTimestamp = null;
-                console.log(`[TRADING] MacroBias caducado en ${ticker}`);
+            // =========================================================================
+            // 📡 MOTOR 1: SINCRONIZACIÓN DE MAPA (JSON)
+            // =========================================================================
+            if (prefix === 'SYNC_ZONES') {
+                if (!alertText.includes('Payload:')) return;
+
+                const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
+                try {
+                    const parsedZones = JSON.parse(payloadStr) as RadarZone[];
+
+                    // Si es un día nuevo, borramos el mapa de ayer. Si es el mismo día, sumamos (4H + 1H + 30M)
+                    if (state.lastSyncDate !== todayStr) {
+                        state.zones = [];
+                        state.activeLocks = [];
+                        state.lastSyncDate = todayStr;
+                        console.log(`[RADAR] 🔄 Nuevo día detectado. Limpiando memoria para ${ticker}`);
+                    }
+
+                    state.zones.push(...parsedZones);
+                    console.log(`[RADAR] 📦 ${parsedZones.length} zonas agregadas. Total en memoria: ${state.zones.length}`);
+
+                    // Notificamos que el radar se actualizó con este fragmento
+                    await sendTelegramAlert(`🗺️ *RADAR ACTUALIZADO | ${ticker}*\n✅ Se sumaron ${parsedZones.length} zonas nuevas al mapa.\n🤖 *JARVIS en línea. Esperando cruces.*`);
+
+                } catch (e) {
+                    console.error(`[RADAR] Error parseando JSON de zonas:`, e);
+                }
             }
 
-            const cleanLane = (lane: LaneState, dirName: string) => {
-                if (lane.setupTimestamp && (now - lane.setupTimestamp > FOUR_HOURS_MS)) {
-                    lane.setupReady = false;
-                    lane.setupTimestamp = null;
-                    lane.activeSetups = [];
-                    console.log(`[TRADING] Setup ${dirName} caducado en ${ticker}`);
-                }
-                if (lane.pendingStruct && (now - lane.pendingStruct.timestamp > LATENCY_WINDOW_MS)) {
-                    lane.pendingStruct = null;
-                }
-            };
+            // =========================================================================
+            // 📍 MOTOR 2: RASTREO POR GPS (PING PRICE)
+            // =========================================================================
+            else if (prefix === 'PING_PRICE') {
+                const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
+                if (!priceMatch) return;
 
-            cleanLane(state.bullishLane, 'BULLISH');
-            cleanLane(state.bearishLane, 'BEARISH');
+                const currentPrice = parseFloat(priceMatch[1]);
+                state.lastPrice = currentPrice;
 
-            // --- FASE 1: MACRO CONTEXT & PO3 ---
-            if (prefix === 'PO3_LIVE') {
-                const typePart = parts[3]?.split(':')[1]?.trim().toUpperCase() || '';
-                const isBullish = typePart.includes('BULLISH');
-                const isBearish = typePart.includes('BEARISH');
+                const currentInsideLocks: string[] = [];
+                let hasNewInvasion = false;
+                let invadedDir = '';
 
-                if (isBullish || isBearish) {
-                    const direction = isBullish ? 'BUY' : 'SELL';
-                    state.macroBias = isBullish ? 'BULLISH' : 'BEARISH';
-                    state.macroTimestamp = now;
+                // Escaneamos todo el mapa para ver dónde estamos parados
+                for (const zone of state.zones) {
+                    if (currentPrice <= zone.top && currentPrice >= zone.btm) {
+                        const lockKey = `${zone.dir}_${zone.top}_${zone.btm}`;
+                        currentInsideLocks.push(lockKey);
 
-                    // SOBREESCRITURA DE ESTADO: Borramos la memoria del carril opuesto
-                    const oppositeDirection = direction === 'BUY' ? 'SELL' : 'BUY';
-                    if (oppositeDirection === 'BUY') state.bullishLane = emptyLane();
-                    else state.bearishLane = emptyLane();
-
-                    const lane = isBullish ? state.bullishLane : state.bearishLane;
-                    lane.setupReady = true;
-                    lane.setupTimestamp = now;
-                    if (!lane.activeSetups.includes('PO3')) lane.activeSetups.push('PO3');
-
-                    console.log(`[TRADING] Fase 1: PO3 activó carril ${direction}. Carril ${oppositeDirection} limpiado.`);
-
-                    if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
-                        await handleTrigger(ticker, state, direction, lane.pendingStruct.type, transaction, docRef);
-                        lane.pendingStruct = null;
+                        // Si esta zona no tenía el candado puesto, es una invasión nueva!
+                        if (!state.activeLocks.includes(lockKey)) {
+                            hasNewInvasion = true;
+                            invadedDir = zone.dir === 'BUY' ? 'Alcista (Soporte)' : 'Bajista (Resistencia)';
+                        }
                     }
                 }
-            }
 
-            // --- FASE 2: SETUP LOCAL Y BREAKER BLOCKS (Sobre-escritura) ---
-            else if (prefix === 'LOCAL_CRT' || prefix === 'LOCAL_CRT_SCALP' || prefix === 'MASTER_ZONE') {
-                if (!currentDirection) return;
+                // Actualizamos los candados (lo que suelta automáticamente las zonas que el precio abandonó)
+                state.activeLocks = currentInsideLocks;
 
-                // TradingView ya manda la dirección invertida para los Breakers, no hace falta invertirla en Node.
-                const effectiveDirection = currentDirection;
-                const isBreaker = upperText.includes('BREAKER_BLOCK') || upperText.includes('BREAKER BLOCK');
-
-                // SOBREESCRITURA DE ESTADO: Llegó un OB/Breaker nuevo, borramos el carril contrario
-                const oppositeDirection = effectiveDirection === 'BUY' ? 'SELL' : 'BUY';
-                if (oppositeDirection === 'BUY') state.bullishLane = emptyLane();
-                else state.bearishLane = emptyLane();
-
-                const lane = (effectiveDirection === 'BUY') ? state.bullishLane : state.bearishLane;
-                lane.setupReady = true;
-                lane.setupTimestamp = now;
-
-                const newSetup = prefix === 'MASTER_ZONE' ? (isBreaker ? 'BREAKER' : 'ZONE') : 'CRT';
-                if (!lane.activeSetups.includes(newSetup)) lane.activeSetups.push(newSetup);
-
-                console.log(`[TRADING] Fase 2: Setup ${newSetup} activó carril ${effectiveDirection}. Carril ${oppositeDirection} limpiado.`);
-
-                if (lane.pendingStruct && (now - lane.pendingStruct.timestamp <= LATENCY_WINDOW_MS)) {
-                    await handleTrigger(ticker, state, effectiveDirection, lane.pendingStruct.type, transaction, docRef);
-                    lane.pendingStruct = null;
+                if (hasNewInvasion) {
+                    console.log(`[RADAR] 📍 Invasión de zona detectada en ${ticker} a precio ${currentPrice}`);
+                    await sendTelegramAlert(`📍 *INVASIÓN DE ZONA MACRO | ${ticker}*\n\n📉 *Precio Actual:* ${currentPrice}\n🚨 *Atención:* El precio acaba de entrar en un *Order Block Macro ${invadedDir}*.\n\n🧠 *Acción:* Zona de interés alcanzada en GPS. Preparate para setups locales.`);
                 }
             }
 
-            // --- FASE 3: GATILLO ESTRUCTURAL (Ignora ruido contrario) ---
-            else if (prefix === 'MASTER_STRUCT' || prefix.startsWith('BOS') || prefix.startsWith('CHOCH')) {
-                const triggerType: 'CHOCH' | 'BOS' = (prefix.startsWith('CHOCH') || (prefix === 'MASTER_STRUCT' && upperText.includes('CHOCH'))) ? 'CHOCH' : 'BOS';
-
+            // =========================================================================
+            // 🎯 MOTOR 3: GATILLOS Y CRUCE DE CONFLUENCIAS (15M REALTIME)
+            // =========================================================================
+            else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT') {
                 if (!currentDirection) return;
 
-                console.log(`[TRADING] Fase 3: Gatillo ${triggerType} ${currentDirection} recibido en ${ticker}`);
+                const triggerName = prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' : 'Order Block Invocado';
+                const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
 
-                // Procesamiento EXCLUSIVO en el carril de la misma dirección (Ignora el opuesto)
-                const currentLane = (currentDirection === 'BUY') ? state.bullishLane : state.bearishLane;
+                // PREGUNTA 1: ¿Estamos ADENTRO de una caja macro con esta misma dirección? (GOD TIER)
+                const isGodTier = state.activeLocks.some(lock => lock.startsWith(currentDirection as string));
 
-                if (currentLane.setupReady) {
-                    await handleTrigger(ticker, state, currentDirection, triggerType, transaction, docRef);
-                    currentLane.pendingStruct = null;
+                // PREGUNTA 2: Si no estamos adentro, ¿Al menos el mapa general tiene zonas de esta dirección? (CONTINUACIÓN)
+                const hasMacroAlignment = state.zones.some(zone => zone.dir === currentDirection);
+
+                let message = '';
+                let alertLevel: 'GOD' | 'CONT' | null = null;
+
+                if (isGodTier) {
+                    alertLevel = 'GOD';
+                    message = `🔥 *ALERTA GOD TIER | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n📦 *Superposición:* DENTRO del bloque Macro (${dirText})\n🧭 *Contexto:* Alineado con Fuerte Order Flow.\n\n🧠 *Acción:* Máxima probabilidad. Abrí 5M y buscá tu Engulfing/CHoCH.`;
+                } else if (hasMacroAlignment) {
+                    alertLevel = 'CONT';
+                    message = `🛤️ *CONTINUACIÓN TENDENCIA | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n🧭 *Contexto:* A favor del mapa Macro (${dirText}).\n⚠️ *Nota:* Apoya la tendencia mayor.\n\n🧠 *Acción:* Trade válido de continuación. Revisá 5M para entrar.`;
+                }
+
+                if (alertLevel) {
+                    console.log(`[RADAR] 🚀 Cruce validado. Disparando Alerta ${alertLevel} en ${ticker}`);
+                    if (alertLevel === 'GOD') {
+                        await sendTelegramAlert(message);
+                    } else {
+                        // Las de continuación las mandamos con captura
+                        await enqueueScreenshotRequest(ticker, message);
+                    }
                 } else {
-                    currentLane.pendingStruct = { type: triggerType, timestamp: now };
-                    console.log(`[TRADING] Gatillo ${triggerType} pendiente en carril ${currentDirection}.`);
+                    console.log(`[RADAR] ⚠️ Gatillo ${triggerName} en ${ticker} ignorado por estar contra el mapa Macro.`);
                 }
             }
 
-            // --- RESET TOTAL MANUAL ---
-            else if (prefix === 'MASTER_INVALID') {
-                state.bullishLane = emptyLane();
-                state.bearishLane = emptyLane();
-                state.macroBias = null;
-                state.macroTimestamp = null;
-                console.log(`[TRADING] Memoria reseteada manualmente para ${ticker}`);
-            }
-
+            // Guardamos el nuevo estado en la base de datos
             transaction.set(docRef, state);
         });
     } catch (e: any) {
-        console.error(`[TRADING] Error crítico en Firebase:`, e.message);
-    }
-}
-
-async function handleTrigger(
-    ticker: string,
-    state: MarketState,
-    direction: 'BUY' | 'SELL',
-    type: 'CHOCH' | 'BOS',
-    transaction: any,
-    docRef: any
-) {
-    const isBullish = direction === 'BUY';
-    const lane = isBullish ? state.bullishLane : state.bearishLane;
-    const dirText = isBullish ? 'COMPRA' : 'VENTA';
-    const tvLink = `https://www.tradingview.com/chart/orjqnC70/?symbol=${ticker}&interval=15`;
-    const setupsText = lane.activeSetups.join(' + ');
-
-    let alertType: 'GOD' | 'SNIPER' | 'CONTINUATION' | null = null;
-    let message = '';
-
-    const macroAligned = (state.macroBias === 'BULLISH' && isBullish) || (state.macroBias === 'BEARISH' && !isBullish);
-    // Agregamos 'BREAKER' a la lista para que el BOS lo active correctamente
-    const hasValidContinuationSetup = lane.activeSetups.includes('CRT') || lane.activeSetups.includes('ZONE') || lane.activeSetups.includes('PO3') || lane.activeSetups.includes('BREAKER');
-
-    // P1: GOD TIER
-    if (type === 'CHOCH' && macroAligned && lane.setupReady) {
-        alertType = 'GOD';
-        message = `🚀 *ALERTA GOD TIER*: ${ticker} | *${dirText}*\n\n💎 *Confluencia Confirmada*\n✅ MacroBias a Favor\n🔥 Setups: *${setupsText}*\n✅ Gatillo CHOCH\n\n📊 [TradingView](${tvLink})`;
-    }
-    // P2: SNIPER
-    else if (type === 'CHOCH' && lane.setupReady) {
-        alertType = 'SNIPER';
-        message = `🎯 *ALERTA SNIPER*: ${ticker} | *${dirText}*\n\n🧠 *Contexto Intradía*\n🔥 Setups: *${setupsText}*\n⚡ Gatillo CHOCH\n⚠️ MacroBias: ${state.macroBias || 'Neutro'}\n\n📊 [TradingView](${tvLink})`;
-    }
-    // P3: CONTINUACIÓN (Se activa si el Setup es BREAKER y llega un BOS)
-    else if (type === 'BOS' && lane.setupReady && hasValidContinuationSetup) {
-        alertType = 'CONTINUATION';
-        message = `🛤️ *ALERTA CONTINUACIÓN*: ${ticker} | *${dirText}*\n\n🏃 *Movimiento en Tendencia*\n🔥 Setups: *${setupsText}*\n⚡ Gatillo BOS\n\n📊 [TradingView](${tvLink})`;
-    }
-
-    if (alertType) {
-        if (alertType === 'GOD') {
-            await sendTelegramAlert(message);
-        } else {
-            await enqueueScreenshotRequest(ticker, message);
-        }
-
-        // Vaciamos ÚNICAMENTE el carril usado.
-        if (isBullish) state.bullishLane = emptyLane();
-        else state.bearishLane = emptyLane();
-
-        console.log(`[TRADING] ✅ ALERTA ${alertType} para ${ticker} | ${dirText} | Gatillo: ${type}`);
-    } else {
-        console.log(`[TRADING] ⚠️ Gatillo ${type} ignorado por falta de confluencias.`);
+        console.error(`[RADAR] Error crítico en Firebase:`, e.message);
     }
 }
