@@ -151,8 +151,11 @@ export async function processTradingAlert(alertText: string) {
             else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT' || prefix === 'PO3_LIVE') {
                 if (!currentDirection) return;
 
+                // Acá está la línea corregida que suma la detección del iFVG
                 const triggerName = prefix === 'PO3_LIVE' ? 'Setup NY PO3 (Barrido Londres)' :
-                    prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' : 'Order Block Invocado';
+                    prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' :
+                        upperText.includes('IFVG') ? 'Toque de iFVG (God Zone)' : 'Order Block Invocado';
+
                 const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
                 const oppositeDirection = currentDirection === 'BUY' ? 'SELL' : 'BUY';
 
