@@ -147,10 +147,13 @@ export async function processTradingAlert(alertText: string) {
             // =========================================================================
             // 🎯 MOTOR 3: GATILLOS Y CRUCE DE CONFLUENCIAS (15M REALTIME)
             // =========================================================================
-            else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT') {
+            else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT' || prefix === 'PO3_LIVE') {
                 if (!currentDirection) return;
 
-                const triggerName = prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' : 'Order Block Invocado';
+                // Identificamos exactamente qué tipo de gatillo acaba de saltar
+                const triggerName = prefix === 'PO3_LIVE' ? 'Setup NY PO3 (Barrido Londres)' :
+                    prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' : 'Order Block Invocado';
+
                 const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
 
                 // PREGUNTA 1: ¿Estamos ADENTRO de una caja macro con esta misma dirección? (GOD TIER)
