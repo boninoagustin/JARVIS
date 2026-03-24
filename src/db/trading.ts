@@ -4,6 +4,7 @@ import { config } from '../config.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
+    tf?: string; // Temporalidad de origen (ej: '60', '240')
     dir: 'BUY' | 'SELL';
     top: number;
     btm: number;
@@ -12,9 +13,9 @@ interface RadarZone {
 }
 
 interface RadarState {
-    lastSyncDate: string | null; // Para reiniciar el mapa cada día (ej: '2026-03-24')
-    zones: RadarZone[];          // El gran mapa de cajas superpuestas
-    activeLocks: string[];       // Candados para evitar spam (ej: 'BUY_1.1550_1.1500')
+    lastSyncDate: string | null;
+    zones: RadarZone[];
+    activeLocks: string[];
     lastPrice: number | null;
 }
 
@@ -52,7 +53,6 @@ export async function processTradingAlert(alertText: string) {
         return;
     }
 
-    // Extracción segura del prefijo y ticker sin romper un posible JSON
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
     const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
 
@@ -62,7 +62,6 @@ export async function processTradingAlert(alertText: string) {
     const ticker = parts[1].replace(/"/g, '');
     const upperText = alertText.toUpperCase();
 
-    // Determinar dirección del gatillo
     let currentDirection: 'BUY' | 'SELL' | null = null;
     if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('ALCISTA') || upperText.includes('COMPRA')) {
         currentDirection = 'BUY';
@@ -71,7 +70,7 @@ export async function processTradingAlert(alertText: string) {
     }
 
     const docRef = db.collection('radar_states').doc(ticker);
-    const todayStr = new Date().toISOString().split('T')[0]; // Fecha actual YYYY-MM-DD
+    const todayStr = new Date().toISOString().split('T')[0];
 
     try {
         await db.runTransaction(async (transaction) => {
@@ -79,28 +78,33 @@ export async function processTradingAlert(alertText: string) {
             let state: RadarState = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
 
             // =========================================================================
-            // 📡 MOTOR 1: SINCRONIZACIÓN DE MAPA (JSON)
+            // 📡 MOTOR 1: SINCRONIZACIÓN DE MAPA EN VIVO
             // =========================================================================
             if (prefix === 'SYNC_ZONES') {
                 if (!alertText.includes('Payload:')) return;
 
+                // Extraemos el TF (ej: 240, 60, 30)
+                const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
+                const sourceTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
                 const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
+
                 try {
                     const parsedZones = JSON.parse(payloadStr) as RadarZone[];
+                    parsedZones.forEach(z => z.tf = sourceTf);
 
-                    // Si es un día nuevo, borramos el mapa de ayer. Si es el mismo día, sumamos (4H + 1H + 30M)
                     if (state.lastSyncDate !== todayStr) {
                         state.zones = [];
                         state.activeLocks = [];
                         state.lastSyncDate = todayStr;
-                        console.log(`[RADAR] 🔄 Nuevo día detectado. Limpiando memoria para ${ticker}`);
+                        console.log(`[RADAR] 🔄 Nuevo día. Limpiando memoria para ${ticker}`);
                     }
 
-                    state.zones.push(...parsedZones);
-                    console.log(`[RADAR] 📦 ${parsedZones.length} zonas agregadas. Total en memoria: ${state.zones.length}`);
+                    // Magia: Borramos SOLO las cajas viejas de esta temporalidad específica
+                    state.zones = state.zones.filter(z => z.tf !== sourceTf);
 
-                    // Notificamos que el radar se actualizó con este fragmento
-                    await sendTelegramAlert(`🗺️ *RADAR ACTUALIZADO | ${ticker}*\n✅ Se sumaron ${parsedZones.length} zonas nuevas al mapa.\n🤖 *JARVIS en línea. Esperando cruces.*`);
+                    // Inyectamos las cajas frescas
+                    state.zones.push(...parsedZones);
+                    console.log(`[RADAR] 📦 Mapa de ${sourceTf}M actualizado. Total de zonas: ${state.zones.length}`);
 
                 } catch (e) {
                     console.error(`[RADAR] Error parseando JSON de zonas:`, e);
@@ -121,13 +125,11 @@ export async function processTradingAlert(alertText: string) {
                 let hasNewInvasion = false;
                 let invadedDir = '';
 
-                // Escaneamos todo el mapa para ver dónde estamos parados
                 for (const zone of state.zones) {
                     if (currentPrice <= zone.top && currentPrice >= zone.btm) {
                         const lockKey = `${zone.dir}_${zone.top}_${zone.btm}`;
                         currentInsideLocks.push(lockKey);
 
-                        // Si esta zona no tenía el candado puesto, es una invasión nueva!
                         if (!state.activeLocks.includes(lockKey)) {
                             hasNewInvasion = true;
                             invadedDir = zone.dir === 'BUY' ? 'Alcista (Soporte)' : 'Bajista (Resistencia)';
@@ -135,31 +137,34 @@ export async function processTradingAlert(alertText: string) {
                     }
                 }
 
-                // Actualizamos los candados (lo que suelta automáticamente las zonas que el precio abandonó)
                 state.activeLocks = currentInsideLocks;
 
                 if (hasNewInvasion) {
-                    console.log(`[RADAR] 📍 Invasión de zona detectada en ${ticker} a precio ${currentPrice}`);
-                    await sendTelegramAlert(`📍 *INVASIÓN DE ZONA MACRO | ${ticker}*\n\n📉 *Precio Actual:* ${currentPrice}\n🚨 *Atención:* El precio acaba de entrar en un *Order Block Macro ${invadedDir}*.\n\n🧠 *Acción:* Zona de interés alcanzada en GPS. Preparate para setups locales.`);
+                    console.log(`[RADAR] 📍 Invasión de zona en ${ticker} a precio ${currentPrice}`);
+                    await sendTelegramAlert(`📍 *INVASIÓN DE ZONA MACRO | ${ticker}*\n\n📉 *Precio Actual:* ${currentPrice}\n🚨 *Atención:* El precio entró en un *Order Block Macro ${invadedDir}*.\n\n🧠 *Acción:* Preparate para setups locales.`);
                 }
             }
 
             // =========================================================================
-            // 🎯 MOTOR 3: GATILLOS Y CRUCE DE CONFLUENCIAS (15M REALTIME)
+            // 🎯 MOTOR 3: GATILLOS Y CRUCE DE CONFLUENCIAS (CON ESCUDO)
             // =========================================================================
             else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT' || prefix === 'PO3_LIVE') {
                 if (!currentDirection) return;
 
-                // Identificamos exactamente qué tipo de gatillo acaba de saltar
                 const triggerName = prefix === 'PO3_LIVE' ? 'Setup NY PO3 (Barrido Londres)' :
                     prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' : 'Order Block Invocado';
-
                 const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+                const oppositeDirection = currentDirection === 'BUY' ? 'SELL' : 'BUY';
 
-                // PREGUNTA 1: ¿Estamos ADENTRO de una caja macro con esta misma dirección? (GOD TIER)
+                const isInsideOppositeMacro = state.activeLocks.some(lock => lock.startsWith(oppositeDirection));
+
+                if (isInsideOppositeMacro) {
+                    console.log(`[RADAR] 🛡️ ESCUDO: Gatillo de ${dirText} bloqueado en ${ticker}. Piso/Techo contrario detectado.`);
+                    transaction.set(docRef, state);
+                    return;
+                }
+
                 const isGodTier = state.activeLocks.some(lock => lock.startsWith(currentDirection as string));
-
-                // PREGUNTA 2: Si no estamos adentro, ¿Al menos el mapa general tiene zonas de esta dirección? (CONTINUACIÓN)
                 const hasMacroAlignment = state.zones.some(zone => zone.dir === currentDirection);
 
                 let message = '';
@@ -170,7 +175,7 @@ export async function processTradingAlert(alertText: string) {
                     message = `🔥 *ALERTA GOD TIER | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n📦 *Superposición:* DENTRO del bloque Macro (${dirText})\n🧭 *Contexto:* Alineado con Fuerte Order Flow.\n\n🧠 *Acción:* Máxima probabilidad. Abrí 5M y buscá tu Engulfing/CHoCH.`;
                 } else if (hasMacroAlignment) {
                     alertLevel = 'CONT';
-                    message = `🛤️ *CONTINUACIÓN TENDENCIA | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n🧭 *Contexto:* A favor del mapa Macro (${dirText}).\n⚠️ *Nota:* Apoya la tendencia mayor.\n\n🧠 *Acción:* Trade válido de continuación. Revisá 5M para entrar.`;
+                    message = `🛤️ *CONTINUACIÓN TENDENCIA | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n🧭 *Contexto:* A favor del mapa Macro (${dirText}).\n\n🧠 *Acción:* Trade válido de continuación. Revisá 5M para entrar.`;
                 }
 
                 if (alertLevel) {
@@ -178,7 +183,6 @@ export async function processTradingAlert(alertText: string) {
                     if (alertLevel === 'GOD') {
                         await sendTelegramAlert(message);
                     } else {
-                        // Las de continuación las mandamos con captura
                         await enqueueScreenshotRequest(ticker, message);
                     }
                 } else {
@@ -186,7 +190,6 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
 
-            // Guardamos el nuevo estado en la base de datos
             transaction.set(docRef, state);
         });
     } catch (e: any) {
