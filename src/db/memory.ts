@@ -81,5 +81,33 @@ export const memory = {
     } catch (err: any) {
         console.error('[DATABASE] Error clearing history from Firebase:', err.message);
     }
+  },
+
+  addFact: async (userId: number, fact: string) => {
+    if (!db) return;
+    try {
+        await db.collection('conversations').doc(userId.toString()).collection('facts').add({
+            fact,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (err: any) {
+        console.error('[DATABASE] Error adding fact to Firebase:', err.message);
+    }
+  },
+  
+  getFacts: async (userId: number): Promise<string[]> => {
+    if (!db) return [];
+    try {
+        const snapshot = await db.collection('conversations')
+            .doc(userId.toString())
+            .collection('facts')
+            .orderBy('created_at', 'asc')
+            .get();
+
+        return snapshot.docs.map(doc => doc.data().fact);
+    } catch (err: any) {
+        console.error('[DATABASE] Error fetching facts from Firebase:', err.message);
+        return [];
+    }
   }
 };

@@ -12,7 +12,7 @@ export interface ToolSchema {
     properties: Record<string, unknown>;
     required?: string[];
   };
-  handler: (args: ToolArgs) => Promise<string> | string;
+  handler: (args: any) => Promise<string> | string;
 }
 
 export const tools: Record<string, ToolSchema> = {
@@ -212,6 +212,184 @@ export const tools: Record<string, ToolSchema> = {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return `Error al generar/enviar el audio: ${message}`;
+      }
+    }
+  },
+  search_local_file: {
+    name: 'search_local_file',
+    description: 'Busca un archivo en el PC local por su nombre o parte de él. Retorna las rutas absolutas donde se encontró. Usa esto antes de enviar un archivo por Telegram si no sabes la ruta exacta.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string', description: 'Nombre o parte del nombre del archivo a buscar. Ej: "factura" o "reporte.pdf"' },
+        directory: { type: 'string', description: 'Directorio base (ej. /home/agustinbonino/Descargas). Si se omite, buscará en carpetas comunes.' }
+      },
+      required: ['filename']
+    },
+    handler: async (args: { filename: string; directory?: string }) => {
+      const { execSync } = await import('child_process');
+      const baseDirs = args.directory ? [args.directory] : [
+          '/home/agustinbonino/Descargas/JARVIS',
+          '/home/agustinbonino/Documentos',
+          '/home/agustinbonino/Descargas',
+          '/home/agustinbonino/Imágenes'
+      ];
+      
+      const safeFilename = args.filename.replace(/[^a-zA-Z0-9_\-\.]/g, '*');
+      let stdout = '';
+      
+      for (const dir of baseDirs) {
+        try {
+          const cmd = `find "${dir}" -type f -iname "*${safeFilename}*" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -n 10`;
+          stdout += execSync(cmd, { encoding: 'utf-8', timeout: 5000 });
+        } catch (err) { /* ignore */ }
+      }
+      
+      if (!stdout.trim()) return `No se encontraron archivos que coincidan con '${args.filename}'. Intenta ampliar la búsqueda o pedir más detalles.`;
+      return `Archivos encontrados (puedes usar send_telegram_document con estas rutas):\n${stdout.trim()}`;
+    }
+  },
+  remember_fact: {
+    name: 'remember_fact',
+    description: 'Guarda un hecho o preferencia sobre el usuario en la memoria persistente a largo plazo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fact: { type: 'string', description: 'El hecho a recordar. Ej: "Al usuario le gusta el color azul" o "Su proyecto principal es JARVIS".' }
+      },
+      required: ['fact']
+    },
+    handler: async (args: { fact: string }) => {
+      const { memory } = await import('../db/memory.js');
+      const { config } = await import('../config.js');
+      const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
+      await memory.addFact(targetUserId, args.fact);
+      return `Hecho recordado exitosamente en Firebase: "${args.fact}"`;
+    }
+  },
+  get_facts: {
+    name: 'get_facts',
+    description: 'Recupera todos los hechos y preferencias guardados sobre el usuario desde la memoria persistente a largo plazo.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    },
+    handler: async () => {
+      const { memory } = await import('../db/memory.js');
+      const { config } = await import('../config.js');
+      const targetUserId = config.TELEGRAM_ALLOWED_USER_IDS[0];
+      const facts = await memory.getFacts(targetUserId);
+      if (facts.length === 0) return 'No hay hechos recordados sobre el usuario aún.';
+      return `Hechos recordados sobre el usuario:\n- ${facts.join('\n- ')}`;
+    }
+  },
+  search_web: {
+    name: 'search_web',
+    description: 'Busca en la web y devuelve un resumen de los resultados principales y sus URLs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'La consulta de búsqueda.' }
+      },
+      required: ['query']
+    },
+    handler: async (args: { query: string }) => {
+      const nodeFetch = (await import('node-fetch')).default;
+      try {
+        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`;
+        const res = await nodeFetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36' }
+        });
+        const html = await res.text();
+        
+        const results: string[] = [];
+        const regex = /<a class="result__url"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>.*?<a class="result__snippet[^>]*>(.*?)<\/a>/gs;
+        let match;
+        let count = 0;
+        
+        while ((match = regex.exec(html)) !== null && count < 6) {
+            let snippet = match[3].replace(/<\/?[^>]+(>|$)/g, "").replace(/\s+/g, ' ').trim();
+            let link = match[1];
+            if (link.startsWith('//')) link = 'https:' + link;
+            results.push(`URL: ${link}\nSnippet: ${snippet}`);
+            count++;
+        }
+        
+        if (results.length === 0) return "No se encontraron resultados parseables. Quizás DuckDuckGo bloqueó la consulta HTML.";
+        return `Resultados para "${args.query}":\n\n${results.join('\n\n')}`;
+      } catch (err: unknown) {
+        return `Error buscando en la web: ${(err as Error).message}`;
+      }
+    }
+  },
+  fetch_webpage: {
+    name: 'fetch_webpage',
+    description: 'Descarga y extrae el texto principal de una página web específica usando su URL.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'La URL de la página a leer.' }
+      },
+      required: ['url']
+    },
+    handler: async (args: { url: string }) => {
+      const puppeteer = (await import('puppeteer')).default;
+      let browser;
+      try {
+        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = await browser.newPage();
+        await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        const text = await page.evaluate(() => document.body.innerText);
+        await browser.close();
+        
+        return text.length > 5000 ? text.substring(0, 5000) + '... [TRUNCADO PARA AHORRAR CONTEXTO]' : text;
+      } catch (err: unknown) {
+        if (browser) await browser.close();
+        return `Error leyendo la página web: ${(err as Error).message}`;
+      }
+    }
+  },
+  create_calendar_event: {
+    name: 'create_calendar_event',
+    description: 'Crea un evento en el Google Calendar principal asociado a JARVIS.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Título del evento' },
+        description: { type: 'string', description: 'Descripción detallada' },
+        startTimeIso: { type: 'string', description: 'Fecha/hora de inicio en formato ISO 8601 (ej. 2026-03-26T10:00:00-03:00)' },
+        endTimeIso: { type: 'string', description: 'Fecha/hora de fin en formato ISO 8601 (ej. 2026-03-26T11:00:00-03:00)' }
+      },
+      required: ['summary', 'description', 'startTimeIso', 'endTimeIso']
+    },
+    handler: async (args: { summary: string; description: string; startTimeIso: string; endTimeIso: string }) => {
+      const { createEvent } = await import('../google/calendar.js');
+      try {
+        const event = await createEvent(args.summary, args.description, args.startTimeIso, args.endTimeIso);
+        return `Evento creado exitosamente: ${event.htmlLink}`;
+      } catch (err: unknown) {
+        return `Error creando evento: ${(err as Error).message}`;
+      }
+    }
+  },
+  get_calendar_events: {
+    name: 'get_calendar_events',
+    description: 'Recupera los próximos eventos de Google Calendar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        maxResults: { type: 'number', description: 'Número máximo de eventos a devolver (por defecto 10)' }
+      }
+    },
+    handler: async (args: { maxResults?: number }) => {
+      const { getEvents } = await import('../google/calendar.js');
+      try {
+        const events = await getEvents(args.maxResults || 10);
+        if (!events || events.length === 0) return 'No se encontraron eventos próximos.';
+        const list = events.map((e: any) => `- ${e.summary} (${e.start.dateTime || e.start.date})`).join('\n');
+        return `Próximos eventos:\n${list}`;
+      } catch (err: unknown) {
+        return `Error obteniendo eventos: ${(err as Error).message}`;
       }
     }
   }
