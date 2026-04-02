@@ -78,7 +78,7 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
             });
 
             const response = await geminiClient.models.generateContent({
-                model: 'gemini-1.5-flash-latest',
+                model: 'gemini-2.5-flash',
                 contents,
                 config: {
                     systemInstruction: systemMsg?.content,
