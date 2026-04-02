@@ -45,7 +45,7 @@ export const tools: Record<string, ToolSchema> = {
         'git status', 'git log', 'git diff', 'git branch', 'git remote',
         'npm run', 'npm test', 'npm list', 'npx tsc --noEmit',
         'node --version', 'npm --version',
-        'curl', 'wget'
+        'curl', 'wget', 'gws'
       ];
 
       const cmdStart = args.command.trim().split(' ')[0];

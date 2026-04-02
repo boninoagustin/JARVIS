@@ -8,3 +8,4 @@ service-account.json
 .vercel
 client_secret.json
 credentials*.json
+.env*.local

@@ -7,37 +7,57 @@ import nodeFetch from 'node-fetch';
 global.fetch = nodeFetch;
 
 import { bot } from './bot/telegram.js';
+import { db } from './db/memory.js';
 import { startScreenshotWorker } from './utils/screenshot_worker.js';
 import { startCleanupTimer } from './db/cleanup.js';
 
-console.log('[SYSTEM] --- FINAL CLEAN START ---');
+console.log('[SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---');
 
 async function main() {
     console.log('[DEBUG] Memory check (Firebase)...');
-    // Firebase initialization is done in memory.ts side-effect
 
-    // Iniciar worker de screenshots y limpieza (NO dependen de Telegram)
+    // Iniciar worker de screenshots y limpieza
     startScreenshotWorker();
     startCleanupTimer();
 
-    // Intentar conectar al bot de Telegram (puede fallar si el ISP lo bloquea)
+    if (!db) {
+        console.error('[FATAL] Firebase is disabled or missing credentials. Hybrid Cloud Mode needs Firebase to receive messages.');
+        process.exit(1);
+    }
+
     try {
-        console.log('[TELEGRAM] Cleaning webhooks...');
-        await bot.api.deleteWebhook({ drop_pending_updates: true });
+        console.log('[TELEGRAM] Starting Firebase Queue Listener...');
+        
+        // Emular start()
+        console.log('[SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---');
 
-        console.log('[TELEGRAM] Fetching bot info...');
-        const botInfo = await bot.api.getMe();
-        console.log(`[SYSTEM] JARVIS is online as @${botInfo.username}`);
+        db.collection('telegram_incoming')
+            .where('status', '==', 'pending')
+            .onSnapshot(async (snapshot) => {
+                for (const change of snapshot.docChanges()) {
+                    if (change.type === 'added') {
+                        const docId = change.doc.id;
+                        const update = change.doc.data().update;
+                        
+                        try {
+                            // Procesar la actualizacion a traves de Grammy
+                            await bot.handleUpdate(update);
+                            
+                            // Si procesa correctamente, borrar el mensaje de la cola
+                            await db?.collection('telegram_incoming').doc(docId).delete();
+                        } catch (err: any) {
+                            console.error('[LOCAL ERROR] Error procesando update:', err.message);
+                            // Marcar como failed para no atascar la cola
+                            await db?.collection('telegram_incoming').doc(docId).update({ status: 'failed' });
+                        }
+                    }
+                }
+            }, (error) => {
+                console.error('[FIREBASE] Listener error:', error);
+            });
 
-        console.log('[TELEGRAM] Starting long polling...');
-        await bot.start({
-            drop_pending_updates: true,
-            allowed_updates: ['message'],
-            onStart: () => console.log('[SYSTEM] --- POLLING ESTABLISHED. Ready for messages ---')
-        });
     } catch (err: any) {
-        console.warn(`[TELEGRAM] No se pudo conectar al bot (ISP bloqueado?): ${err.message}`);
-        console.log('[SYSTEM] Screenshot Worker y Cleanup siguen activos. Telegram se maneja vía Vercel.');
+        console.warn(`[TELEGRAM] Failed to start listener: ${err.message}`);
     }
 }
 
