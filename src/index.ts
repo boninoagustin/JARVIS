@@ -26,6 +26,10 @@ async function main() {
     }
 
     try {
+        console.log('[TELEGRAM] Fetching bot info via Vercel proxy...');
+        await bot.init();
+        console.log(`[SYSTEM] JARVIS is online as @${bot.botInfo.username}`);
+
         console.log('[TELEGRAM] Starting Firebase Queue Listener...');
         
         // Emular start()
