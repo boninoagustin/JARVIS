@@ -19,6 +19,8 @@ export const config = {
   GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
   GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
+  N8N_API_URL: process.env.N8N_API_URL || '',
+  N8N_API_KEY: process.env.N8N_API_KEY || '',
 };
 
 // Security Validations

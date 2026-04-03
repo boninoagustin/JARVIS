@@ -22,7 +22,7 @@ export interface LLMResponse {
 }
 
 export async function generateResponse(messages: ChatMessage[]): Promise<LLMResponse> {
-    const tools = getToolsForLLM();
+    const tools = await getToolsForLLM();
 
     // 1. Try Gemini
     if (geminiClient) {

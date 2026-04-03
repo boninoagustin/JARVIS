@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { getN8nTools, executeN8nTool } from '../mcp/client.js';
 
 // Tipo para los argumentos de herramientas
 type ToolArgs = Record<string, unknown>;
@@ -395,8 +396,10 @@ export const tools: Record<string, ToolSchema> = {
   }
 };
 
-export const getToolsForLLM = () => {
-  return Object.values(tools).map((t) => ({
+export const getToolsForLLM = async () => {
+  const n8nTools = await getN8nTools();
+
+  const internalToolsInfo = Object.values(tools).map((t) => ({
     type: 'function',
     function: {
       name: t.name,
@@ -404,16 +407,29 @@ export const getToolsForLLM = () => {
       parameters: t.parameters,
     }
   }));
+
+  const mcpToolsInfo = n8nTools.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }
+  }));
+
+  return [...internalToolsInfo, ...mcpToolsInfo];
 };
 
 export const executeTool = async (name: string, args: ToolArgs): Promise<string> => {
-  if (!tools[name]) {
-    return `Error: Tool ${name} not found.`;
-  }
-  try {
-    return await tools[name].handler(args);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return `Error executing internal tool ${name}: ${message}`;
+  if (tools[name]) {
+    try {
+      return await tools[name].handler(args);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return `Error executing internal tool ${name}: ${message}`;
+    }
+  } else {
+    // Si no está localmente, lo delegamos a MCP
+    return await executeN8nTool(name, args);
   }
 };
