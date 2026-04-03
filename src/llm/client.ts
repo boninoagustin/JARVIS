@@ -77,31 +77,47 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
                 };
             });
 
-            const response = await geminiClient.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents,
-                config: {
-                    systemInstruction: systemMsg?.content,
-                    tools: geminiTools as any
-                }
-            });
+            const tryGeminiModel = async (modelName: string) => {
+                const response = await geminiClient.models.generateContent({
+                    model: modelName,
+                    contents,
+                    config: {
+                        systemInstruction: systemMsg?.content,
+                        tools: geminiTools as any
+                    }
+                });
 
-            const text = response.candidates?.[0]?.content?.parts?.find((p: any) => 'text' in p)?.text || null;
-            const functionCalls = response.candidates?.[0]?.content?.parts
-                ?.filter((p: any) => 'functionCall' in p)
-                .map((p: any) => ({
-                    id: `call_${Math.random().toString(36).substr(2, 9)}`,
-                    name: (p as any).functionCall.name,
-                    args: (p as any).functionCall.args
-                }));
+                const text = response.candidates?.[0]?.content?.parts?.find((p: any) => 'text' in p)?.text || null;
+                const functionCalls = response.candidates?.[0]?.content?.parts
+                    ?.filter((p: any) => 'functionCall' in p)
+                    .map((p: any) => ({
+                        id: `call_${Math.random().toString(36).substr(2, 9)}`,
+                        name: (p as any).functionCall.name,
+                        args: (p as any).functionCall.args
+                    }));
 
-            return {
-                content: text,
-                toolCalls: functionCalls?.length ? functionCalls : undefined
+                return {
+                    content: text,
+                    toolCalls: functionCalls?.length ? functionCalls : undefined
+                };
             };
 
+            try {
+                console.log('[LLM] Attempting Gemini 3.1 Flash Lite Preview...');
+                return await tryGeminiModel('gemini-3.1-flash-lite-preview');
+            } catch (error: any) {
+                console.error('[LLM] Gemini 3.1 Native failed:', error.message);
+            }
+            
+            try {
+                console.log('[LLM] Attempting Gemini 2.5 Flash (Fallback)...');
+                return await tryGeminiModel('gemini-2.5-flash');
+            } catch (error: any) {
+                console.error('[LLM] Gemini 2.5 Native fallback failed:', error.message);
+            }
+
         } catch (error: any) {
-            console.error('[LLM] Gemini Native failed:', error.message);
+            console.error('[LLM] Gemini prepare/tools failed:', error.message);
         }
     }
 
