@@ -183,11 +183,7 @@ export async function processTradingAlert(alertText: string) {
 
                 if (alertLevel) {
                     console.log(`[RADAR] 🚀 Cruce validado. Disparando Alerta ${alertLevel} en ${ticker}`);
-                    if (alertLevel === 'GOD') {
-                        await sendTelegramAlert(message);
-                    } else {
-                        await enqueueScreenshotRequest(ticker, message);
-                    }
+                    await enqueueScreenshotRequest(ticker, message);
                 } else {
                     console.log(`[RADAR] ⚠️ Gatillo ${triggerName} en ${ticker} ignorado por estar contra el mapa Macro.`);
                 }
