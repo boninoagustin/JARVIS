@@ -4,7 +4,7 @@ import { config } from '../config.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
-    tf?: string; // Temporalidad de origen (ej: '60', '240')
+    tf?: string;
     dir: 'BUY' | 'SELL';
     top: number;
     btm: number;
@@ -12,19 +12,33 @@ interface RadarZone {
     medal?: string;
 }
 
+// NUEVO: Sistema de memoria temporal para puntajes
+interface ScoreState {
+    points: number;
+    lastUpdate: number; // Timestamp para limpiar memoria vieja
+    events: string[];   // Lista de eventos que sumaron puntos (ej: ["TOUCH_OB", "SWEEP"])
+}
+
 interface RadarState {
     lastSyncDate: string | null;
     zones: RadarZone[];
     activeLocks: string[];
     lastPrice: number | null;
+    scoreBuy: ScoreState;   // Memoria de compras
+    scoreSell: ScoreState;  // Memoria de ventas
 }
 
 const emptyState = (): RadarState => ({
     lastSyncDate: null,
     zones: [],
     activeLocks: [],
-    lastPrice: null
+    lastPrice: null,
+    scoreBuy: { points: 0, lastUpdate: 0, events: [] },
+    scoreSell: { points: 0, lastUpdate: 0, events: [] }
 });
+
+// Tiempo de expiración de la memoria del setup (ej. 4 horas = 14400000 ms)
+const SETUP_MEMORY_WINDOW_MS = 14400000;
 
 async function sendTelegramAlert(message: string) {
     for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
@@ -63,27 +77,38 @@ export async function processTradingAlert(alertText: string) {
     const upperText = alertText.toUpperCase();
 
     let currentDirection: 'BUY' | 'SELL' | null = null;
-    if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('ALCISTA') || upperText.includes('COMPRA')) {
+    if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('COMPRA')) {
         currentDirection = 'BUY';
-    } else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('BAJISTA') || upperText.includes('VENTA')) {
+    } else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('VENTA')) {
         currentDirection = 'SELL';
     }
 
     const docRef = db.collection('radar_states').doc(ticker);
     const todayStr = new Date().toISOString().split('T')[0];
+    const nowMs = Date.now();
 
     try {
         await db.runTransaction(async (transaction) => {
             const docSnap = await transaction.get(docRef);
             let state: RadarState = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
 
+            // Compatibilidad con documentos antiguos que no tienen scoreBuy o scoreSell
+            if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
+            if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
+
+            // Limpieza de memoria temporal (Si pasaron más de 4hs sin confirmación, resetea los puntos)
+            if (nowMs - state.scoreBuy.lastUpdate > SETUP_MEMORY_WINDOW_MS) {
+                state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
+            }
+            if (nowMs - state.scoreSell.lastUpdate > SETUP_MEMORY_WINDOW_MS) {
+                state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
+            }
+
             // =========================================================================
             // 📡 MOTOR 1: SINCRONIZACIÓN DE MAPA EN VIVO
             // =========================================================================
             if (prefix === 'SYNC_ZONES') {
                 if (!alertText.includes('Payload:')) return;
-
-                // Extraemos el TF (ej: 240, 60, 30)
                 const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
                 const sourceTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
                 const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
@@ -96,96 +121,105 @@ export async function processTradingAlert(alertText: string) {
                         state.zones = [];
                         state.activeLocks = [];
                         state.lastSyncDate = todayStr;
-                        console.log(`[RADAR] 🔄 Nuevo día. Limpiando memoria para ${ticker}`);
                     }
-
-                    // Magia: Borramos SOLO las cajas viejas de esta temporalidad específica
                     state.zones = state.zones.filter(z => z.tf !== sourceTf);
-
-                    // Inyectamos las cajas frescas
                     state.zones.push(...parsedZones);
-                    console.log(`[RADAR] 📦 Mapa de ${sourceTf}M actualizado. Total de zonas: ${state.zones.length}`);
-
                 } catch (e) {
                     console.error(`[RADAR] Error parseando JSON de zonas:`, e);
                 }
             }
 
             // =========================================================================
-            // 📍 MOTOR 2: RASTREO POR GPS (PING PRICE)
+            // 📍 MOTOR 2: RASTREO POR GPS (PING PRICE - Modo Silencioso)
             // =========================================================================
             else if (prefix === 'PING_PRICE') {
                 const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
                 if (!priceMatch) return;
-
-                const currentPrice = parseFloat(priceMatch[1]);
-                state.lastPrice = currentPrice;
-
-                const currentInsideLocks: string[] = [];
-                let hasNewInvasion = false;
-                let invadedDir = '';
-
-                for (const zone of state.zones) {
-                    if (currentPrice <= zone.top && currentPrice >= zone.btm) {
-                        const lockKey = `${zone.dir}_${zone.top}_${zone.btm}`;
-                        currentInsideLocks.push(lockKey);
-
-                        if (!state.activeLocks.includes(lockKey)) {
-                            hasNewInvasion = true;
-                            invadedDir = zone.dir === 'BUY' ? 'Alcista (Soporte)' : 'Bajista (Resistencia)';
-                        }
-                    }
-                }
-
-                state.activeLocks = currentInsideLocks;
-
-                if (hasNewInvasion) {
-                    console.log(`[RADAR] 📍 Invasión de zona en ${ticker} a precio ${currentPrice}`);
-                    await sendTelegramAlert(`📍 *INVASIÓN DE ZONA MACRO | ${ticker}*\n\n📉 *Precio Actual:* ${currentPrice}\n🚨 *Atención:* El precio entró en un *Order Block Macro ${invadedDir}*.\n\n🧠 *Acción:* Preparate para setups locales.`);
-                }
+                state.lastPrice = parseFloat(priceMatch[1]);
             }
 
             // =========================================================================
-            // 🎯 MOTOR 3: GATILLOS Y CRUCE DE CONFLUENCIAS (CON ESCUDO)
+            // 🎯 MOTOR 3: SISTEMA DE PUNTUACIÓN SCALPER SMC (0 a 10 Puntos)
             // =========================================================================
-            else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'MASTER_ZONE' || prefix === 'LOCAL_CRT' || prefix === 'PO3_LIVE') {
-                if (!currentDirection) return;
+            else if (currentDirection) {
+                const activeScore = currentDirection === 'BUY' ? state.scoreBuy : state.scoreSell;
+                const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+                let addedPoints = 0;
+                let eventName = "";
 
-                // Acá está la línea corregida que suma la detección del iFVG
-                const triggerName = prefix === 'PO3_LIVE' ? 'Setup NY PO3 (Barrido Londres)' :
-                    prefix.includes('SWEEP') || prefix.includes('CRT') ? 'Sweep / Trampa' :
-                        upperText.includes('IFVG') ? 'Toque de iFVG (God Zone)' : 'Order Block Invocado';
-
-                const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
-                const oppositeDirection = currentDirection === 'BUY' ? 'SELL' : 'BUY';
-
-                const isInsideOppositeMacro = state.activeLocks.some(lock => lock.startsWith(oppositeDirection));
-
-                if (isInsideOppositeMacro) {
-                    console.log(`[RADAR] 🛡️ ESCUDO: Gatillo de ${dirText} bloqueado en ${ticker}. Piso/Techo contrario detectado.`);
-                    transaction.set(docRef, state);
-                    return;
+                // 1. Llegada a POI (Order Block)
+                if (prefix === 'TOUCH_ZONE' && !activeScore.events.includes('TOUCH')) {
+                    if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
+                        addedPoints = 3;
+                        eventName = "Touch OB Oro/God Zone";
+                    } else {
+                        addedPoints = 2;
+                        eventName = "Touch OB Plata/Bronce";
+                    }
+                    activeScore.events.push('TOUCH');
                 }
 
-                const isGodTier = state.activeLocks.some(lock => lock.startsWith(currentDirection as string));
-                const hasMacroAlignment = state.zones.some(zone => zone.dir === currentDirection);
-
-                let message = '';
-                let alertLevel: 'GOD' | 'CONT' | null = null;
-
-                if (isGodTier) {
-                    alertLevel = 'GOD';
-                    message = `🔥 *ALERTA GOD TIER | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n📦 *Superposición:* DENTRO del bloque Macro (${dirText})\n🧭 *Contexto:* Alineado con Fuerte Order Flow.\n\n🧠 *Acción:* Máxima probabilidad. Abrí 5M y buscá tu Engulfing/CHoCH.`;
-                } else if (hasMacroAlignment) {
-                    alertLevel = 'CONT';
-                    message = `🛤️ *CONTINUACIÓN TENDENCIA | ${ticker} | ${dirText}*\n\n🎯 *Gatillo:* ${triggerName} en 15M\n🧭 *Contexto:* A favor del mapa Macro (${dirText}).\n\n🧠 *Acción:* Trade válido de continuación. Revisá 5M para entrar.`;
+                // 2. Barrido de Liquidez (Sweep/CRT)
+                else if ((prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') && !activeScore.events.includes('SWEEP')) {
+                    addedPoints = 3;
+                    eventName = "Barrido de Liquidez Macro";
+                    activeScore.events.push('SWEEP');
                 }
 
-                if (alertLevel) {
-                    console.log(`[RADAR] 🚀 Cruce validado. Disparando Alerta ${alertLevel} en ${ticker}`);
-                    await enqueueScreenshotRequest(ticker, message);
-                } else {
-                    console.log(`[RADAR] ⚠️ Gatillo ${triggerName} en ${ticker} ignorado por estar contra el mapa Macro.`);
+                // 3. Confluencia por Agotamiento Extremo (SMC DIV)
+                else if (prefix === 'EVENTO_SMC_DIV' && !activeScore.events.includes('DIV')) {
+                    addedPoints = 2;
+                    eventName = "Divergencia SMC (Agotamiento)";
+                    activeScore.events.push('DIV');
+                }
+
+                // 4. Gatillo Definitivo (CHoCH)
+                else if (prefix === 'EVENTO_CHOCH') {
+                    addedPoints = 2;
+                    eventName = "CHoCH Estructural";
+                    // El CHoCH es la orden de ejecución, no bloqueamos duplicados por si hace re-entradas.
+                }
+
+                // Procesamos los puntos si hubo un evento válido
+                if (addedPoints > 0) {
+                    activeScore.points += addedPoints;
+                    activeScore.lastUpdate = nowMs;
+                    // Si sumamos puntos hacia un lado, limpiamos el mapa del lado opuesto por seguridad
+                    oppositeScore.points = 0;
+                    oppositeScore.events = [];
+
+                    console.log(`[RADAR] ➕ +${addedPoints} pts para ${ticker} ${currentDirection}. Total: ${activeScore.points}/10`);
+
+                    // Evaluador Final de Setup
+                    if (prefix === 'EVENTO_CHOCH') {
+                        const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+
+                        if (activeScore.points >= 8) {
+                            // SETUP A+ (Puntaje Máximo)
+                            let msg = `🔥 *ALERTA FRANCOTIRADOR A+ | ${ticker} | ${dirText}*\n\n`;
+                            msg += `🎯 *Puntaje:* ${activeScore.points}/10\n`;
+                            msg += `🛠️ *Confluencias:* ${activeScore.events.join(', ')} + CHoCH\n\n`;
+                            msg += `🧠 *Acción:* Gatillo institucional confirmado. Entrar con riesgo operativo estándar.`;
+
+                            await enqueueScreenshotRequest(ticker, msg);
+                            // Reseteo post-disparo exitoso para no hacer spam si lateraliza
+                            activeScore.points = 0;
+                            activeScore.events = [];
+
+                        } else if (activeScore.points >= 5) {
+                            // SETUP B (Puntaje Medio)
+                            let msg = `⚠️ *SETUP CALIDAD MEDIA (B) | ${ticker} | ${dirText}*\n\n`;
+                            msg += `🎯 *Puntaje:* ${activeScore.points}/10\n`;
+                            msg += `🛠️ *Confluencias:* ${activeScore.events.length > 0 ? activeScore.events.join(', ') : 'Ninguna previa'} + CHoCH\n\n`;
+                            msg += `🧠 *Acción:* Faltó confirmación en POI macro o barrido. Reducir riesgo a la mitad (0.5%).`;
+
+                            await enqueueScreenshotRequest(ticker, msg);
+                            activeScore.points = 0;
+                            activeScore.events = [];
+                        } else {
+                            console.log(`[RADAR] ❌ CHoCH en ${ticker} ignorado por bajo puntaje (${activeScore.points}/10). Basura.`);
+                        }
+                    }
                 }
             }
 
