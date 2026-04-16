@@ -16,7 +16,7 @@ interface RadarZone {
 interface ScoreState {
     points: number;
     lastUpdate: number; // Timestamp para limpiar memoria vieja
-    events: string[];   // Lista de eventos que sumaron puntos (ej: ["TOUCH_OB", "SWEEP"])
+    events: string[];   // Lista de eventos que sumaron puntos (ej: ["TOUCH", "SWEEP"])
 }
 
 interface RadarState {
@@ -145,16 +145,13 @@ export async function processTradingAlert(alertText: string) {
                 const activeScore = currentDirection === 'BUY' ? state.scoreBuy : state.scoreSell;
                 const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
                 let addedPoints = 0;
-                let eventName = "";
 
                 // 1. Llegada a POI (Order Block)
                 if (prefix === 'TOUCH_ZONE' && !activeScore.events.includes('TOUCH')) {
                     if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
                         addedPoints = 3;
-                        eventName = "Touch OB Oro/God Zone";
                     } else {
                         addedPoints = 2;
-                        eventName = "Touch OB Plata/Bronce";
                     }
                     activeScore.events.push('TOUCH');
                 }
@@ -162,21 +159,18 @@ export async function processTradingAlert(alertText: string) {
                 // 2. Barrido de Liquidez (Sweep/CRT)
                 else if ((prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') && !activeScore.events.includes('SWEEP')) {
                     addedPoints = 3;
-                    eventName = "Barrido de Liquidez Macro";
                     activeScore.events.push('SWEEP');
                 }
 
                 // 3. Confluencia por Agotamiento Extremo (SMC DIV)
                 else if (prefix === 'EVENTO_SMC_DIV' && !activeScore.events.includes('DIV')) {
                     addedPoints = 2;
-                    eventName = "Divergencia SMC (Agotamiento)";
                     activeScore.events.push('DIV');
                 }
 
                 // 4. Gatillo Definitivo (CHoCH)
                 else if (prefix === 'EVENTO_CHOCH') {
                     addedPoints = 2;
-                    eventName = "CHoCH Estructural";
                     // El CHoCH es la orden de ejecución, no bloqueamos duplicados por si hace re-entradas.
                 }
 
@@ -184,14 +178,12 @@ export async function processTradingAlert(alertText: string) {
                 if (addedPoints > 0) {
                     activeScore.points += addedPoints;
                     activeScore.lastUpdate = nowMs;
-                    // Si sumamos puntos hacia un lado, limpiamos el mapa del lado opuesto por seguridad
-                    oppositeScore.points = 0;
-                    oppositeScore.events = [];
 
                     console.log(`[RADAR] ➕ +${addedPoints} pts para ${ticker} ${currentDirection}. Total: ${activeScore.points}/10`);
 
                     // Evaluador Final de Setup
                     if (prefix === 'EVENTO_CHOCH') {
+                        // Declaramos dirText para que no tire error en el mensaje
                         const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
 
                         if (activeScore.points >= 8) {
@@ -202,9 +194,12 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🧠 *Acción:* Gatillo institucional confirmado. Entrar con riesgo operativo estándar.`;
 
                             await enqueueScreenshotRequest(ticker, msg);
-                            // Reseteo post-disparo exitoso para no hacer spam si lateraliza
+
+                            // Reseteo post-disparo exitoso: Borramos AMBAS memorias
                             activeScore.points = 0;
                             activeScore.events = [];
+                            oppositeScore.points = 0;
+                            oppositeScore.events = [];
 
                         } else if (activeScore.points >= 5) {
                             // SETUP B (Puntaje Medio)
@@ -214,10 +209,16 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🧠 *Acción:* Faltó confirmación en POI macro o barrido. Reducir riesgo a la mitad (0.5%).`;
 
                             await enqueueScreenshotRequest(ticker, msg);
+
+                            // Reseteo post-disparo: Borramos AMBAS memorias
                             activeScore.points = 0;
                             activeScore.events = [];
+                            oppositeScore.points = 0;
+                            oppositeScore.events = [];
+
                         } else {
-                            console.log(`[RADAR] ❌ CHoCH en ${ticker} ignorado por bajo puntaje (${activeScore.points}/10). Basura.`);
+                            // CHOCH BASURA: No disparamos alerta y NO BORRAMOS el oppositeScore
+                            console.log(`[RADAR] ❌ CHoCH de ${dirText} en ${ticker} ignorado por bajo puntaje (${activeScore.points}/10). Basura.`);
                         }
                     }
                 }
