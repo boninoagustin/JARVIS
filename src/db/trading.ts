@@ -50,16 +50,7 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
-async function enqueueScreenshotRequest(ticker: string, message: string) {
-    if (!db) return;
-    const requestRef = db.collection('screenshot_requests').doc();
-    await requestRef.set({
-        ticker,
-        message,
-        status: 'pending',
-        timestamp: Date.now()
-    });
-}
+
 
 export async function processTradingAlert(alertText: string) {
     if (!db) {
@@ -193,7 +184,7 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🛠️ *Confluencias:* ${activeScore.events.join(', ')} + CHoCH\n\n`;
                             msg += `🧠 *Acción:* Gatillo institucional confirmado. Entrar con riesgo operativo estándar.`;
 
-                            await enqueueScreenshotRequest(ticker, msg);
+                            await sendTelegramAlert(msg);
 
                             // Reseteo post-disparo exitoso: Borramos AMBAS memorias
                             activeScore.points = 0;
@@ -208,7 +199,7 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🛠️ *Confluencias:* ${activeScore.events.length > 0 ? activeScore.events.join(', ') : 'Ninguna previa'} + CHoCH\n\n`;
                             msg += `🧠 *Acción:* Faltó confirmación en POI macro o barrido. Reducir riesgo a la mitad (0.5%).`;
 
-                            await enqueueScreenshotRequest(ticker, msg);
+                            await sendTelegramAlert(msg);
 
                             // Reseteo post-disparo: Borramos AMBAS memorias
                             activeScore.points = 0;

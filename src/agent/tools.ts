@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { getN8nTools, executeN8nTool } from '../mcp/client.js';
+import { getTradingViewTools, executeTradingViewTool } from '../mcp/tradingview.js';
 
 // Tipo para los argumentos de herramientas
 type ToolArgs = Record<string, unknown>;
@@ -398,6 +399,7 @@ export const tools: Record<string, ToolSchema> = {
 
 export const getToolsForLLM = async () => {
   const n8nTools = await getN8nTools();
+  const tvTools = await getTradingViewTools();
 
   const internalToolsInfo = Object.values(tools).map((t) => ({
     type: 'function',
@@ -408,7 +410,7 @@ export const getToolsForLLM = async () => {
     }
   }));
 
-  const mcpToolsInfo = n8nTools.map(t => ({
+  const mcpToolsInfo = [...n8nTools, ...tvTools].map(t => ({
     type: 'function',
     function: {
       name: t.name,
@@ -429,7 +431,17 @@ export const executeTool = async (name: string, args: ToolArgs): Promise<string>
       return `Error executing internal tool ${name}: ${message}`;
     }
   } else {
-    // Si no está localmente, lo delegamos a MCP
-    return await executeN8nTool(name, args);
+    // Si no está localmente, verificamos a cuál MCP pertenece
+    const n8nTools = await getN8nTools();
+    if (n8nTools.find(t => t.name === name)) {
+      return await executeN8nTool(name, args);
+    }
+    
+    const tvTools = await getTradingViewTools();
+    if (tvTools.find(t => t.name === name)) {
+      return await executeTradingViewTool(name, args);
+    }
+
+    return `Error: Tool ${name} not found locally or in any MCP servers.`;
   }
 };
