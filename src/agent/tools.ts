@@ -150,8 +150,34 @@ export const tools: Record<string, ToolSchema> = {
         await bot.api.sendDocument(targetUserId, new InputFile(args.filePath));
         return `El archivo ${args.filePath} fue enviado con éxito a Telegram.`;
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return `Error al enviar el archivo a Telegram: ${message}`;
+        console.warn(`[TOOLS] Grammy upload failed, falling back to Vercel API: ${err}`);
+        try {
+          const fileBuffer = fs.readFileSync(args.filePath);
+          const base64Data = fileBuffer.toString('base64');
+          
+          let fetchFn = globalThis.fetch;
+          if (!fetchFn) {
+            const nodeFetchObj = await import('node-fetch');
+            fetchFn = nodeFetchObj.default as any;
+          }
+          
+          const vercelResponse = await fetchFn('https://jarvis-seven-kappa.vercel.app/api/send-screenshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ticker: path.basename(args.filePath, path.extname(args.filePath)).replace(/[^a-zA-Z0-9_]/g, ''),
+              imageBase64: base64Data,
+              message: 'Aquí tienes la captura solicitada.'
+            })
+          });
+          
+          if (!vercelResponse.ok) {
+            throw new Error(`Vercel API error: ${vercelResponse.status} - ${(await vercelResponse.text())}`);
+          }
+          return `El archivo ${args.filePath} fue enviado con éxito a Telegram (vía endpoint de fallback).`;
+        } catch (fallbackErr: any) {
+          return `Error al enviar el archivo a Telegram: ${err instanceof Error ? err.message : String(err)}. Fallback error: ${fallbackErr.message}`;
+        }
       }
     }
   },

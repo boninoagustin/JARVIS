@@ -85,13 +85,14 @@ export async function executeTradingViewTool(name: string, args: Record<string, 
   }
   
   try {
-    const result = await client.callTool({
-      name,
-      arguments: args
-    }) as any;
+    const timeoutMs = 15000;
+    const result = await Promise.race([
+      client.callTool({ name, arguments: args }) as any,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout (${timeoutMs}ms). Asegúrate de que TradingView Desktop esté abierto en la PC con el puerto de debugging habilitado (--remote-debugging-port=9222).`)), timeoutMs))
+    ]);
     
     // Adapt MCP text results
-    const textContent = result.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
+    const textContent = result.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
     return textContent || 'The tool executed but returned no text content.';
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
