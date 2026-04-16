@@ -110,10 +110,10 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
             }
             
             try {
-                console.log('[LLM] Attempting Gemini 2.5 Flash (Fallback)...');
-                return await tryGeminiModel('gemini-2.5-flash');
+                console.log('[LLM] Attempting Gemini 3.1 Flash Lite Preview (Fallback)...');
+                return await tryGeminiModel('gemini-3.1-flash-lite-preview');
             } catch (error: any) {
-                console.error('[LLM] Gemini 2.5 Native fallback failed:', error.message);
+                console.error('[LLM] Gemini 3.1 fallback failed:', error.message);
             }
 
         } catch (error: any) {
