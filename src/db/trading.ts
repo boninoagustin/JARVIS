@@ -156,8 +156,8 @@ export async function processTradingAlert(alertText: string) {
                     activeScore.events.push('TOUCH');
                 }
 
-                // 2. Barrido de Liquidez (Sweep/CRT)
-                else if ((prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') && !activeScore.events.includes('SWEEP')) {
+                // 2. Barrido de Liquidez (Sweep Estructural o PO3 Judas Swing)
+                else if ((prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'PO3_LIVE') && !activeScore.events.includes('SWEEP')) {
                     addedPoints = 3;
                     activeScore.events.push('SWEEP');
                 }
