@@ -1,10 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
 import { Groq, toFile } from 'groq-sdk';
+import OpenAI from 'openai';
 import { config } from '../config.js';
 import { getToolsForLLM } from '../agent/tools.js';
 
 const geminiClient = config.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY }) : null;
 const groqClient = config.GROQ_API_KEY ? new Groq({ apiKey: config.GROQ_API_KEY }) : null;
+const openRouterClient = config.OPENROUTER_API_KEY ? new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: config.OPENROUTER_API_KEY }) : null;
 
 // The unified message structure
 export interface ChatMessage {
@@ -160,7 +162,37 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
         }
     }
 
-    // 3. Optional OpenRouter could go here...
+    // 3. Try OpenRouter (Final Fallback)
+    if (openRouterClient) {
+        try {
+            console.log('[LLM] Attempting OpenRouter Fallback...');
+            const openRouterMessages = messages.map(m => {
+                const base: any = { role: m.role === 'model' ? 'assistant' : m.role, content: m.content || '' };
+                if (m.toolCalls) base.tool_calls = m.toolCalls;
+                if (m.toolCallId) base.tool_call_id = m.toolCallId;
+                return base;
+            });
+
+            const completion = await openRouterClient.chat.completions.create({
+                messages: openRouterMessages,
+                model: config.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+                tools: tools as any,
+                tool_choice: 'auto'
+            });
+
+            const choice = completion.choices[0].message;
+            return {
+                content: choice.content,
+                toolCalls: choice.tool_calls?.map(tc => ({
+                    id: tc.id,
+                    name: tc.function.name,
+                    args: JSON.parse(tc.function.arguments)
+                }))
+            };
+        } catch (error: any) {
+            console.error('[LLM] OpenRouter request failed:', error.message);
+        }
+    }
 
     throw new Error('All configured LLM providers failed or no API keys are configured.');
 }
