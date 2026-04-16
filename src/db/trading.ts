@@ -1,6 +1,7 @@
 import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
+import { evaluateWithKronos } from '../services/kronos.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
@@ -174,8 +175,25 @@ export async function processTradingAlert(alertText: string) {
 
                     // Evaluador Final de Setup
                     if (prefix === 'EVENTO_CHOCH') {
-                        // Declaramos dirText para que no tire error en el mensaje
                         const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+                        
+                        // Consultar a Kronos de manera asíncrona pero esperando la resolución para agregarla al mensaje
+                        // NOTA: Si falla o demora, kronos devolverá {isConfirmed: false, details: '...'} y el bot sigue su flujo.
+                        let kronosAnnotation = "\n\n🤖 *Evaluando predicción IA...*";
+                        try {
+                            if (activeScore.points >= 5) { // Solo consultamos si es un setup válido para no malgastar recursos
+                                const kronosResult = await evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL');
+                                if (kronosResult.trend === null) {
+                                    kronosAnnotation = `\n\n🤖 *Kronos AI:* ${kronosResult.details}`;
+                                } else {
+                                    const icon = kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA';
+                                    kronosAnnotation = `\n\n🤖 *Kronos AI:* ${icon}\n${kronosResult.details}`;
+                                }
+                            }
+                        } catch (e: any) {
+                            console.error(`[RADAR] Error no bloqueante al consultar Kronos:`, e.message);
+                            kronosAnnotation = `\n\n🤖 *Kronos AI:* 🔴 Error Interno`;
+                        }
 
                         if (activeScore.points >= 8) {
                             // SETUP A+ (Puntaje Máximo)
@@ -183,6 +201,7 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🎯 *Puntaje:* ${activeScore.points}/10\n`;
                             msg += `🛠️ *Confluencias:* ${activeScore.events.join(', ')} + CHoCH\n\n`;
                             msg += `🧠 *Acción:* Gatillo institucional confirmado. Entrar con riesgo operativo estándar.`;
+                            msg += kronosAnnotation;
 
                             await sendTelegramAlert(msg);
 
@@ -198,6 +217,7 @@ export async function processTradingAlert(alertText: string) {
                             msg += `🎯 *Puntaje:* ${activeScore.points}/10\n`;
                             msg += `🛠️ *Confluencias:* ${activeScore.events.length > 0 ? activeScore.events.join(', ') : 'Ninguna previa'} + CHoCH\n\n`;
                             msg += `🧠 *Acción:* Faltó confirmación en POI macro o barrido. Reducir riesgo a la mitad (0.5%).`;
+                            msg += kronosAnnotation;
 
                             await sendTelegramAlert(msg);
 

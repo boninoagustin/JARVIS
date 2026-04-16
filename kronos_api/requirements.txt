@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+torch
+pandas
+transformers
+kaleido
+plotly
+pydantic
+einops

@@ -10,3 +10,7 @@ client_secret.json
 credentials*.json
 .env*.local
 .aider*
+.venv
+__pycache__
+*.pyc
+kronos_api/model/
