@@ -116,6 +116,13 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
                 console.error('[LLM] Gemini Flash Lite Latest fallback failed:', error.message);
             }
 
+            try {
+                console.log('[LLM] Attempting Gemini Flash Latest (Fallback 2)...');
+                return await tryGeminiModel('gemini-flash-latest');
+            } catch (error: any) {
+                console.error('[LLM] Gemini Flash Latest fallback failed:', error.message);
+            }
+
         } catch (error: any) {
             console.error('[LLM] Gemini prepare/tools failed:', error.message);
         }
