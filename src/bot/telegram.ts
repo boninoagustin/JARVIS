@@ -19,7 +19,6 @@ export const bot = new Bot(config.TELEGRAM_BOT_TOKEN, {
     client: {
         buildUrl: (root, token, method) => {
             // Local PC: override to proxy via Vercel
-            // Vercel webhook: also use proxy (or we can just skip it, but safe to use always if Vercel URL exists)
             const proxyUrl = 'https://jarvis-seven-kappa.vercel.app/api/proxy';
             return `${proxyUrl}?method=${method}`;
         }
