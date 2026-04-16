@@ -42,6 +42,18 @@ bot.command('start', async (ctx) => {
     await ctx.reply("🔥 JARVIS is ONLINE (Cloud Mode). How can I help you?");
 });
 
+// Command /clear
+bot.command('clear', async (ctx) => {
+    const userId = ctx.from!.id;
+    try {
+        const { memory } = await import('../db/memory.js');
+        await memory.clearHistory(userId);
+        await ctx.reply("🧹 Memoria borrada. El contexto de la conversación ha sido reiniciado.");
+    } catch (e: any) {
+        await ctx.reply("Error al borrar memoria: " + e.message);
+    }
+});
+
 // Global text message handling
 bot.on('message:text', async (ctx) => {
     const userId = ctx.from!.id;
