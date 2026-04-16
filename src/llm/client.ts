@@ -151,7 +151,7 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
             const choice = completion.choices[0].message;
             return {
                 content: choice.content,
-                toolCalls: choice.tool_calls?.map(tc => ({
+                toolCalls: choice.tool_calls?.map((tc: any) => ({
                     id: tc.id,
                     name: tc.function.name,
                     args: JSON.parse(tc.function.arguments)
@@ -183,7 +183,7 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
             const choice = completion.choices[0].message;
             return {
                 content: choice.content,
-                toolCalls: choice.tool_calls?.map(tc => ({
+                toolCalls: choice.tool_calls?.map((tc: any) => ({
                     id: tc.id,
                     name: tc.function.name,
                     args: JSON.parse(tc.function.arguments)
