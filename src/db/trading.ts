@@ -166,8 +166,19 @@ export async function processTradingAlert(alertText: string) {
                     } else {
                         const eventName = `OB_${readableTf}`;
                         if (!activeScore.events.includes(eventName)) {
-                            addedPoints = (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) ? 3 : 2;
-                            activeScore.events.push(eventName);
+                            // NUEVO: Evaluación de Volume Profile (POC)
+                            if (upperText.includes('PLATINO') || upperText.includes('POC')) {
+                                addedPoints = 4; // ¡Puntaje Máximo! OB + Volumen Institucional Confirmado
+                                activeScore.events.push(`POC_Volume_${readableTf}`);
+                            }
+                            else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
+                                addedPoints = 3;
+                                activeScore.events.push(eventName);
+                            }
+                            else {
+                                addedPoints = 2;
+                                activeScore.events.push(eventName);
+                            }
                         }
                     }
                 }
@@ -245,11 +256,20 @@ export async function processTradingAlert(alertText: string) {
                         msg += `🎯 *Puntaje Total:* ${totalPoints} Puntos\n`;
                         msg += `🧱 *Confluencias:* ${activeScore.events.join(', ')} + CHoCH_5M\n\n`;
 
-                        let avisoRiesgo = isMacroAligned
-                            ? `Faltó barrido o zonas pesadas para ser un trade A+. Reducir riesgo.`
-                            : `Las tendencias de 1H/4H están en contra. Este es un trade de retroceso agresivo. Reducir el riesgo a la mitad (0.5%).`;
+                        // NUEVA LÓGICA DE AVISO DE RIESGO (Distingue Neutral de En Contra)
+                        const isMacroAgainst = (state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL') ||
+                            (state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL');
 
-                        msg += `🧠 *Análisis de Jarvis:* Gatillo activado pero con alertas. ${avisoRiesgo}`;
+                        let avisoRiesgo = '';
+                        if (isMacroAligned) {
+                            avisoRiesgo = `Faltó barrido de liquidez o zonas más pesadas para ser un trade A+. Reducir riesgo.`;
+                        } else if (isMacroAgainst) {
+                            avisoRiesgo = `Las tendencias de 1H/4H están en contra. Este es un trade de retroceso agresivo. Reducir el riesgo a la mitad (0.5%).`;
+                        } else {
+                            avisoRiesgo = `El contexto macro está neutral (esperando confirmación estructural). Operar con precaución (0.5%).`;
+                        }
+
+                        msg += `🧠 *Análisis de Jarvis:* Gatillo activado. ${avisoRiesgo}`;
                         msg += kronosAnnotation;
 
                         await sendTelegramAlert(msg);
