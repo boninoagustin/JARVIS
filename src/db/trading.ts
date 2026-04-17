@@ -119,6 +119,14 @@ export async function processTradingAlert(alertText: string) {
                 const sourceTf = eventTf;
                 const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
 
+                // --- NUEVO: Extraer la tendencia macro al sincronizar el mapa ---
+                const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
+                if (trendMatch) {
+                    state.marketBias[sourceTf] = trendMatch[1].toUpperCase() as 'BUY' | 'SELL';
+                    console.log(`[RADAR] 🧭 Sesgo Macro actualizado por SYNC en ${sourceTf}M: ${state.marketBias[sourceTf]}`);
+                }
+                // ----------------------------------------------------------------
+
                 try {
                     const parsedZones = JSON.parse(payloadStr) as RadarZone[];
                     parsedZones.forEach(z => z.tf = sourceTf);

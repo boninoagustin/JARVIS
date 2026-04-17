@@ -58,6 +58,14 @@ async def startup_event():
     except Exception as e:
         print(f"Error loading models on startup: {e}")
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "online",
+        "model_loaded": predictor is not None,
+        "device": str(next(kronos_model.parameters()).device) if kronos_model is not None else "N/A"
+    }
+
 @app.post("/predict")
 async def predict(req: PredictRequest):
     if predictor is None:

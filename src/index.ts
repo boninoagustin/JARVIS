@@ -60,8 +60,34 @@ async function main() {
                 console.error('[FIREBASE] Listener error:', error);
             });
 
+        console.log('[TRADING] Starting Firebase Queue Listener...');
+        db.collection('trading_incoming')
+            .where('status', '==', 'pending')
+            .onSnapshot(async (snapshot) => {
+                for (const change of snapshot.docChanges()) {
+                    if (change.type === 'added') {
+                        const docId = change.doc.id;
+                        const alertText = change.doc.data().alertText;
+                        
+                        try {
+                            const { processTradingAlert } = await import('./db/trading.js');
+                            await processTradingAlert(alertText);
+                            
+                            // Si procesa correctamente, borrar el mensaje de la cola
+                            await db?.collection('trading_incoming').doc(docId).delete();
+                        } catch (err: any) {
+                            console.error('[LOCAL TRADING ERROR] Error procesando update:', err.message);
+                            // Marcar como failed para no atascar la cola
+                            await db?.collection('trading_incoming').doc(docId).update({ status: 'failed' });
+                        }
+                    }
+                }
+            }, (error) => {
+                console.error('[FIREBASE TRADING] Listener error:', error);
+            });
+
     } catch (err: any) {
-        console.warn(`[TELEGRAM] Failed to start listener: ${err.message}`);
+        console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }
 }
 
