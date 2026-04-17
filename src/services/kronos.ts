@@ -31,16 +31,35 @@ const KRONOS_API_URL = process.env.KRONOS_API_URL || 'http://127.0.0.1:8000/pred
  */
 async function fetchBinanceOHLCV(symbol: string, interval: string = '5m', limit: number = 400) {
     try {
-        // Tickers in Binance usually end in USDT, remove any non-alphanumeric chars (like / or -) just in case
-        const cleanSymbol = symbol.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        // Clean suffix .P or PERP from futures tickers
+        let cleanSymbol = symbol.toUpperCase().replace(/\.P$/, '').replace(/PERP$/, '');
+        // Remove any other non-alphanumeric chars
+        cleanSymbol = cleanSymbol.replace(/[^a-zA-Z0-9]/g, '');
         
-        const response = await axios.get(`https://api.binance.com/api/v3/klines`, {
-            params: {
-                symbol: cleanSymbol,
-                interval: interval,
-                limit: limit
+        let response;
+        try {
+            // First try Binance Futures
+            response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
+                params: {
+                    symbol: cleanSymbol,
+                    interval: interval,
+                    limit: limit
+                }
+            });
+        } catch (fapiError: any) {
+            if (fapiError.response && fapiError.response.status === 400) {
+                // If it fails with 400 (Invalid symbol), fallback to Binance Spot
+                response = await axios.get(`https://api.binance.com/api/v3/klines`, {
+                    params: {
+                        symbol: cleanSymbol,
+                        interval: interval,
+                        limit: limit
+                    }
+                });
+            } else {
+                throw fapiError;
             }
-        });
+        }
 
         // Map Binance array format to Kronos KlineData object format
         return response.data.map((kline: any) => ({
