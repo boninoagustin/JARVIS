@@ -78,6 +78,48 @@ async function fetchBinanceOHLCV(symbol: string, interval: string = '5m', limit:
     }
 }
 
+async function fetchYahooOHLCV(yahooSymbol: string, interval: string = '5m') {
+    try {
+        const res = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}`, {
+            params: {
+                interval: interval,
+                range: '2d'
+            }
+        });
+        const result = res.data.chart.result[0];
+        const timestamps = result.timestamp;
+        const ohlcv = result.indicators.quote[0];
+        
+        let formatted = [];
+        for (let i = 0; i < timestamps.length; i++) {
+            if (ohlcv.close[i] === null) continue;
+            formatted.push({
+                timestamp: new Date(timestamps[i] * 1000).toISOString(),
+                open: ohlcv.open[i],
+                high: ohlcv.high[i],
+                low: ohlcv.low[i],
+                close: ohlcv.close[i],
+                volume: ohlcv.volume[i] || 0,
+                amount: (ohlcv.volume[i] || 0) * ohlcv.close[i]
+            });
+        }
+        return formatted;
+    } catch (e: any) {
+        console.error(`[KRONOS] Error fetching Yahoo OHLCV for ${yahooSymbol}:`, e.message);
+        return null;
+    }
+}
+
+function getYahooSymbol(ticker: string): string | null {
+    const t = ticker.toUpperCase();
+    if (t.includes('EURUSD')) return 'EURUSD=X';
+    if (t.includes('USDCAD')) return 'USDCAD=X';
+    if (t.includes('US100') || t.includes('NAS100') || t.includes('NDX')) return 'NQ=F';
+    if (t.includes('XAAUSD') || t.includes('XAUUSD') || t.includes('GOLD')) return 'GC=F';
+    if (t.includes('BTCUSD') && !t.includes('USDT')) return 'BTC-USD';
+    return null;
+}
+
 /**
  * Evaluates the setup with the Kronos AI model.
  * Returns the expected trend or null if the API is down/errors out.
@@ -88,11 +130,20 @@ export async function evaluateWithKronos(ticker: string, originalDirection: 'BUY
     details: string
 }> {
     
-    // 1. Fetch historical data from Binance
-    const klines = await fetchBinanceOHLCV(ticker);
+    // 1. Try to fetch historical data from Yahoo Finance if it's a known Forex/Index pair
+    const yahooSymbol = getYahooSymbol(ticker);
+    let klines;
+    let dataProvider = 'Binance';
+    
+    if (yahooSymbol) {
+        klines = await fetchYahooOHLCV(yahooSymbol);
+        dataProvider = 'Yahoo Finance';
+    } else {
+        klines = await fetchBinanceOHLCV(ticker);
+    }
     
     if (!klines || klines.length === 0) {
-        return { trend: null, isConfirmed: false, details: '🔴 Binance Data Error' };
+        return { trend: null, isConfirmed: false, details: `🔴 ${dataProvider} Data Error` };
     }
 
     try {
