@@ -224,6 +224,41 @@ export async function processTradingAlert(alertText: string) {
                     }
                     return; // Salimos para no sumar puntos nuevos en esta lectura
                 }
+                // --- 💥 NUEVO: SISTEMA DE INVALIDACIÓN DE DIVERGENCIAS ---
+                if (prefix === 'DIV_BROKEN') {
+                    const eventDIV = `DIV_${readableTf}`;
+                    const initialLength = activeScore.events.length;
+
+                    // Buscamos la etiqueta de Divergencia de esa temporalidad y la borramos
+                    activeScore.events = activeScore.events.filter(e => e !== eventDIV);
+
+                    // Si efectivamente teníamos anotada la divergencia, restamos los 2 puntos
+                    if (activeScore.events.length < initialLength) {
+                        activeScore.points = Math.max(0, activeScore.points - 2);
+                        console.log(`[RADAR] 🩹 DIVERGENCIA ROTA en ${readableTf}. Restando 2 pts en ${currentDirection}. Puntos restantes: ${activeScore.points}`);
+                    }
+                    return; // Cortamos la ejecución para no procesar nada más
+                }
+                // --- 💥 NUEVO: SISTEMA DE INVALIDACIÓN DE SWEEPS / TRAMPAS ---
+                if (prefix === 'SWEEP_BROKEN') {
+                    const eventSweep = `Sweep_${readableTf}`;
+                    const eventAbsorcion = `Sweep_${readableTf}_Absorcion`;
+
+                    let pointsToDeduct = 0;
+                    const initialLength = activeScore.events.length;
+
+                    activeScore.events = activeScore.events.filter(e => {
+                        if (e === eventAbsorcion) { pointsToDeduct += 5; return false; }
+                        if (e === eventSweep) { pointsToDeduct += 3; return false; }
+                        return true;
+                    });
+
+                    if (activeScore.events.length < initialLength) {
+                        activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
+                        console.log(`[RADAR] 🩹 SWEEP ROTO en ${readableTf}. Restando ${pointsToDeduct} pts en ${currentDirection}. Puntos restantes: ${activeScore.points}`);
+                    }
+                    return;
+                }
                 // --- CAPA 2 Y 3: RECOLECCIÓN DE PUNTOS (Apilamiento por TF) ---
                 if (prefix === 'TOUCH_ZONE') {
                     if (upperText.includes('BREAKER')) {
