@@ -250,3 +250,22 @@ export function tryCompressToolResult(
 
     return { result: toolResult, compressed: false, savedBytes: 0, savedPercent: 0 };
 }
+
+/**
+ * Smart Text Truncation (Headroom concept)
+ * En lugar de cortar el texto al final de golpe, conserva el principio y el final, 
+ * que suelen contener la información más relevante (ej. el inicio del log y el error fatal).
+ */
+export function smartTruncate(text: string, maxLength: number = 2500): string {
+    if (!text || text.length <= maxLength) return text;
+    
+    const half = Math.floor(maxLength / 2);
+    // Reservamos un poco de espacio para el mensaje de truncado
+    const keepStart = half - 50; 
+    const keepEnd = half - 50;
+    
+    const start = text.substring(0, keepStart);
+    const end = text.substring(text.length - keepEnd);
+    
+    return `${start}\n\n... [🔥 TEXTO COMPRIMIDO POR JARVIS: ${text.length - keepStart - keepEnd} caracteres omitidos] ...\n\n${end}`;
+}

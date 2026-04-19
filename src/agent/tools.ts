@@ -38,7 +38,7 @@ export const tools: Record<string, ToolSchema> = {
       },
       required: ['command']
     },
-    handler: (args: { command: string }) => {
+    handler: async (args: { command: string }) => {
       // Whitelist de comandos permitidos por seguridad
       const ALLOWED_COMMANDS = [
         'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc', 'du',
@@ -72,12 +72,14 @@ export const tools: Record<string, ToolSchema> = {
 
       try {
           const stdout = execSync(args.command as string, { encoding: 'utf-8', timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
-          return stdout.length > 2500 ? stdout.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. IF YOU NEED MORE DETAIL, REFINE YOUR SEARCH]' : stdout;
+          const { smartTruncate } = await import('../utils/toon.js');
+          return smartTruncate(stdout, 2500);
       } catch (err: unknown) {
           const error = err as { stdout?: Buffer; stderr?: Buffer; message: string };
           const output = error.stdout?.toString() || error.stderr?.toString() || '';
           const msg = `Error executing command: ${error.message}\nOutput: ${output}`;
-          return msg.length > 2500 ? msg.substring(0, 2500) + '\n...[TRUNCATED FOR LENGTH. COMMAND FAILED OR TIMED OUT]' : msg;
+          const { smartTruncate } = await import('../utils/toon.js');
+          return smartTruncate(msg, 2500);
       }
     }
   },
@@ -511,6 +513,82 @@ export const tools: Record<string, ToolSchema> = {
     handler: async (args: { query: string }) => {
       const { queryTradeHistory } = await import('../services/trade_rag.js');
       return await queryTradeHistory(args.query);
+    }
+  },
+  read_youtube_video: {
+    name: 'read_youtube_video',
+    description: 'Extrae los subtítulos/transcripción de un video de YouTube dado su URL. Útil para resumir videos largos o responder preguntas sobre ellos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'La URL completa del video de YouTube.' }
+      },
+      required: ['url']
+    },
+    handler: async (args: { url: string }) => {
+      try {
+        const { YoutubeTranscript } = await import('youtube-transcript');
+        const transcript = await YoutubeTranscript.fetchTranscript(args.url);
+        
+        // Unimos el texto
+        const fullText = transcript.map(t => t.text).join(' ');
+        
+        // Usamos nuestro optimizador de contexto por si el video es de 3 horas
+        const { smartTruncate } = await import('../utils/toon.js');
+        return smartTruncate(fullText, 15000); // Permitimos hasta ~15k caracteres
+      } catch (err: any) {
+        return `Error al extraer subtítulos (el video puede no tenerlos o tener restricciones): ${err.message}`;
+      }
+    }
+  },
+  crypto_sentiment_agent: {
+    name: 'crypto_sentiment_agent',
+    description: 'Busca el sentimiento actual y noticias recientes de una criptomoneda o mercado financiero en la web.',
+    parameters: {
+      type: 'object',
+      properties: {
+        asset: { type: 'string', description: 'El nombre del activo o criptomoneda a buscar (Ej: Bitcoin SEC news, Ethereum update)' }
+      },
+      required: ['asset']
+    },
+    handler: async (args: { asset: string }) => {
+      try {
+        const fetchFn = globalThis.fetch || (await import('node-fetch')).default;
+        const response = await fetchFn(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.asset + ' news sentiment today')}`);
+        const html = await response.text();
+        
+        // Extracción rudimentaria de títulos y snippets (sin dependencias extra)
+        const matches = [...html.matchAll(/<a class="result__snippet[^>]*>(.*?)<\/a>/g)];
+        const results = matches.slice(0, 5).map(m => m[1].replace(/<\/?[^>]+(>|$)/g, "")).join('\n\n');
+        
+        if (!results) return "No se encontraron noticias recientes o sentimiento claro. Intenta otra búsqueda.";
+        
+        return `Resultados de sentimiento y noticias recientes para "${args.asset}":\n\n${results}\n\nCon base en esto, actúa como un analista y define si el sentimiento es Alcista, Bajista o Neutral.`;
+      } catch (err: any) {
+        return `Error obteniendo sentimiento: ${err.message}`;
+      }
+    }
+  },
+  trading_swarm: {
+    name: 'trading_swarm',
+    description: 'Activa un Swarm Multi-Agente (Comité de Inversión) para evaluar un trade. Incluye análisis técnico, fundamental, de riesgo y decisión del CEO.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ticker: { type: 'string', description: 'El activo a evaluar (ej. BTCUSD, EURUSD, US100)' },
+        direction: { type: 'string', description: 'Dirección sugerida: BUY o SELL' },
+        balance: { type: 'number', description: 'Balance estimado de la cuenta para calcular riesgo (opcional, default 1000)' }
+      },
+      required: ['ticker', 'direction']
+    },
+    handler: async (args: { ticker: string; direction: string; balance?: number }) => {
+      const { analyzeInvestmentSwarm } = await import('../services/investment.js');
+      try {
+        const dir = args.direction.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+        return await analyzeInvestmentSwarm(args.ticker, dir, args.balance);
+      } catch (err: any) {
+        return `Error en el Swarm: ${err.message}`;
+      }
     }
   }
 };

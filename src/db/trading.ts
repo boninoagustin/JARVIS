@@ -2,7 +2,6 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { evaluateWithKronos } from '../services/kronos.js';
-import { analyzeInvestment, formatInvestmentAlert } from '../services/investment.js';
 import { evaluateWithMixture } from '../llm/mixture.js';
 import { logTrade } from '../services/journal.js';
 
@@ -267,12 +266,13 @@ export async function processTradingAlert(alertText: string) {
 
                     // 💥 ESCENARIO A: SETUP NUCLEAR (8+ Pts)
                     if (totalPoints >= 8) {
-                        // Run Kronos + Investment + Mixture in parallel
+                        // Run Kronos + Investment Swarm + Mixture in parallel
+                        const { analyzeInvestmentSwarm } = await import('../services/investment.js');
                         const [kronosResult, investmentResult, mixtureResult] = await Promise.all([
                             evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
                                 trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
                             })),
-                            analyzeInvestment(ticker, currentDirection as 'BUY' | 'SELL').catch(() => null),
+                            analyzeInvestmentSwarm(ticker, currentDirection as 'BUY' | 'SELL').catch((e: any) => `🔴 Error en Swarm: ${e.message}`),
                             evaluateWithMixture(
                                 `Activo: ${ticker}\nPuntos: ${totalPoints}\nConfluencias: ${activeScore.events.join(', ')} + CHoCH_5M\n${confluenceReport}`,
                                 currentDirection as 'BUY' | 'SELL'
@@ -295,9 +295,9 @@ export async function processTradingAlert(alertText: string) {
                         msg += `🧠 *Análisis de Jarvis:* Gatillo en 5M activado con alineación brutal. Tocamos zonas pesadas y barrieron liquidez. Probabilidad altísima. Operar con riesgo estándar.`;
                         msg += kronosAnnotation;
 
-                        // Investment Agent annotation
+                        // Investment Swarm annotation
                         if (investmentResult) {
-                            msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
+                            msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
                         }
 
                         // Mixture of Agents annotation
@@ -313,7 +313,7 @@ export async function processTradingAlert(alertText: string) {
                             grade: 'A+', points: totalPoints, events: [...activeScore.events, 'CHoCH_5M'],
                             macroContext: state.marketBias,
                             kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                            investmentSentiment: investmentResult?.sentiment,
+                            investmentSentiment: 'SWARM_ANALYZED', // Simplified as Swarm returns a string report now
                             mixtureConsensus: mixtureResult?.consensus,
                             timestamp: Date.now()
                         }).then(id => console.log(`[JOURNAL] A+ trade logged: #${id}`)).catch(() => {});
@@ -324,6 +324,7 @@ export async function processTradingAlert(alertText: string) {
                     }
                     else if (totalPoints >= 5) {
                         // Run Kronos + Investment in parallel (no Mixture for B setups)
+                        const { analyzeInvestment, formatInvestmentAlert } = await import('../services/investment.js');
                         const [kronosResult, investmentResult] = await Promise.all([
                             evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
                                 trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`

@@ -295,6 +295,119 @@ export async function analyzeInvestment(
 }
 
 /**
+ * Multi-Agent Swarm Analysis (Trading Committee)
+ * Orchestrates 3 agents: Technical, Fundamental, and Risk Manager, 
+ * synthesized by a CEO agent.
+ */
+export async function analyzeInvestmentSwarm(
+    ticker: string, 
+    direction: 'BUY' | 'SELL',
+    accountBalance: number = 1000 // Default to $1000 if unknown
+): Promise<string> {
+    console.log(`[SWARM] Iniciando Comité de Inversión para ${ticker}...`);
+
+    if (!geminiClient) {
+        return "El Swarm requiere Gemini API configurada.";
+    }
+
+    // 1. Data Gathering Phase
+    let marketData = await fetchCoinGeckoData(ticker);
+    if (!marketData) marketData = await fetchYahooData(ticker);
+    const news = await fetchNews(ticker);
+    
+    const marketContext = marketData ? `Precio: $${marketData.price}. Cambio 24h: ${marketData.change24h}%. Volumen: $${(marketData.volume24h / 1e6).toFixed(1)}M.` : 'Sin datos técnicos.';
+    const newsContext = news.length > 0 ? news.join('\n') : 'Sin noticias recientes.';
+
+    // 2. Swarm Execution (Parallel Agents)
+    console.log(`[SWARM] Ejecutando agentes en paralelo...`);
+    
+    // Agent 1: Technical Analyst (Based on direction and market data)
+    const technicalPrompt = `Eres el Analista Técnico Principal. Evalúa el activo ${ticker}.
+El usuario sugiere una dirección de trade: ${direction}.
+Datos actuales: ${marketContext}
+Dame un veredicto técnico muy breve (1-2 oraciones) y tu nivel de confianza en este setup (0-100%).`;
+
+    // Agent 2: Fundamental/Sentiment Analyst (Based on news)
+    const fundamentalPrompt = `Eres el Analista Fundamental Principal. Evalúa el activo ${ticker}.
+Titulares recientes:
+${newsContext}
+Dame un veredicto fundamental muy breve (1-2 oraciones) y si el sentimiento es BULLISH, BEARISH o NEUTRAL.`;
+
+    // Agent 3: Risk Manager
+    const riskPrompt = `Eres el Gestor de Riesgo. Evalúa un trade en ${ticker} dirección ${direction}.
+El balance de la cuenta es $${accountBalance}. La regla de oro es no arriesgar más del 1-2% por trade.
+Datos de volatilidad (cambio 24h): ${marketData?.change24h || 'desconocido'}%.
+Dame una recomendación estricta de gestión de riesgo, tamaño de posición (lotaje o %) y dónde colocar el Stop Loss (amplio o ajustado).`;
+
+    try {
+        const [techRes, fundRes, riskRes] = await Promise.all([
+            geminiClient.models.generateContent({
+                model: 'gemini-3.1-flash-lite-preview',
+                contents: [{ role: 'user', parts: [{ text: technicalPrompt }] }],
+                config: { temperature: 0.1, maxOutputTokens: 200 }
+            }),
+            geminiClient.models.generateContent({
+                model: 'gemini-3.1-flash-lite-preview',
+                contents: [{ role: 'user', parts: [{ text: fundamentalPrompt }] }],
+                config: { temperature: 0.3, maxOutputTokens: 200 }
+            }),
+            geminiClient.models.generateContent({
+                model: 'gemini-3.1-flash-lite-preview',
+                contents: [{ role: 'user', parts: [{ text: riskPrompt }] }],
+                config: { temperature: 0.1, maxOutputTokens: 200 }
+            })
+        ]);
+
+        const techReport = techRes.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Fallo técnico.';
+        const fundReport = fundRes.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Fallo fundamental.';
+        const riskReport = riskRes.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Fallo de riesgo.';
+
+        // 3. CEO Synthesis
+        console.log(`[SWARM] Sintetizando decisión del CEO...`);
+        const ceoPrompt = `Eres el CEO del Fondo de Cobertura 'Alejabot Capital'.
+Debes tomar la decisión final sobre si ejecutar o descartar un trade en ${ticker} (${direction}).
+
+Reportes de tu comité:
+1. ANALISTA TÉCNICO: ${techReport}
+2. ANALISTA FUNDAMENTAL: ${fundReport}
+3. GESTOR DE RIESGO: ${riskReport}
+
+Escribe tu veredicto final para el usuario. Sé directo, profesional y estructurado.
+Usa este formato:
+🎯 **Decisión Final CEO:** [APROBADO | RECHAZADO | ESPERAR]
+📈 **Resumen Técnico:** ...
+📰 **Sentimiento Fundamental:** ...
+🛡️ **Plan de Riesgo:** ...
+💡 **Conclusión:** ...`;
+
+        const ceoRes = await geminiClient.models.generateContent({
+            model: 'gemini-3.1-pro-preview',
+            contents: [{ role: 'user', parts: [{ text: ceoPrompt }] }],
+            config: { temperature: 0.2, maxOutputTokens: 400 }
+        }).catch(async (e) => {
+            console.warn(`[SWARM] Fallback to gemini-3.1-flash-lite-preview for CEO: ${e.message}`);
+            return await geminiClient.models.generateContent({
+                model: 'gemini-3.1-flash-lite-preview',
+                contents: [{ role: 'user', parts: [{ text: ceoPrompt }] }],
+                config: { temperature: 0.2, maxOutputTokens: 400 }
+            }).catch(async (e2) => {
+                console.warn(`[SWARM] Fallback to gemini-2.5-pro for CEO: ${e2.message}`);
+                return await geminiClient.models.generateContent({
+                    model: 'gemini-2.5-pro',
+                    contents: [{ role: 'user', parts: [{ text: ceoPrompt }] }],
+                    config: { temperature: 0.2, maxOutputTokens: 400 }
+                });
+            });
+        });
+
+        return ceoRes.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'El CEO no pudo generar un reporte.';
+    } catch (err: any) {
+        console.error(`[SWARM] Error en el comité de inversión:`, err.message);
+        return `Error en el Swarm Multi-Agente: ${err.message}`;
+    }
+}
+
+/**
  * Format an InvestmentAnalysis into a Telegram-friendly string.
  */
 export function formatInvestmentAlert(analysis: InvestmentAnalysis): string {
