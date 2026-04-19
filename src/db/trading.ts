@@ -212,9 +212,8 @@ export async function processTradingAlert(alertText: string) {
                     } else {
                         const eventName = `OB_${readableTf}`;
                         if (!activeScore.events.includes(eventName)) {
-                            // NUEVO: Evaluación de Volume Profile (POC)
                             if (upperText.includes('PLATINO') || upperText.includes('POC')) {
-                                addedPoints = 4; // ¡Puntaje Máximo! OB + Volumen Institucional Confirmado
+                                addedPoints = 4;
                                 activeScore.events.push(`POC_Volume_${readableTf}`);
                             }
                             else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
@@ -231,8 +230,14 @@ export async function processTradingAlert(alertText: string) {
                 else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'PO3_LIVE') {
                     const eventName = `Sweep_${readableTf}`;
                     if (!activeScore.events.includes(eventName)) {
-                        addedPoints = 3;
-                        activeScore.events.push(eventName);
+                        // --- INTEGRACIÓN: Validación de Absorción Institucional ---
+                        if (upperText.includes('ABSORCION')) {
+                            addedPoints = 5; // Puntos nucleares
+                            activeScore.events.push(`${eventName}_Absorcion`);
+                        } else {
+                            addedPoints = 3; // Sweep normal
+                            activeScore.events.push(eventName);
+                        }
                     }
                 }
                 else if (prefix === 'EVENTO_SMC_DIV') {
@@ -252,7 +257,18 @@ export async function processTradingAlert(alertText: string) {
                 // --- CAPA 4: EL GATILLO FINAL (SOLO EN 5M) ---
                 if (prefix === 'EVENTO_CHOCH' && eventTf === '5') {
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
-                    const totalPoints = activeScore.points + 2; // Le sumamos los 2 puntos del CHoCH actual
+
+                    // --- INTEGRACIÓN: Bonus del VWAP ---
+                    let vwapBonus = 0;
+                    if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') {
+                        vwapBonus = 2;
+                        activeScore.events.push('VWAP_Discount');
+                    } else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') {
+                        vwapBonus = 2;
+                        activeScore.events.push('VWAP_Premium');
+                    }
+
+                    const totalPoints = activeScore.points + 2 + vwapBonus; // Sumamos CHoCH + VWAP
 
                     // Análisis del mapa estructural (Capa 1)
                     const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
@@ -316,7 +332,7 @@ export async function processTradingAlert(alertText: string) {
                             investmentSentiment: 'SWARM_ANALYZED', // Simplified as Swarm returns a string report now
                             mixtureConsensus: mixtureResult?.consensus,
                             timestamp: Date.now()
-                        }).then(id => console.log(`[JOURNAL] A+ trade logged: #${id}`)).catch(() => {});
+                        }).then(id => console.log(`[JOURNAL] A+ trade logged: #${id}`)).catch(() => { });
 
                         // Reseteo post-disparo
                         activeScore.points = 0; activeScore.events = [];
@@ -377,7 +393,7 @@ export async function processTradingAlert(alertText: string) {
                             kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
                             investmentSentiment: investmentResult?.sentiment,
                             timestamp: Date.now()
-                        }).then(id => console.log(`[JOURNAL] B trade logged: #${id}`)).catch(() => {});
+                        }).then(id => console.log(`[JOURNAL] B trade logged: #${id}`)).catch(() => { });
 
                         // Reseteo post-disparo
                         activeScore.points = 0; activeScore.events = [];
