@@ -86,6 +86,27 @@ async function main() {
                 console.error('[FIREBASE TRADING] Listener error:', error);
             });
 
+        // Daily Journal Review — sends at 22:00 Argentina time
+        const REVIEW_HOUR = 22; // 10 PM
+        let lastReviewDate = '';
+        setInterval(async () => {
+            const now = new Date();
+            const argTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+            const todayStr = argTime.toISOString().split('T')[0];
+            
+            if (argTime.getHours() === REVIEW_HOUR && lastReviewDate !== todayStr) {
+                lastReviewDate = todayStr;
+                try {
+                    const { sendDailyReview } = await import('./services/journal.js');
+                    await sendDailyReview();
+                    console.log('[JOURNAL] Daily review sent.');
+                } catch (e: any) {
+                    console.error('[JOURNAL] Daily review error:', e.message);
+                }
+            }
+        }, 60_000); // Check every minute
+        console.log(`[JOURNAL] Daily review scheduled at ${REVIEW_HOUR}:00 (Argentina time).`);
+
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }

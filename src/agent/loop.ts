@@ -1,12 +1,12 @@
 import { executeTool, tools } from './tools.js';
 import { generateResponse, ChatMessage, LLMResponse } from '../llm/client.js';
 import { memory } from '../db/memory.js';
+import { tryCompressToolResult } from '../utils/toon.js';
+import { extractFacts, storeFacts, getSmartContext } from '../db/smart_memory.js';
 
 const MAX_ITERATIONS = 10;
 
-const SYSTEM_PROMPT: ChatMessage = {
-    role: 'system',
-    content: `Eres JARVIS, un asistente personal de IA.
+const BASE_SYSTEM_CONTENT = `Eres JARVIS, un asistente personal de IA.
 Tu objetivo es ayudar al usuario de forma inteligente, segura y eficiente.
 Solo interactúas con tu usuario designado a través de Telegram.
 Tienes acceso a una memoria persistente en la nube (Firebase) y herramientas físicas en la máquina host.
@@ -17,17 +17,35 @@ Si el usuario te pide explícitamente "responde con audio", "canta", "dímelo", 
 Si el usuario te pide algo para lo que tienes una herramienta, ¡ÚSALA! Important: The host system is Linux. If the user mentions a Windows drive like "disco Datos" or "disco D", remember it might be mounted at /mnt/d/, /mnt/c/, or /media/user/Datos. Verify paths with 'ls' before assuming they don't exist. Be precise with searches. DO NOT run non-targeted searches like 'find /' which will timeout.
 ESTÁS EQUIPADO CON HERRAMIENTAS MCP DE N8N Y TRADINGVIEW. Si el usuario pide un pantallazo, diagrama o gráfico de TradingView, DEBES usar PRIMERO 'capture_screenshot'. Esa herramienta te devolverá un JSON con el 'file_path'. LUEGO, para que el usuario reciba la imagen, DEBES llamar OBLIGATORIAMENTE a 'send_telegram_document' pasándole ese file_path. Para flujos de n8n, usa herramientas como 'search_nodes' o 'n8n_'.
 SIEMPRE RESPONDE EN ESPAÑOL, a menos que el usuario explícitamente te pida otro idioma.
-Sé educado, conciso y profesional.`
-};
+Sé educado, conciso y profesional.`;
+
+/**
+ * Build a dynamic system prompt with injected smart memory context.
+ */
+async function buildSystemPrompt(userId: number): Promise<ChatMessage> {
+    const smartContext = await getSmartContext(userId);
+    const content = smartContext
+        ? `${BASE_SYSTEM_CONTENT}\n\n${smartContext}`
+        : BASE_SYSTEM_CONTENT;
+    
+    if (smartContext) {
+        console.log(`[JARVIS] Smart Memory injected (${smartContext.length} chars) for user ${userId}.`);
+    }
+
+    return { role: 'system', content };
+}
 
 export async function processUserMessage(userId: number, text: string, inlineData?: { data: string; mimeType: string }): Promise<string> {
     console.log(`[JARVIS] Procesando mensaje de ${userId}: "${text}"${inlineData ? ' [CON IMAGEN]' : ''}`);
     
-    // 1. Obtener historial (últimos 10 mensajes, ANTES de insertar el actual)
+    // 1. Build dynamic system prompt with smart memory
+    const systemPrompt = await buildSystemPrompt(userId);
+
+    // 2. Obtener historial (últimos 10 mensajes, ANTES de insertar el actual)
     console.log('[JARVIS] Obteniendo historial...');
     const dbHistory = await memory.getHistory(userId, 10);
     
-    // 2. Guardar mensaje del usuario en memoria async
+    // 3. Guardar mensaje del usuario en memoria async
     console.log('[JARVIS] Guardando mensaje en memoria...');
     await memory.addMessage(userId, 'user', text);
 
@@ -37,14 +55,14 @@ export async function processUserMessage(userId: number, text: string, inlineDat
         content: h.content
     }));
 
-    // 3. Preparar contexto añadiendo explícitamente el mensaje actual
+    // 4. Preparar contexto añadiendo explícitamente el mensaje actual
     const currentUserMessage: ChatMessage = { role: 'user', content: text };
     if (inlineData) {
         currentUserMessage.inlineData = inlineData;
     }
 
     const conversation: ChatMessage[] = [
-        SYSTEM_PROMPT, 
+        systemPrompt, 
         ...chatHistory, 
         currentUserMessage
     ];
@@ -90,8 +108,15 @@ export async function processUserMessage(userId: number, text: string, inlineDat
 
            for (const call of response.toolCalls) {
                console.log(`[Bucle Agente] Ejecutando Herramienta: ${call.name} con args`, call.args);
-               const result = await executeTool(call.name, call.args);
-               console.log(`[Bucle Agente] Resultado de Herramienta: ${result}`);
+               const rawResult = await executeTool(call.name, call.args);
+               
+               // TOON compression: compress tabular tool results to save tokens
+               const { result, compressed, savedBytes, savedPercent } = tryCompressToolResult(rawResult, call.name);
+               if (compressed) {
+                   console.log(`[TOON] Compressed ${rawResult.length} → ${result.length} bytes (${savedPercent}% saved)`);
+               } else {
+                   console.log(`[Bucle Agente] Resultado de Herramienta: ${rawResult.substring(0, 200)}`);
+               }
                
                // Enviar resultado de vuelta
                conversation.push({
@@ -126,6 +151,17 @@ export async function processUserMessage(userId: number, text: string, inlineDat
     
     // Save JARVIS final textual response to DB memory
     await memory.addMessage(userId, 'model', finalReply);
+
+    // Smart Memory: extract facts in background (non-blocking)
+    extractFacts(text, finalReply)
+        .then(facts => {
+            if (facts.length > 0) {
+                storeFacts(userId, facts).catch(err => 
+                    console.error('[SMART_MEMORY] Background store failed:', err)
+                );
+            }
+        })
+        .catch(err => console.error('[SMART_MEMORY] Background extraction failed:', err));
 
     return finalReply;
 }

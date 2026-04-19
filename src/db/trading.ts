@@ -2,6 +2,9 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { evaluateWithKronos } from '../services/kronos.js';
+import { analyzeInvestment, formatInvestmentAlert } from '../services/investment.js';
+import { evaluateWithMixture } from '../llm/mixture.js';
+import { logTrade } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
@@ -29,6 +32,7 @@ interface RadarState {
     scoreSell: ScoreState;
     // Capa 1: Memoria de Contexto Macro
     marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
+    lastApproachAlert?: number; // <--- NUEVO: Evita spam de pre-alertas
 }
 
 const emptyState = (): RadarState => ({
@@ -38,7 +42,8 @@ const emptyState = (): RadarState => ({
     lastPrice: null,
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' }
+    marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' },
+    lastApproachAlert: 0
 });
 
 const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
@@ -102,6 +107,7 @@ export async function processTradingAlert(alertText: string) {
             if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
             if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
             if (!state.marketBias) state.marketBias = emptyState().marketBias;
+            if (!state.lastApproachAlert) state.lastApproachAlert = 0;
 
             // Limpieza de memoria temporal (4hs)
             if (nowMs - state.scoreBuy.lastUpdate > SETUP_MEMORY_WINDOW_MS) {
@@ -143,12 +149,45 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
             // =========================================================================
-            // 📍 MOTOR 2: RASTREO POR GPS
+            // 📍 MOTOR 2: RASTREO POR GPS (SISTEMA DE ALERTA TEMPRANA)
             // =========================================================================
             else if (prefix === 'PING_PRICE') {
                 const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
                 if (!priceMatch) return;
-                state.lastPrice = parseFloat(priceMatch[1]);
+
+                const currentPrice = parseFloat(priceMatch[1]);
+                state.lastPrice = currentPrice;
+
+                // --- RADAR DE APROXIMACIÓN ---
+                // Solo evaluamos si pasaron al menos 2 horas desde la última pre-alerta de este activo
+                if (nowMs - state.lastApproachAlert > 7200000) { // 7200000 ms = 2 horas
+                    for (const z of state.zones) {
+                        // Filtro: Solo nos importan las murallas macro (1H/4H) de alta probabilidad
+                        if ((z.tf === '60' || z.tf === '240') && (z.medal === 'Oro' || z.medal === 'Platino' || z.medal === 'Diamante')) {
+
+                            // Calculamos si el precio está "arriba" buscando un soporte, o "abajo" buscando resistencia
+                            const targetPrice = z.dir === 'BUY' ? z.top : z.btm;
+
+                            // Distancia porcentual universal
+                            const distancePct = Math.abs((currentPrice - targetPrice) / currentPrice) * 100;
+
+                            // Si está a menos de 0.15% de tocar la zona y asegurando que aún no entró a la caja
+                            const noCruzoAun = z.dir === 'BUY' ? currentPrice > z.top : currentPrice < z.btm;
+
+                            if (distancePct > 0 && distancePct <= 0.15 && noCruzoAun) {
+                                let msg = `👀 *RADAR DE APROXIMACIÓN | ${ticker}*\n\n`;
+                                msg += `El precio actual (\`${currentPrice}\`) está a menos de 0.15% de colisionar con una zona institucional pesada.\n\n`;
+                                msg += `🧱 *Muro Detectado:* ${z.medal} OB (${z.tf}M)\n`;
+                                msg += `🧭 *Dirección Esperada:* ${z.dir === 'BUY' ? '🟢 COMPRAS (Soporte)' : '🔴 VENTAS (Resistencia)'}\n\n`;
+                                msg += `👉 *Jarvis:* Abrí TradingView. El choque es inminente. Prepará la Killzone y esperá manipulación en 5M.`;
+
+                                await sendTelegramAlert(msg);
+                                state.lastApproachAlert = nowMs; // Apagamos el radar por 2 horas para este activo
+                                break; // Mandamos una sola alerta y cortamos el loop
+                            }
+                        }
+                    }
+                }
             }
             // =========================================================================
             // 🎯 MOTOR 3: CEREBRO ANALÍTICO (CAPAS Y CONFLUENCIAS)
@@ -226,24 +265,29 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("5")} Gatillo 5M: ${currentDirection}\n\n`;
 
-                    // Consulta Kronos AI (Sin bloquear si falla)
-                    let kronosAnnotation = "\n\n🤖 *Evaluando predicción IA...*";
-                    try {
-                        if (totalPoints >= 5) {
-                            const kronosResult = await evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL');
-                            if (kronosResult.trend === null) {
-                                kronosAnnotation = `\n\n🤖 *Kronos AI:* ${kronosResult.details}`;
-                            } else {
-                                const icon = kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA';
-                                kronosAnnotation = `\n\n🤖 *Kronos AI:* ${icon}\n${kronosResult.details}`;
-                            }
-                        }
-                    } catch (e: any) {
-                        kronosAnnotation = `\n\n🤖 *Kronos AI:* 🔴 Error Interno`;
-                    }
-
                     // 💥 ESCENARIO A: SETUP NUCLEAR (8+ Pts)
                     if (totalPoints >= 8) {
+                        // Run Kronos + Investment + Mixture in parallel
+                        const [kronosResult, investmentResult, mixtureResult] = await Promise.all([
+                            evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
+                                trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                            })),
+                            analyzeInvestment(ticker, currentDirection as 'BUY' | 'SELL').catch(() => null),
+                            evaluateWithMixture(
+                                `Activo: ${ticker}\nPuntos: ${totalPoints}\nConfluencias: ${activeScore.events.join(', ')} + CHoCH_5M\n${confluenceReport}`,
+                                currentDirection as 'BUY' | 'SELL'
+                            ).catch(() => null)
+                        ]);
+
+                        // Build Kronos annotation
+                        let kronosAnnotation = '';
+                        if (kronosResult.trend === null) {
+                            kronosAnnotation = `\n\n🤖 *Kronos AI:* ${kronosResult.details}`;
+                        } else {
+                            const icon = kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA';
+                            kronosAnnotation = `\n\n🤖 *Kronos AI:* ${icon}\n${kronosResult.details}`;
+                        }
+
                         let msg = `🔥 *ALERTA FRANCOTIRADOR A+ | ${ticker} | ${dirText}*\n\n`;
                         msg += confluenceReport;
                         msg += `🎯 *Puntaje Total:* ${totalPoints} Puntos\n`;
@@ -251,20 +295,57 @@ export async function processTradingAlert(alertText: string) {
                         msg += `🧠 *Análisis de Jarvis:* Gatillo en 5M activado con alineación brutal. Tocamos zonas pesadas y barrieron liquidez. Probabilidad altísima. Operar con riesgo estándar.`;
                         msg += kronosAnnotation;
 
+                        // Investment Agent annotation
+                        if (investmentResult) {
+                            msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
+                        }
+
+                        // Mixture of Agents annotation
+                        if (mixtureResult) {
+                            msg += `\n\n${mixtureResult.summary}`;
+                        }
+
                         await sendTelegramAlert(msg);
+
+                        // Journal: log trade
+                        logTrade({
+                            ticker, direction: currentDirection as 'BUY' | 'SELL',
+                            grade: 'A+', points: totalPoints, events: [...activeScore.events, 'CHoCH_5M'],
+                            macroContext: state.marketBias,
+                            kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
+                            investmentSentiment: investmentResult?.sentiment,
+                            mixtureConsensus: mixtureResult?.consensus,
+                            timestamp: Date.now()
+                        }).then(id => console.log(`[JOURNAL] A+ trade logged: #${id}`)).catch(() => {});
 
                         // Reseteo post-disparo
                         activeScore.points = 0; activeScore.events = [];
                         oppositeScore.points = 0; oppositeScore.events = [];
                     }
-                    // 🟡 ESCENARIO B: RETROCESO / CALIDAD MEDIA (5 a 7 Pts)
                     else if (totalPoints >= 5) {
+                        // Run Kronos + Investment in parallel (no Mixture for B setups)
+                        const [kronosResult, investmentResult] = await Promise.all([
+                            evaluateWithKronos(ticker, currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
+                                trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                            })),
+                            analyzeInvestment(ticker, currentDirection as 'BUY' | 'SELL').catch(() => null)
+                        ]);
+
+                        // Build Kronos annotation
+                        let kronosAnnotation = '';
+                        if (kronosResult.trend === null) {
+                            kronosAnnotation = `\n\n🤖 *Kronos AI:* ${kronosResult.details}`;
+                        } else {
+                            const icon = kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA';
+                            kronosAnnotation = `\n\n🤖 *Kronos AI:* ${icon}\n${kronosResult.details}`;
+                        }
+
                         let msg = `⚠️ *SETUP CALIDAD MEDIA (B) | ${ticker} | ${dirText}*\n\n`;
                         msg += confluenceReport;
                         msg += `🎯 *Puntaje Total:* ${totalPoints} Puntos\n`;
                         msg += `🧱 *Confluencias:* ${activeScore.events.join(', ')} + CHoCH_5M\n\n`;
 
-                        // NUEVA LÓGICA DE AVISO DE RIESGO (Distingue Neutral de En Contra)
+                        // LÓGICA DE AVISO DE RIESGO
                         const isMacroAgainst = (state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL') ||
                             (state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL');
 
@@ -280,7 +361,22 @@ export async function processTradingAlert(alertText: string) {
                         msg += `🧠 *Análisis de Jarvis:* Gatillo activado. ${avisoRiesgo}`;
                         msg += kronosAnnotation;
 
+                        // Investment Agent annotation
+                        if (investmentResult) {
+                            msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
+                        }
+
                         await sendTelegramAlert(msg);
+
+                        // Journal: log trade
+                        logTrade({
+                            ticker, direction: currentDirection as 'BUY' | 'SELL',
+                            grade: 'B', points: totalPoints, events: [...activeScore.events, 'CHoCH_5M'],
+                            macroContext: state.marketBias,
+                            kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
+                            investmentSentiment: investmentResult?.sentiment,
+                            timestamp: Date.now()
+                        }).then(id => console.log(`[JOURNAL] B trade logged: #${id}`)).catch(() => {});
 
                         // Reseteo post-disparo
                         activeScore.points = 0; activeScore.events = [];
