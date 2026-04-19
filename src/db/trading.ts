@@ -200,7 +200,30 @@ export async function processTradingAlert(alertText: string) {
                 if (prefix === 'EVENTO_CHOCH') {
                     state.marketBias[eventTf] = currentDirection; // Jarvis anota para dónde va esta temporalidad
                 }
+                // --- 💥 NUEVO: SISTEMA DE INVALIDACIÓN (KILLSWITCH INTELIGENTE) ---
+                if (prefix === 'ZONE_BROKEN') {
+                    const eventOB = `OB_${readableTf}`;
+                    const eventPOC = `POC_Volume_${readableTf}`;
+                    const eventBreaker = `Breaker_${readableTf}`;
 
+                    let pointsToDeduct = 0;
+                    const initialLength = activeScore.events.length;
+
+                    // Filtramos los eventos para eliminar SOLO los de la temporalidad rota
+                    activeScore.events = activeScore.events.filter(e => {
+                        if (e === eventPOC) { pointsToDeduct += 4; return false; }
+                        if (e === eventBreaker) { pointsToDeduct += 3; return false; }
+                        if (e === eventOB) { pointsToDeduct += 3; return false; } // Descontamos 3 pts por seguridad
+                        return true;
+                    });
+
+                    // Si efectivamente borramos algo, actualizamos el puntaje
+                    if (activeScore.events.length < initialLength) {
+                        activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
+                        console.log(`[RADAR] 🩹 ZONA ROTA en ${readableTf}. Restando ${pointsToDeduct} pts en ${currentDirection}. Puntos restantes: ${activeScore.points}`);
+                    }
+                    return; // Salimos para no sumar puntos nuevos en esta lectura
+                }
                 // --- CAPA 2 Y 3: RECOLECCIÓN DE PUNTOS (Apilamiento por TF) ---
                 if (prefix === 'TOUCH_ZONE') {
                     if (upperText.includes('BREAKER')) {
