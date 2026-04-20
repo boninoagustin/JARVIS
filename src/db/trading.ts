@@ -31,7 +31,8 @@ interface RadarState {
     scoreSell: ScoreState;
     // Capa 1: Memoria de Contexto Macro
     marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
-    lastApproachAlert?: number; // <--- NUEVO: Evita spam de pre-alertas
+    lastApproachAlert?: number;
+    lastSniperAlert?: number; // Anti-spam: cooldown entre alertas disparadas
 }
 
 const emptyState = (): RadarState => ({
@@ -42,8 +43,11 @@ const emptyState = (): RadarState => ({
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
     marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' },
-    lastApproachAlert: 0
+    lastApproachAlert: 0,
+    lastSniperAlert: 0
 });
+
+const SNIPER_COOLDOWN_MS = 300000; // 5 minutos entre alertas del mismo ticker
 
 const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
@@ -107,6 +111,7 @@ export async function processTradingAlert(alertText: string) {
             if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
             if (!state.marketBias) state.marketBias = emptyState().marketBias;
             if (!state.lastApproachAlert) state.lastApproachAlert = 0;
+            if (!state.lastSniperAlert) state.lastSniperAlert = 0;
 
             // Limpieza de memoria temporal (4hs)
             if (nowMs - state.scoreBuy.lastUpdate > SETUP_MEMORY_WINDOW_MS) {
@@ -289,6 +294,13 @@ export async function processTradingAlert(alertText: string) {
 
                 // --- CAPA 4: EL GATILLO FINAL (SOLO EN 5M) ---
                 if (prefix === 'EVENTO_CHOCH' && eventTf === '5') {
+                    // ANTI-SPAM: si ya mandamos una alerta hace menos de 5 min, ignorar
+                    if (nowMs - (state.lastSniperAlert ?? 0) < SNIPER_COOLDOWN_MS) {
+                        const secsLeft = Math.round((SNIPER_COOLDOWN_MS - (nowMs - (state.lastSniperAlert ?? 0))) / 1000);
+                        console.log(`[RADAR] 🔇 CHoCH 5M ignorado — cooldown activo para ${ticker} (${secsLeft}s restantes).`);
+                        return;
+                    }
+
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
 
                     // --- INTEGRACIÓN: Bonus del VWAP ---
@@ -371,12 +383,13 @@ export async function processTradingAlert(alertText: string) {
                             grade: 'A+', points: totalPoints, events: [...activeScore.events, 'CHoCH_5M'],
                             macroContext: state.marketBias,
                             kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                            investmentSentiment: 'SWARM_ANALYZED', // Simplified as Swarm returns a string report now
+                            investmentSentiment: 'SWARM_ANALYZED',
                             mixtureConsensus: mixtureResult?.consensus,
                             timestamp: Date.now()
                         }).then(id => console.log(`[JOURNAL] A+ trade logged: #${id}`)).catch(() => { });
 
-                        // Reseteo post-disparo
+                        // Reseteo post-disparo + cooldown anti-spam
+                        state.lastSniperAlert = nowMs;
                         activeScore.points = 0; activeScore.events = [];
                         oppositeScore.points = 0; oppositeScore.events = [];
                     }
@@ -437,10 +450,11 @@ export async function processTradingAlert(alertText: string) {
                             timestamp: Date.now()
                         }).then(id => console.log(`[JOURNAL] B trade logged: #${id}`)).catch(() => { });
 
-                        // Reseteo post-disparo
+                        // Reseteo post-disparo + cooldown anti-spam
+                        state.lastSniperAlert = nowMs;
                         activeScore.points = 0; activeScore.events = [];
                         oppositeScore.points = 0; oppositeScore.events = [];
-                    }
+                    }}
                     // 🔴 ESCENARIO C: RUIDO / BASURA (< 5 Pts)
                     else {
                         console.log(`[RADAR] ❌ CHoCH en 5M ignorado (${totalPoints} Pts). No hay zonas HTF ni manipulación. Puro ruido.`);
