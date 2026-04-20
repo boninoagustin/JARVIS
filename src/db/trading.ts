@@ -454,7 +454,7 @@ export async function processTradingAlert(alertText: string) {
                         state.lastSniperAlert = nowMs;
                         activeScore.points = 0; activeScore.events = [];
                         oppositeScore.points = 0; oppositeScore.events = [];
-                    }}
+                    }
                     // 🔴 ESCENARIO C: RUIDO / BASURA (< 5 Pts)
                     else {
                         console.log(`[RADAR] ❌ CHoCH en 5M ignorado (${totalPoints} Pts). No hay zonas HTF ni manipulación. Puro ruido.`);
