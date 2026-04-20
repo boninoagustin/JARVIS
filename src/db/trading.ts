@@ -313,19 +313,19 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.events.push('VWAP_Premium');
                     }
 
-                    const totalPoints = activeScore.points + 2 + vwapBonus; // Sumamos CHoCH + VWAP
+                    let totalPoints = activeScore.points + 2 + vwapBonus; // Sumamos CHoCH + VWAP
 
                     // Análisis del mapa estructural (Capa 1)
                     const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
 
-                    // FILTRO MACRO: Si 4H Y 1H están ambos en contra → trade inválido, ignorar
+                    // FILTRO MACRO: Si 4H Y 1H están ambos en contra → trade de contra-tendencia (restamos 3 pts)
                     const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                     const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
+                    
                     if (is4HAgainst && is1HAgainst) {
-                        console.log(`[RADAR] 🚫 CHoCH 5M BLOQUEADO — Macro 4H+1H en contra de ${currentDirection} en ${ticker}. Trade inválido.`);
-                        activeScore.points = 0; activeScore.events = [];
-                        return;
+                        totalPoints -= 3; 
+                        console.log(`[RADAR] ⚠️ Trade contra-tendencia Macro en ${ticker}. Restando 3 pts.`);
                     }
 
                     let confluenceReport = `🗺️ *Contexto Macro:*\n`;
