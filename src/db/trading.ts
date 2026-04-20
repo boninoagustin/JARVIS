@@ -238,19 +238,24 @@ export async function processTradingAlert(alertText: string) {
                             activeScore.events.push(eventName);
                         }
                     } else {
-                        const eventName = `OB_${readableTf}`;
-                        if (!activeScore.events.includes(eventName)) {
-                            if (upperText.includes('PLATINO') || upperText.includes('POC')) {
+                        // FIX: cada rama chequea contra el nombre exacto que se va a pushear
+                        if (upperText.includes('PLATINO') || upperText.includes('POC')) {
+                            const pocEventName = `POC_Volume_${readableTf}`;
+                            if (!activeScore.events.includes(pocEventName)) {
                                 addedPoints = 4;
-                                activeScore.events.push(`POC_Volume_${readableTf}`);
+                                activeScore.events.push(pocEventName);
                             }
-                            else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
+                        } else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
+                            const obGoldName = `OB_Gold_${readableTf}`;
+                            if (!activeScore.events.includes(obGoldName)) {
                                 addedPoints = 3;
-                                activeScore.events.push(eventName);
+                                activeScore.events.push(obGoldName);
                             }
-                            else {
+                        } else {
+                            const obEventName = `OB_${readableTf}`;
+                            if (!activeScore.events.includes(obEventName)) {
                                 addedPoints = 2;
-                                activeScore.events.push(eventName);
+                                activeScore.events.push(obEventName);
                             }
                         }
                     }
@@ -301,6 +306,15 @@ export async function processTradingAlert(alertText: string) {
                     // Análisis del mapa estructural (Capa 1)
                     const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+
+                    // FILTRO MACRO: Si 4H Y 1H están ambos en contra → trade inválido, ignorar
+                    const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
+                    const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
+                    if (is4HAgainst && is1HAgainst) {
+                        console.log(`[RADAR] 🚫 CHoCH 5M BLOQUEADO — Macro 4H+1H en contra de ${currentDirection} en ${ticker}. Trade inválido.`);
+                        activeScore.points = 0; activeScore.events = [];
+                        return;
+                    }
 
                     let confluenceReport = `🗺️ *Contexto Macro:*\n`;
                     confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
