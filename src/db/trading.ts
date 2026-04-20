@@ -162,7 +162,7 @@ export async function processTradingAlert(alertText: string) {
                 if (nowMs - state.lastApproachAlert > 7200000) { // 7200000 ms = 2 horas
                     for (const z of state.zones) {
                         // Filtro: Solo nos importan las murallas macro (1H/4H) de alta probabilidad
-                        if ((z.tf === '60' || z.tf === '240') && (z.medal === 'Oro' || z.medal === 'Platino' || z.medal === 'Diamante')) {
+                        if ((z.tf === '60' || z.tf === '240') && (z.medal === 'Oro' || z.medal === 'Platino')) {
 
                             // Calculamos si el precio está "arriba" buscando un soporte, o "abajo" buscando resistencia
                             const targetPrice = z.dir === 'BUY' ? z.top : z.btm;
@@ -285,7 +285,7 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                 }
-                else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP' || prefix === 'PO3_LIVE') {
+                else if (prefix === 'EVENTO_SWEEP') {
                     const eventName = `Sweep_${readableTf}`;
                     if (!activeScore.events.includes(eventName)) {
                         // --- INTEGRACIÓN: Validación de Absorción Institucional ---
