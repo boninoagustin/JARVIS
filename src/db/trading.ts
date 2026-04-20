@@ -156,37 +156,7 @@ export async function processTradingAlert(alertText: string) {
 
                 const currentPrice = parseFloat(priceMatch[1]);
                 state.lastPrice = currentPrice;
-
-                // --- RADAR DE APROXIMACIÓN ---
-                // Solo evaluamos si pasaron al menos 2 horas desde la última pre-alerta de este activo
-                if (nowMs - state.lastApproachAlert > 7200000) { // 7200000 ms = 2 horas
-                    for (const z of state.zones) {
-                        // Filtro: Solo nos importan las murallas macro (1H/4H) de alta probabilidad
-                        if ((z.tf === '60' || z.tf === '240') && (z.medal === 'Oro' || z.medal === 'Platino')) {
-
-                            // Calculamos si el precio está "arriba" buscando un soporte, o "abajo" buscando resistencia
-                            const targetPrice = z.dir === 'BUY' ? z.top : z.btm;
-
-                            // Distancia porcentual universal
-                            const distancePct = Math.abs((currentPrice - targetPrice) / currentPrice) * 100;
-
-                            // Si está a menos de 0.15% de tocar la zona y asegurando que aún no entró a la caja
-                            const noCruzoAun = z.dir === 'BUY' ? currentPrice > z.top : currentPrice < z.btm;
-
-                            if (distancePct > 0 && distancePct <= 0.15 && noCruzoAun) {
-                                let msg = `👀 *RADAR DE APROXIMACIÓN | ${ticker}*\n\n`;
-                                msg += `El precio actual (\`${currentPrice}\`) está a menos de 0.15% de colisionar con una zona institucional pesada.\n\n`;
-                                msg += `🧱 *Muro Detectado:* ${z.medal} OB (${z.tf}M)\n`;
-                                msg += `🧭 *Dirección Esperada:* ${z.dir === 'BUY' ? '🟢 COMPRAS (Soporte)' : '🔴 VENTAS (Resistencia)'}\n\n`;
-                                msg += `👉 *Jarvis:* Abrí TradingView. El choque es inminente. Prepará la Killzone y esperá manipulación en 5M.`;
-
-                                await sendTelegramAlert(msg);
-                                state.lastApproachAlert = nowMs; // Apagamos el radar por 2 horas para este activo
-                                break; // Mandamos una sola alerta y cortamos el loop
-                            }
-                        }
-                    }
-                }
+                // Radar de aproximación desactivado
             }
             // =========================================================================
             // 🎯 MOTOR 3: CEREBRO ANALÍTICO (CAPAS Y CONFLUENCIAS)
