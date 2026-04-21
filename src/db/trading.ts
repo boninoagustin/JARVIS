@@ -49,6 +49,24 @@ const emptyState = (): RadarState => ({
 const SNIPER_COOLDOWN_MS = 300000; // 5 minutos entre alertas del mismo ticker
 const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
+// --- SISTEMA ANTI-DUPLICADOS ---
+const recentAlertCache = new Map<string, number>();
+const DEDUP_WINDOW_MS = 60000; // 60 segundos de ventana anti-duplicados
+
+function isDuplicate(fingerprint: string): boolean {
+    const now = Date.now();
+    // Limpiar cache de entradas viejas
+    for (const [key, ts] of recentAlertCache) {
+        if (now - ts > DEDUP_WINDOW_MS) recentAlertCache.delete(key);
+    }
+    if (recentAlertCache.has(fingerprint)) {
+        console.log(`[RADAR] 🛑 Alerta duplicada ignorada: ${fingerprint}`);
+        return true;
+    }
+    recentAlertCache.set(fingerprint, now);
+    return false;
+}
+
 const parseTF = (tf: string) => {
     if (tf === '240') return '4H';
     if (tf === '60') return '1H';
@@ -384,87 +402,117 @@ export async function processTradingAlert(alertText: string) {
         // EJECUCIÓN DE ALERTAS FUERA DE LA TRANSACCIÓN (Evita duplicados por reintentos)
         // =========================================================================
         if (triggerSniperTouch && alertData) {
-            let msg = `🎯 *GATILLO SNIPER (AL TOQUE) | ${ticker} | ${alertData.dirText}*\n\n`;
-            msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
-            msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
-            msg += `🧠 *Jarvis:* El precio alcanzó una zona de liquidez con la macro a favor. Configuración agresiva lista para límite.`;
+            const fingerprint = `SNIPER_${ticker}_${alertData.dirText}_${alertData.points}_${alertData.events.join(',')}`;
+            if (!isDuplicate(fingerprint)) {
+                // Ejecutar Kronos + Swarm en paralelo para enriquecer la alerta
+                const [kronosResult, swarmResult] = await Promise.all([
+                    evaluateWithKronos(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL').catch((e: any) => ({
+                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                    })),
+                    (async () => {
+                        try {
+                            const { analyzeInvestmentSwarm } = await import('../services/investment.js');
+                            return await analyzeInvestmentSwarm(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL');
+                        } catch (e: any) {
+                            return `🔴 Error en Swarm: ${e.message}`;
+                        }
+                    })()
+                ]);
 
-            await sendTelegramAlert(msg);
+                let kronosAnnotation = kronosResult.trend === null
+                    ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}`
+                    : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
+
+                let msg = `🎯 *GATILLO SNIPER (AL TOQUE) | ${ticker} | ${alertData.dirText}*\n\n`;
+                msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
+                msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
+                msg += `🧠 *Jarvis:* El precio alcanzó una zona de liquidez con la macro a favor. Configuración agresiva lista para límite.`;
+                msg += kronosAnnotation;
+                if (swarmResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${swarmResult}`;
+
+                await sendTelegramAlert(msg);
+            }
         }
 
         if (triggerChochA && alertData) {
-            const { analyzeInvestmentSwarm } = await import('../services/investment.js');
-            const [kronosResult, investmentResult, mixtureResult] = await Promise.all([
-                evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
-                    trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                })),
-                analyzeInvestmentSwarm(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => `🔴 Error en Swarm: ${e.message}`),
-                evaluateWithMixture(
-                    `Activo: ${ticker}\nPuntos: ${alertData.totalPoints}\nConfluencias: ${alertData.events.join(', ')} + CHoCH_5M\n${alertData.confluenceReport}`,
-                    alertData.currentDirection as 'BUY' | 'SELL'
-                ).catch(() => null)
-            ]);
+            const fingerprint = `CHOCHA_${ticker}_${alertData.dirText}_${alertData.totalPoints}_${alertData.events.join(',')}`;
+            if (!isDuplicate(fingerprint)) {
+                const { analyzeInvestmentSwarm } = await import('../services/investment.js');
+                const [kronosResult, investmentResult, mixtureResult] = await Promise.all([
+                    evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
+                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                    })),
+                    analyzeInvestmentSwarm(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => `🔴 Error en Swarm: ${e.message}`),
+                    evaluateWithMixture(
+                        `Activo: ${ticker}\nPuntos: ${alertData.totalPoints}\nConfluencias: ${alertData.events.join(', ')} + CHoCH_5M\n${alertData.confluenceReport}`,
+                        alertData.currentDirection as 'BUY' | 'SELL'
+                    ).catch(() => null)
+                ]);
 
-            let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
+                let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
 
-            let msg = `🔥 *ALERTA FRANCOTIRADOR A+ | ${ticker} | ${alertData.dirText}*\n\n`;
-            msg += alertData.confluenceReport;
-            msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
-            msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
-            msg += `🧠 *Jarvis:* Gatillo en 5M activado con alineación brutal. Operar con riesgo estándar.`;
-            msg += kronosAnnotation;
+                let msg = `🔥 *ALERTA FRANCOTIRADOR A+ | ${ticker} | ${alertData.dirText}*\n\n`;
+                msg += alertData.confluenceReport;
+                msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
+                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
+                msg += `🧠 *Jarvis:* Gatillo en 5M activado con alineación brutal. Operar con riesgo estándar.`;
+                msg += kronosAnnotation;
 
-            if (investmentResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
-            if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
+                if (investmentResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
+                if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
 
-            await sendTelegramAlert(msg);
+                await sendTelegramAlert(msg);
 
-            logTrade({
-                ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
-                grade: 'A+', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
-                macroContext: alertData.marketBias,
-                kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                investmentSentiment: 'SWARM_ANALYZED',
-                mixtureConsensus: mixtureResult?.consensus,
-                timestamp: Date.now()
-            }).catch(() => { });
+                logTrade({
+                    ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
+                    grade: 'A+', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
+                    macroContext: alertData.marketBias,
+                    kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
+                    investmentSentiment: 'SWARM_ANALYZED',
+                    mixtureConsensus: mixtureResult?.consensus,
+                    timestamp: Date.now()
+                }).catch(() => { });
+            }
         }
 
         if (triggerChochB && alertData) {
-            const { analyzeInvestment, formatInvestmentAlert } = await import('../services/investment.js');
-            const [kronosResult, investmentResult] = await Promise.all([
-                evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
-                    trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                })),
-                analyzeInvestment(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch(() => null)
-            ]);
+            const fingerprint = `CHOCHB_${ticker}_${alertData.dirText}_${alertData.totalPoints}_${alertData.events.join(',')}`;
+            if (!isDuplicate(fingerprint)) {
+                const { analyzeInvestment, formatInvestmentAlert } = await import('../services/investment.js');
+                const [kronosResult, investmentResult] = await Promise.all([
+                    evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
+                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                    })),
+                    analyzeInvestment(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch(() => null)
+                ]);
 
-            let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
+                let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
 
-            let msg = `⚠️ *SETUP CALIDAD MEDIA (B) | ${ticker} | ${alertData.dirText}*\n\n`;
-            msg += alertData.confluenceReport;
-            msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
-            msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
+                let msg = `⚠️ *SETUP CALIDAD MEDIA (B) | ${ticker} | ${alertData.dirText}*\n\n`;
+                msg += alertData.confluenceReport;
+                msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
+                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
 
-            let avisoRiesgo = alertData.isMacroAligned ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo.` :
-                (alertData.is4HAgainst && alertData.is1HAgainst) ? `Trade contra-tendencia agresivo. Reducir riesgo a la mitad (0.5%).` :
-                    `Contexto macro neutral. Operar con precaución.`;
+                let avisoRiesgo = alertData.isMacroAligned ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo.` :
+                    (alertData.is4HAgainst && alertData.is1HAgainst) ? `Trade contra-tendencia agresivo. Reducir riesgo a la mitad (0.5%).` :
+                        `Contexto macro neutral. Operar con precaución.`;
 
-            msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
-            msg += kronosAnnotation;
+                msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
+                msg += kronosAnnotation;
 
-            if (investmentResult) msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
+                if (investmentResult) msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
 
-            await sendTelegramAlert(msg);
+                await sendTelegramAlert(msg);
 
-            logTrade({
-                ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
-                grade: 'B', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
-                macroContext: alertData.marketBias,
-                kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                investmentSentiment: investmentResult?.sentiment,
-                timestamp: Date.now()
-            }).catch(() => { });
+                logTrade({
+                    ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
+                    grade: 'B', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
+                    macroContext: alertData.marketBias,
+                    kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
+                    investmentSentiment: investmentResult?.sentiment,
+                    timestamp: Date.now()
+                }).catch(() => { });
+            }
         }
 
     } catch (e: any) {
