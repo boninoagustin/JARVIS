@@ -173,13 +173,50 @@ export async function processTradingAlert(alertText: string) {
                     console.error(`[RADAR] Error parseando JSON:`, e);
                 }
             }
-            // =========================================================================
-            // MOTOR 2: PING PRECIO
+            // // // =========================================================================
+            // MOTOR 2: PING PRECIO (Y RADAR DE COLISIÓN INTERNA)
             // =========================================================================
             else if (prefix === 'PING_PRICE') {
                 const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
                 if (!priceMatch) return;
-                state.lastPrice = parseFloat(priceMatch[1]);
+                
+                const currentPrice = parseFloat(priceMatch[1]);
+                state.lastPrice = currentPrice;
+
+                // 📡 Jarvis revisa si el PING cayó adentro de una caja macro (1H o 4H)
+                for (const zone of state.zones) {
+                    if (currentPrice <= zone.top && currentPrice >= zone.btm) {
+                        const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+                        
+                        // Normalizamos la temporalidad (ej. "240" -> "4H")
+                        const zTf = parseTF(zone.tf || '');
+                        let eventName = '';
+                        let pts = 2;
+
+                        // Unificamos el vocabulario con el MOTOR 3
+                        if (zone.medal?.includes('Breaker')) {
+                            eventName = `Breaker_${zTf}`;
+                            pts = 3;
+                        } else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) {
+                            eventName = `POC_Volume_${zTf}`;
+                            pts = 4;
+                        } else if (zone.medal?.includes('God') || zone.medal?.includes('Oro')) {
+                            eventName = `OB_Gold_${zTf}`;
+                            pts = 3;
+                        } else {
+                            eventName = `OB_${zTf}`;
+                            pts = 2;
+                        }
+                        
+                        if (!activeScore.events.includes(eventName)) {
+                            activeScore.events.push(eventName);
+                            activeScore.points += pts;
+                            activeScore.lastUpdate = nowMs;
+                            
+                            console.log(`[RADAR] 📡 Colisión Interna: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+                        }
+                    }
+                }
             }
             // =========================================================================
             // MOTOR 3: CEREBRO ANALÍTICO (CONFLUENCIAS Y GATILLOS)
