@@ -41,7 +41,8 @@ const emptyState = (): RadarState => ({
     lastPrice: null,
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' },
+    // Cambiamos el 5 por el 3 para el mapa de tendencias
+    marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "3": 'NEUTRAL' },
     lastApproachAlert: 0,
     lastSniperAlert: 0
 });
@@ -71,7 +72,7 @@ const parseTF = (tf: string) => {
     if (tf === '240') return '4H';
     if (tf === '60') return '1H';
     if (tf === '15') return '15M';
-    if (tf === '5') return '5M';
+    if (tf === '3') return '3M'; // Actualizado a 3M
     return `${tf}M`;
 };
 
@@ -313,8 +314,8 @@ export async function processTradingAlert(alertText: string) {
                     }
                 }
 
-                // --- CAPA 4: EL GATILLO FINAL (CHOCH VALIDADO) ---
-                if (prefix === 'EVENTO_CHOCH' && eventTf === '5') {
+                // --- CAPA 4: EL GATILLO FINAL (CHOCH VALIDADO EN 3M) ---
+                if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { // Actualizado a 3M
                     if (nowMs - (state.lastSniperAlert ?? 0) < SNIPER_COOLDOWN_MS) {
                         return; // Cooldown anti-spam
                     }
@@ -327,6 +328,14 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+                    
+                    // 🌟 SCORING ASIMÉTRICO Y EVALUACIÓN MACRO
+                    const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+                    const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
+                    const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
+
+                    // Si está a favor del sesgo macro, le regalamos 5 puntos base para que gatille más fácil.
+                    let baseBiasPoints = isMacroAligned ? 5 : 0;
 
                     let vwapBonus = 0;
                     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') {
@@ -337,26 +346,24 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.events.push('VWAP_Premium');
                     }
 
-                    let totalPoints = activeScore.points + 2 + vwapBonus;
-
-                    const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
-                    const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
-
-                    // PENALIZACIÓN CONTRA-TENDENCIA
-                    const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
-                    const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
+                    // Cálculo final de puntos sumando el bonus asimétrico
+                    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; // +2 por el CHoCH
 
                     if (is4HAgainst && is1HAgainst) {
                         totalPoints -= 3;
                         console.log(`[RADAR] ⚠️ Trade contra-tendencia Macro en ${ticker}. Restando 3 pts.`);
                     }
 
+                    const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
+
                     let confluenceReport = `🗺️ *Contexto Macro:*\n`;
                     confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
-                    confluenceReport += `${getIcon("5")} Gatillo 5M: ${currentDirection}\n\n`;
+                    confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; // Actualizado a 3M
+                    confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`; // Nuevo informe visual del bono
 
+                    // Criterios de Aprobación
                     if (totalPoints >= 8) {
                         triggerChochA = true;
                         alertData = {
@@ -365,7 +372,8 @@ export async function processTradingAlert(alertText: string) {
                             totalPoints,
                             events: [...activeScore.events],
                             marketBias: { ...state.marketBias },
-                            currentDirection
+                            currentDirection,
+                            isMacroAligned
                         };
 
                         state.lastSniperAlert = nowMs;
@@ -404,7 +412,6 @@ export async function processTradingAlert(alertText: string) {
         if (triggerSniperTouch && alertData) {
             const fingerprint = `SNIPER_${ticker}_${alertData.dirText}_${alertData.points}_${alertData.events.join(',')}`;
             if (!isDuplicate(fingerprint)) {
-                // Ejecutar Kronos + Swarm en paralelo para enriquecer la alerta
                 const [kronosResult, swarmResult] = await Promise.all([
                     evaluateWithKronos(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL').catch((e: any) => ({
                         trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
@@ -426,7 +433,7 @@ export async function processTradingAlert(alertText: string) {
                 let msg = `🎯 *GATILLO SNIPER (AL TOQUE) | ${ticker} | ${alertData.dirText}*\n\n`;
                 msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
                 msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
-                msg += `🧠 *Jarvis:* El precio alcanzó una zona de liquidez con la macro a favor. Configuración agresiva lista para límite.`;
+                msg += `🧠 *Jarvis:* El precio alcanzó una zona macro (3M). Operar con riesgo estándar (1%).`;
                 msg += kronosAnnotation;
                 if (swarmResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${swarmResult}`;
 
@@ -444,7 +451,7 @@ export async function processTradingAlert(alertText: string) {
                     })),
                     analyzeInvestmentSwarm(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => `🔴 Error en Swarm: ${e.message}`),
                     evaluateWithMixture(
-                        `Activo: ${ticker}\nPuntos: ${alertData.totalPoints}\nConfluencias: ${alertData.events.join(', ')} + CHoCH_5M\n${alertData.confluenceReport}`,
+                        `Activo: ${ticker}\nPuntos: ${alertData.totalPoints}\nConfluencias: ${alertData.events.join(', ')} + CHoCH_3M\n${alertData.confluenceReport}`,
                         alertData.currentDirection as 'BUY' | 'SELL'
                     ).catch(() => null)
                 ]);
@@ -454,8 +461,14 @@ export async function processTradingAlert(alertText: string) {
                 let msg = `🔥 *ALERTA FRANCOTIRADOR A+ | ${ticker} | ${alertData.dirText}*\n\n`;
                 msg += alertData.confluenceReport;
                 msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
-                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
-                msg += `🧠 *Jarvis:* Gatillo en 5M activado con alineación brutal. Operar con riesgo estándar.`;
+                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_3M\n\n`;
+                
+                // GESTIÓN DE RIESGO DINÁMICA
+                let avisoRiesgo = alertData.isMacroAligned 
+                    ? "Operar con riesgo estándar (1%)." 
+                    : "Setup en contra-tendencia. Riesgo reducido (0.5%).";
+                
+                msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
                 msg += kronosAnnotation;
 
                 if (investmentResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
@@ -465,7 +478,7 @@ export async function processTradingAlert(alertText: string) {
 
                 logTrade({
                     ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
-                    grade: 'A+', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
+                    grade: 'A+', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_3M'],
                     macroContext: alertData.marketBias,
                     kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
                     investmentSentiment: 'SWARM_ANALYZED',
@@ -491,11 +504,14 @@ export async function processTradingAlert(alertText: string) {
                 let msg = `⚠️ *SETUP CALIDAD MEDIA (B) | ${ticker} | ${alertData.dirText}*\n\n`;
                 msg += alertData.confluenceReport;
                 msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
-                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_5M\n\n`;
+                msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_3M\n\n`;
 
-                let avisoRiesgo = alertData.isMacroAligned ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo.` :
-                    (alertData.is4HAgainst && alertData.is1HAgainst) ? `Trade contra-tendencia agresivo. Reducir riesgo a la mitad (0.5%).` :
-                        `Contexto macro neutral. Operar con precaución.`;
+                // GESTIÓN DE RIESGO DINÁMICA AVANZADA
+                let avisoRiesgo = alertData.isMacroAligned 
+                    ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo (0.5%).` 
+                    : (alertData.is4HAgainst && alertData.is1HAgainst) 
+                        ? `Trade contra-tendencia agresivo. Riesgo mínimo (0.25%).` 
+                        : `Contexto macro neutral. Operar con precaución (0.5%).`;
 
                 msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
                 msg += kronosAnnotation;
@@ -506,7 +522,7 @@ export async function processTradingAlert(alertText: string) {
 
                 logTrade({
                     ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
-                    grade: 'B', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_5M'],
+                    grade: 'B', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_3M'],
                     macroContext: alertData.marketBias,
                     kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
                     investmentSentiment: investmentResult?.sentiment,
