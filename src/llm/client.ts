@@ -105,10 +105,10 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
             };
 
             try {
-                console.log('[LLM] Attempting Gemini 3.1 Pro Preview...');
-                return await tryGeminiModel('gemini-3.1-pro-preview');
+                console.log('[LLM] Attempting Gemini 3 Flash Preview...');
+                return await tryGeminiModel('gemini-3-flash-preview');
             } catch (error: any) {
-                console.error('[LLM] Gemini 3.1 Pro Preview failed:', error.message);
+                console.error('[LLM] Gemini 3 Flash Preview failed:', error.message);
             }
 
             try {
@@ -123,13 +123,6 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
                 return await tryGeminiModel('gemini-2.5-pro');
             } catch (error: any) {
                 console.error('[LLM] Gemini 2.5 Pro fallback failed:', error.message);
-            }
-
-            try {
-                console.log('[LLM] Attempting Gemini Flash Latest (Fallback 2)...');
-                return await tryGeminiModel('gemini-flash-latest');
-            } catch (error: any) {
-                console.error('[LLM] Gemini Flash Latest fallback failed:', error.message);
             }
 
         } catch (error: any) {

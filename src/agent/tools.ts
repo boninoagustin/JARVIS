@@ -203,7 +203,11 @@ export const tools: Record<string, ToolSchema> = {
       // Lanzar el timer sin await para no bloquear
       setTimeout(async () => {
         try {
-          await bot.api.sendMessage(targetUserId, `⏰ **Recordatorio:**\n\n${args.message}`, { parse_mode: 'Markdown' });
+          try {
+              await bot.api.sendMessage(targetUserId, `⏰ **Recordatorio:**\n\n${args.message}`, { parse_mode: 'Markdown' });
+          } catch (e) {
+              await bot.api.sendMessage(targetUserId, `⏰ Recordatorio:\n\n${args.message}`);
+          }
         } catch (e: unknown) {
           const message = e instanceof Error ? e.message : String(e);
           console.error('[REMINDER ERROR]', message);

@@ -82,6 +82,11 @@ async function sendTelegramAlert(message: string) {
             await bot.api.sendMessage(userId, message, { parse_mode: 'Markdown' });
         } catch (err: any) {
             console.error(`[TRADING] Error enviando alerta a ${userId}:`, err.message);
+            try {
+                await bot.api.sendMessage(userId, message);
+            } catch (fallbackErr: any) {
+                console.error(`[TRADING] Fallback fallo a ${userId}:`, fallbackErr.message);
+            }
         }
     }
 }

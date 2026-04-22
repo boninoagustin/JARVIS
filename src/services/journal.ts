@@ -278,7 +278,12 @@ export async function sendDailyReview(): Promise<void> {
         try {
             await bot.api.sendMessage(userId, msg, { parse_mode: 'Markdown' });
         } catch (err: any) {
-            console.error(`[JOURNAL] Error sending daily review to ${userId}:`, err.message);
+            console.error(`[JOURNAL] Telegram error for ${userId}:`, err.message);
+            try {
+                await bot.api.sendMessage(userId, msg);
+            } catch (fallbackErr: any) {
+                console.error(`[JOURNAL] Fallback fallo a ${userId}:`, fallbackErr.message);
+            }
         }
     }
 }

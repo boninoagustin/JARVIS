@@ -55,7 +55,7 @@ async function parseQuery(naturalQuery: string): Promise<ParsedQuery> {
 
     try {
         const response = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: naturalQuery }] }],
             config: { systemInstruction: PARSE_PROMPT, maxOutputTokens: 150, temperature: 0.1 }
         });
@@ -169,7 +169,7 @@ export async function queryTradeHistory(naturalQuery: string): Promise<string> {
             }).join('\n');
 
         const response = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: context }] }],
             config: { systemInstruction: SYNTH_PROMPT, maxOutputTokens: 500, temperature: 0.3 }
         });

@@ -50,7 +50,7 @@ export async function extractFacts(userMessage: string, jarvisResponse: string):
 
     try {
         const response = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{
                 role: 'user',
                 parts: [{ text: `User message: "${userMessage}"\n\nAssistant response: "${jarvisResponse.substring(0, 500)}"` }]

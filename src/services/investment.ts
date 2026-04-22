@@ -259,7 +259,7 @@ export async function analyzeInvestment(
 
     try {
         const response = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: context }] }],
             config: {
                 systemInstruction: INVESTMENT_PROMPT,
@@ -381,7 +381,7 @@ Usa este formato:
 💡 **Conclusión:** ...`;
 
         const ceoRes = await geminiClient.models.generateContent({
-            model: 'gemini-3.1-pro-preview',
+            model: 'gemini-3-flash-preview',
             contents: [{ role: 'user', parts: [{ text: ceoPrompt }] }],
             config: { temperature: 0.2, maxOutputTokens: 400 }
         }).catch(async (e) => {

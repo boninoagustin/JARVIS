@@ -73,7 +73,7 @@ export async function deepResearch(query: string): Promise<ResearchReport> {
     let searchQueries: string[];
     try {
         const r = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: `Tema: "${query}"\nGenera 3 búsquedas web (inglés/español) cubriendo ángulos técnico, fundamental, y noticias. Una por línea, sin numeración.` }] }],
             config: { maxOutputTokens: 100, temperature: 0.5 }
         });
@@ -102,7 +102,7 @@ export async function deepResearch(query: string): Promise<ResearchReport> {
 
     try {
         const synth = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: ctx }] }],
             config: { systemInstruction: RESEARCH_PROMPT, maxOutputTokens: 1500, temperature: 0.3 }
         });

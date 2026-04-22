@@ -49,7 +49,7 @@ async function askGemini(context: string): Promise<AgentVote | null> {
     if (!geminiClient) return null;
     try {
         const res = await geminiClient.models.generateContent({
-            model: 'gemini-2.0-flash-lite',
+            model: 'gemini-3.1-flash-lite-preview',
             contents: [{ role: 'user', parts: [{ text: context }] }],
             config: { systemInstruction: VOTING_PROMPT, maxOutputTokens: 150, temperature: 0.2 }
         });
