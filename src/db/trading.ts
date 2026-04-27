@@ -454,19 +454,9 @@ export async function processTradingAlert(alertText: string) {
         if (triggerSniperTouch && alertData) {
             const fingerprint = `SNIPER_${ticker}_${alertData.dirText}_${alertData.points}_${alertData.events.join(',')}`;
             if (!isDuplicate(fingerprint)) {
-                const [kronosResult, swarmResult] = await Promise.all([
-                    evaluateWithKronos(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL').catch((e: any) => ({
-                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                    })),
-                    (async () => {
-                        try {
-                            const { analyzeInvestmentSwarm } = await import('../services/investment.js');
-                            return await analyzeInvestmentSwarm(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL');
-                        } catch (e: any) {
-                            return `🔴 Error en Swarm: ${e.message}`;
-                        }
-                    })()
-                ]);
+                const kronosResult = await evaluateWithKronos(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL').catch((e: any) => ({
+                    trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                }));
 
                 let kronosAnnotation = kronosResult.trend === null
                     ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}`
@@ -477,7 +467,7 @@ export async function processTradingAlert(alertText: string) {
                 msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
                 msg += `🧠 *Jarvis:* El precio alcanzó una zona macro (3M). Operar con riesgo estándar (1%).`;
                 msg += kronosAnnotation;
-                if (swarmResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${swarmResult}`;
+
 
                 await sendTelegramAlert(msg);
             }
