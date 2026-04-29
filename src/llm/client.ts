@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { Groq, toFile } from 'groq-sdk';
+import { Groq } from 'groq-sdk';
 import OpenAI from 'openai';
 import { config } from '../config.js';
 import { getToolsForLLM } from '../agent/tools.js';
@@ -197,30 +197,4 @@ export async function generateResponse(messages: ChatMessage[]): Promise<LLMResp
     throw new Error('All configured LLM providers failed or no API keys are configured.');
 }
 
-/**
- * Audio Transcription using Groq Whisper
- */
-export async function transcribeAudio(audioBuffer: Buffer, filename: string = 'audio.ogg'): Promise<string> {
-    if (!groqClient) {
-        throw new Error('Groq API Key not configured. Transcription unavailable.');
-    }
 
-    try {
-        console.log('[GROQ] Transcribing audio...');
-        const fileObj = await toFile(audioBuffer, filename);
-        
-        const transcription = await groqClient.audio.transcriptions.create({
-            file: fileObj,
-            model: 'whisper-large-v3-turbo',
-            language: 'es', // Force Spanish as requested
-            response_format: 'text',
-        });
-
-        console.log('[GROQ] Transcription complete.');
-        // @ts-ignore - Groq SDK returns string if format is text
-        return transcription.trim();
-    } catch (error: any) {
-        console.error('[GROQ] Transcription failed:', error.message);
-        throw new Error(`Failed to transcribe audio: ${error.message}`);
-    }
-}

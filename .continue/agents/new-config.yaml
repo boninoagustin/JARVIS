@@ -1,0 +1,5 @@
+models:
+  - name: "DeepSeek: DeepSeek V4 Pro"
+    provider: openrouter
+    model: deepseek/deepseek-v4-pro
+    apiKey: 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

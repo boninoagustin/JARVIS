@@ -47,8 +47,28 @@ const emptyState = (): RadarState => ({
     lastSniperAlert: 0
 });
 
-const SNIPER_COOLDOWN_MS = 300000; // 5 minutos entre alertas del mismo ticker
 const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
+
+let globalKillswitches: Record<string, boolean> = {};
+let dynamicBotConfig = {
+    sniperCooldownMs: 300000,
+    minPointsForBuy: 8,
+    minPointsForSell: 8,
+    baseRiskPercentage: 1.0
+};
+
+if (db) {
+    try {
+        db.collection('app_settings').doc('global').onSnapshot((snap) => {
+            if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
+        });
+        db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
+            if (snap.exists) dynamicBotConfig = { ...dynamicBotConfig, ...snap.data() };
+        });
+    } catch (e) {
+        console.error('[TRADING] Error iniciando listeners de configuración', e);
+    }
+}
 
 // --- SISTEMA ANTI-DUPLICADOS ---
 const recentAlertCache = new Map<string, number>();
@@ -105,6 +125,11 @@ export async function processTradingAlert(alertText: string) {
     const prefix = parts[0].toUpperCase();
     const ticker = parts[1].replace(/"/g, '');
     const upperText = alertText.toUpperCase();
+
+    if (globalKillswitches[ticker]) {
+        console.log(`[TRADING] 🚫 Alerta ignorada para ${ticker}: KILLSWITCH ACTIVADO.`);
+        return;
+    }
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
     const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
@@ -344,7 +369,7 @@ export async function processTradingAlert(alertText: string) {
                     // 💥 GATILLO 1: SNIPER (Entrada Agresiva)
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
                     if (activeScore.points >= 5 && isMacroAligned && (prefix === 'TOUCH_ZONE' || prefix.includes('SWEEP'))) {
-                        if (nowMs - (state.lastSniperAlert ?? 0) > SNIPER_COOLDOWN_MS) {
+                        if (nowMs - (state.lastSniperAlert ?? 0) > dynamicBotConfig.sniperCooldownMs) {
                             triggerSniperTouch = true;
                             alertData = {
                                 dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
@@ -358,7 +383,7 @@ export async function processTradingAlert(alertText: string) {
 
                 // --- CAPA 4: EL GATILLO FINAL (CHOCH VALIDADO EN 3M) ---
                 if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { // Actualizado a 3M
-                    if (nowMs - (state.lastSniperAlert ?? 0) < SNIPER_COOLDOWN_MS) {
+                    if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
                         return; // Cooldown anti-spam
                     }
 
@@ -406,7 +431,9 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`; // Nuevo informe visual del bono
 
                     // Criterios de Aprobación
-                    if (totalPoints >= 8) {
+                    const minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
+                    
+                    if (totalPoints >= minPtsRequired) {
                         triggerChochA = true;
                         alertData = {
                             dirText,
@@ -422,7 +449,7 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.points = 0; activeScore.events = [];
                         oppositeScore.points = 0; oppositeScore.events = [];
                     }
-                    else if (totalPoints >= 5) {
+                    else if (totalPoints >= Math.max(minPtsRequired - 3, 5)) {
                         triggerChochB = true;
                         alertData = {
                             dirText,
@@ -441,7 +468,7 @@ export async function processTradingAlert(alertText: string) {
                         oppositeScore.points = 0; oppositeScore.events = [];
                     }
                     else {
-                        console.log(`[RADAR] ❌ CHoCH ignorado (${totalPoints} Pts). No alcanza puntaje mínimo.`);
+                        console.log(`[RADAR] ❌ CHoCH ignorado (${totalPoints} Pts). No alcanza puntaje mínimo de ${minPtsRequired}.`);
                     }
                 }
             }
@@ -465,7 +492,7 @@ export async function processTradingAlert(alertText: string) {
                 let msg = `🎯 *GATILLO SNIPER (AL TOQUE) | ${ticker} | ${alertData.dirText}*\n\n`;
                 msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
                 msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
-                msg += `🧠 *Jarvis:* El precio alcanzó una zona macro (3M). Operar con riesgo estándar (1%).`;
+                msg += `🧠 *Jarvis:* El precio alcanzó una zona macro (3M). Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`;
                 msg += kronosAnnotation;
 
 
@@ -497,8 +524,8 @@ export async function processTradingAlert(alertText: string) {
                 
                 // GESTIÓN DE RIESGO DINÁMICA
                 let avisoRiesgo = alertData.isMacroAligned 
-                    ? "Operar con riesgo estándar (1%)." 
-                    : "Setup en contra-tendencia. Riesgo reducido (0.5%).";
+                    ? `Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).` 
+                    : `Setup en contra-tendencia. Riesgo reducido (${dynamicBotConfig.baseRiskPercentage / 2}%).`;
                 
                 msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
                 msg += kronosAnnotation;
