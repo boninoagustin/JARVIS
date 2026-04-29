@@ -63,7 +63,10 @@ if (db) {
             if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
         });
         db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
-            if (snap.exists) dynamicBotConfig = { ...dynamicBotConfig, ...snap.data() };
+            if (snap.exists) {
+                dynamicBotConfig = { ...dynamicBotConfig, ...snap.data() };
+                console.log(`[CONFIG] ⚙️ Bot config actualizado: minBUY=${dynamicBotConfig.minPointsForBuy} | minSELL=${dynamicBotConfig.minPointsForSell} | cooldown=${dynamicBotConfig.sniperCooldownMs / 60000}min | riesgo=${dynamicBotConfig.baseRiskPercentage}%`);
+            }
         });
     } catch (e) {
         console.error('[TRADING] Error iniciando listeners de configuración', e);
