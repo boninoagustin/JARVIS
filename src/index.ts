@@ -110,6 +110,21 @@ async function main() {
         }, 60_000); // Check every minute
         console.log(`[JOURNAL] Daily review scheduled at ${REVIEW_HOUR}:00 (Argentina time).`);
 
+        // Finnhub Fundamentals Update
+        const fetchFundamentals = async () => {
+            try {
+                const { updateFundamentals } = await import('./services/finnhub.js');
+                await updateFundamentals();
+            } catch (e: any) {
+                console.error('[FINNHUB] Error updating fundamentals:', e.message);
+            }
+        };
+        
+        // Execute immediately, then every 15 minutes (900,000 ms)
+        fetchFundamentals();
+        setInterval(fetchFundamentals, 900_000);
+        console.log(`[FINNHUB] Fundamentals update scheduled every 15 minutes.`);
+
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }
