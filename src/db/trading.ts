@@ -59,14 +59,20 @@ let dynamicBotConfig = {
 
 if (db) {
     try {
+        console.log('[CONFIG] Iniciando listeners de configuración...');
         db.collection('app_settings').doc('global').onSnapshot((snap) => {
             if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
         });
         db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
+            console.log(`[CONFIG] bot_config snapshot recibido. exists=${snap.exists}`);
             if (snap.exists) {
                 dynamicBotConfig = { ...dynamicBotConfig, ...snap.data() };
                 console.log(`[CONFIG] ⚙️ Bot config actualizado: minBUY=${dynamicBotConfig.minPointsForBuy} | minSELL=${dynamicBotConfig.minPointsForSell} | cooldown=${dynamicBotConfig.sniperCooldownMs / 60000}min | riesgo=${dynamicBotConfig.baseRiskPercentage}%`);
+            } else {
+                console.log('[CONFIG] ⚠️ bot_config NO existe en Firebase. Usando defaults.');
             }
+        }, (err) => {
+            console.error('[CONFIG] ❌ Error en onSnapshot bot_config:', err);
         });
     } catch (e) {
         console.error('[TRADING] Error iniciando listeners de configuración', e);

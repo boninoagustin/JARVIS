@@ -60,6 +60,9 @@ async function main() {
                 console.error('[FIREBASE] Listener error:', error);
             });
 
+        // Pre-cargar trading module para activar listeners de config
+        await import('./db/trading.js');
+        
         console.log('[TRADING] Starting Firebase Queue Listener...');
         db.collection('trading_incoming')
             .where('status', '==', 'pending')

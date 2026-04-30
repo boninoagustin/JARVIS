@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { PieChart as PieChartIcon, TrendingUp, Crosshair, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
+import { PieChart as PieChartIcon, TrendingUp, Crosshair, CheckCircle, XCircle, MinusCircle, Target } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
 
 interface TradeLog {
@@ -9,6 +9,7 @@ interface TradeLog {
   ticker: string;
   direction: string;
   grade: string;
+  points?: number;
   result?: string;
   timestamp: number;
 }
@@ -37,7 +38,7 @@ export default function AnalyticsJournal() {
   const [updating, setUpdating] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(50));
+    const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TradeLog));
       setTrades(data);
@@ -80,8 +81,32 @@ export default function AnalyticsJournal() {
     return Object.keys(grades).map(k => ({ name: k, value: grades[k] }));
   };
 
+  const getPointsStats = () => {
+    const pts: Record<string, { wins: number, losses: number }> = {};
+    trades.forEach(t => {
+      if (t.result && t.result !== 'SKIP' && t.points !== undefined) {
+        const key = t.points.toString();
+        if (!pts[key]) pts[key] = { wins: 0, losses: 0 };
+        if (t.result === 'WIN') pts[key].wins++;
+        else if (t.result === 'LOSS') pts[key].losses++;
+      }
+    });
+    
+    return Object.keys(pts).map(p => {
+      const data = pts[p];
+      const total = data.wins + data.losses;
+      return {
+        name: `${p} pts`,
+        points: Number(p),
+        winRate: total > 0 ? Number(((data.wins / total) * 100).toFixed(1)) : 0,
+        total,
+      };
+    }).sort((a, b) => a.points - b.points);
+  };
+
   const stats = getStats();
   const gradeStats = getGradeStats();
+  const pointsStats = getPointsStats();
   
   const totalCompleted = stats.reduce((acc, curr) => acc + curr.value, 0);
   const winRate = totalCompleted > 0 ? ((stats[0].value / totalCompleted) * 100).toFixed(1) : '0.0';
@@ -94,7 +119,7 @@ export default function AnalyticsJournal() {
         <span><PieChartIcon size={14} style={{ marginRight: 8 }} /> DIARIO ANALÍTICO Y ESTADÍSTICAS</span>
       </div>
 
-      <div className="grid-3">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <div className="panel">
           <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Crosshair size={18} /> WIN RATE GLOBAL
@@ -116,7 +141,7 @@ export default function AnalyticsJournal() {
         </div>
 
         <div className="panel" style={{ height: '300px' }}>
-          <h3 style={{ marginBottom: '16px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>RESULTADOS (ÚLTIMOS 50)</h3>
+          <h3 style={{ marginBottom: '16px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>RESULTADOS (ÚLTIMOS 100)</h3>
           {totalCompleted > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -148,6 +173,32 @@ export default function AnalyticsJournal() {
              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-tertiary)' }}>Sin datos suficientes</div>
           )}
         </div>
+
+        <div className="panel" style={{ height: '300px' }}>
+          <h3 style={{ marginBottom: '16px', fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Target size={16} /> WIN RATE POR PUNTOS (CONFLUENCIAS)
+          </h3>
+          {pointsStats.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={pointsStats} layout="vertical" margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+                <XAxis type="number" domain={[0, 100]} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(tick) => `${tick}%`} />
+                <YAxis type="category" dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} width={60} />
+                <Tooltip 
+                  cursor={{ fill: 'var(--bg-panel-hover)' }} 
+                  contentStyle={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} 
+                  formatter={(value: any, _name: any, props: any) => [`${value}% (${props.payload.total} trades)`, 'Win Rate']}
+                />
+                <Bar dataKey="winRate" fill="#00ff00" radius={[0, 4, 4, 0]} barSize={20}>
+                  {pointsStats.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.winRate >= 60 ? '#00ff00' : entry.winRate >= 40 ? '#ffaa00' : '#ff3333'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-tertiary)' }}>Sin datos suficientes</div>
+          )}
+        </div>
       </div>
 
       <div className="panel">
@@ -160,7 +211,7 @@ export default function AnalyticsJournal() {
                 <th>FECHA</th>
                 <th>ACTIVO</th>
                 <th>DIRECCIÓN</th>
-                <th>CALIDAD</th>
+                <th>CALIDAD / PUNTOS</th>
                 <th>RESULTADO</th>
               </tr>
             </thead>
@@ -170,7 +221,16 @@ export default function AnalyticsJournal() {
                   <td>{new Date(t.timestamp).toLocaleString()}</td>
                   <td style={{ fontWeight: 600 }}>{t.ticker}</td>
                   <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'}>{t.direction}</td>
-                  <td><span style={{ padding: '2px 6px', backgroundColor: 'rgba(255,170,0,0.1)', color: 'var(--accent-gold)', borderRadius: '4px' }}>{t.grade}</span></td>
+                  <td>
+                    <span style={{ padding: '2px 6px', backgroundColor: 'rgba(255,170,0,0.1)', color: 'var(--accent-gold)', borderRadius: '4px', marginRight: '8px' }}>
+                      {t.grade}
+                    </span>
+                    {t.points !== undefined && (
+                      <span style={{ padding: '2px 6px', backgroundColor: 'rgba(100,100,100,0.2)', color: 'var(--text-secondary)', borderRadius: '4px', fontSize: '0.8rem' }}>
+                        {t.points} pts
+                      </span>
+                    )}
+                  </td>
                   <td>
                     {t.result ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
