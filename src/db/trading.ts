@@ -13,6 +13,7 @@ interface RadarZone {
     btm: number;
     lvl: string;
     medal?: string;
+    score?: number; // 🆕 Agregamos el Score Matemático de Pine Script
 }
 
 // SISTEMA DE MEMORIA TEMPORAL PARA APILAMIENTO
@@ -233,24 +234,20 @@ export async function processTradingAlert(alertText: string) {
                         let basePts = 0;
 
                         // 🔍 DETECCIÓN DE FRANCOTIRADORES ESPECIALES
-                        if (zone.medal?.includes('God Breaker')) {
-                            eventName = `🦄_Unicornio_${zTf}`;
-                            basePts = 6; // Puntaje masivo (Breaker + iFVG)
-                        } else if (zone.medal?.includes('CHoCH🚀')) {
-                            eventName = `🎯_Silver_Bullet_${zTf}`;
-                            basePts = 5; // Retesteo del origen del CHoCH
-                        } else if (zone.medal?.includes('Breaker')) {
-                            eventName = `Breaker_${zTf}`;
-                            basePts = 3;
-                        } else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) {
-                            eventName = `POC_Volume_${zTf}`;
-                            basePts = 4;
-                        } else if (zone.medal?.includes('God') || zone.medal?.includes('Oro')) {
-                            eventName = `OB_Gold_${zTf}`;
-                            basePts = 3;
+                        // Ahora usamos la matemática exacta del indicador 5.0
+                        if (zone.score !== undefined) {
+                            basePts = zone.score;
+                            eventName = zone.medal?.includes('God') ? `💎_GOD_ZONE_${zTf}` :
+                                zone.medal?.includes('CHoCH') ? `🎯_Silver_Bullet_${zTf}` :
+                                    `OB_${zone.medal}_${zTf}`;
                         } else {
-                            eventName = `OB_${zTf}`;
-                            basePts = 2;
+                            // Fallback por si lee una alerta vieja
+                            if (zone.medal?.includes('God Breaker')) { eventName = `🦄_Unicornio_${zTf}`; basePts = 6; }
+                            else if (zone.medal?.includes('CHoCH🚀')) { eventName = `🎯_Silver_Bullet_${zTf}`; basePts = 5; }
+                            else if (zone.medal?.includes('Breaker')) { eventName = `Breaker_${zTf}`; basePts = 3; }
+                            else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) { eventName = `POC_Volume_${zTf}`; basePts = 4; }
+                            else if (zone.medal?.includes('God') || zone.medal?.includes('Oro')) { eventName = `OB_Gold_${zTf}`; basePts = 3; }
+                            else { eventName = `OB_${zTf}`; basePts = 2; }
                         }
 
                         // ⚖️ MULTIPLICADOR DE TEMPORALIDAD MACRO
@@ -350,41 +347,50 @@ export async function processTradingAlert(alertText: string) {
 
                 // --- RECOLECCIÓN DE PUNTOS ---
                 if (prefix === 'TOUCH_ZONE') {
+                    // 🆕 Extraemos los puntos enviados directamente por Pine Script 5.0
+                    const ptMatch = alertText.match(/Puntos:\s*(\d+)/i);
+                    const dynamicPts = ptMatch ? parseInt(ptMatch[1], 10) : 0;
+
                     if (upperText.includes('BREAKER')) {
                         const eventName = `Breaker_${readableTf}`;
                         if (!activeScore.events.includes(eventName)) {
-                            addedPoints = 3;
+                            addedPoints = dynamicPts > 0 ? dynamicPts : 3;
                             activeScore.events.push(eventName);
                         }
                     } else {
                         if (upperText.includes('PLATINO') || upperText.includes('POC')) {
                             const pocEventName = `POC_Volume_${readableTf}`;
                             if (!activeScore.events.includes(pocEventName)) {
-                                addedPoints = 4;
+                                addedPoints = dynamicPts > 0 ? dynamicPts : 4;
                                 activeScore.events.push(pocEventName);
                             }
                         } else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
                             const obGoldName = `OB_Gold_${readableTf}`;
                             if (!activeScore.events.includes(obGoldName)) {
-                                addedPoints = 3;
+                                addedPoints = dynamicPts > 0 ? dynamicPts : 3;
                                 activeScore.events.push(obGoldName);
                             }
                         } else {
                             const obEventName = `OB_${readableTf}`;
                             if (!activeScore.events.includes(obEventName)) {
-                                addedPoints = 2;
+                                addedPoints = dynamicPts > 0 ? dynamicPts : 2;
                                 activeScore.events.push(obEventName);
                             }
                         }
                     }
                 }
+                // --- RECOLECCIÓN DE PUNTOS ---
                 else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
                     const eventNormal = `Sweep_${readableTf}`;
                     const eventAbsorb = `🩸_V-Shape_Absorb_${readableTf}`;
+                    const eventAsia = `🌙_Judas_Swing_Asia_${readableTf}`; // NUEVO EVENTO
 
-                    if (!activeScore.events.includes(eventNormal) && !activeScore.events.includes(eventAbsorb)) {
-                        if (upperText.includes('ABSORCION')) {
-                            addedPoints = 6; // Puntaje alto para forzar el gatillo
+                    if (!activeScore.events.includes(eventNormal) && !activeScore.events.includes(eventAbsorb) && !activeScore.events.includes(eventAsia)) {
+                        if (upperText.includes('ASIA_SWEEP')) {
+                            addedPoints = 6; // Puntaje masivo. El barrido de Asia es inminente.
+                            activeScore.events.push(eventAsia);
+                        } else if (upperText.includes('ABSORCION')) {
+                            addedPoints = 6;
                             activeScore.events.push(eventAbsorb);
                         } else {
                             addedPoints = 3;
