@@ -228,35 +228,45 @@ export async function processTradingAlert(alertText: string) {
                         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
                         const zTf = parseTF(zone.tf || '');
                         let eventName = '';
-                        let pts = 0;
+
+                        // INICIAMOS basePts ACÁ PARA NO REPETIR VARIABLES
+                        let basePts = 0;
 
                         // 🔍 DETECCIÓN DE FRANCOTIRADORES ESPECIALES
                         if (zone.medal?.includes('God Breaker')) {
                             eventName = `🦄_Unicornio_${zTf}`;
-                            pts = 6; // Puntaje masivo (Breaker + iFVG)
+                            basePts = 6; // Puntaje masivo (Breaker + iFVG)
                         } else if (zone.medal?.includes('CHoCH🚀')) {
                             eventName = `🎯_Silver_Bullet_${zTf}`;
-                            pts = 5; // Retesteo del origen del CHoCH
+                            basePts = 5; // Retesteo del origen del CHoCH
                         } else if (zone.medal?.includes('Breaker')) {
                             eventName = `Breaker_${zTf}`;
-                            pts = 3;
+                            basePts = 3;
                         } else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) {
                             eventName = `POC_Volume_${zTf}`;
-                            pts = 4;
+                            basePts = 4;
                         } else if (zone.medal?.includes('God') || zone.medal?.includes('Oro')) {
                             eventName = `OB_Gold_${zTf}`;
-                            pts = 3;
+                            basePts = 3;
                         } else {
                             eventName = `OB_${zTf}`;
-                            pts = 2;
+                            basePts = 2;
                         }
+
+                        // ⚖️ MULTIPLICADOR DE TEMPORALIDAD MACRO
+                        let tfMultiplier = 1;
+                        if (zTf === '4H') tfMultiplier = 2;        // Vale EL DOBLE
+                        else if (zTf === '1H') tfMultiplier = 1.5; // Vale 50% más
+
+                        // ASIGNAMOS pts FINAL ACÁ, UNA SOLA VEZ
+                        const pts = Math.floor(basePts * tfMultiplier);
 
                         if (!activeScore.events.includes(eventName)) {
                             activeScore.events.push(eventName);
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
 
-                            console.log(`[RADAR] 📡 Colisión: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+                            console.log(`[RADAR] 📡 Colisión: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts (Base ${basePts} x ${tfMultiplier}) para ${zone.dir}. Total: ${activeScore.points}`);
 
                             // 💥 GATILLO SNIPER INVISIBLE (Por colisión de PING)
                             const isMacroAligned = (state.marketBias['240'] === zone.dir) || (state.marketBias['60'] === zone.dir);
