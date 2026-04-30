@@ -212,28 +212,32 @@ export async function processTradingAlert(alertText: string) {
                     console.error(`[RADAR] Error parseando JSON:`, e);
                 }
             }
-            // // // =========================================================================
+            // =========================================================================
             // MOTOR 2: PING PRECIO (Y RADAR DE COLISIÓN INTERNA)
             // =========================================================================
             else if (prefix === 'PING_PRICE') {
                 const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
                 if (!priceMatch) return;
-                
+
                 const currentPrice = parseFloat(priceMatch[1]);
                 state.lastPrice = currentPrice;
 
-                // 📡 Jarvis revisa si el PING cayó adentro de una caja macro (1H o 4H)
+                // 📡 Jarvis revisa si el PING cayó adentro de una caja
                 for (const zone of state.zones) {
                     if (currentPrice <= zone.top && currentPrice >= zone.btm) {
                         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-                        
-                        // Normalizamos la temporalidad (ej. "240" -> "4H")
                         const zTf = parseTF(zone.tf || '');
                         let eventName = '';
-                        let pts = 2;
+                        let pts = 0;
 
-                        // Unificamos el vocabulario con el MOTOR 3
-                        if (zone.medal?.includes('Breaker')) {
+                        // 🔍 DETECCIÓN DE FRANCOTIRADORES ESPECIALES
+                        if (zone.medal?.includes('God Breaker')) {
+                            eventName = `🦄_Unicornio_${zTf}`;
+                            pts = 6; // Puntaje masivo (Breaker + iFVG)
+                        } else if (zone.medal?.includes('CHoCH🚀')) {
+                            eventName = `🎯_Silver_Bullet_${zTf}`;
+                            pts = 5; // Retesteo del origen del CHoCH
+                        } else if (zone.medal?.includes('Breaker')) {
                             eventName = `Breaker_${zTf}`;
                             pts = 3;
                         } else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) {
@@ -246,13 +250,29 @@ export async function processTradingAlert(alertText: string) {
                             eventName = `OB_${zTf}`;
                             pts = 2;
                         }
-                        
+
                         if (!activeScore.events.includes(eventName)) {
                             activeScore.events.push(eventName);
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
-                            
-                            console.log(`[RADAR] 📡 Colisión Interna: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+
+                            console.log(`[RADAR] 📡 Colisión: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+
+                            // 💥 GATILLO SNIPER INVISIBLE (Por colisión de PING)
+                            const isMacroAligned = (state.marketBias['240'] === zone.dir) || (state.marketBias['60'] === zone.dir);
+                            // Solo dispara si es Unicornio o Silver Bullet Y está alineado
+                            if ((eventName.includes('Unicornio') || eventName.includes('Silver_Bullet')) && isMacroAligned) {
+                                if (nowMs - (state.lastSniperAlert ?? 0) > dynamicBotConfig.sniperCooldownMs) {
+                                    triggerSniperTouch = true;
+                                    alertData = {
+                                        dirText: zone.dir === 'BUY' ? 'COMPRA' : 'VENTA',
+                                        events: [...activeScore.events],
+                                        points: activeScore.points,
+                                        specialSetup: eventName.includes('Unicornio') ? '🦄 UNICORNIO (Breaker+FVG)' : '🎯 SILVER BULLET (Retest CHoCH)'
+                                    };
+                                    state.lastSniperAlert = nowMs;
+                                }
+                            }
                         }
                     }
                 }
@@ -350,11 +370,11 @@ export async function processTradingAlert(alertText: string) {
                 }
                 else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
                     const eventNormal = `Sweep_${readableTf}`;
-                    const eventAbsorb = `Sweep_${readableTf}_Absorcion`;
+                    const eventAbsorb = `🩸_V-Shape_Absorb_${readableTf}`;
 
                     if (!activeScore.events.includes(eventNormal) && !activeScore.events.includes(eventAbsorb)) {
                         if (upperText.includes('ABSORCION')) {
-                            addedPoints = 5;
+                            addedPoints = 6; // Puntaje alto para forzar el gatillo
                             activeScore.events.push(eventAbsorb);
                         } else {
                             addedPoints = 3;
@@ -404,7 +424,7 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
-                    
+
                     // 🌟 SCORING ASIMÉTRICO Y EVALUACIÓN MACRO
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
                     const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
@@ -441,7 +461,7 @@ export async function processTradingAlert(alertText: string) {
 
                     // Criterios de Aprobación
                     const minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
-                    
+
                     if (totalPoints >= minPtsRequired) {
                         triggerChochA = true;
                         alertData = {
@@ -498,10 +518,16 @@ export async function processTradingAlert(alertText: string) {
                     ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}`
                     : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
 
-                let msg = `🎯 *GATILLO SNIPER (AL TOQUE) | ${ticker} | ${alertData.dirText}*\n\n`;
+                let setupName = alertData.specialSetup || 'AL TOQUE (ZONA HTF)';
+                if (alertData.events.some((e: string) => e.includes('V-Shape_Absorb'))) {
+                    setupName = '🩸 V-SHAPE ABSORB (Rechazo Extremo)';
+                }
+
+                let msg = `🎯 *GATILLO SNIPER | ${ticker} | ${alertData.dirText}*\n`;
+                msg += `⚡ *Setup:* ${setupName}\n\n`;
                 msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
                 msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
-                msg += `🧠 *Jarvis:* El precio alcanzó una zona macro (3M). Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`;
+                msg += `🧠 *Jarvis:* Condición especial detectada. Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`;
                 msg += kronosAnnotation;
 
 
@@ -530,12 +556,12 @@ export async function processTradingAlert(alertText: string) {
                 msg += alertData.confluenceReport;
                 msg += `🎯 *Puntaje Total:* ${alertData.totalPoints} Puntos\n`;
                 msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_3M\n\n`;
-                
+
                 // GESTIÓN DE RIESGO DINÁMICA
-                let avisoRiesgo = alertData.isMacroAligned 
-                    ? `Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).` 
+                let avisoRiesgo = alertData.isMacroAligned
+                    ? `Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`
                     : `Setup en contra-tendencia. Riesgo reducido (${dynamicBotConfig.baseRiskPercentage / 2}%).`;
-                
+
                 msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
                 msg += kronosAnnotation;
 
@@ -575,10 +601,10 @@ export async function processTradingAlert(alertText: string) {
                 msg += `🧱 *Confluencias:* ${alertData.events.join(', ')} + CHoCH_3M\n\n`;
 
                 // GESTIÓN DE RIESGO DINÁMICA AVANZADA
-                let avisoRiesgo = alertData.isMacroAligned 
-                    ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo (0.5%).` 
-                    : (alertData.is4HAgainst && alertData.is1HAgainst) 
-                        ? `Trade contra-tendencia agresivo. Riesgo mínimo (0.25%).` 
+                let avisoRiesgo = alertData.isMacroAligned
+                    ? `Faltó barrido de liquidez o zonas pesadas. Reducir riesgo (0.5%).`
+                    : (alertData.is4HAgainst && alertData.is1HAgainst)
+                        ? `Trade contra-tendencia agresivo. Riesgo mínimo (0.25%).`
                         : `Contexto macro neutral. Operar con precaución (0.5%).`;
 
                 msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
