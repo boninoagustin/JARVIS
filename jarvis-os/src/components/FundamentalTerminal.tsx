@@ -184,11 +184,18 @@ export default function FundamentalTerminal() {
       <div className="grid-2" style={{ marginBottom: 'var(--spacing-lg)' }}>
         <div className="panel" style={{ marginBottom: 0 }}>
           <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-            <Newspaper size={18} /> REAL-TIME NEWS FEED
+            <Newspaper size={18} /> FEED DE NOTICIAS EN TIEMPO REAL
           </h3>
           <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
             Titulares financieros extraídos vía Finnhub API.
           </p>
+
+          <div style={{ padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px', borderLeft: '3px solid var(--text-primary)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>💡 Impacto en la Operativa:</strong><br/>
+            • <strong style={{ color: 'var(--accent-red)' }}>Noticias en Rojo (Alto Impacto):</strong> Generan volatilidad extrema inmediata. Peligro de "slippage" o mechas engañosas en {displayAssets.length > 0 ? displayAssets.slice(0, 3).join(', ') : 'tus pares'}.<br/>
+            • <strong style={{ color: 'var(--accent-gold)' }}>Noticias en Amarillo (Medio Impacto):</strong> Definen el tono general de la sesión. Útiles para alinear tu sesgo direccional.<br/>
+            • <em>Recomendación:</em> Si una noticia afecta al USD, impactará inversamente en EURUSD, XAUUSD y BTCUSD.
+          </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
             {!fundamentals?.news ? (
