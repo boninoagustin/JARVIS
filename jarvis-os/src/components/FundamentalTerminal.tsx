@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, query } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Terminal, ShieldAlert, Newspaper, TrendingUp, BrainCircuit, Bitcoin, Briefcase } from 'lucide-react';
 
@@ -31,6 +31,7 @@ const DEFAULT_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
 export default function FundamentalTerminal() {
   const [settings, setSettings] = useState<AppSettings>({ killswitches: {} });
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
+  const [tradedAssets, setTradedAssets] = useState<string[]>([]);
   
   useEffect(() => {
     // Escuchar Killswitches
@@ -48,9 +49,16 @@ export default function FundamentalTerminal() {
       }
     });
 
+    // Escuchar Activos Operados desde radar_states
+    const unsubRadar = onSnapshot(query(collection(db, 'radar_states')), (snapshot) => {
+      const assets = snapshot.docs.map(doc => doc.id);
+      setTradedAssets(assets.sort());
+    });
+
     return () => {
       unsubGlobal();
       unsubFundamentals();
+      unsubRadar();
     };
   }, []);
 
@@ -69,6 +77,8 @@ export default function FundamentalTerminal() {
     if (status === 'status-sell') return { bg: 'rgba(255, 51, 51, 0.05)', border: 'rgba(255, 51, 51, 0.2)' };
     return { bg: 'rgba(255, 170, 0, 0.05)', border: 'rgba(255, 170, 0, 0.2)' };
   };
+
+  const displayAssets = tradedAssets.length > 0 ? tradedAssets : DEFAULT_ASSETS;
 
   return (
     <div>
@@ -92,7 +102,7 @@ export default function FundamentalTerminal() {
           </p>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {DEFAULT_ASSETS.map(asset => {
+            {displayAssets.map(asset => {
               const isLocked = settings.killswitches[asset] || false;
               return (
                 <div key={asset} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', backgroundColor: isLocked ? 'rgba(255, 51, 51, 0.1)' : 'transparent' }}>
