@@ -135,6 +135,13 @@ export default function FundamentalTerminal() {
             Variables clave de mercado para entender el contexto global y el apetito por el riesgo.
           </p>
 
+          <div style={{ padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px', borderLeft: '3px solid var(--accent-blue)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>💡 Guía Rápida de Impacto:</strong><br/>
+            • <strong style={{ color: 'var(--accent-red)' }}>DXY (Dólar) Fuerte:</strong> Presión bajista para BTCUSD, EURUSD y Oro.<br/>
+            • <strong style={{ color: 'var(--accent-red)' }}>VIX y Yields (Bonos) Altos:</strong> Miedo en el mercado. Negativo para US100 (Nasdaq) y Cripto.<br/>
+            • <strong style={{ color: 'var(--accent-green)' }}>Risk On (Apetito por Riesgo):</strong> Entorno ideal para comprar BTCUSD y US100.
+          </div>
+
           <table className="data-table">
             <thead>
               <tr>
@@ -245,6 +252,13 @@ export default function FundamentalTerminal() {
             Datos de red y liquidez de derivados para Bitcoin.
           </p>
 
+          <div style={{ padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px', borderLeft: '3px solid #f7931a' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>💡 Cómo impactan en BTCUSD:</strong><br/>
+            • <strong style={{ color: 'var(--accent-red)' }}>Funding Rates Altos y Codicia:</strong> Mercado sobre-apalancado en Compras (Longs). Riesgo inminente de liquidaciones (caída rápida).<br/>
+            • <strong style={{ color: 'var(--accent-green)' }}>Netflow Negativo (Salida de Exchanges):</strong> Bullish (Alcista) a mediano plazo, significa que guardan BTC en frío y hay menos oferta para vender.<br/>
+            • <strong style={{ color: 'var(--text-primary)' }}>Dominancia BTC subiendo:</strong> Bitcoin atrae el capital, las altcoins pierden fuerza.
+          </div>
+
           <table className="data-table">
             <thead>
               <tr>
@@ -285,6 +299,13 @@ export default function FundamentalTerminal() {
           <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
             Reportes corporativos clave y eventos macro próximos.
           </p>
+
+          <div style={{ padding: '12px', backgroundColor: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px', borderLeft: '3px solid var(--accent-gold)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>💡 Protocolo Operativo:</strong><br/>
+            • <strong style={{ color: 'var(--accent-gold)' }}>Earnings (NVDA, AAPL, MSFT):</strong> Afectan directamente a índices y sus pares como <strong style={{ color: 'var(--text-primary)' }}>US100 (Nasdaq)</strong> y US500.<br/>
+            • <strong style={{ color: 'var(--accent-red)' }}>Eventos Macro (FOMC, NFP, CPI):</strong> Generan latigazos extremos en <strong style={{ color: 'var(--text-primary)' }}>EURUSD, XAUUSD (Oro) y BTCUSD</strong>.<br/>
+            • <em>Acción recomendada:</em> Considera activar el <strong>Killswitch</strong> 15 mins antes de estos eventos para evitar mechas que toquen Stop Loss.
+          </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
