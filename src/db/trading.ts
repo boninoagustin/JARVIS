@@ -214,7 +214,7 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
             // =========================================================================
-            // MOTOR 2: PING PRECIO (Y RADAR DE COLISIÓN INTERNA)
+            // MOTOR 2: PING PRECIO (Y RADAR DE COLISIÓN INTERNA EN NODE)
             // =========================================================================
             else if (prefix === 'PING_PRICE') {
                 const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
@@ -223,63 +223,37 @@ export async function processTradingAlert(alertText: string) {
                 const currentPrice = parseFloat(priceMatch[1]);
                 state.lastPrice = currentPrice;
 
-                // 📡 Jarvis revisa si el PING cayó adentro de una caja
+                // 📡 Jarvis cruza el precio actual con el mapa JSON que tiene en memoria
                 for (const zone of state.zones) {
-                    if (currentPrice <= zone.top && currentPrice >= zone.btm) {
+                    // Agregamos un micro-buffer (0.02%) por las dudas del spread
+                    const buffer = currentPrice * 0.0002; 
+                    
+                    if (currentPrice <= (zone.top + buffer) && currentPrice >= (zone.btm - buffer)) {
                         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
                         const zTf = parseTF(zone.tf || '');
-                        let eventName = '';
+                        
+                        // Extraemos los puntos matemáticos que mandó el indicador 5.0
+                        let basePts = zone.score !== undefined ? zone.score : 2; 
 
-                        // INICIAMOS basePts ACÁ PARA NO REPETIR VARIABLES
-                        let basePts = 0;
-
-                        // 🔍 DETECCIÓN DE FRANCOTIRADORES ESPECIALES
-                        // Ahora usamos la matemática exacta del indicador 5.0
-                        if (zone.score !== undefined) {
-                            basePts = zone.score;
-                            eventName = zone.medal?.includes('God') ? `💎_GOD_ZONE_${zTf}` :
-                                zone.medal?.includes('CHoCH') ? `🎯_Silver_Bullet_${zTf}` :
-                                    `OB_${zone.medal}_${zTf}`;
-                        } else {
-                            // Fallback por si lee una alerta vieja
-                            if (zone.medal?.includes('God Breaker')) { eventName = `🦄_Unicornio_${zTf}`; basePts = 6; }
-                            else if (zone.medal?.includes('CHoCH🚀')) { eventName = `🎯_Silver_Bullet_${zTf}`; basePts = 5; }
-                            else if (zone.medal?.includes('Breaker')) { eventName = `Breaker_${zTf}`; basePts = 3; }
-                            else if (zone.medal?.includes('Platino') || zone.medal?.includes('POC')) { eventName = `POC_Volume_${zTf}`; basePts = 4; }
-                            else if (zone.medal?.includes('God') || zone.medal?.includes('Oro')) { eventName = `OB_Gold_${zTf}`; basePts = 3; }
-                            else { eventName = `OB_${zTf}`; basePts = 2; }
-                        }
+                        let eventName = zone.medal?.includes('God') ? `💎_GOD_ZONE_${zTf}` :
+                                        zone.medal?.includes('CHoCH') ? `🎯_Silver_Bullet_${zTf}` :
+                                        zone.medal?.includes('Breaker') ? `♻️_Breaker_${zTf}` :
+                                        `OB_${zone.medal}_${zTf}`;
 
                         // ⚖️ MULTIPLICADOR DE TEMPORALIDAD MACRO
                         let tfMultiplier = 1;
                         if (zTf === '4H') tfMultiplier = 2;        // Vale EL DOBLE
                         else if (zTf === '1H') tfMultiplier = 1.5; // Vale 50% más
 
-                        // ASIGNAMOS pts FINAL ACÁ, UNA SOLA VEZ
                         const pts = Math.floor(basePts * tfMultiplier);
 
+                        // Si Jarvis no había anotado este toque todavía, lo suma a la memoria temporal
                         if (!activeScore.events.includes(eventName)) {
                             activeScore.events.push(eventName);
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
 
-                            console.log(`[RADAR] 📡 Colisión: Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts (Base ${basePts} x ${tfMultiplier}) para ${zone.dir}. Total: ${activeScore.points}`);
-
-                            // 💥 GATILLO SNIPER INVISIBLE (Por colisión de PING)
-                            const isMacroAligned = (state.marketBias['240'] === zone.dir) || (state.marketBias['60'] === zone.dir);
-                            // Solo dispara si es Unicornio o Silver Bullet Y está alineado
-                            if ((eventName.includes('Unicornio') || eventName.includes('Silver_Bullet')) && isMacroAligned) {
-                                if (nowMs - (state.lastSniperAlert ?? 0) > dynamicBotConfig.sniperCooldownMs) {
-                                    triggerSniperTouch = true;
-                                    alertData = {
-                                        dirText: zone.dir === 'BUY' ? 'COMPRA' : 'VENTA',
-                                        events: [...activeScore.events],
-                                        points: activeScore.points,
-                                        specialSetup: eventName.includes('Unicornio') ? '🦄 UNICORNIO (Breaker+FVG)' : '🎯 SILVER BULLET (Retest CHoCH)'
-                                    };
-                                    state.lastSniperAlert = nowMs;
-                                }
-                            }
+                            console.log(`[RADAR] 📡 Colisión Interna: Ping de Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
                         }
                     }
                 }
@@ -379,17 +353,13 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                 }
-                // --- RECOLECCIÓN DE PUNTOS ---
+                // --- RECOLECCIÓN DE EVENTOS RÁPIDOS (Sweeps y Divergencias) ---
                 else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
                     const eventNormal = `Sweep_${readableTf}`;
                     const eventAbsorb = `🩸_V-Shape_Absorb_${readableTf}`;
-                    const eventAsia = `🌙_Judas_Swing_Asia_${readableTf}`; // NUEVO EVENTO
 
-                    if (!activeScore.events.includes(eventNormal) && !activeScore.events.includes(eventAbsorb) && !activeScore.events.includes(eventAsia)) {
-                        if (upperText.includes('ASIA_SWEEP')) {
-                            addedPoints = 6; // Puntaje masivo. El barrido de Asia es inminente.
-                            activeScore.events.push(eventAsia);
-                        } else if (upperText.includes('ABSORCION')) {
+                    if (!activeScore.events.includes(eventNormal) && !activeScore.events.includes(eventAbsorb)) {
+                        if (upperText.includes('ABSORCION')) {
                             addedPoints = 6;
                             activeScore.events.push(eventAbsorb);
                         } else {
@@ -410,45 +380,29 @@ export async function processTradingAlert(alertText: string) {
                     activeScore.points += addedPoints;
                     activeScore.lastUpdate = nowMs;
                     console.log(`[RADAR] ➕ +${addedPoints} pts para ${ticker} ${currentDirection}. Total: ${activeScore.points}`);
-
-                    // 💥 GATILLO 1: SNIPER (Entrada Agresiva)
-                    const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
-                    if (activeScore.points >= 5 && isMacroAligned && (prefix === 'TOUCH_ZONE' || prefix.includes('SWEEP'))) {
-                        if (nowMs - (state.lastSniperAlert ?? 0) > dynamicBotConfig.sniperCooldownMs) {
-                            triggerSniperTouch = true;
-                            alertData = {
-                                dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
-                                events: [...activeScore.events],
-                                points: activeScore.points
-                            };
-                            state.lastSniperAlert = nowMs;
-                        }
-                    }
                 }
 
                 // --- CAPA 4: EL GATILLO FINAL (CHOCH VALIDADO EN 3M) ---
-                if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { // Actualizado a 3M
+                if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { 
                     if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
                         return; // Cooldown anti-spam
                     }
 
-                    // 🛡️ CANDADO DE TITANIO: No operamos CHoCH sin mitigar zonas o barrer liquidez antes
-                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('Sweep_') || e.includes('POC_') || e.includes('Breaker_'));
+                    // 🛡️ CANDADO DE TITANIO: Verificamos que Jarvis haya registrado toques previos en la zona o sweeps
+                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_'));
+                    
                     if (!hasHTFBacking) {
-                        console.log(`[RADAR] 🗑️ CHoCH BASURA IGNORADO | ${ticker}: Ocurrió sin mitigar zonas ni barrer liquidez previa.`);
+                        console.log(`[RADAR] 🗑️ CHoCH IGNORADO | ${ticker}: El precio giró en el aire (no hay registro de zonas tocadas ni sweeps en memoria).`);
                         return;
                     }
 
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
-
-                    // 🌟 SCORING ASIMÉTRICO Y EVALUACIÓN MACRO
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
                     const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                     const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
 
-                    // Si está a favor del sesgo macro, le regalamos 5 puntos base para que gatille más fácil.
                     let baseBiasPoints = isMacroAligned ? 5 : 0;
-
+                    
                     let vwapBonus = 0;
                     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') {
                         vwapBonus = 2;
@@ -458,7 +412,6 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.events.push('VWAP_Premium');
                     }
 
-                    // Cálculo final de puntos sumando el bonus asimétrico
                     let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; // +2 por el CHoCH
 
                     if (is4HAgainst && is1HAgainst) {
