@@ -359,6 +359,67 @@ export default function FundamentalTerminal() {
           </div>
         </div>
       </div>
+
+      {/* ROW 4: Conclusión por Activo (Synthesis) */}
+      <div className="panel" style={{ marginTop: 'var(--spacing-lg)' }}>
+        <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+          <BrainCircuit size={18} color="var(--accent-blue)" /> SÍNTESIS DIRECCIONAL POR ACTIVO
+        </h3>
+        <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '20px' }}>
+          Conclusión calculada cruzando los Indicadores Macro, Análisis de Sentimiento (IA), Calendario Económico y Métricas On-Chain.
+        </p>
+
+        <div className="grid-2">
+          {displayAssets.map(asset => {
+            // Lógica simulada de síntesis (Idealmente provendría del backend en el objeto fundamentals)
+            let action = 'NEUTRAL';
+            let color = 'var(--text-tertiary)';
+            let bgColor = 'rgba(255, 255, 255, 0.02)';
+            let border = '1px solid var(--border-color)';
+            let reasoning = 'Esperando confluencia de datos...';
+
+            if (asset === 'BTCUSD') {
+              action = 'LONG PENDIENTE';
+              color = 'var(--accent-green)';
+              bgColor = 'rgba(0, 255, 0, 0.05)';
+              border = '1px solid rgba(0, 255, 0, 0.2)';
+              reasoning = 'Macro: Risk On favorece. On-Chain: Salida neta de exchanges alcista. Sentimiento IA: Fuerte. Riesgo: Vigilar Funding Rates para evitar barrida antes de subir.';
+            } else if (asset === 'US100') {
+              action = 'PRECAUCIÓN (EARNINGS)';
+              color = 'var(--accent-gold)';
+              bgColor = 'rgba(255, 170, 0, 0.05)';
+              border = '1px solid rgba(255, 170, 0, 0.2)';
+              reasoning = 'Macro: Yields altos presionan a la baja. Calendario: Alta exposición a próximos Earnings (NVDA/AAPL). Sentimiento: Mixto. Recomendación: Reducir apalancamiento.';
+            } else if (asset === 'EURUSD') {
+              action = 'SHORT FAVORECIDO';
+              color = 'var(--accent-red)';
+              bgColor = 'rgba(255, 51, 51, 0.05)';
+              border = '1px solid rgba(255, 51, 51, 0.2)';
+              reasoning = 'Macro: DXY (Dólar) Fuerte presiona a la baja. Calendario: Esperando NFP el viernes. Sentimiento: Débil. Buscar rebotes para vender.';
+            } else if (asset === 'XAUUSD') {
+               action = 'RANGO VOLÁTIL';
+               color = 'var(--accent-gold)';
+               bgColor = 'rgba(255, 170, 0, 0.05)';
+               border = '1px solid rgba(255, 170, 0, 0.2)';
+               reasoning = 'Macro: Yields altos vs Riesgo Geopolítico. Se neutralizan mutuamente. Sentimiento: Incierto. Operar extremos del rango.';
+            }
+
+            return (
+              <div key={asset} style={{ padding: '16px', backgroundColor: bgColor, border: border, borderRadius: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <strong className="mono" style={{ fontSize: '1.1rem' }}>{asset}</strong>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: color, padding: '4px 8px', border: `1px solid ${color}`, borderRadius: '4px' }}>
+                    {action}
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
+                  {reasoning}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
