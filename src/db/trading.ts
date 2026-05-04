@@ -14,6 +14,8 @@ interface RadarZone {
     lvl: string;
     medal?: string;
     score?: number; // 🆕 Agregamos el Score Matemático de Pine Script
+    tp?: number;    // 🆕 Take Profit sugerido por el indicador
+    sl?: number;    // 🆕 Stop Loss sugerido por el indicador
 }
 
 // SISTEMA DE MEMORIA TEMPORAL PARA APILAMIENTO
@@ -52,9 +54,9 @@ const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 300000,
-    minPointsForBuy: 8,
-    minPointsForSell: 8,
+    sniperCooldownMs: 180000,     // 🆕 3 minutos (alineado con velas de 3M)
+    minPointsForBuy: 7,           // 🆕 Bajado de 8 a 7 (más sensible tras fix de dirección)
+    minPointsForSell: 7,          // 🆕 Bajado de 8 a 7
     baseRiskPercentage: 1.0
 };
 
@@ -156,7 +158,6 @@ export async function processTradingAlert(alertText: string) {
     const todayStr = new Date().toISOString().split('T')[0];
     const nowMs = Date.now();
 
-    let triggerSniperTouch = false;
     let triggerChochA = false;
     let triggerChochB = false;
     let alertData: any = null;
@@ -164,7 +165,6 @@ export async function processTradingAlert(alertText: string) {
     try {
         await db.runTransaction(async (transaction) => {
             // Reset flags en caso de reintento de la transacción
-            triggerSniperTouch = false;
             triggerChochA = false;
             triggerChochB = false;
             alertData = null;
@@ -221,18 +221,32 @@ export async function processTradingAlert(alertText: string) {
                 if (!priceMatch) return;
 
                 const currentPrice = parseFloat(priceMatch[1]);
+                const previousPrice = state.lastPrice; // 🆕 Guardamos precio anterior para detectar dirección
                 state.lastPrice = currentPrice;
+                const buffer = currentPrice * 0.0002; // micro-buffer por spread
 
-                // 📡 Jarvis cruza el precio actual con el mapa JSON que tiene en memoria
+                // 📡 FASE 1: Recorremos zonas y detectamos toques individuales
+                const touchedThisPing: { zone: RadarZone; eventName: string; pts: number }[] = [];
+
                 for (const zone of state.zones) {
-                    // Agregamos un micro-buffer (0.02%) por las dudas del spread
-                    const buffer = currentPrice * 0.0002; 
-                    
                     if (currentPrice <= (zone.top + buffer) && currentPrice >= (zone.btm - buffer)) {
+                        // 🆕 DETECCIÓN DE DIRECCIÓN DE ENTRADA (SMC Purista)
+                        const enteredFromAbove = previousPrice !== null && previousPrice > zone.top;
+                        const enteredFromBelow = previousPrice !== null && previousPrice < zone.btm;
+                        
+                        const isValidDirection = (zone.dir === 'BUY' && enteredFromAbove) ||
+                                                 (zone.dir === 'SELL' && enteredFromBelow);
+                        
+                        const isFirstPing = previousPrice === null;
+                        
+                        if (!isValidDirection && !isFirstPing) {
+                            console.log(`[RADAR] 🗑️ Toque ignorado en ${zone.medal} ${zone.dir}: dirección incorrecta (prev=${previousPrice}, curr=${currentPrice}, zone=[${zone.btm}-${zone.top}])`);
+                            continue;
+                        }
+                        
                         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
                         const zTf = parseTF(zone.tf || '');
                         
-                        // Extraemos los puntos matemáticos que mandó el indicador 5.0
                         let basePts = zone.score !== undefined ? zone.score : 2; 
 
                         let eventName = zone.medal?.includes('God') ? `💎_GOD_ZONE_${zTf}` :
@@ -240,20 +254,79 @@ export async function processTradingAlert(alertText: string) {
                                         zone.medal?.includes('Breaker') ? `♻️_Breaker_${zTf}` :
                                         `OB_${zone.medal}_${zTf}`;
 
-                        // ⚖️ MULTIPLICADOR DE TEMPORALIDAD MACRO
                         let tfMultiplier = 1;
-                        if (zTf === '4H') tfMultiplier = 2;        // Vale EL DOBLE
-                        else if (zTf === '1H') tfMultiplier = 1.5; // Vale 50% más
+                        if (zTf === '4H') tfMultiplier = 2;
+                        else if (zTf === '1H') tfMultiplier = 1.5;
 
                         const pts = Math.floor(basePts * tfMultiplier);
 
-                        // Si Jarvis no había anotado este toque todavía, lo suma a la memoria temporal
                         if (!activeScore.events.includes(eventName)) {
                             activeScore.events.push(eventName);
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
 
-                            console.log(`[RADAR] 📡 Colisión Interna: Ping de Precio ${currentPrice} entró en ${zone.medal} de ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+                            const dirTag = enteredFromAbove ? '↓desde arriba' : enteredFromBelow ? '↑desde abajo' : '•primer ping';
+                            console.log(`[RADAR] 📡 Colisión Interna: Ping ${currentPrice} ${dirTag} → ${zone.medal} ${zTf}. ➕ +${pts} pts para ${zone.dir}. Total: ${activeScore.points}`);
+                            
+                            // Guardamos para análisis de confluencia post-loop
+                            touchedThisPing.push({ zone, eventName, pts });
+                        }
+                    }
+                }
+
+                // 🆕 FASE 2: DETECCIÓN DE CONFLUENCIA MULTI-TF (4H + 1H + 15M + 3M)
+                // Buscamos zonas de DISTINTAS temporalidades tocadas en la misma dirección
+                for (const dir of ['BUY', 'SELL'] as const) {
+                    const dirZones = touchedThisPing.filter(t => t.zone.dir === dir);
+                    if (dirZones.length < 2) continue;
+
+                    const activeScore = dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+                    
+                    // Agrupar por timeframe y detectar solapamiento de rangos entre zonas
+                    const uniqueTFs = new Set(dirZones.map(t => t.zone.tf));
+                    const tfCount = uniqueTFs.size;
+                    
+                    if (tfCount >= 2) {
+                        // Verificar que las zonas efectivamente se solapan en precio (no solo que el precio las tocó)
+                        const zonesOverlap = dirZones.some((a, i) => 
+                            dirZones.some((b, j) => 
+                                i !== j && a.zone.tf !== b.zone.tf &&
+                                !(a.zone.top < b.zone.btm || a.zone.btm > b.zone.top) // rangos se intersectan
+                            )
+                        );
+                        
+                        if (!zonesOverlap) {
+                            console.log(`[RADAR] 🔍 ${tfCount} TFs tocadas para ${dir} pero sin solapamiento de rangos. Sin bonus.`);
+                            continue;
+                        }
+                        
+                        let confluenceBonus = 0;
+                        let confluenceTag = '';
+                        
+                        if (tfCount === 4) {
+                            confluenceBonus = 10;
+                            confluenceTag = '🔥 CONFLUENCIA 4-TF';
+                        } else if (tfCount === 3) {
+                            confluenceBonus = 7;
+                            confluenceTag = '🎯 CONFLUENCIA 3-TF';
+                        } else {
+                            confluenceBonus = 4;
+                            confluenceTag = '⚡ CONFLUENCIA 2-TF';
+                        }
+                        
+                        const tfList = [...uniqueTFs].map(t => parseTF(t || '')).sort((a, b) => {
+                            const order: Record<string, number> = { '3M': 0, '15M': 1, '1H': 2, '4H': 3 };
+                            return (order[b] || 0) - (order[a] || 0);
+                        }).join('+');
+                        
+                        const eventName = `🧲_CONFLUENCIA_${tfCount}TF_${tfList}`;
+                        if (!activeScore.events.includes(eventName)) {
+                            activeScore.events.push(eventName);
+                            activeScore.points += confluenceBonus;
+                            activeScore.lastUpdate = nowMs;
+                            
+                            const medals = dirZones.map(t => `${t.zone.medal}(${parseTF(t.zone.tf || '')})`).join(', ');
+                            console.log(`[RADAR] ${confluenceTag} ${tfList} detectada para ${ticker} ${dir}. Zonas: ${medals}. ➕ +${confluenceBonus} pts. Total: ${activeScore.points}`);
                         }
                     }
                 }
@@ -391,9 +464,21 @@ export async function processTradingAlert(alertText: string) {
                     // 🛡️ CANDADO DE TITANIO: Verificamos que Jarvis haya registrado toques previos en la zona o sweeps
                     const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_'));
                     
+                    // 🆕 FALLBACK INTELIGENTE: Si no hay zonas en memoria (recién arrancó o perdió sync),
+                    // en vez de ignorar, aplicamos una penalización y exigimos más puntos.
+                    let orphanPenalty = 0;
                     if (!hasHTFBacking) {
-                        console.log(`[RADAR] 🗑️ CHoCH IGNORADO | ${ticker}: El precio giró en el aire (no hay registro de zonas tocadas ni sweeps en memoria).`);
-                        return;
+                        // Verificamos si hay zonas en el mapa (puede que no se hayan tocado aún)
+                        const hasZonesInMap = state.zones.length > 0;
+                        if (hasZonesInMap) {
+                            // Hay zonas mapeadas pero no tocadas → penalización leve
+                            orphanPenalty = 3;
+                            console.log(`[RADAR] ⚠️ CHoCH sin toques previos en ${ticker}. Penalización leve (-${orphanPenalty} pts). Zonas mapeadas: ${state.zones.length}`);
+                        } else {
+                            // No hay zonas en absoluto → penalización fuerte, pero dejamos pasar
+                            orphanPenalty = 5;
+                            console.log(`[RADAR] ⚠️ CHoCH HUÉRFANO en ${ticker}: sin zonas en memoria. Penalización fuerte (-${orphanPenalty} pts).`);
+                        }
                     }
 
                     const dirText = currentDirection === 'BUY' ? 'COMPRA' : 'VENTA';
@@ -414,6 +499,11 @@ export async function processTradingAlert(alertText: string) {
 
                     let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; // +2 por el CHoCH
 
+                    // 🆕 Aplicar penalización por CHoCH huérfano (sin toques previos en zonas)
+                    if (orphanPenalty > 0) {
+                        totalPoints -= orphanPenalty;
+                    }
+
                     if (is4HAgainst && is1HAgainst) {
                         totalPoints -= 3;
                         console.log(`[RADAR] ⚠️ Trade contra-tendencia Macro en ${ticker}. Restando 3 pts.`);
@@ -427,6 +517,9 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; // Actualizado a 3M
                     confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`; // Nuevo informe visual del bono
+                    if (orphanPenalty > 0) {
+                        confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts (sin toques previos en zonas)\n`;
+                    }
 
                     // Criterios de Aprobación
                     const minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
@@ -476,34 +569,6 @@ export async function processTradingAlert(alertText: string) {
         // =========================================================================
         // EJECUCIÓN DE ALERTAS FUERA DE LA TRANSACCIÓN (Evita duplicados por reintentos)
         // =========================================================================
-        if (triggerSniperTouch && alertData) {
-            const fingerprint = `SNIPER_${ticker}_${alertData.dirText}_${alertData.points}_${alertData.events.join(',')}`;
-            if (!isDuplicate(fingerprint)) {
-                const kronosResult = await evaluateWithKronos(ticker, alertData.dirText === 'COMPRA' ? 'BUY' : 'SELL').catch((e: any) => ({
-                    trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                }));
-
-                let kronosAnnotation = kronosResult.trend === null
-                    ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}`
-                    : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
-
-                let setupName = alertData.specialSetup || 'AL TOQUE (ZONA HTF)';
-                if (alertData.events.some((e: string) => e.includes('V-Shape_Absorb'))) {
-                    setupName = '🩸 V-SHAPE ABSORB (Rechazo Extremo)';
-                }
-
-                let msg = `🎯 *GATILLO SNIPER | ${ticker} | ${alertData.dirText}*\n`;
-                msg += `⚡ *Setup:* ${setupName}\n\n`;
-                msg += `🧱 *Eventos Recientes:* ${alertData.events.join(', ')}\n`;
-                msg += `⚖️ *Puntaje Acumulado:* ${alertData.points} Pts\n\n`;
-                msg += `🧠 *Jarvis:* Condición especial detectada. Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`;
-                msg += kronosAnnotation;
-
-
-                await sendTelegramAlert(msg);
-            }
-        }
-
         if (triggerChochA && alertData) {
             const fingerprint = `CHOCHA_${ticker}_${alertData.dirText}_${alertData.totalPoints}_${alertData.events.join(',')}`;
             if (!isDuplicate(fingerprint)) {
@@ -532,6 +597,17 @@ export async function processTradingAlert(alertText: string) {
                     : `Setup en contra-tendencia. Riesgo reducido (${dynamicBotConfig.baseRiskPercentage / 2}%).`;
 
                 msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
+
+                // 🆕 Buscar la mejor zona tocada para sugerir TP/SL
+                const touchedZone = state.zones
+                    .filter(z => z.dir === alertData.currentDirection)
+                    .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+                if (touchedZone?.tp || touchedZone?.sl) {
+                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${touchedZone.medal || ''}):*`;
+                    if (touchedZone.tp) msg += `\n🎯 TP: ${touchedZone.tp}`;
+                    if (touchedZone.sl) msg += `\n🛑 SL: ${touchedZone.sl}`;
+                }
+
                 msg += kronosAnnotation;
 
                 if (investmentResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
@@ -577,6 +653,17 @@ export async function processTradingAlert(alertText: string) {
                         : `Contexto macro neutral. Operar con precaución (0.5%).`;
 
                 msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
+
+                // 🆕 Buscar la mejor zona tocada para sugerir TP/SL
+                const touchedZoneB = state.zones
+                    .filter(z => z.dir === alertData.currentDirection)
+                    .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+                if (touchedZoneB?.tp || touchedZoneB?.sl) {
+                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${touchedZoneB.medal || ''}):*`;
+                    if (touchedZoneB.tp) msg += `\n🎯 TP: ${touchedZoneB.tp}`;
+                    if (touchedZoneB.sl) msg += `\n🛑 SL: ${touchedZoneB.sl}`;
+                }
+
                 msg += kronosAnnotation;
 
                 if (investmentResult) msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
