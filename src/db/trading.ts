@@ -524,6 +524,11 @@ export async function processTradingAlert(alertText: string) {
                     // Criterios de Aprobación
                     const minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
 
+                    // Buscar la mejor zona tocada para sugerir TP/SL (dentro de la transacción donde state existe)
+                    const bestZone = state.zones
+                        .filter(z => z.dir === currentDirection)
+                        .sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
+
                     if (totalPoints >= minPtsRequired) {
                         triggerChochA = true;
                         alertData = {
@@ -533,7 +538,8 @@ export async function processTradingAlert(alertText: string) {
                             events: [...activeScore.events],
                             marketBias: { ...state.marketBias },
                             currentDirection,
-                            isMacroAligned
+                            isMacroAligned,
+                            bestZone
                         };
 
                         state.lastSniperAlert = nowMs;
@@ -551,7 +557,8 @@ export async function processTradingAlert(alertText: string) {
                             currentDirection,
                             isMacroAligned,
                             is4HAgainst,
-                            is1HAgainst
+                            is1HAgainst,
+                            bestZone
                         };
 
                         state.lastSniperAlert = nowMs;
@@ -598,14 +605,11 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
 
-                // 🆕 Buscar la mejor zona tocada para sugerir TP/SL
-                const touchedZone = state.zones
-                    .filter(z => z.dir === alertData.currentDirection)
-                    .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
-                if (touchedZone?.tp || touchedZone?.sl) {
-                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${touchedZone.medal || ''}):*`;
-                    if (touchedZone.tp) msg += `\n🎯 TP: ${touchedZone.tp}`;
-                    if (touchedZone.sl) msg += `\n🛑 SL: ${touchedZone.sl}`;
+                // Usar la zona precalculada dentro de la transacción (state no existe aquí)
+                if (alertData.bestZone?.tp || alertData.bestZone?.sl) {
+                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${alertData.bestZone.medal || ''}):*`;
+                    if (alertData.bestZone.tp) msg += `\n🎯 TP: ${alertData.bestZone.tp}`;
+                    if (alertData.bestZone.sl) msg += `\n🛑 SL: ${alertData.bestZone.sl}`;
                 }
 
                 msg += kronosAnnotation;
@@ -654,14 +658,11 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
 
-                // 🆕 Buscar la mejor zona tocada para sugerir TP/SL
-                const touchedZoneB = state.zones
-                    .filter(z => z.dir === alertData.currentDirection)
-                    .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
-                if (touchedZoneB?.tp || touchedZoneB?.sl) {
-                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${touchedZoneB.medal || ''}):*`;
-                    if (touchedZoneB.tp) msg += `\n🎯 TP: ${touchedZoneB.tp}`;
-                    if (touchedZoneB.sl) msg += `\n🛑 SL: ${touchedZoneB.sl}`;
+                // Usar la zona precalculada dentro de la transacción (state no existe aquí)
+                if (alertData.bestZone?.tp || alertData.bestZone?.sl) {
+                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${alertData.bestZone.medal || ''}):*`;
+                    if (alertData.bestZone.tp) msg += `\n🎯 TP: ${alertData.bestZone.tp}`;
+                    if (alertData.bestZone.sl) msg += `\n🛑 SL: ${alertData.bestZone.sl}`;
                 }
 
                 msg += kronosAnnotation;
