@@ -61,7 +61,10 @@ async function main() {
             });
 
         // Pre-cargar trading module para activar listeners de config
-        await import('./db/trading.js');
+        const tradingModule = await import('./db/trading.js');
+        
+        // 🆕 v5.1: Iniciar watchdog de desconexión TradingView
+        tradingModule.startWatchdog();
         
         console.log('[TRADING] Starting Firebase Queue Listener...');
         db.collection('trading_incoming')

@@ -13,9 +13,12 @@ interface RadarZone {
     btm: number;
     lvl: string;
     medal?: string;
-    score?: number; // 🆕 Agregamos el Score Matemático de Pine Script
-    tp?: number;    // 🆕 Take Profit sugerido por el indicador
-    sl?: number;    // 🆕 Stop Loss sugerido por el indicador
+    score?: number; // Score Matemático de Pine Script
+    tp?: number;    // Take Profit sugerido por el indicador
+    sl?: number;    // Stop Loss con buffer ATR (v5.1)
+    mid?: number;   // Punto medio de la zona (v5.1)
+    atr?: number;   // ATR del timeframe (v5.1, para calcular R:R)
+    createdAt?: number; // Timestamp de sincronización (v5.1, para TTL)
 }
 
 // SISTEMA DE MEMORIA TEMPORAL PARA APILAMIENTO
@@ -35,6 +38,8 @@ interface RadarState {
     marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
     lastApproachAlert?: number;
     lastSniperAlert?: number;
+    nextZones?: RadarZone[];     // 🆕 v5.1: Agenda de próximas zonas por distancia
+    lastHeartbeat?: number;       // 🆕 v5.1: timestamp del último HEARTBEAT
 }
 
 const emptyState = (): RadarState => ({
@@ -54,9 +59,9 @@ const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 180000,     // 🆕 3 minutos (alineado con velas de 3M)
-    minPointsForBuy: 7,           // 🆕 Bajado de 8 a 7 (más sensible tras fix de dirección)
-    minPointsForSell: 7,          // 🆕 Bajado de 8 a 7
+    sniperCooldownMs: 180000,     // 🆕 v5.1: 3 minutos (alineado con velas de 3M para scalping)
+    minPointsForBuy: 6,           // 🆕 v5.1: Bajado de 7 a 6 (más sensible con dirección validada)
+    minPointsForSell: 6,          // 🆕 v5.1: Bajado de 7 a 6
     baseRiskPercentage: 1.0
 };
 
@@ -85,6 +90,19 @@ if (db) {
 // --- SISTEMA ANTI-DUPLICADOS ---
 const recentAlertCache = new Map<string, number>();
 const DEDUP_WINDOW_MS = 60000; // 60 segundos de ventana anti-duplicados
+
+// 🆕 v5.1: Throttle para SYNC_ZONES (evita saturar Firebase)
+const lastSyncTime = new Map<string, number>();
+const SYNC_THROTTLE_MS: Record<string, number> = {
+    '3': 0,       // 3M no sincroniza (solo PING)
+    '15': 120000, // 15M: máximo 1 sync cada 2 min
+    '60': 300000, // 1H: máximo 1 sync cada 5 min
+    '240': 600000 // 4H: máximo 1 sync cada 10 min
+};
+
+// 🆕 v5.1: Watchdog - tracking de última alerta por ticker
+const tickerLastSeen = new Map<string, number>();
+const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos sin alerta → warning
 
 function isDuplicate(fingerprint: string): boolean {
     const now = Date.now();
@@ -143,6 +161,9 @@ export async function processTradingAlert(alertText: string) {
         return;
     }
 
+    // 🆕 v5.1: Actualizar timestamp de última actividad (watchdog)
+    tickerLastSeen.set(ticker, nowMs);
+
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
     const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
     const readableTf = parseTF(eventTf);
@@ -191,6 +212,17 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'SYNC_ZONES') {
                 if (!alertText.includes('Payload:')) return;
                 const sourceTf = eventTf;
+                
+                // 🆕 v5.1: Throttle - no sincronizar más de lo necesario
+                const syncKey = `${ticker}_${sourceTf}`;
+                const lastSync = lastSyncTime.get(syncKey) || 0;
+                const throttleMs = SYNC_THROTTLE_MS[sourceTf] || 60000;
+                if (nowMs - lastSync < throttleMs) {
+                    console.log(`[RADAR] ⏭️ SYNC_ZONES throttled para ${ticker} ${readableTf} (último: hace ${Math.round((nowMs - lastSync)/1000)}s)`);
+                    return;
+                }
+                lastSyncTime.set(syncKey, nowMs);
+                
                 const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
 
                 const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
@@ -200,7 +232,7 @@ export async function processTradingAlert(alertText: string) {
 
                 try {
                     const parsedZones = JSON.parse(payloadStr) as RadarZone[];
-                    parsedZones.forEach(z => z.tf = sourceTf);
+                    parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
 
                     if (state.lastSyncDate !== todayStr) {
                         state.zones = [];
@@ -341,6 +373,12 @@ export async function processTradingAlert(alertText: string) {
 
                 if (prefix === 'EVENTO_CHOCH') {
                     state.marketBias[eventTf] = currentDirection;
+                    addedPoints = 3; // Cambio de estructura = más peso
+                }
+                // 🆕 v5.1: BOS es continuación de tendencia, menor peso
+                else if (prefix === 'EVENTO_BOS') {
+                    state.marketBias[eventTf] = currentDirection;
+                    addedPoints = 1; // Continuación = menos peso
                 }
 
                 // --- SISTEMA DE INVALIDACIÓN (KILLSWITCH) ---
@@ -448,6 +486,21 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.events.push(eventName);
                     }
                 }
+                // 🆕 v5.1: ZONE_TOUCHED viene del indicador con medal/score/level precisos
+                else if (prefix === 'ZONE_TOUCHED') {
+                    const medalMatch = alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i);
+                    const scoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
+                    const zoneMedal = medalMatch?.[1] || 'OB';
+                    const zoneScore = parseInt(scoreMatch?.[1] || '2');
+                    
+                    const eventName = `🎯_ZoneTouched_${zoneMedal}_${readableTf}`;
+                    if (!activeScore.events.includes(eventName)) {
+                        // Score base según calidad de la zona tocada
+                        const basePts = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
+                        addedPoints = basePts;
+                        activeScore.events.push(eventName);
+                    }
+                }
 
                 if (addedPoints > 0) {
                     activeScore.points += addedPoints;
@@ -462,20 +515,17 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     // 🛡️ CANDADO DE TITANIO: Verificamos que Jarvis haya registrado toques previos en la zona o sweeps
-                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_'));
+                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_') || e.includes('ZoneTouched_'));
                     
-                    // 🆕 FALLBACK INTELIGENTE: Si no hay zonas en memoria (recién arrancó o perdió sync),
-                    // en vez de ignorar, aplicamos una penalización y exigimos más puntos.
+                    // 🆕 v5.1: FALLBACK INTELIGENTE - Si no hay zonas en memoria, 
+                    // en vez de ignorar, aplicamos una penalización fuerte pero dejamos pasar
                     let orphanPenalty = 0;
                     if (!hasHTFBacking) {
-                        // Verificamos si hay zonas en el mapa (puede que no se hayan tocado aún)
                         const hasZonesInMap = state.zones.length > 0;
                         if (hasZonesInMap) {
-                            // Hay zonas mapeadas pero no tocadas → penalización leve
                             orphanPenalty = 3;
                             console.log(`[RADAR] ⚠️ CHoCH sin toques previos en ${ticker}. Penalización leve (-${orphanPenalty} pts). Zonas mapeadas: ${state.zones.length}`);
                         } else {
-                            // No hay zonas en absoluto → penalización fuerte, pero dejamos pasar
                             orphanPenalty = 5;
                             console.log(`[RADAR] ⚠️ CHoCH HUÉRFANO en ${ticker}: sin zonas en memoria. Penalización fuerte (-${orphanPenalty} pts).`);
                         }
@@ -569,7 +619,46 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[RADAR] ❌ CHoCH ignorado (${totalPoints} Pts). No alcanza puntaje mínimo de ${minPtsRequired}.`);
                     }
                 }
+                // 🆕 v5.1: HEARTBEAT - actualizar timestamp de último latido
+                else if (prefix === 'HEARTBEAT') {
+                    state.lastHeartbeat = nowMs;
+                    console.log(`[RADAR] 💓 Heartbeat: ${ticker} ${readableTf} | Zones: ${state.zones.length} | Bias: ${state.marketBias[eventTf] || 'NEUTRAL'}`);
+                }
             }
+
+            // 🆕 v5.1: TTL CLEANUP - limpiar zonas viejas
+            const MAX_ZONE_AGE_MS: Record<string, number> = {
+                '3': 30 * 60 * 1000,     // 3M: 30 min
+                '15': 2 * 60 * 60 * 1000, // 15M: 2 horas
+                '60': 8 * 60 * 60 * 1000, // 1H: 8 horas
+                '240': 24 * 60 * 60 * 1000 // 4H: 24 horas
+            };
+            const beforeCount = state.zones.length;
+            state.zones = state.zones.filter(z => {
+                if (!z.createdAt) return true; // Zonas legacy sin timestamp se mantienen
+                const maxAge = MAX_ZONE_AGE_MS[z.tf || '60'] || 4 * 60 * 60 * 1000;
+                return (nowMs - z.createdAt) < maxAge;
+            });
+            if (state.zones.length < beforeCount) {
+                console.log(`[RADAR] 🧹 TTL: ${beforeCount - state.zones.length} zonas expiradas de ${ticker}`);
+            }
+
+            // 🆕 v5.1: AGENDA DE PRÓXIMAS ZONAS (ordenadas por cercanía al precio)
+            if (state.lastPrice && state.zones.length > 0) {
+                const sortedZones = [...state.zones]
+                    .filter(z => {
+                        if (z.dir === 'BUY') return z.top < state.lastPrice!;
+                        return z.btm > state.lastPrice!;
+                    })
+                    .sort((a, b) => {
+                        const distA = Math.abs(state.lastPrice! - (a.dir === 'BUY' ? a.top : a.btm));
+                        const distB = Math.abs(state.lastPrice! - (b.dir === 'BUY' ? b.top : b.btm));
+                        return distA - distB;
+                    })
+                    .slice(0, 3);
+                state.nextZones = sortedZones;
+            }
+
             transaction.set(docRef, state);
         });
 
@@ -606,10 +695,14 @@ export async function processTradingAlert(alertText: string) {
                 msg += `🧠 *Jarvis:* Gatillo en 3M activado. ${avisoRiesgo}`;
 
                 // Usar la zona precalculada dentro de la transacción (state no existe aquí)
-                if (alertData.bestZone?.tp || alertData.bestZone?.sl) {
-                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${alertData.bestZone.medal || ''}):*`;
-                    if (alertData.bestZone.tp) msg += `\n🎯 TP: ${alertData.bestZone.tp}`;
-                    if (alertData.bestZone.sl) msg += `\n🛑 SL: ${alertData.bestZone.sl}`;
+                if (alertData.bestZone) {
+                    msg += `\n\n📐 *Niveles Sugeridos:*`;
+                    msg += `\n🎯 Zona: ${alertData.bestZone.medal || 'OB'} ${alertData.bestZone.tf ? parseTF(alertData.bestZone.tf) : ''}`;
+                    if (alertData.bestZone.top && alertData.bestZone.btm) {
+                        msg += `\n📊 Rango: ${alertData.bestZone.btm} - ${alertData.bestZone.top}`;
+                    }
+                    if (alertData.bestZone.sl) msg += `\n🛑 SL sugerido: ${alertData.bestZone.sl}`;
+                    if (alertData.bestZone.mid) msg += `\n📍 Mid: ${alertData.bestZone.mid}`;
                 }
 
                 msg += kronosAnnotation;
@@ -658,11 +751,15 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += `🧠 *Jarvis:* Gatillo activado. ${avisoRiesgo}`;
 
-                // Usar la zona precalculada dentro de la transacción (state no existe aquí)
-                if (alertData.bestZone?.tp || alertData.bestZone?.sl) {
-                    msg += `\n\n📐 *Niveles Sugeridos (de la zona ${alertData.bestZone.medal || ''}):*`;
-                    if (alertData.bestZone.tp) msg += `\n🎯 TP: ${alertData.bestZone.tp}`;
-                    if (alertData.bestZone.sl) msg += `\n🛑 SL: ${alertData.bestZone.sl}`;
+                // Usar la zona precalculada dentro de la transacción
+                if (alertData.bestZone) {
+                    msg += `\n\n📐 *Niveles Sugeridos:*`;
+                    msg += `\n🎯 Zona: ${alertData.bestZone.medal || 'OB'} ${alertData.bestZone.tf ? parseTF(alertData.bestZone.tf) : ''}`;
+                    if (alertData.bestZone.top && alertData.bestZone.btm) {
+                        msg += `\n📊 Rango: ${alertData.bestZone.btm} - ${alertData.bestZone.top}`;
+                    }
+                    if (alertData.bestZone.sl) msg += `\n🛑 SL sugerido: ${alertData.bestZone.sl}`;
+                    if (alertData.bestZone.mid) msg += `\n📍 Mid: ${alertData.bestZone.mid}`;
                 }
 
                 msg += kronosAnnotation;
@@ -685,4 +782,36 @@ export async function processTradingAlert(alertText: string) {
     } catch (e: any) {
         console.error(`[RADAR] Error crítico en Firebase:`, e.message);
     }
+}
+
+// =========================================================================
+// 🆕 v5.1: WATCHDOG - Monitorea desconexiones de TradingView
+// Cada 2 minutos verifica que todos los tickers activos reciban señales
+// =========================================================================
+const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
+let watchdogStarted = false;
+
+export function startWatchdog() {
+    if (watchdogStarted) return;
+    watchdogStarted = true;
+    
+    setInterval(() => {
+        const now = Date.now();
+        for (const [ticker, lastSeen] of tickerLastSeen) {
+            const elapsed = now - lastSeen;
+            if (elapsed > HEARTBEAT_TIMEOUT_MS) {
+                console.warn(`[WATCHDOG] ⚠️ ${ticker}: SIN ALERTAS hace ${Math.round(elapsed / 60000)} minutos. ¿TradingView desconectado?`);
+                // Solo alerta una vez por hora por ticker para no saturar
+                const lastWarnKey = `wdog_warn_${ticker}`;
+                const lastWarn = recentAlertCache.get(lastWarnKey) || 0;
+                if (now - lastWarn > 60 * 60 * 1000) {
+                    recentAlertCache.set(lastWarnKey, now);
+                    sendTelegramAlert(`⚠️ *WATCHDOG ALERTA* | ${ticker}\n\nSin señales de TradingView hace ${Math.round(elapsed / 60000)} minutos.\nPosible desconexión del webhook o indicador apagado.`)
+                        .catch(() => {});
+                }
+            }
+        }
+    }, WATCHDOG_INTERVAL_MS);
+    
+    console.log('[WATCHDOG] ✅ Watchdog iniciado. Verificando cada 2 minutos.');
 }
