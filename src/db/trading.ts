@@ -175,6 +175,8 @@ export async function processTradingAlert(alertText: string) {
         return;
     }
 
+    const nowMs = Date.now();
+
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
     const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
 
@@ -205,7 +207,6 @@ export async function processTradingAlert(alertText: string) {
 
     const docRef = db.collection('radar_states').doc(ticker);
     const todayStr = new Date().toISOString().split('T')[0];
-    const nowMs = Date.now();
 
     let triggerChochA = false;
     let triggerChochB = false;
