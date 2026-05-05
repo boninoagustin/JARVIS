@@ -7,18 +7,46 @@ import { logTrade } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
+    // v5.1 (long) field names
     tf?: string;
-    dir: 'BUY' | 'SELL';
-    top: number;
-    btm: number;
-    lvl: string;
+    dir?: 'BUY' | 'SELL';
+    top?: number;
+    btm?: number;
+    lvl?: string;
     medal?: string;
-    score?: number; // Score Matemático de Pine Script
-    tp?: number;    // Take Profit sugerido por el indicador
-    sl?: number;    // Stop Loss con buffer ATR (v5.1)
-    mid?: number;   // Punto medio de la zona (v5.1)
-    atr?: number;   // ATR del timeframe (v5.1, para calcular R:R)
-    createdAt?: number; // Timestamp de sincronización (v5.1, para TTL)
+    score?: number;
+    tp?: number;
+    sl?: number;
+    mid?: number;
+    atr?: number;
+    // v5.1.1 (short) field aliases → merged into above at parse time
+    t?: string;      // tf
+    d?: 'BUY' | 'SELL';  // dir
+    p?: number;      // top (price)
+    b?: number;      // btm (bottom)
+    lv?: string;     // lvl
+    md?: string;     // medal
+    sc?: number;     // score
+    mi?: number;     // mid
+    a?: number;      // atr
+    createdAt?: number;
+}
+
+/**
+ * Normalize a RadarZone (from old long-format or new short-format) to the canonical fields.
+ */
+function normalizeZone(raw: any): RadarZone {
+    // If short-format fields present, map them to long names
+    if (raw.t !== undefined && raw.tf === undefined) raw.tf = raw.t;
+    if (raw.d !== undefined && raw.dir === undefined) raw.dir = raw.d;
+    if (raw.p !== undefined && raw.top === undefined) raw.top = raw.p;
+    if (raw.b !== undefined && raw.btm === undefined) raw.btm = raw.b;
+    if (raw.lv !== undefined && raw.lvl === undefined) raw.lvl = raw.lv;
+    if (raw.md !== undefined && raw.medal === undefined) raw.medal = raw.md;
+    if (raw.sc !== undefined && raw.score === undefined) raw.score = raw.sc;
+    if (raw.mi !== undefined && raw.mid === undefined) raw.mid = raw.mi;
+    if (raw.a !== undefined && raw.atr === undefined) raw.atr = raw.a;
+    return raw as RadarZone;
 }
 
 // SISTEMA DE MEMORIA TEMPORAL PARA APILAMIENTO
@@ -231,7 +259,8 @@ export async function processTradingAlert(alertText: string) {
                 }
 
                 try {
-                    const parsedZones = JSON.parse(payloadStr) as RadarZone[];
+                    const rawZones = JSON.parse(payloadStr) as any[];
+                    const parsedZones: RadarZone[] = rawZones.map(normalizeZone);
                     parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
 
                     if (state.lastSyncDate !== todayStr) {
@@ -566,7 +595,7 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                     confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; // Actualizado a 3M
-                    confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`; // Nuevo informe visual del bono
+                    confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
                     if (orphanPenalty > 0) {
                         confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts (sin toques previos en zonas)\n`;
                     }

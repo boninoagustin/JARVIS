@@ -83,7 +83,7 @@ export default function FundamentalTerminal() {
   const fetchMacroData = async () => {
     setLoadingMacro(true);
     try {
-      const { fetchMacroIndicators } = await import('../../../src/services/macro_data');
+      const { fetchMacroIndicators } = await import('../services/macro_data');
       const data = await fetchMacroIndicators();
       setMacroData(data);
     } catch {

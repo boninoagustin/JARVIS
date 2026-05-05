@@ -242,6 +242,21 @@ f_ia_alert_ping(id, sym, msg) =>
     else
         log.info(id + " | " + msg)
 
+// 🆕 v5.1.1: Compact price formatting to avoid 4096-char alert limit
+f_compact_price(float price) =>
+    str.tostring(math.round_to_mintick(price))
+
+// 🆕 v5.1.1: Short medal codes (keep substrings for JARVIS bot: God, CHoCH, Breaker)
+f_short_medal(string medal) =>
+    medal == "Platino" ? "PLAT" :
+    medal == "Oro" ? "ORO" :
+    medal == "Plata" ? "PLATA" :
+    medal == "Bronce" ? "BRONCE" :
+    medal == "CHoCH🚀" ? "CHoCH" :
+    medal == "Breaker" ? "Breaker" :
+    medal == "God Breaker" ? "God_Brk" :
+    medal
+
 // =========================================================================
 // 3. 🧠 UDTs & FUNCIONES (Mejorados con scoring + mitigación parcial)
 // =========================================================================
@@ -1387,13 +1402,13 @@ if use_sync and barstate.isconfirmed
                 if added > 0
                     ob_json += ","
                 
-                // 🆕 v5.1: Calcular SL real con buffer ATR (no el borde de la zona)
+                // 🆕 v5.1.1: JSON compacto con precios reducidos y nombres cortos. max 8 zonas por alerta.
                 float real_sl = ob_res.is_bull ? ob_res.btm - atr_global * 0.5 : ob_res.top + atr_global * 0.5
-                float mid_range = (ob_res.top + ob_res.btm) / 2
                 
-                // 🆕 v5.1: JSON incluye tf, atr, y sl real con buffer
-                ob_json += '{"tf":"' + timeframe.period + '","dir":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","top":' + str.tostring(ob_res.top) + ',"btm":' + str.tostring(ob_res.btm) + ',"lvl":"' + ob_res.level + '","medal":"' + ob_res.medal + '","score":' + str.tostring(ob_res.score) + ',"mid":' + str.tostring(mid_range) + ',"sl":' + str.tostring(real_sl) + ',"atr":' + str.tostring(atr_global) + '}'
+                ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(ob_res.top) + ',"b":' + f_compact_price(ob_res.btm) + ',"lv":"' + ob_res.level + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + str.tostring(ob_res.score) + ',"mi":' + f_compact_price((ob_res.top + ob_res.btm) / 2) + ',"sl":' + f_compact_price(real_sl) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
                 added += 1
+                if added >= 8
+                    break
                 
     if breaker_obs.size() > 0 and show_breaker
         for i = 0 to math.min(breaker_obs.size() - 1, 10)
@@ -1410,8 +1425,10 @@ if use_sync and barstate.isconfirmed
             
             if added > 0
                 ob_json += ","
-            ob_json += '{"tf":"' + timeframe.period + '","dir":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","top":' + str.tostring(brk.top) + ',"btm":' + str.tostring(brk.btm) + ',"lvl":"' + brk.level + '","medal":"' + brk_medal_final + '","score":' + str.tostring(brk.score) + ',"mid":' + str.tostring((brk.top + brk.btm) / 2) + ',"sl":' + str.tostring(brk.is_bull ? brk.btm - atr_global * 0.5 : brk.top + atr_global * 0.5) + ',"atr":' + str.tostring(atr_global) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(brk.top) + ',"b":' + f_compact_price(brk.btm) + ',"lv":"' + brk.level + '","md":"' + brk_medal_final + '","sc":' + str.tostring(brk.score) + ',"mi":' + f_compact_price((brk.top + brk.btm) / 2) + ',"sl":' + f_compact_price(brk.is_bull ? brk.btm - atr_global * 0.5 : brk.top + atr_global * 0.5) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
             added += 1
+            if added >= 8
+                break
     
     // 🆕 v5.1: Incluir divergencias activas en el JSON de sincronización
     if array.size(active_divs) > 0
@@ -1419,8 +1436,10 @@ if use_sync and barstate.isconfirmed
             div_data div = array.get(active_divs, i)
             if added > 0
                 ob_json += ","
-            ob_json += '{"tf":"' + timeframe.period + '","dir":"' + (div.is_bull ? 'BUY' : 'SELL') + '","top":' + str.tostring(div.top) + ',"btm":' + str.tostring(div.btm) + ',"medal":"SMC_DIV","score":5,"mid":' + str.tostring((div.top + div.btm) / 2) + ',"sl":' + str.tostring(div.is_bull ? div.btm - atr_global * 0.5 : div.top + atr_global * 0.5) + ',"atr":' + str.tostring(atr_global) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(div.top) + ',"b":' + f_compact_price(div.btm) + ',"md":"SMC_DIV","sc":5,"mi":' + f_compact_price((div.top + div.btm) / 2) + ',"sl":' + f_compact_price(div.is_bull ? div.btm - atr_global * 0.5 : div.top + atr_global * 0.5) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
             added += 1
+            if added >= 8
+                break
                 
     ob_json += "]"
     string current_trend_str = (macro_trend == 1) ? "BUY" : (macro_trend == -1) ? "SELL" : "NEUTRAL"
