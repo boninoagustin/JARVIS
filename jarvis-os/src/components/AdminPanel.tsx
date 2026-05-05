@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Settings, Sliders, Save } from 'lucide-react';
+import { Settings, Sliders, Save, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface BotConfig {
   sniperCooldownMs: number;
@@ -11,15 +12,17 @@ interface BotConfig {
 }
 
 const DEFAULT_CONFIG: BotConfig = {
-  sniperCooldownMs: 300000,
-  minPointsForBuy: 8,
-  minPointsForSell: 8,
+  sniperCooldownMs: 180000,
+  minPointsForBuy: 6,
+  minPointsForSell: 6,
   baseRiskPercentage: 1.0,
 };
 
 export default function AdminPanel() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [saving, setSaving] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error'>('idle');
+  const { toast } = useToast();
 
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'app_settings', 'bot_config'), (docSnap) => {
@@ -32,16 +35,21 @@ export default function AdminPanel() {
 
   const handleChange = (key: keyof BotConfig, value: number) => {
     setConfig(prev => ({ ...prev, [key]: value }));
+    setSaveFeedback('idle');
   };
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveFeedback('idle');
     try {
       await setDoc(doc(db, 'app_settings', 'bot_config'), config, { merge: true });
-      // Show save success (could use a toast notification here)
-      setTimeout(() => setSaving(false), 1000);
+      setSaveFeedback('success');
+      toast('Parámetros guardados correctamente', 'success');
     } catch (e) {
       console.error("Error saving config", e);
+      setSaveFeedback('error');
+      toast('Error al guardar parámetros', 'error');
+    } finally {
       setSaving(false);
     }
   };
@@ -57,25 +65,31 @@ export default function AdminPanel() {
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
             <Sliders size={18} /> SENSIBILIDAD DEL ALGORITMO
           </h3>
-          <button 
-            onClick={handleSave}
-            disabled={saving}
-            style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '8px', 
-              padding: '8px 16px', 
-              backgroundColor: saving ? 'var(--bg-panel-hover)' : 'var(--accent-gold)', 
-              color: saving ? 'var(--text-secondary)' : 'var(--bg-base)',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: saving ? 'wait' : 'pointer',
-              fontWeight: 600,
-              fontFamily: 'var(--font-mono)'
-            }}
-          >
-            <Save size={16} /> {saving ? 'GUARDANDO...' : 'APLICAR CAMBIOS'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {saveFeedback === 'success' && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-green)', fontSize: '0.8rem' }}>
+                <CheckCircle size={14} /> Guardado
+              </span>
+            )}
+            {saveFeedback === 'error' && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-red)', fontSize: '0.8rem' }}>
+                <AlertTriangle size={14} /> Error
+              </span>
+            )}
+            <button 
+              onClick={handleSave}
+              disabled={saving}
+              style={{ 
+                display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', 
+                backgroundColor: saving ? 'var(--bg-panel-hover)' : 'var(--accent-gold)', 
+                color: saving ? 'var(--text-secondary)' : 'var(--bg-base)',
+                border: 'none', borderRadius: '4px', cursor: saving ? 'wait' : 'pointer',
+                fontWeight: 600, fontFamily: 'var(--font-mono)', transition: 'all 0.2s'
+              }}
+            >
+              <Save size={16} /> {saving ? 'GUARDANDO...' : 'APLICAR CAMBIOS'}
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

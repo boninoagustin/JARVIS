@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, orderBy, limit, doc, updateDoc } from 'f
 import { db } from '../firebase';
 import { PieChart as PieChartIcon, TrendingUp, Crosshair, CheckCircle, XCircle, MinusCircle, Target } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
+import { useToast } from './Toast';
 
 interface TradeLog {
   id: string;
@@ -36,6 +37,7 @@ const resultButtonStyle = (color: string, isActive: boolean) => ({
 export default function AnalyticsJournal() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
@@ -51,8 +53,11 @@ export default function AnalyticsJournal() {
     try {
       const tradeRef = doc(db, 'trade_journal', tradeId);
       await updateDoc(tradeRef, { result });
+      const labels: Record<string, string> = { WIN: 'WIN ✅', LOSS: 'LOSS ❌', BREAKEVEN: 'BE ➖', SKIP: 'No operado 🚫' };
+      toast(`Trade #${tradeId} → ${labels[result]}`, result === 'WIN' ? 'success' : result === 'LOSS' ? 'error' : 'info');
     } catch (e) {
       console.error('Error updating trade result:', e);
+      toast('Error al registrar resultado', 'error');
     } finally {
       setUpdating(null);
     }

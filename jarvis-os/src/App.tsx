@@ -5,6 +5,7 @@ import RadarHeatmap from './components/RadarHeatmap';
 import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
+import { ToastProvider } from './components/Toast';
 import './index.css';
 
 function Sidebar() {
@@ -51,6 +52,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <ToastProvider>
       <div className="app-container">
         <Sidebar />
         <main className="main-content">
@@ -72,6 +74,7 @@ function App() {
           </Routes>
         </main>
       </div>
+      </ToastProvider>
     </BrowserRouter>
   );
 }
