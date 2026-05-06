@@ -1,19 +1,18 @@
 // This work is licensed under Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
 //@version=5
 // ╔══════════════════════════════════════════════════════════════════════════════╗
-// ║  SMC Master 5.1 [SMC Purist Engine + JARVIS Integration]                    ║
-// ║  Changelog v5.0 → v5.1:                                                     ║
-// ║    🔴 CRITICAL: Fixed tp/sl JSON fields (na guard) → now computes real SL  ║
-// ║    🔴 CRITICAL: Added "tf" field inside JSON payload                       ║
-// ║    🟠 HIGH:     ZONE_TOUCHED alerts for precise zone collision             ║
-// ║    🟠 HIGH:     CHoCH vs BOS differentiated in alert prefix                ║
-// ║    🟠 HIGH:     HEARTBEAT every 20 candles for watchdog                    ║
-// ║    🟡 MEDIUM:   Divergences (SMC DIV) added to SYNC_ZONES payload          ║
-// ║    🟡 MEDIUM:   SL calculated with ATR buffer (not zone edge)              ║
-// ║    🟢 LOW:      PING uses alert.freq_all for multi-touch per candle        ║
-// ║    🟢 LOW:      SYNC_ZONES throttled by barstate (only on new structure)   ║
+// ║  SMC Master 5.2 [SMC Purist Engine + JARVIS Integration]                    ║
+// ║  Changelog v5.1 → v5.2:                                                     ║
+// ║    🔴 CRITICAL: Trendline Liquidity Engine (retail traps + double tops/bots)║
+// ║    🔴 CRITICAL: EVENTO_SWEEP_TL → JARVIS integration (2 pts per sweep)     ║
+// ║    🟠 HIGH:     Double Top / Double Bottom detection (equal highs/lows)    ║
+// ║    🟠 HIGH:     TL sweep uses high/low (not close) for cleaner breaks      ║
+// ║    🟡 MEDIUM:   TL require_kz optional (off by default = 24/7)             ║
+// ║    🟡 MEDIUM:   Dynamic TL cleanup by timeframe (3M=300, 15M=200, etc.)    ║
+// ║    🟢 LOW:      PING_PRICE direction detection (enter from above/below)     ║
+// ║    🟢 LOW:      SWEEP_BROKEN now invalidates TL events too                 ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
-indicator("SMC Master 5.1 [SMC Purist Engine]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=1000)
+indicator("SMC Master 5.2 [SMC Purist Engine]", overlay=true, max_boxes_count=500, max_lines_count=600, max_labels_count=600, max_bars_back=1000)
 
 // =========================================================================
 // 0. 🌟 PRESETS AUTOMÁTICOS (MATRIZ BIDIMENSIONAL)
@@ -899,6 +898,132 @@ if array.size(active_pools) > 0
                 array.remove(active_pools, i)
 
 // =========================================================================
+// 8.5 📉 TRENDLINE LIQUIDITY (TRAMPAS RETAIL)
+// =========================================================================
+type tl_data
+    bool is_bull
+    line l
+    label lbl
+    float m
+    float b
+    int end_idx
+    bool swept
+
+grp_tl = "📉 Trendline Liquidity ($$$)"
+show_tl = input.bool(true, "Mostrar Líneas de Tendencia (Retail Liq)", group=grp_tl)
+tl_tol = input.float(0.4, "Tolerancia Rectitud (x ATR)", step=0.1, group=grp_tl)
+in_alert_tl = input.bool(true, "Alerta: Sweep de Trendline", group=grp_tl)
+tl_require_kz = input.bool(false, "Solo en Killzones (TL Swp)", group=grp_tl)
+// Las alertas dependen exclusivamente de la temporalidad (apagado en macro y micro extremo)
+alert_tl = preset_3m ? false : preset_15m ? true : preset_1h ? true : preset_4h ? false : in_alert_tl
+
+// Limpieza dinámica por TF
+int tl_max_bars = preset_3m ? 300 : preset_15m ? 200 : preset_1h ? 150 : preset_4h ? 100 : 150
+
+// Memorias para los últimos 3 pivotes
+var float pl1 = na, var int pl1_idx = na
+var float pl2 = na, var int pl2_idx = na
+var float pl3 = na, var int pl3_idx = na
+
+var float ph1 = na, var int ph1_idx = na
+var float ph2 = na, var int ph2_idx = na
+var float ph3 = na, var int ph3_idx = na
+
+var array<tl_data> active_tls = array.new<tl_data>()
+
+// --- DETECCIÓN DE RESISTENCIA RETAIL (Lower Highs + Double Tops) ---
+if not na(smc_ph)
+    ph3 := ph2, ph3_idx := ph2_idx
+    ph2 := ph1, ph2_idx := ph1_idx
+    ph1 := curr_ph, ph1_idx := curr_ph_idx
+
+    if not na(ph3) and show_tl
+        // Caso 1: Lower Highs (tendencia bajista)
+        if ph1 < ph2 and ph2 < ph3
+            float m1 = (ph2 - ph3) / math.max(1, ph2_idx - ph3_idx)
+            float proj_ph1 = ph2 + m1 * (ph1_idx - ph2_idx)
+            
+            if math.abs(ph1 - proj_ph1) <= (atr_global * tl_tol)
+                float m_avg = (ph1 - ph3) / math.max(1, ph1_idx - ph3_idx)
+                float b_y = ph1 - m_avg * ph1_idx
+                line l = line.new(ph3_idx, ph3, bar_index, m_avg * bar_index + b_y, color=color.new(color.red, 30), style=line.style_dashed, width=2)
+                label lbl = label.new(ph1_idx, ph1, "$$$ TL LIQ", color=color(na), textcolor=color.red, style=label.style_label_down, size=size.tiny)
+                array.push(active_tls, tl_data.new(false, l, lbl, m_avg, b_y, bar_index, false))
+        
+        // Caso 2: Double Top (Equal Highs) — trampa más peligrosa
+        else if math.abs(ph1 - ph2) <= (atr_global * tl_tol) and ph2 < ph3
+            float m_avg = (ph1 - ph3) / math.max(1, ph1_idx - ph3_idx)
+            float b_y = ph1 - m_avg * ph1_idx
+            float top_level = math.max(ph1, ph2)
+            line l = line.new(ph3_idx, ph3, bar_index, m_avg * bar_index + b_y, color=color.new(color.red, 40), style=line.style_dashed, width=3)
+            label lbl = label.new(ph1_idx, top_level, "$$$ DBL TOP", color=color(na), textcolor=color.maroon, style=label.style_label_down, size=size.tiny)
+            array.push(active_tls, tl_data.new(false, l, lbl, m_avg, b_y, bar_index, false))
+
+// --- DETECCIÓN DE SOPORTE RETAIL (Higher Lows + Double Bottoms) ---
+if not na(smc_pl)
+    pl3 := pl2, pl3_idx := pl2_idx
+    pl2 := pl1, pl2_idx := pl1_idx
+    pl1 := curr_pl, pl1_idx := curr_pl_idx
+
+    if not na(pl3) and show_tl
+        // Caso 1: Higher Lows (tendencia alcista)
+        if pl1 > pl2 and pl2 > pl3
+            float m1 = (pl2 - pl3) / math.max(1, pl2_idx - pl3_idx)
+            float proj_pl1 = pl2 + m1 * (pl1_idx - pl2_idx)
+            
+            if math.abs(pl1 - proj_pl1) <= (atr_global * tl_tol)
+                float m_avg = (pl1 - pl3) / math.max(1, pl1_idx - pl3_idx)
+                float b_y = pl1 - m_avg * pl1_idx
+                line l = line.new(pl3_idx, pl3, bar_index, m_avg * bar_index + b_y, color=color.new(#089981, 30), style=line.style_dashed, width=2)
+                label lbl = label.new(pl1_idx, pl1, "$$$ TL LIQ", color=color(na), textcolor=#089981, style=label.style_label_up, size=size.tiny)
+                array.push(active_tls, tl_data.new(true, l, lbl, m_avg, b_y, bar_index, false))
+        
+        // Caso 2: Double Bottom (Equal Lows) — trampa más peligrosa
+        else if math.abs(pl1 - pl2) <= (atr_global * tl_tol) and pl2 > pl3
+            float m_avg = (pl1 - pl3) / math.max(1, pl1_idx - pl3_idx)
+            float b_y = pl1 - m_avg * pl1_idx
+            float bot_level = math.min(pl1, pl2)
+            line l = line.new(pl3_idx, pl3, bar_index, m_avg * bar_index + b_y, color=color.new(#056656, 40), style=line.style_dashed, width=3)
+            label lbl = label.new(pl1_idx, bot_level, "$$$ DBL BOT", color=color(na), textcolor=#056656, style=label.style_label_up, size=size.tiny)
+            array.push(active_tls, tl_data.new(true, l, lbl, m_avg, b_y, bar_index, false))
+
+// --- GESTIÓN DE TRAMPAS (Extensión y Ruptura) ---
+if array.size(active_tls) > 0
+    for i = array.size(active_tls) - 1 to 0
+        t = array.get(active_tls, i)
+        float current_tl_price = t.m * bar_index + t.b
+        
+        // Extender la línea hacia la derecha con el precio actual
+        line.set_x2(t.l, bar_index)
+        line.set_y2(t.l, current_tl_price)
+
+        // Evaluar barrido (Ruptura Retail) — usamos high/low, no close
+        bool is_broken = false
+        if t.is_bull and low < current_tl_price
+            is_broken := true
+        else if not t.is_bull and high > current_tl_price
+            is_broken := true
+
+        if is_broken
+            if not t.swept
+                // Exigimos que la ruptura se dé con momentum (Sweep Institucional, no un cruce débil)
+                bool has_break_vol = volume > ta.sma(volume, 20) * vol_mult or (t.is_bull ? zDn >= active_zThresh : zUp >= active_zThresh)
+                bool kz_ok = not tl_require_kz or in_kz
+                if alert_tl and kz_ok and has_break_vol
+                    f_ia_alert("EVENTO_SWEEP_TL", syminfo.ticker, "TF: " + timeframe.period + " | Dir: " + (t.is_bull ? "SELL" : "BUY") + " | Tipo: Trendline Sweep")
+                
+                label.set_text(t.lbl, "🩸 TL SWEPT")
+                label.set_textcolor(t.lbl, color.new(color.gray, 40))
+                line.set_color(t.l, color.new(color.gray, 70))
+                t.swept := true
+            
+        // Limpieza de memoria RAM (borrar líneas viejas, dinámico por TF)
+        if bar_index - t.end_idx > tl_max_bars
+            line.delete(t.l)
+            label.delete(t.lbl)
+            array.remove(active_tls, i)
+
+// =========================================================================
 // 9. 🏛️ MOTOR SMC PURISTA (BOS / CHOCH Y SCORING MATEMÁTICO)
 // =========================================================================
 var all_obs = array.new<ob_data>(0)
@@ -1268,6 +1393,7 @@ if use_heartbeat and heartbeat_counter >= 20 and barstate.isconfirmed
         " | Zones: " + str.tostring(all_obs.size()) + 
         " | Breakers: " + str.tostring(breaker_obs.size()) +
         " | FVGs: " + str.tostring(fvgs.size()) +
+        " | TLs: " + str.tostring(array.size(active_tls)) +
         " | VWAP: " + vwap_status +
         " | Bias: " + str.tostring(active_trend) +
         " | Price: " + str.tostring(close))

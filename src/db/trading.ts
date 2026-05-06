@@ -87,9 +87,9 @@ const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 180000,     // 🆕 v5.1: 3 minutos (alineado con velas de 3M para scalping)
-    minPointsForBuy: 6,           // 🆕 v5.1: Bajado de 7 a 6 (más sensible con dirección validada)
-    minPointsForSell: 6,          // 🆕 v5.1: Bajado de 7 a 6
+    sniperCooldownMs: 120000,     // 🔥 2 minutos (más rápido para scalping real)
+    minPointsForBuy: 5,           // Bajado a 5: más permisivo, la dirección validada + orphan penalty filtran
+    minPointsForSell: 5,          // Bajado a 5
     baseRiskPercentage: 1.0
 };
 
@@ -445,12 +445,14 @@ export async function processTradingAlert(alertText: string) {
                 if (prefix === 'SWEEP_BROKEN') {
                     const eventSweep = `Sweep_${readableTf}`;
                     const eventAbsorcion = `Sweep_${readableTf}_Absorcion`;
+                    const eventTLSweep = `📉_TL_Sweep_${readableTf}`;
                     let pointsToDeduct = 0;
                     const initialLength = activeScore.events.length;
 
                     activeScore.events = activeScore.events.filter(e => {
                         if (e === eventAbsorcion) { pointsToDeduct += 5; return false; }
                         if (e === eventSweep) { pointsToDeduct += 3; return false; }
+                        if (e === eventTLSweep) { pointsToDeduct += 2; return false; }
                         return true;
                     });
 
@@ -516,6 +518,21 @@ export async function processTradingAlert(alertText: string) {
                         activeScore.events.push(eventName);
                     }
                 }
+                // 🆕 v5.2: Trendline Liquidity Sweep (Trampas Retail)
+                else if (prefix === 'EVENTO_SWEEP_TL') {
+                    const tlEvent = `📉_TL_Sweep_${readableTf}`;
+                    if (!activeScore.events.includes(tlEvent)) {
+                        addedPoints = 2;
+                        activeScore.events.push(tlEvent);
+                    }
+                    // Invalidar TL del lado opuesto (si la tenía)
+                    const oppTlEvent = `📉_TL_Sweep_${readableTf}`;
+                    if (oppositeScore.events.includes(oppTlEvent)) {
+                        oppositeScore.events = oppositeScore.events.filter(e => e !== oppTlEvent);
+                        oppositeScore.points = Math.max(0, oppositeScore.points - 2);
+                        console.log(`[RADAR] 🔄 TL Sweep invalida lado opuesto para ${ticker}. -2 pts.`);
+                    }
+                }
                 // 🆕 v5.1: ZONE_TOUCHED viene del indicador con medal/score/level precisos
                 else if (prefix === 'ZONE_TOUCHED') {
                     const medalMatch = alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i);
@@ -545,7 +562,7 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     // 🛡️ CANDADO DE TITANIO: Verificamos que Jarvis haya registrado toques previos en la zona o sweeps
-                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_') || e.includes('ZoneTouched_'));
+                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_') || e.includes('ZoneTouched_') || e.includes('TL_Sweep_'));
                     
                     // 🆕 v5.1: FALLBACK INTELIGENTE - Si no hay zonas en memoria, 
                     // en vez de ignorar, aplicamos una penalización fuerte pero dejamos pasar
@@ -553,11 +570,11 @@ export async function processTradingAlert(alertText: string) {
                     if (!hasHTFBacking) {
                         const hasZonesInMap = state.zones.length > 0;
                         if (hasZonesInMap) {
-                            orphanPenalty = 3;
+                            orphanPenalty = 2;  // 🟢 Más leve: si hay zonas pero no se tocaron, solo -2
                             console.log(`[RADAR] ⚠️ CHoCH sin toques previos en ${ticker}. Penalización leve (-${orphanPenalty} pts). Zonas mapeadas: ${state.zones.length}`);
                         } else {
-                            orphanPenalty = 5;
-                            console.log(`[RADAR] ⚠️ CHoCH HUÉRFANO en ${ticker}: sin zonas en memoria. Penalización fuerte (-${orphanPenalty} pts).`);
+                            orphanPenalty = 3;  // 🟢 Más leve: -3 en vez de -5. Sigue duro pero no mata setups válidos
+                            console.log(`[RADAR] ⚠️ CHoCH HUÉRFANO en ${ticker}: sin zonas en memoria. Penalización (-${orphanPenalty} pts).`);
                         }
                     }
 
@@ -831,14 +848,7 @@ export function startWatchdog() {
             const elapsed = now - lastSeen;
             if (elapsed > HEARTBEAT_TIMEOUT_MS) {
                 console.warn(`[WATCHDOG] ⚠️ ${ticker}: SIN ALERTAS hace ${Math.round(elapsed / 60000)} minutos. ¿TradingView desconectado?`);
-                // Solo alerta una vez por hora por ticker para no saturar
-                const lastWarnKey = `wdog_warn_${ticker}`;
-                const lastWarn = recentAlertCache.get(lastWarnKey) || 0;
-                if (now - lastWarn > 60 * 60 * 1000) {
-                    recentAlertCache.set(lastWarnKey, now);
-                    sendTelegramAlert(`⚠️ *WATCHDOG ALERTA* | ${ticker}\n\nSin señales de TradingView hace ${Math.round(elapsed / 60000)} minutos.\nPosible desconexión del webhook o indicador apagado.`)
-                        .catch(() => {});
-                }
+                // ⚠️ Solo logging en consola. Telegram desactivado a pedido del usuario.
             }
         }
     }, WATCHDOG_INTERVAL_MS);
