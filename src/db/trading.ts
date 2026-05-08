@@ -3,7 +3,7 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { evaluateWithKronos } from '../services/kronos.js';
 import { evaluateWithMixture } from '../llm/mixture.js';
-import { logTrade } from '../services/journal.js';
+import { logTrade, recordResult } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
@@ -56,6 +56,14 @@ interface ScoreState {
     events: string[];
 }
 
+interface ImpulseLeg {
+    dir: 'BUY' | 'SELL';
+    origin: number;
+    extreme: number;
+    tp2?: number | null;       // 🚀 Liquidez Externa (DOL macro del ciclo anterior)
+    oteScored?: boolean;       // 🔒 Candado para no sumar puntos infinitos
+}
+
 interface RadarState {
     lastSyncDate: string | null;
     zones: RadarZone[];
@@ -68,6 +76,8 @@ interface RadarState {
     lastSniperAlert?: number;
     nextZones?: RadarZone[];     // 🆕 v5.1: Agenda de próximas zonas por distancia
     lastHeartbeat?: number;       // 🆕 v5.1: timestamp del último HEARTBEAT
+    activeImpulseBuy?: ImpulseLeg | null;  // 🆕 Canal de Compras
+    activeImpulseSell?: ImpulseLeg | null; // 🆕 Canal de Ventas
 }
 
 const emptyState = (): RadarState => ({
@@ -80,10 +90,26 @@ const emptyState = (): RadarState => ({
     // Cambiamos el 5 por el 3 para el mapa de tendencias
     marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "3": 'NEUTRAL' },
     lastApproachAlert: 0,
-    lastSniperAlert: 0
+    lastSniperAlert: 0,
+    activeImpulseBuy: null,
+    activeImpulseSell: null
 });
 
 const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
+
+// 🆕 v5.2: Trades activos para auto-detección de TP/SL
+interface ActiveTrade {
+    tradeId: string;
+    ticker: string;
+    direction: 'BUY' | 'SELL';
+    entryPrice: number;
+    tpPrice: number;
+    slPrice: number;
+    timestamp: number;
+}
+const activeTrades = new Map<string, ActiveTrade>();
+
+let consecutiveLosses = 0; // 🆕 v5.2: Protección anti-racha
 
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
@@ -285,6 +311,66 @@ export async function processTradingAlert(alertText: string) {
                 const currentPrice = parseFloat(priceMatch[1]);
                 const previousPrice = state.lastPrice; // 🆕 Guardamos precio anterior para detectar dirección
                 state.lastPrice = currentPrice;
+
+                // =========================================================================
+                // 📏 CÁLCULO DINÁMICO DE OTE (DOBLE MOTOR)
+                // =========================================================================
+                const processImpulse = (leg: ImpulseLeg | null | undefined, price: number) => {
+                    if (!leg) return null;
+                    let impulseInvalidated = false;
+
+                    // 1. Estirar el Fibo si el precio sigue rompiendo a favor
+                    if (leg.dir === 'BUY' && price > leg.extreme) leg.extreme = price;
+                    else if (leg.dir === 'SELL' && price < leg.extreme) leg.extreme = price;
+
+                    // 2. Verificar Invalidación (Stop Hunt del Origen)
+                    if (leg.dir === 'BUY' && price < leg.origin) {
+                        impulseInvalidated = true;
+                        console.log(`[FIBO] 🗑️ Impulso BUY invalidado. Rompió el Origen (${leg.origin}).`);
+                    } else if (leg.dir === 'SELL' && price > leg.origin) {
+                        impulseInvalidated = true;
+                        console.log(`[FIBO] 🗑️ Impulso SELL invalidado. Rompió el Origen (${leg.origin}).`);
+                    }
+
+                    // 3. Procesar zona OTE si el impulso sigue vivo
+                    if (!impulseInvalidated) {
+                        const range = Math.abs(leg.extreme - leg.origin);
+                        const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.62) : leg.extreme + (range * 0.79);
+                        const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.62);
+
+                        // 4. Verifica si el precio entra a la zona dorada Y AÚN NO COBRÓ LOS PUNTOS
+                        if (price <= Math.max(oteTop, oteBtm) && price >= Math.min(oteTop, oteBtm) && !leg.oteScored) {
+                            const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+                            const eventName = `🎯_OTE_Retracement_3M`;
+                            
+                            if (!activeScore.events.includes(eventName)) {
+                                activeScore.events.push(eventName);
+                                activeScore.points += 4;
+                                activeScore.lastUpdate = nowMs;
+                                leg.oteScored = true;
+                                
+                                const stopLoss = leg.origin.toFixed(5);
+                                const tp1 = leg.extreme.toFixed(5);
+                                const tp2 = leg.tp2 ? leg.tp2.toFixed(5) : 'Buscando nuevo DOL macro...';
+
+                                console.log(`
+🎯 ENTRADA SNIPER OTE CONFIRMADA
+🟢 Dirección: ${leg.dir}
+🛡️ Stop Loss (Origin): ${stopLoss}
+💰 TP 1 (Liq. Interna): ${tp1}
+🚀 TP 2 (Liq. Externa): ${tp2}
+                                `);
+                            }
+                        }
+                    }
+                    // Si se invalidó, retorna null para limpiar esa dirección de la RAM
+                    return impulseInvalidated ? null : leg;
+                };
+
+                // Ejecutamos ambos canales en cada Ping
+                state.activeImpulseBuy = processImpulse(state.activeImpulseBuy, currentPrice);
+                state.activeImpulseSell = processImpulse(state.activeImpulseSell, currentPrice);
+
                 const buffer = currentPrice * 0.0002; // micro-buffer por spread
 
                 // 📡 FASE 1: Recorremos zonas y detectamos toques individuales
@@ -403,6 +489,39 @@ export async function processTradingAlert(alertText: string) {
 
                 if (prefix === 'EVENTO_CHOCH') {
                     state.marketBias[eventTf] = currentDirection;
+                    
+                    // 🆕 Jarvis inicializa el impulso al recibir el CHoCH (Doble Canal)
+                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
+                    if (originMatch && state.lastPrice) {
+                        const newOrigin = parseFloat(originMatch[1]);
+                        const isBuy = currentDirection === 'BUY';
+                        const activeLeg = isBuy ? state.activeImpulseBuy : state.activeImpulseSell;
+                        
+                        let shouldCreateNew = true;
+                        
+                        // 🛡️ Escudo Anti-Amnesia: no pisar impulso si el precio está dentro de su rango
+                        if (activeLeg) {
+                            const isInsideRange = state.lastPrice > Math.min(activeLeg.origin, activeLeg.extreme) && 
+                                                  state.lastPrice < Math.max(activeLeg.origin, activeLeg.extreme);
+                            if (isInsideRange) shouldCreateNew = false;
+                        }
+                        
+                        if (shouldCreateNew) {
+                            const newLeg = {
+                                dir: currentDirection as 'BUY' | 'SELL',
+                                origin: newOrigin,
+                                extreme: state.lastPrice,
+                                tp2: null,
+                                oteScored: false
+                            };
+                            
+                            if (isBuy) state.activeImpulseBuy = newLeg;
+                            else state.activeImpulseSell = newLeg;
+                            
+                            console.log(`[FIBO] 📏 Nuevo Impulso ${currentDirection} iniciado. Origen: ${newOrigin}`);
+                        }
+                    }
+                    
                     addedPoints = 3; // Cambio de estructura = más peso
                 }
                 // 🆕 v5.1: BOS es continuación de tendencia, menor peso
@@ -715,12 +834,10 @@ export async function processTradingAlert(alertText: string) {
         if (triggerChochA && alertData) {
             const fingerprint = `CHOCHA_${ticker}_${alertData.dirText}_${alertData.totalPoints}_${alertData.events.join(',')}`;
             if (!isDuplicate(fingerprint)) {
-                const { analyzeInvestmentSwarm } = await import('../services/investment.js');
-                const [kronosResult, investmentResult, mixtureResult] = await Promise.all([
+                const [kronosResult, mixtureResult] = await Promise.all([
                     evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
                         trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
                     })),
-                    analyzeInvestmentSwarm(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => `🔴 Error en Swarm: ${e.message}`),
                     evaluateWithMixture(
                         `Activo: ${ticker}\nPuntos: ${alertData.totalPoints}\nConfluencias: ${alertData.events.join(', ')} + CHoCH_3M\n${alertData.confluenceReport}`,
                         alertData.currentDirection as 'BUY' | 'SELL'
@@ -754,7 +871,6 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += kronosAnnotation;
 
-                if (investmentResult) msg += `\n\n👔 *Comité de Inversión (Swarm):*\n${investmentResult}`;
                 if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
 
                 await sendTelegramAlert(msg);
@@ -764,7 +880,6 @@ export async function processTradingAlert(alertText: string) {
                     grade: 'A+', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_3M'],
                     macroContext: alertData.marketBias,
                     kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                    investmentSentiment: 'SWARM_ANALYZED',
                     mixtureConsensus: mixtureResult?.consensus,
                     timestamp: Date.now()
                 }).catch(() => { });
@@ -774,13 +889,9 @@ export async function processTradingAlert(alertText: string) {
         if (triggerChochB && alertData) {
             const fingerprint = `CHOCHB_${ticker}_${alertData.dirText}_${alertData.totalPoints}_${alertData.events.join(',')}`;
             if (!isDuplicate(fingerprint)) {
-                const { analyzeInvestment, formatInvestmentAlert } = await import('../services/investment.js');
-                const [kronosResult, investmentResult] = await Promise.all([
-                    evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
-                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                    })),
-                    analyzeInvestment(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch(() => null)
-                ]);
+                const kronosResult = await evaluateWithKronos(ticker, alertData.currentDirection as 'BUY' | 'SELL').catch((e: any) => ({
+                    trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                }));
 
                 let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
 
@@ -811,8 +922,6 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += kronosAnnotation;
 
-                if (investmentResult) msg += `\n\n${formatInvestmentAlert(investmentResult)}`;
-
                 await sendTelegramAlert(msg);
 
                 logTrade({
@@ -820,7 +929,6 @@ export async function processTradingAlert(alertText: string) {
                     grade: 'B', points: alertData.totalPoints, events: [...alertData.events, 'CHoCH_3M'],
                     macroContext: alertData.marketBias,
                     kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
-                    investmentSentiment: investmentResult?.sentiment,
                     timestamp: Date.now()
                 }).catch(() => { });
             }
