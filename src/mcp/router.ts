@@ -207,23 +207,6 @@ export function getRouterStatus(): string {
 }
 
 // ─── Default Server Registration ───
-// Register n8n and TradingView by default
-
-if (config.N8N_API_URL || config.N8N_API_KEY) {
-    const n8nEnv: Record<string, string> = {
-        LOG_LEVEL: 'error',
-        DISABLE_CONSOLE_OUTPUT: 'true'
-    };
-    if (config.N8N_API_URL) n8nEnv['N8N_API_URL'] = config.N8N_API_URL;
-    if (config.N8N_API_KEY) n8nEnv['N8N_API_KEY'] = config.N8N_API_KEY;
-
-    registerServer({
-        name: 'n8n',
-        command: 'npx',
-        args: ['-y', 'n8n-mcp'],
-        env: n8nEnv
-    });
-}
 
 registerServer({
     name: 'tradingview',
