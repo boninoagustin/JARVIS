@@ -1,0 +1,11 @@
+{
+  "installCommand": "cd jarvis-os && npm install --include=dev",
+  "buildCommand": "cd jarvis-os && npm run build",
+  "outputDirectory": "jarvis-os/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
