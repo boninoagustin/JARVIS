@@ -13,6 +13,17 @@ interface TradeLog {
   points?: number;
   result?: string;
   timestamp: number;
+  // 🆕 Niveles de ejecución
+  entryPrice?: number;
+  tp1Price?: number;
+  tp2Price?: number;
+  slPrice?: number;
+  tp1Hit?: boolean;
+  tp2Hit?: boolean;
+  slHit?: boolean;
+  tp1Timestamp?: number;
+  tp2Timestamp?: number;
+  slTimestamp?: number;
 }
 
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
@@ -217,6 +228,7 @@ export default function AnalyticsJournal() {
                 <th>ACTIVO</th>
                 <th>DIRECCIÓN</th>
                 <th>CALIDAD / PUNTOS</th>
+                <th>NIVELES</th>
                 <th>RESULTADO</th>
               </tr>
             </thead>
@@ -234,6 +246,24 @@ export default function AnalyticsJournal() {
                       <span style={{ padding: '2px 6px', backgroundColor: 'rgba(100,100,100,0.2)', color: 'var(--text-secondary)', borderRadius: '4px', fontSize: '0.8rem' }}>
                         {t.points} pts
                       </span>
+                    )}
+                  </td>
+                  {/* 🆕 Columna de niveles SL / TP1 / TP2 */}
+                  <td style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                    {t.slPrice !== undefined && t.tp1Price !== undefined ? (
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <span title="Stop Loss" style={{ color: 'var(--accent-red)', opacity: t.slHit ? 0.4 : 0.7 }}>🛑{t.slPrice}</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                        <span title="Take Profit 1" style={{ color: 'var(--accent-gold)', opacity: t.tp1Hit ? 0.4 : 0.7 }}>🎯{t.tp1Price}</span>
+                        {t.tp2Price && t.tp2Price > 0 && (
+                          <>
+                            <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                            <span title="Take Profit 2" style={{ color: 'var(--accent-green)', opacity: t.tp2Hit ? 0.4 : 0.7 }}>🚀{t.tp2Price}</span>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem' }}>—</span>
                     )}
                   </td>
                   <td>

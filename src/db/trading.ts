@@ -96,11 +96,15 @@ const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
 
 interface ActiveTrade {
     tradeId: string;
+    journalId?: string;       
     ticker: string;
     direction: 'BUY' | 'SELL';
     entryPrice: number;
-    tpPrice: number;
+    tp1Price: number;         
+    tp2Price: number;         
     slPrice: number;
+    tp1Hit: boolean;          
+    tp2Hit: boolean;          
     timestamp: number;
 }
 const activeTrades = new Map<string, ActiveTrade>();
@@ -141,13 +145,12 @@ const SYNC_THROTTLE_MS: Record<string, number> = { '3': 0, '15': 120000, '60': 3
 const tickerLastSeen = new Map<string, number>();
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; 
 
-function isDuplicate(fingerprint: string): boolean {
-    const now = Date.now();
+function isDuplicate(fingerprint: string, nowMs: number): boolean {
     for (const [key, ts] of recentAlertCache) {
-        if (now - ts > DEDUP_WINDOW_MS) recentAlertCache.delete(key);
+        if (nowMs - ts > DEDUP_WINDOW_MS) recentAlertCache.delete(key);
     }
     if (recentAlertCache.has(fingerprint)) return true;
-    recentAlertCache.set(fingerprint, now);
+    recentAlertCache.set(fingerprint, nowMs);
     return false;
 }
 
@@ -170,16 +173,16 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
-// 🆕 Función Pura Extraída
-function evaluateImpulse(leg: ImpulseLeg | null | undefined, price: number, ticker: string, state: RadarState, nowMs: number) {
+// 🆕 Función Pura Extraída con Mechas
+function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
 
-    if (leg.dir === 'BUY' && price > leg.extreme) leg.extreme = price;
-    else if (leg.dir === 'SELL' && price < leg.extreme) leg.extreme = price;
+    if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
+    else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
 
-    if (leg.dir === 'BUY' && price < leg.origin) impulseInvalidated = true;
-    else if (leg.dir === 'SELL' && price > leg.origin) impulseInvalidated = true;
+    if (leg.dir === 'BUY' && lowPrice < leg.origin) impulseInvalidated = true;
+    else if (leg.dir === 'SELL' && highPrice > leg.origin) impulseInvalidated = true;
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
@@ -188,7 +191,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, price: number, tick
         const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.62) : leg.extreme + (range * 0.79);
         const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.62);
 
-        if (price <= Math.max(oteTop, oteBtm) && price >= Math.min(oteTop, oteBtm) && !leg.oteScored && leg.isValidated) {
+        if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored && leg.isValidated) {
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
             const eventName = `🎯_OTE_Retracement_3M`;
             
@@ -203,9 +206,12 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, price: number, tick
                 const tp1 = leg.extreme.toFixed(decimals);
                 const tp2 = leg.tp2 ? leg.tp2.toFixed(decimals) : 'Buscando DOL macro...';
 
+                const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
+
                 console.log(`[FIBO] 🎯 OTE CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
 
                 const oteData = {
+                    tradeId, 
                     direction: leg.dir,
                     dirText: leg.dir === 'BUY' ? 'COMPRA' : 'VENTA',
                     stopLoss, tp1, tp2,
@@ -216,10 +222,15 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, price: number, tick
                     marketBias: { ...state.marketBias }
                 };
 
-                const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
                 activeTrades.set(tradeId, {
                     tradeId, ticker, direction: leg.dir,
-                    entryPrice: price, tpPrice: leg.extreme, slPrice: leg.origin, timestamp: nowMs
+                    entryPrice: currentPrice,
+                    tp1Price: leg.extreme,
+                    tp2Price: leg.tp2 || 0,
+                    slPrice: leg.origin,
+                    tp1Hit: false,
+                    tp2Hit: false,
+                    timestamp: nowMs
                 });
 
                 return { updatedLeg: leg, triggerOte: true, oteData };
@@ -232,7 +243,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, price: number, tick
 export async function processTradingAlert(alertText: string) {
     if (!db) return;
 
-    const nowMs = Date.now();
+    // 🕒 El Bypass Temporal (Bar Replay Histórico)
+    const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
+    const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
+
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
     const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
 
@@ -255,7 +269,7 @@ export async function processTradingAlert(alertText: string) {
     else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('VENTA')) currentDirection = 'SELL';
 
     const docRef = db.collection('radar_states').doc(ticker);
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = new Date(nowMs).toISOString().split('T')[0];
 
     let triggerOte = false;
     let oteData: any = null;
@@ -308,37 +322,141 @@ export async function processTradingAlert(alertText: string) {
                 if (!priceMatch) return;
 
                 const currentPrice = parseFloat(priceMatch[1]);
-                const previousPrice = state.lastPrice; // Persiste cross-restarts gracias a Firebase
+                
+                // 🆕 Extraemos las mechas para el backtesting
+                const highMatch = alertText.match(/High:\s*([0-9.]+)/i);
+                const lowMatch = alertText.match(/Low:\s*([0-9.]+)/i);
+                const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
+                const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
+
+                const previousPrice = state.lastPrice; 
                 state.lastPrice = currentPrice;
 
-                // Llamada a helper externa
-                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, ticker, state, nowMs);
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; }
 
-                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, ticker, state, nowMs);
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; }
 
                 if (activeTrades.size > 0) {
                     for (const [tradeId, trade] of activeTrades) {
                         if (trade.ticker !== ticker) continue;
-                        let tradeResult: 'WIN' | 'LOSS' | null = null;
+                        const nowTrade = nowMs; 
                         
-                        if (trade.direction === 'BUY') {
-                            if (currentPrice >= trade.tpPrice) tradeResult = 'WIN';
-                            else if (currentPrice <= trade.slPrice) tradeResult = 'LOSS';
-                        } else {
-                            if (currentPrice <= trade.tpPrice) tradeResult = 'WIN';
-                            else if (currentPrice >= trade.slPrice) tradeResult = 'LOSS';
+                        if (!trade.tp1Hit) {
+                            const tp1Hit = trade.direction === 'BUY' 
+                                ? highPrice >= trade.tp1Price 
+                                : lowPrice <= trade.tp1Price;
+                            if (tp1Hit) {
+                                trade.tp1Hit = true;
+                                const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
+                                const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
+                                
+                                if (trade.journalId) {
+                                    const { db: fireDb } = await import('./memory.js');
+                                    if (fireDb) {
+                                        fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                            tp1Hit: true,
+                                            tp1Timestamp: nowTrade,
+                                        }).catch(() => {});
+                                    }
+                                }
+                                
+                                const tp1Msg = `🟡 *TP1 ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
+                                    `📥 Entrada: ${trade.entryPrice}\n` +
+                                    `🎯 TP1: ${trade.tp1Price} ✅\n` +
+                                    `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
+                                    `🛑 SL: ${trade.slPrice}\n` +
+                                    `⏱️ Duración: ${durationStr}\n\n` +
+                                    `💡 Sugerencia: Mover SL a BE o tomar parcial.`;
+                                sendTelegramAlert(tp1Msg).catch(() => {});
+                                console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — duración ${durationStr}`);
+                            }
                         }
                         
-                        if (tradeResult) {
+                        if (trade.tp2Price > 0) {
+                            const tp2Hit = trade.direction === 'BUY' 
+                                ? highPrice >= trade.tp2Price 
+                                : lowPrice <= trade.tp2Price;
+                            if (tp2Hit) {
+                                trade.tp2Hit = true;
+                                const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+                                const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
+                                
+                                if (trade.journalId) {
+                                    const { db: fireDb } = await import('./memory.js');
+                                    if (fireDb) {
+                                        fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                            tp2Hit: true,
+                                            tp2Timestamp: nowTrade,
+                                            result: 'WIN',
+                                            pnl: parseFloat(pnlPct.toFixed(2)),
+                                            durationMin,
+                                        }).catch(() => {});
+                                    }
+                                }
+                                recordResult(tradeId, 'WIN', parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                                activeTrades.delete(tradeId);
+                                if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
+                                else consecutiveLosses = 0;
+                                
+                                const tp2Msg = `🟢 *TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}*\n\n` +
+                                    `📥 Entrada: ${trade.entryPrice}\n` +
+                                    `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
+                                    `🚀 TP2: ${trade.tp2Price} ✅\n` +
+                                    `📊 PnL: +${pnlPct.toFixed(2)}%\n` +
+                                    `⏱️ Duración total: ${durationMin} min\n\n` +
+                                    `🏆 ¡Trade completo! ${consecutiveLosses > 0 ? `Racha protección: ${consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
+                                sendTelegramAlert(tp2Msg).catch(() => {});
+                                console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId} | PnL: +${pnlPct.toFixed(2)}% | ${durationMin}min`);
+                                continue;
+                            }
+                        }
+                        
+                        // En backtesting, Stop Loss evaluado por mecha.
+                        const slHit = trade.direction === 'BUY' 
+                            ? lowPrice <= trade.slPrice 
+                            : highPrice >= trade.slPrice;
+                        if (slHit) {
                             const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
-                            recordResult(tradeId, tradeResult, parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                            const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
+                            const tp1Touched = trade.tp1Hit ? 'Sí (parcial)' : 'No';
+                            
+                            if (trade.journalId) {
+                                const { db: fireDb } = await import('./memory.js');
+                                if (fireDb) {
+                                    fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                        slHit: true,
+                                        slTimestamp: nowTrade,
+                                        result: 'LOSS',
+                                        pnl: parseFloat(pnlPct.toFixed(2)),
+                                        durationMin,
+                                    }).catch(() => {});
+                                }
+                            }
+                            recordResult(tradeId, 'LOSS', parseFloat(pnlPct.toFixed(2))).catch(() => {});
                             activeTrades.delete(tradeId);
-                            if (tradeResult === 'LOSS') consecutiveLosses++;
-                            else consecutiveLosses = 0;
+                            consecutiveLosses++;
+                            
+                            const protectionMsg = consecutiveLosses >= 3 
+                                ? '🔴 ALERTA: 3 pérdidas consecutivas. Activar cooldown de 15 min y solo operar A+.'
+                                : consecutiveLosses >= 2 
+                                    ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
+                                    : '';
+                            
+                            const slMsg = `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
+                                `📥 Entrada: ${trade.entryPrice}\n` +
+                                `🛑 SL: ${trade.slPrice} ❌\n` +
+                                `🎯 TP1 tocado: ${tp1Touched}\n` +
+                                `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
+                                `⏱️ Duración: ${durationMin} min\n\n` +
+                                `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
+                                `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+                            sendTelegramAlert(slMsg).catch(() => {});
+                            console.log(`[JOURNAL] 🔴 SL alcanzado (LOSS): ${ticker} ${trade.direction} #${tradeId} | PnL: -${pnlPct.toFixed(2)}% | ${durationMin}min | Racha: ${consecutiveLosses}`);
+                            continue;
                         }
                     }
                 }
@@ -348,16 +466,37 @@ export async function processTradingAlert(alertText: string) {
                 
                 for (const zone of state.zones) {
                     if (currentPrice <= (zone.top + buffer) && currentPrice >= (zone.btm - buffer)) {
-                        const enteredFromAbove = previousPrice !== null && previousPrice > zone.top;
-                        const enteredFromBelow = previousPrice !== null && previousPrice < zone.btm;
-                        const isValidDirection = (zone.dir === 'BUY' && enteredFromAbove) || (zone.dir === 'SELL' && enteredFromBelow);
-                        const isFirstPing = previousPrice === null;
+                        const hasPreviousPrice = previousPrice !== null;
+                        const enteredFromAbove = hasPreviousPrice && previousPrice > zone.top;
+                        const enteredFromBelow = hasPreviousPrice && previousPrice < zone.btm;
                         
-                        if (!isValidDirection && !isFirstPing) continue;
+                        const isValidDirection = (zone.dir === 'BUY' && enteredFromAbove) || 
+                                                 (zone.dir === 'SELL' && enteredFromBelow);
+                        const isFirstPing = !hasPreviousPrice;
+                        
+                        if (!isValidDirection && !isFirstPing) {
+                            console.log(`[PING] Toque ignorado por dirección incorrecta: ${zone.dir} zone, price ${currentPrice}, prev ${previousPrice}`);
+                            continue;
+                        }
                         
                         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
                         const zTf = parseTF(zone.tf || '');
-                        let basePts = zone.score !== undefined ? zone.score : 2; 
+                        let basePts = zone.score !== undefined ? zone.score : 2;
+
+                        let confluenceMultiplier = 1.0;
+                        let confluenceTFs: string[] = [];
+                        for (const otherZone of state.zones) {
+                            if (otherZone === zone) continue;
+                            if (otherZone.dir !== zone.dir) continue;
+                            if (otherZone.tf === zone.tf) continue;
+                            const overlaps = !(otherZone.top < zone.btm || otherZone.btm > zone.top);
+                            if (overlaps && !confluenceTFs.includes(otherZone.tf || '')) {
+                                confluenceTFs.push(otherZone.tf || '');
+                            }
+                        }
+                        if (confluenceTFs.length >= 3) confluenceMultiplier = 2.5;       
+                        else if (confluenceTFs.length >= 2) confluenceMultiplier = 2.0;   
+                        else if (confluenceTFs.length >= 1) confluenceMultiplier = 1.5;   
 
                         let eventName = zone.medal?.includes('God') ? `💎_GOD_ZONE_${zTf}` :
                                         zone.medal?.includes('CHoCH') ? `🎯_Silver_Bullet_${zTf}` :
@@ -365,13 +504,18 @@ export async function processTradingAlert(alertText: string) {
                                         `OB_${zone.medal}_${zTf}`;
 
                         let tfMultiplier = zTf === '4H' ? 2 : zTf === '1H' ? 1.5 : 1;
-                        const pts = Math.floor(basePts * tfMultiplier);
+                        let pts = Math.floor(basePts * tfMultiplier * confluenceMultiplier);
 
                         if (!activeScore.events.includes(eventName)) {
                             activeScore.events.push(eventName);
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
                             touchedThisPing.push({ zone, eventName, pts });
+                        }
+                        
+                        if (confluenceMultiplier > 1.0) {
+                            const tfTags = confluenceTFs.map(t => parseTF(t)).join('+');
+                            console.log(`[RADAR] 🧲 CONFLUENCIA ${confluenceMultiplier}x en ${ticker} ${zone.dir}: ${zTf} + (${tfTags}) = ${pts} pts`);
                         }
                     }
                 }
@@ -606,7 +750,7 @@ export async function processTradingAlert(alertText: string) {
         // =========================================================================
         if (triggerOte && oteData) {
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
-            if (!isDuplicate(fingerprint)) {
+            if (!isDuplicate(fingerprint, nowMs)) {
                 
                 const [kronosResult, mixtureResult] = await Promise.all([
                     evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL').catch((e: any) => ({
@@ -645,14 +789,25 @@ export async function processTradingAlert(alertText: string) {
 
                 await sendTelegramAlert(msg);
 
-                logTrade({
+                const journalId = await logTrade({
                     ticker, direction: oteData.direction as 'BUY' | 'SELL',
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
                     kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
                     mixtureConsensus: mixtureResult?.consensus,
-                    timestamp: Date.now()
-                }).catch(() => { });
+                    timestamp: nowMs,
+                    entryPrice: parseFloat(oteData.tp1) * (oteData.direction === 'BUY' ? 0.999 : 1.001), 
+                    tp1Price: parseFloat(oteData.tp1),
+                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                    slPrice: parseFloat(oteData.stopLoss),
+                }).catch(() => 'ERR');
+                
+                if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
+                    const activeTrade = activeTrades.get(oteData.tradeId);
+                    if (activeTrade) {
+                        activeTrade.journalId = journalId;
+                    }
+                }
             }
         }
 
@@ -671,7 +826,6 @@ export function startWatchdog() {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
         
-        // Purga de memoria TTL
         for (const [id, trade] of activeTrades) {
             if (now - trade.timestamp > SEVEN_DAYS) {
                 activeTrades.delete(id);

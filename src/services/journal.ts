@@ -27,8 +27,20 @@ export interface TradeRecord {
     mixtureConsensus?: string;
     timestamp: number;
     date: string;              // YYYY-MM-DD for daily grouping
-    result?: 'WIN' | 'LOSS' | 'BREAKEVEN';
+    result?: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'PARTIAL_TP1';
     pnl?: number;
+    durationMin?: number;       // 🆕 Duración del trade en minutos (entrada → cierre)
+    // 🆕 Niveles de ejecución para tracking automático en el Diario Analítico
+    entryPrice?: number;
+    tp1Price?: number;
+    tp2Price?: number;
+    slPrice?: number;
+    tp1Hit?: boolean;           // Se marca true cuando el precio toca TP1
+    tp2Hit?: boolean;           // Se marca true cuando el precio toca TP2
+    slHit?: boolean;            // Se marca true cuando el precio toca SL
+    tp1Timestamp?: number;      // Cuándo se alcanzó TP1
+    tp2Timestamp?: number;      // Cuándo se alcanzó TP2
+    slTimestamp?: number;       // Cuándo se alcanzó SL
 }
 
 export interface PerformanceMetrics {
@@ -68,8 +80,11 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
             ...record,
             id,
             date,
+            tp1Hit: record.tp1Hit || false,
+            tp2Hit: record.tp2Hit || false,
+            slHit: record.slHit || false,
         });
-        console.log(`[JOURNAL] Trade #${id} logged: ${record.ticker} ${record.direction} ${record.grade} (${record.points} pts)`);
+        console.log(`[JOURNAL] Trade #${id} logged: ${record.ticker} ${record.direction} ${record.grade} (${record.points} pts) | SL:${record.slPrice} TP1:${record.tp1Price} TP2:${record.tp2Price}`);
         return id;
     } catch (err: any) {
         console.error('[JOURNAL] Error logging trade:', err.message);
@@ -251,40 +266,90 @@ export async function getPendingTrades(): Promise<TradeRecord[]> {
 }
 
 /**
- * Send the daily review message asking about all pending trades.
- * Called by a cron/scheduler at end of trading day.
+ * Send a comprehensive end-of-day summary with stats and pending trades.
+ * Called by the scheduler at 22:00 Argentina time.
  */
 export async function sendDailyReview(): Promise<void> {
-    const pending = await getPendingTrades();
-    
-    if (pending.length === 0) {
-        console.log('[JOURNAL] No pending trades for daily review.');
-        return;
-    }
+    if (!db) return;
 
-    let msg = `📋 *JOURNAL DIARIO — Revisión de Trades*\n\n`;
-    msg += `Hoy tuviste *${pending.length}* alerta(s). ¿Cómo te fue?\n\n`;
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const snapshot = await db.collection(JOURNAL_COLLECTION)
+            .where('date', '==', today)
+            .get();
 
-    for (const trade of pending) {
-        const dirIcon = trade.direction === 'BUY' ? '🟢' : '🔴';
-        msg += `🆔 \`${trade.id}\` — ${dirIcon} ${trade.ticker} ${trade.direction} (${trade.grade}, ${trade.points} pts)\n`;
-    }
+        const allToday = snapshot.docs.map(d => d.data() as TradeRecord);
+        const withResult = allToday.filter(t => t.result);
+        const pending = allToday.filter(t => !t.result);
 
-    msg += `\n📝 *Para registrar resultados, decime:*\n`;
-    msg += `"El trade ABC123 fue win" o "El trade XYZ789 fue loss"\n`;
-    msg += `También podés decir: "Todos win" o "Todos loss"`;
+        const wins = withResult.filter(t => t.result === 'WIN').length;
+        const losses = withResult.filter(t => t.result === 'LOSS').length;
+        const be = withResult.filter(t => t.result === 'BREAKEVEN').length;
+        const partials = withResult.filter(t => t.result === 'PARTIAL_TP1').length;
+        const closed = wins + losses + be;
+        const winRate = closed > 0 ? ((wins / closed) * 100).toFixed(1) : '—';
 
-    for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
-        try {
-            await bot.api.sendMessage(userId, msg, { parse_mode: 'Markdown' });
-        } catch (err: any) {
-            console.error(`[JOURNAL] Telegram error for ${userId}:`, err.message);
-            try {
-                await bot.api.sendMessage(userId, msg);
-            } catch (fallbackErr: any) {
-                console.error(`[JOURNAL] Fallback fallo a ${userId}:`, fallbackErr.message);
+        // PnL acumulado
+        const totalPnl = withResult.reduce((sum, t) => sum + (t.pnl || 0), 0);
+        const pnlSign = totalPnl >= 0 ? '+' : '';
+
+        // Duración promedio
+        const tradesWithDuration = withResult.filter(t => (t as any).durationMin);
+        const avgDuration = tradesWithDuration.length > 0
+            ? Math.round(tradesWithDuration.reduce((sum, t) => sum + ((t as any).durationMin || 0), 0) / tradesWithDuration.length)
+            : null;
+
+        // Mejor par
+        const byTicker: Record<string, { wins: number; losses: number; pnl: number }> = {};
+        for (const t of withResult) {
+            if (!byTicker[t.ticker]) byTicker[t.ticker] = { wins: 0, losses: 0, pnl: 0 };
+            if (t.result === 'WIN') byTicker[t.ticker].wins++;
+            else if (t.result === 'LOSS') byTicker[t.ticker].losses++;
+            byTicker[t.ticker].pnl += t.pnl || 0;
+        }
+        const bestPair = Object.entries(byTicker).sort((a, b) => b[1].pnl - a[1].pnl)[0];
+
+        let msg = `📊 *CIERRE DE SESIÓN | ${today.split('-').reverse().join('/')}*\n\n`;
+        
+        if (allToday.length === 0) {
+            msg += `😴 Sin actividad hoy. Sin alertas ni trades registrados.`;
+        } else {
+            msg += `✅ *WIN:* ${wins} | ❌ *LOSS:* ${losses} | ➖ *BE:* ${be}\n`;
+            if (partials > 0) msg += `🟡 *TP1 parciales:* ${partials}\n`;
+            msg += `📈 *Win Rate:* ${winRate}% (${closed} cerrados)\n`;
+            msg += `💰 *PnL acumulado:* ${pnlSign}${totalPnl.toFixed(2)}%\n`;
+            if (avgDuration) msg += `⏱️ *Duración promedio:* ${avgDuration} min\n`;
+            if (bestPair) {
+                const pairWR = (bestPair[1].wins + bestPair[1].losses) > 0 
+                    ? ((bestPair[1].wins / (bestPair[1].wins + bestPair[1].losses)) * 100).toFixed(0) 
+                    : '—';
+                msg += `⭐ *Mejor par:* ${bestPair[0]} (WR ${pairWR}%, PnL ${bestPair[1].pnl >= 0 ? '+' : ''}${bestPair[1].pnl.toFixed(1)}%)\n`;
+            }
+
+            if (pending.length > 0) {
+                msg += `\n⏳ *${pending.length} trade(s) pendiente(s):*\n`;
+                for (const t of pending) {
+                    const dirIcon = t.direction === 'BUY' ? '🟢' : '🔴';
+                    const levels = t.tp1Price 
+                        ? ` | SL:${t.slPrice} TP1:${t.tp1Price}${t.tp2Price ? ` TP2:${t.tp2Price}` : ''}`
+                        : '';
+                    msg += `  ${dirIcon} \`${t.id}\` ${t.ticker} ${t.grade} (${t.points} pts)${levels}\n`;
+                }
+                msg += `\n📝 *Registrá resultados:* "El trade XXXX fue win/loss/breakeven"`;
             }
         }
+
+        // Enviar a Telegram
+        for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+            try {
+                await bot.api.sendMessage(userId, msg, { parse_mode: 'Markdown' });
+            } catch {
+                try { await bot.api.sendMessage(userId, msg); } catch {}
+            }
+        }
+        console.log(`[JOURNAL] 📊 Resumen diario enviado: ${wins}W/${losses}L/${be}BE | PnL: ${pnlSign}${totalPnl.toFixed(2)}%`);
+    } catch (err: any) {
+        console.error('[JOURNAL] Error en resumen diario:', err.message);
     }
 }
 
