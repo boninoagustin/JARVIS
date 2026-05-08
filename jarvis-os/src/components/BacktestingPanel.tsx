@@ -179,11 +179,11 @@ export default function BacktestingPanel() {
                     />
 
                     {!isRunning ? (
-                        <button onClick={handleStart} style={{ width: '100%', padding: '12px', backgroundColor: 'var(--accent-gold)', color: 'var(--bg-base)', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer' }}>
+                        <button type="button" onClick={handleStart} style={{ width: '100%', padding: '12px', backgroundColor: 'var(--accent-gold)', color: 'var(--bg-base)', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer' }}>
                             🚀 INICIAR BACKTESTING
                         </button>
                     ) : (
-                        <button onClick={handleStop} style={{ width: '100%', padding: '12px', backgroundColor: 'var(--accent-red)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer' }}>
+                        <button type="button" onClick={handleStop} style={{ width: '100%', padding: '12px', backgroundColor: 'var(--accent-red)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer' }}>
                             🛑 DETENER Y GUARDAR
                         </button>
                     )}
