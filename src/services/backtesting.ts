@@ -21,21 +21,26 @@ export async function startBacktesting(ticker: string, startDate: string, config
     try {
         // ... (existing code)
         console.log('[BACKTESTING] Launching/Verifying TradingView with CDP...');
-        await executeToolByName('tv_launch', { kill_existing: false });
+        const launchResult = await executeToolByName('tv_launch', { kill_existing: false });
+        console.log('[BACKTESTING] tv_launch result:', launchResult);
         
         // Wait a bit for TV to be ready
         await new Promise(r => setTimeout(r, 5000));
 
         // 1. Set symbol
+        console.log(`[BACKTESTING] Setting symbol to ${ticker}...`);
         await executeToolByName('chart_set_symbol', { symbol: ticker });
         
         // 2. Set timeframe to 3M
+        console.log('[BACKTESTING] Setting timeframe to 3...');
         await executeToolByName('chart_set_timeframe', { timeframe: '3' });
 
         // 3. Start replay at date
+        console.log(`[BACKTESTING] Starting replay at ${startDate}...`);
         await executeToolByName('replay_start', { date: startDate });
 
         // 4. Start autoplay at 1x
+        console.log('[BACKTESTING] Starting autoplay...');
         await executeToolByName('replay_autoplay', { speed: 1000 });
 
         // 5. Update status in DB
@@ -85,18 +90,25 @@ export async function stopBacktesting() {
     }
 
     try {
-        await executeToolByName('replay_stop', {});
+        try {
+            await executeToolByName('replay_stop', {});
+        } catch (e) {
+            console.log('[BACKTESTING] replay_stop skipped or failed:', e);
+        }
         
-        if (db && currentSessionId) {
+        if (db) {
+            // Siempre reseteamos el estado general, sin importar si había ID en memoria
             await db.collection('app_settings').doc('backtesting_status').set({
                 active: false,
                 lastUpdate: Date.now()
-            });
+            }, { merge: true });
 
-            await db.collection('backtesting_sessions').doc(currentSessionId).update({
-                status: 'completed',
-                endTime: Date.now()
-            });
+            if (currentSessionId) {
+                await db.collection('backtesting_sessions').doc(currentSessionId).set({
+                    status: 'completed',
+                    endTime: Date.now()
+                }, { merge: true });
+            }
         }
         
         isBacktesting = false;
