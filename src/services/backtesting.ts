@@ -39,6 +39,9 @@ export async function startBacktesting(ticker: string, startDate: string, config
         console.log(`[BACKTESTING] Starting replay at ${startDate}...`);
         await executeToolByName('replay_start', { date: startDate });
 
+        // Short delay before autoplay
+        await new Promise(r => setTimeout(r, 2000));
+
         // 4. Start autoplay at 1x
         console.log('[BACKTESTING] Starting autoplay...');
         await executeToolByName('replay_autoplay', { speed: 1000 });
@@ -143,11 +146,21 @@ function startPolling() {
             // We need to find the indicator name. The user mentioned smc_master_5.1
             const consoleOutput = await executeToolByName('pine_get_console', { study_filter: 'SMC_Master_5.1' });
             
-            if (!consoleOutput || consoleOutput.includes('Error')) return;
+            if (!consoleOutput || consoleOutput.startsWith('Error')) return;
 
-            const lines = consoleOutput.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            let parsed;
+            try {
+                parsed = JSON.parse(consoleOutput);
+            } catch (e: any) {
+                // If it's not JSON, it might just be empty text
+                return;
+            }
+
+            if (!parsed.success || !parsed.entries) return;
+
+            const logs = parsed.entries.map((e: any) => e.message);
             
-            for (const line of lines) {
+            for (const line of logs) {
                 if (!lastSeenLogs.includes(line)) {
                     console.log(`[BACKTESTING] New log detected: ${line}`);
                     await processTradingAlert(line);
