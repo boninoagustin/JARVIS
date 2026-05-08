@@ -92,6 +92,7 @@ export default function BacktestingPanel() {
       });
       toast(`Iniciando sesión para ${ticker}...`, 'info');
     } catch (e) {
+      console.error('[Backtesting] Error starting:', e);
       toast('Error al iniciar', 'error');
     }
   };
