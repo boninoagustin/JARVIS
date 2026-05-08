@@ -7,11 +7,11 @@ import { logTrade, recordResult } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
-    // v5.1 (long) field names
+    // v5.1 (long) field names — top/btm/dir REQUIRED (normalizeZone ensures them)
     tf?: string;
-    dir?: 'BUY' | 'SELL';
-    top?: number;
-    btm?: number;
+    dir: 'BUY' | 'SELL';
+    top: number;
+    btm: number;
     lvl?: string;
     medal?: string;
     score?: number;
@@ -62,6 +62,7 @@ interface ImpulseLeg {
     extreme: number;
     tp2?: number | null;       // 🚀 Liquidez Externa (DOL macro del ciclo anterior)
     oteScored?: boolean;       // 🔒 Candado para no sumar puntos infinitos
+    isValidated?: boolean;     // 🛡️ Sello de aprobación del Cerebro Analítico
 }
 
 interface RadarState {
@@ -287,7 +288,9 @@ export async function processTradingAlert(alertText: string) {
 
                 try {
                     const rawZones = JSON.parse(payloadStr) as any[];
-                    const parsedZones: RadarZone[] = rawZones.map(normalizeZone);
+                    const parsedZones: RadarZone[] = rawZones
+                        .map(normalizeZone)
+                        .filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
                     parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
 
                     if (state.lastSyncDate !== todayStr) {
@@ -360,6 +363,27 @@ export async function processTradingAlert(alertText: string) {
 💰 TP 1 (Liq. Interna): ${tp1}
 🚀 TP 2 (Liq. Externa): ${tp2}
                                 `);
+
+                                // 🚀 Alerta de Gatillo OTE (Entrada Final)
+                                if (leg.isValidated) {
+                                    const msgOte = `🎯 *ENTRADA SNIPER OTE CONFIRMADA*\n🟢 *Dirección:* ${leg.dir}\n🛡️ *Stop Loss:* ${stopLoss}\n💰 *TP 1 (Interno):* ${tp1}\n🚀 *TP 2 (Externo):* ${tp2}`;
+                                    sendTelegramAlert(msgOte).catch(console.error);
+
+                                    // 📝 Registrar trade activo para auto-detección de TP/SL
+                                    const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
+                                    activeTrades.set(tradeId, {
+                                        tradeId,
+                                        ticker,
+                                        direction: leg.dir,
+                                        entryPrice: price,
+                                        tpPrice: leg.extreme,
+                                        slPrice: leg.origin,
+                                        timestamp: nowMs
+                                    });
+                                    console.log(`[JOURNAL] 📝 Trade ${tradeId} registrado: ${ticker} ${leg.dir} | SL: ${leg.origin.toFixed(5)} | TP: ${leg.extreme.toFixed(5)}`);
+                                } else {
+                                    console.log(`[FIBO] 🔇 OTE Tocado pero ignorado. El CHoCH previo no alcanzó los ${dynamicBotConfig.minPointsForBuy} pts.`);
+                                }
                             }
                         }
                     }
@@ -370,6 +394,47 @@ export async function processTradingAlert(alertText: string) {
                 // Ejecutamos ambos canales en cada Ping
                 state.activeImpulseBuy = processImpulse(state.activeImpulseBuy, currentPrice);
                 state.activeImpulseSell = processImpulse(state.activeImpulseSell, currentPrice);
+
+                // =========================================================================
+                // 🔍 OBSERVADOR DE TP/SL: Auto-detección de resultados de trades activos
+                // =========================================================================
+                if (activeTrades.size > 0) {
+                    for (const [tradeId, trade] of activeTrades) {
+                        if (trade.ticker !== ticker) continue;
+                        
+                        let tradeResult: 'WIN' | 'LOSS' | null = null;
+                        
+                        if (trade.direction === 'BUY') {
+                            if (currentPrice >= trade.tpPrice) {
+                                tradeResult = 'WIN';
+                            } else if (currentPrice <= trade.slPrice) {
+                                tradeResult = 'LOSS';
+                            }
+                        } else {
+                            if (currentPrice <= trade.tpPrice) {
+                                tradeResult = 'WIN';
+                            } else if (currentPrice >= trade.slPrice) {
+                                tradeResult = 'LOSS';
+                            }
+                        }
+                        
+                        if (tradeResult) {
+                            const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+                            recordResult(tradeId, tradeResult, parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                            activeTrades.delete(tradeId);
+                            
+                            const emoji = tradeResult === 'WIN' ? '🏆' : '💀';
+                            console.log(`[JOURNAL] ${emoji} Trade ${tradeId} (${ticker} ${trade.direction}): ${tradeResult} | PnL: ${pnlPct.toFixed(2)}%`);
+                            
+                            // 🆕 v5.2: Protección anti-racha
+                            if (tradeResult === 'LOSS') {
+                                consecutiveLosses++;
+                            } else {
+                                consecutiveLosses = 0;
+                            }
+                        }
+                    }
+                }
 
                 const buffer = currentPrice * 0.0002; // micro-buffer por spread
 
@@ -490,37 +555,53 @@ export async function processTradingAlert(alertText: string) {
                 if (prefix === 'EVENTO_CHOCH') {
                     state.marketBias[eventTf] = currentDirection;
                     
-                    // 🆕 Jarvis inicializa el impulso al recibir el CHoCH (Doble Canal)
-                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
-                    if (originMatch && state.lastPrice) {
-                        const newOrigin = parseFloat(originMatch[1]);
-                        const isBuy = currentDirection === 'BUY';
-                        const activeLeg = isBuy ? state.activeImpulseBuy : state.activeImpulseSell;
-                        
-                        let shouldCreateNew = true;
-                        
-                        // 🛡️ Escudo Anti-Amnesia: no pisar impulso si el precio está dentro de su rango
-                        if (activeLeg) {
-                            const isInsideRange = state.lastPrice > Math.min(activeLeg.origin, activeLeg.extreme) && 
-                                                  state.lastPrice < Math.max(activeLeg.origin, activeLeg.extreme);
-                            if (isInsideRange) shouldCreateNew = false;
-                        }
-                        
-                        if (shouldCreateNew) {
-                            const newLeg = {
-                                dir: currentDirection as 'BUY' | 'SELL',
-                                origin: newOrigin,
-                                extreme: state.lastPrice,
-                                tp2: null,
-                                oteScored: false
-                            };
+                    // 🛡️ RESTRICCIÓN SNIPER: Solo el CHoCH de 3M arma el Fibo Elástico
+                    if (eventTf === '3') {
+                        const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
+                        if (originMatch && state.lastPrice) {
+                            const newOrigin = parseFloat(originMatch[1]);
+                            const isBuy = currentDirection === 'BUY';
+                            const activeLeg = isBuy ? state.activeImpulseBuy : state.activeImpulseSell;
                             
-                            if (isBuy) state.activeImpulseBuy = newLeg;
-                            else state.activeImpulseSell = newLeg;
+                            let shouldCreateNew = true;
                             
-                            console.log(`[FIBO] 📏 Nuevo Impulso ${currentDirection} iniciado. Origen: ${newOrigin}`);
+                            // 🛡️ Escudo Anti-Amnesia: no pisar impulso si el precio está dentro de su rango
+                            if (activeLeg && state.lastPrice) {
+                                const isInsideRange = state.lastPrice > Math.min(activeLeg.origin, activeLeg.extreme) && 
+                                                      state.lastPrice < Math.max(activeLeg.origin, activeLeg.extreme);
+                                if (isInsideRange) shouldCreateNew = false;
+                            }
+                            
+                            if (shouldCreateNew) {
+                                // 🎯 CAPTURA DEL TP2 (Draw on Liquidity Macro)
+                                let macroTarget: number | null = null;
+                                
+                                if (isBuy && state.activeImpulseSell) {
+                                    macroTarget = state.activeImpulseSell.origin;
+                                    state.activeImpulseSell = null;
+                                } else if (!isBuy && state.activeImpulseBuy) {
+                                    macroTarget = state.activeImpulseBuy.origin;
+                                    state.activeImpulseBuy = null;
+                                }
+
+                                // Evitamos error de TypeScript si lastPrice es null
+                                const currentExt = state.lastPrice || newOrigin;
+
+                                const newLeg: ImpulseLeg = {
+                                    dir: currentDirection as 'BUY' | 'SELL',
+                                    origin: newOrigin,
+                                    extreme: currentExt,
+                                    tp2: macroTarget,
+                                    oteScored: false
+                                };
+                                
+                                if (isBuy) state.activeImpulseBuy = newLeg;
+                                else state.activeImpulseSell = newLeg;
+                                
+                                console.log(`[FIBO] 📏 Nuevo Impulso 3M ${currentDirection} iniciado. Origen: ${newOrigin}. TP2 Macro: ${macroTarget || 'No disponible'}`);
+                            }
                         }
-                    }
+                    } // Fin del IF '3'
                     
                     addedPoints = 3; // Cambio de estructura = más peso
                 }
@@ -738,7 +819,13 @@ export async function processTradingAlert(alertText: string) {
                     }
 
                     // Criterios de Aprobación
-                    const minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
+                    let minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
+                    
+                    // 🆕 v5.2: Protección anti-racha — subir threshold si venimos perdiendo
+                    if (consecutiveLosses >= 2) {
+                        minPtsRequired += 2;
+                        console.log(`[RADAR] ⚠️ Anti-racha: ${consecutiveLosses} pérdidas consecutivas. Threshold subido a ${minPtsRequired}.`);
+                    }
 
                     // Buscar la mejor zona tocada para sugerir TP/SL (dentro de la transacción donde state existe)
                     const bestZone = state.zones
@@ -747,6 +834,11 @@ export async function processTradingAlert(alertText: string) {
 
                     if (totalPoints >= minPtsRequired) {
                         triggerChochA = true;
+                        
+                        // 🛡️ SELLO DE APROBACIÓN: Le avisamos al motor de PING que este Fibo es letal
+                        if (currentDirection === 'BUY' && state.activeImpulseBuy) state.activeImpulseBuy.isValidated = true;
+                        if (currentDirection === 'SELL' && state.activeImpulseSell) state.activeImpulseSell.isValidated = true;
+
                         alertData = {
                             dirText,
                             confluenceReport,
@@ -764,6 +856,11 @@ export async function processTradingAlert(alertText: string) {
                     }
                     else if (totalPoints >= Math.max(minPtsRequired - 3, 5)) {
                         triggerChochB = true;
+                        
+                        // 🛡️ SELLO DE APROBACIÓN PARA SETUP B
+                        if (currentDirection === 'BUY' && state.activeImpulseBuy) state.activeImpulseBuy.isValidated = true;
+                        if (currentDirection === 'SELL' && state.activeImpulseSell) state.activeImpulseSell.isValidated = true;
+
                         alertData = {
                             dirText,
                             confluenceReport,
@@ -873,7 +970,7 @@ export async function processTradingAlert(alertText: string) {
 
                 if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
 
-                await sendTelegramAlert(msg);
+                // await sendTelegramAlert(msg);  // 🔇 CHoCH pre-aviso apagado — solo OTE dispara
 
                 logTrade({
                     ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',
@@ -922,7 +1019,7 @@ export async function processTradingAlert(alertText: string) {
 
                 msg += kronosAnnotation;
 
-                await sendTelegramAlert(msg);
+                // await sendTelegramAlert(msg);  // 🔇 CHoCH pre-aviso apagado — solo OTE dispara
 
                 logTrade({
                     ticker, direction: alertData.currentDirection as 'BUY' | 'SELL',

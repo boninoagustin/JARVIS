@@ -1498,7 +1498,7 @@ if use_sync and barstate.isconfirmed
     int added = 0
     
     if all_obs.size() > 0
-        for i = 0 to math.min(all_obs.size() - 1, 30) 
+        for i = 0 to math.min(all_obs.size() - 1, 20) 
             ob_data ob_res = all_obs.get(i)
             if not ob_res.mitigated and not ob_res.hidden and ob_res.score >= min_score
                 bool is_macro_aligned = is_bias_off ? true : (ob_res.is_bull ? (master_bias >= 0) : (master_bias <= 0))
@@ -1531,13 +1531,13 @@ if use_sync and barstate.isconfirmed
                 // 🆕 v5.1.1: JSON compacto con precios reducidos y nombres cortos. max 8 zonas por alerta.
                 float real_sl = ob_res.is_bull ? ob_res.btm - atr_global * 0.5 : ob_res.top + atr_global * 0.5
                 
-                ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(ob_res.top) + ',"b":' + f_compact_price(ob_res.btm) + ',"lv":"' + ob_res.level + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + str.tostring(ob_res.score) + ',"mi":' + f_compact_price((ob_res.top + ob_res.btm) / 2) + ',"sl":' + f_compact_price(real_sl) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
+                ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(ob_res.top) + ',"b":' + f_compact_price(ob_res.btm) + ',"lv":"' + f_compact_price(ob_res.is_bull ? ob_res.top : ob_res.btm) + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + str.tostring(ob_res.score) + ',"mi":' + f_compact_price((ob_res.top + ob_res.btm) / 2) + ',"sl":' + f_compact_price(real_sl) + ',"a":' + f_compact_price(atr_global) + '}'
                 added += 1
                 if added >= 8
                     break
                 
     if breaker_obs.size() > 0 and show_breaker
-        for i = 0 to math.min(breaker_obs.size() - 1, 10)
+        for i = 0 to math.min(breaker_obs.size() - 1, 7)
             ob_data brk = breaker_obs.get(i)
             if brk.mitigated or brk.hidden or brk.score < min_score
                 continue
@@ -1551,18 +1551,18 @@ if use_sync and barstate.isconfirmed
             
             if added > 0
                 ob_json += ","
-            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(brk.top) + ',"b":' + f_compact_price(brk.btm) + ',"lv":"' + brk.level + '","md":"' + brk_medal_final + '","sc":' + str.tostring(brk.score) + ',"mi":' + f_compact_price((brk.top + brk.btm) / 2) + ',"sl":' + f_compact_price(brk.is_bull ? brk.btm - atr_global * 0.5 : brk.top + atr_global * 0.5) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(brk.top) + ',"b":' + f_compact_price(brk.btm) + ',"lv":"' + f_compact_price(brk.is_bull ? brk.top : brk.btm) + '","md":"' + brk_medal_final + '","sc":' + str.tostring(brk.score) + ',"mi":' + f_compact_price((brk.top + brk.btm) / 2) + ',"sl":' + f_compact_price(brk.is_bull ? brk.btm - atr_global * 0.5 : brk.top + atr_global * 0.5) + ',"a":' + f_compact_price(atr_global) + '}'
             added += 1
             if added >= 8
                 break
     
     // 🆕 v5.1: Incluir divergencias activas en el JSON de sincronización
     if array.size(active_divs) > 0
-        for i = 0 to math.min(array.size(active_divs) - 1, 5)
+        for i = 0 to math.min(array.size(active_divs) - 1, 3)
             div_data div = array.get(active_divs, i)
             if added > 0
                 ob_json += ","
-            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(div.top) + ',"b":' + f_compact_price(div.btm) + ',"md":"SMC_DIV","sc":5,"mi":' + f_compact_price((div.top + div.btm) / 2) + ',"sl":' + f_compact_price(div.is_bull ? div.btm - atr_global * 0.5 : div.top + atr_global * 0.5) + ',"a":' + str.tostring(math.round(atr_global / syminfo.mintick * syminfo.mintick)) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_compact_price(div.top) + ',"b":' + f_compact_price(div.btm) + ',"md":"SMC_DIV","sc":5,"mi":' + f_compact_price((div.top + div.btm) / 2) + ',"sl":' + f_compact_price(div.is_bull ? div.btm - atr_global * 0.5 : div.top + atr_global * 0.5) + ',"a":' + f_compact_price(atr_global) + '}'
             added += 1
             if added >= 8
                 break
