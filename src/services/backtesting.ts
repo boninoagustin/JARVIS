@@ -39,8 +39,9 @@ export async function startBacktesting(ticker: string, startDate: string, config
         console.log(`[BACKTESTING] Starting replay at ${startDate}...`);
         await executeToolByName('replay_start', { date: startDate });
 
-        // Short delay before autoplay
-        await new Promise(r => setTimeout(r, 2000));
+        // Wait for indicator and chart to fully load before autoplay
+        console.log('[BACKTESTING] Waiting 10s for indicator to load...');
+        await new Promise(r => setTimeout(r, 10000));
 
         // 4. Start autoplay at 1x
         console.log('[BACKTESTING] Starting autoplay...');
