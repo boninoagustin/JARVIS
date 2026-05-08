@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, query, where, orderBy, limit, addDoc, serverTimestamp, doc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Play, Square, Search, Calendar, History, TrendingUp, BarChart2, BookOpen } from 'lucide-react';
+import { Play, Calendar, TrendingUp, BarChart2, BookOpen } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface TradeLog {

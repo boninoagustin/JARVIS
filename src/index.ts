@@ -105,7 +105,7 @@ async function main() {
                             console.log(`[COMMAND] Received: ${command}`);
                             if (command === 'start_backtesting') {
                                 const { startBacktesting } = await import('./services/backtesting.js');
-                                await startBacktesting(params.ticker, params.startDate, params.configNote);
+                                await startBacktesting(params.ticker, params.startDate, params.configNote, params.minBuyPoints, params.minSellPoints);
                             } else if (command === 'stop_backtesting') {
                                 const { stopBacktesting } = await import('./services/backtesting.js');
                                 await stopBacktesting();
