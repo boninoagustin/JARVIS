@@ -92,6 +92,34 @@ async function main() {
                 console.error('[FIREBASE TRADING] Listener error:', error);
             });
 
+        console.log('[APP] Starting Command Listener...');
+        db.collection('app_commands')
+            .where('status', '==', 'pending')
+            .onSnapshot(async (snapshot) => {
+                for (const change of snapshot.docChanges()) {
+                    if (change.type === 'added') {
+                        const docId = change.doc.id;
+                        const { command, params } = change.doc.data();
+                        
+                        try {
+                            console.log(`[COMMAND] Received: ${command}`);
+                            if (command === 'start_backtesting') {
+                                const { startBacktesting } = await import('./services/backtesting.js');
+                                await startBacktesting(params.ticker, params.startDate, params.configNote);
+                            } else if (command === 'stop_backtesting') {
+                                const { stopBacktesting } = await import('./services/backtesting.js');
+                                await stopBacktesting();
+                            }
+                            
+                            await db?.collection('app_commands').doc(docId).delete();
+                        } catch (err: any) {
+                            console.error(`[COMMAND ERROR] ${command}:`, err.message);
+                            await db?.collection('app_commands').doc(docId).update({ status: 'failed' });
+                        }
+                    }
+                }
+            });
+
         // Daily Journal Review — sends at 22:00 Argentina time
         const REVIEW_HOUR = 22; // 10 PM
         let lastReviewDate = '';

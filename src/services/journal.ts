@@ -30,6 +30,9 @@ export interface TradeRecord {
     result?: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'PARTIAL_TP1';
     pnl?: number;
     durationMin?: number;       // 🆕 Duración del trade en minutos (entrada → cierre)
+    mode?: 'live' | 'backtesting'; // 🆕 Modo de ejecución (default: live)
+    sessionId?: string;         // 🆕 ID de sesión para agrupar trades de backtesting
+    configNote?: string;        // 🆕 Nota sobre la configuración del indicador
     // 🆕 Niveles de ejecución para tracking automático en el Diario Analítico
     entryPrice?: number;
     tp1Price?: number;

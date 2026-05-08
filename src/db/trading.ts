@@ -709,7 +709,17 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
                     if (orphanPenalty > 0) confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts\n`;
 
-                    let minPtsRequired = currentDirection === 'BUY' ? dynamicBotConfig.minPointsForBuy : dynamicBotConfig.minPointsForSell;
+                    let sessionThresholds: { buy: number; sell: number } | null = null;
+                    const isBacktest = tsMatch !== null;
+                    if (isBacktest) {
+                        const { getCurrentSessionThresholds } = await import('../services/backtesting.js');
+                        sessionThresholds = getCurrentSessionThresholds();
+                    }
+
+                    let minPtsRequired = currentDirection === 'BUY' 
+                        ? (sessionThresholds?.buy || dynamicBotConfig.minPointsForBuy) 
+                        : (sessionThresholds?.sell || dynamicBotConfig.minPointsForSell);
+                    
                     if (consecutiveLosses >= 2) minPtsRequired += 2;
 
                     const bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
@@ -752,19 +762,33 @@ export async function processTradingAlert(alertText: string) {
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
             if (!isDuplicate(fingerprint, nowMs)) {
                 
-                const [kronosResult, mixtureResult] = await Promise.all([
-                    evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL').catch((e: any) => ({
-                        trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                    })),
-                    evaluateWithMixture(
-                        `Activo: ${ticker}\nPuntos: ${oteData.points}\nConfluencias: ${oteData.events?.join(', ')}\n${oteData.confluenceReport}`,
-                        oteData.direction as 'BUY' | 'SELL'
-                    ).catch(() => null)
-                ]);
+                const isBacktest = tsMatch !== null;
+                let kronosResult = { isConfirmed: true, details: "Backtesting: IA omitida." };
+                let mixtureResult: any = null;
+                let sessionId: string | undefined;
 
-                let kronosAnnotation = kronosResult.trend === null ? `\n\n🤖 *Kronos AI:* ${kronosResult.details}` : `\n\n🤖 *Kronos AI:* ${kronosResult.isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${kronosResult.details}`;
+                if (isBacktest) {
+                    const { getCurrentSessionId } = await import('../services/backtesting.js');
+                    sessionId = getCurrentSessionId() || undefined;
+                }
 
-                let msg = `🔥 *ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}*\n\n`;
+                if (!isBacktest) {
+                    const [kRes, mRes] = await Promise.all([
+                        evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL').catch((e: any) => ({
+                            trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
+                        })),
+                        evaluateWithMixture(
+                            `Activo: ${ticker}\nPuntos: ${oteData.points}\nConfluencias: ${oteData.events?.join(', ')}\n${oteData.confluenceReport}`,
+                            oteData.direction as 'BUY' | 'SELL'
+                        ).catch(() => null)
+                    ]);
+                    kronosResult = kRes as any;
+                    mixtureResult = mRes;
+                }
+
+                let kronosAnnotation = isBacktest ? "" : (kronosResult as any).trend === null ? `\n\n🤖 *Kronos AI:* ${(kronosResult as any).details}` : `\n\n🤖 *Kronos AI:* ${(kronosResult as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kronosResult as any).details}`;
+
+                let msg = `${isBacktest ? "🧪 *BACKTESTING* | " : "🔥 "}*ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}*\n\n`;
                 msg += oteData.confluenceReport;
                 msg += `🎯 *Puntaje Total:* ${oteData.points} Puntos\n`;
                 msg += `🧱 *Confluencias:* ${oteData.events?.join(', ')}\n\n`;
@@ -787,15 +811,19 @@ export async function processTradingAlert(alertText: string) {
                 msg += kronosAnnotation;
                 if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
 
-                await sendTelegramAlert(msg);
+                if (!isBacktest) {
+                    await sendTelegramAlert(msg);
+                }
 
                 const journalId = await logTrade({
                     ticker, direction: oteData.direction as 'BUY' | 'SELL',
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
-                    kronosVerdict: kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE',
+                    kronosVerdict: isBacktest ? 'SKIP_BT' : (kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE'),
                     mixtureConsensus: mixtureResult?.consensus,
                     timestamp: nowMs,
+                    mode: isBacktest ? 'backtesting' : 'live',
+                    sessionId,
                     entryPrice: parseFloat(oteData.tp1) * (oteData.direction === 'BUY' ? 0.999 : 1.001), 
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,

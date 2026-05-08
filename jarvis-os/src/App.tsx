@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Terminal, PieChart, Settings } from 'lucide-react';
+import { Activity, Terminal, PieChart, Settings, Play } from 'lucide-react';
 import RadarHeatmap from './components/RadarHeatmap';
 import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
+import BacktestingPanel from './components/BacktestingPanel';
 import { ToastProvider } from './components/Toast';
 import './index.css';
 
@@ -25,6 +26,9 @@ function Sidebar() {
         </NavLink>
         <NavLink to="/journal" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <PieChart size={18} /> Diario Analítico
+        </NavLink>
+        <NavLink to="/backtesting" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <Play size={18} /> Backtesting
         </NavLink>
         <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Settings size={18} /> Panel de Control
@@ -70,6 +74,7 @@ function App() {
             <Route path="/radar" element={<RadarHeatmap />} />
             <Route path="/terminal" element={<FundamentalTerminal />} />
             <Route path="/journal" element={<AnalyticsJournal />} />
+            <Route path="/backtesting" element={<BacktestingPanel />} />
             <Route path="/admin" element={<AdminPanel />} />
           </Routes>
         </main>
