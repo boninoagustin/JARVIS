@@ -5,6 +5,12 @@ import { generateResponse } from '../llm/client.js';
 const FINNHUB_API_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
 
 export async function updateFundamentals() {
+    const { getCurrentSessionId } = await import('./backtesting.js');
+    if (getCurrentSessionId()) {
+        console.log('[FINNHUB] Backtesting active. Skipping fundamentals update.');
+        return;
+    }
+
     console.log('[FINNHUB] Actualizando datos fundamentales...');
     try {
         // 1. Obtener noticias de mercado general (Forex, Crypto, Stocks)

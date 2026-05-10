@@ -109,6 +109,8 @@ interface ActiveTrade {
 }
 const activeTrades = new Map<string, ActiveTrade>();
 let consecutiveLosses = 0; 
+let streakKillswitchUntil = 0;
+let vixKillswitchUntil = 0;
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
     sniperCooldownMs: 120000,     
@@ -329,8 +331,10 @@ export async function processTradingAlert(alertText: string) {
                 const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
                 const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
 
+                // 🔴 CRÍTICO: Guardar precio ANTERIOR antes de actualizar, para detección de dirección
                 const previousPrice = state.lastPrice; 
                 state.lastPrice = currentPrice;
+                const hasPreviousPrice = previousPrice !== null;
 
                 const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseBuy = buyRes.updatedLeg;
@@ -440,11 +444,19 @@ export async function processTradingAlert(alertText: string) {
                             activeTrades.delete(tradeId);
                             consecutiveLosses++;
                             
-                            const protectionMsg = consecutiveLosses >= 3 
-                                ? '🔴 ALERTA: 3 pérdidas consecutivas. Activar cooldown de 15 min y solo operar A+.'
-                                : consecutiveLosses >= 2 
-                                    ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
-                                    : '';
+                            if (consecutiveLosses >= 5) {
+                                streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
+                            }
+                            
+                            const protectionMsg = consecutiveLosses >= 5 
+                                ? '🔴 ALERTA: 5 pérdidas consecutivas. KILLSWITCH ACTIVADO por 30 min.'
+                                : consecutiveLosses === 4
+                                    ? '⚠️ 4 pérdidas consecutivas. Subiendo minPts +5.'
+                                    : consecutiveLosses === 3 
+                                        ? '⚠️ 3 pérdidas consecutivas. Subiendo minPts +3.'
+                                        : consecutiveLosses === 2 
+                                            ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
+                                            : '';
                             
                             const slMsg = `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
                                 `📥 Entrada: ${trade.entryPrice}\n` +
@@ -759,6 +771,15 @@ export async function processTradingAlert(alertText: string) {
         // EJECUCIÓN OTE FUERA DE LA TRANSACCIÓN
         // =========================================================================
         if (triggerOte && oteData) {
+            if (nowMs < streakKillswitchUntil) {
+                console.log(`[KILLSWITCH] Setup ignorado por racha perdedora.`);
+                return;
+            }
+            if (nowMs < vixKillswitchUntil) {
+                console.log(`[KILLSWITCH] Setup ignorado por alta volatilidad (VIX > 30).`);
+                return;
+            }
+
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
             if (!isDuplicate(fingerprint, nowMs)) {
                 
@@ -850,6 +871,27 @@ let watchdogStarted = false;
 export function startWatchdog() {
     if (watchdogStarted) return;
     watchdogStarted = true;
+    
+    // Check VIX every 15 minutes
+    const checkVix = async () => {
+        try {
+            const fetch = (await import('node-fetch')).default;
+            const FINNHUB_API_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
+            const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
+            const data: any = await res.json();
+            if (data.c && data.c > 30) {
+                console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
+                vixKillswitchUntil = Date.now() + 20 * 60 * 1000; // Fail-safe de 20 min
+            } else {
+                vixKillswitchUntil = 0;
+            }
+        } catch (e) {
+            console.error('[NEWS FILTER] Error verificando VIX:', e);
+        }
+    };
+    setInterval(checkVix, 15 * 60 * 1000);
+    checkVix(); // Initial check
+
     setInterval(() => {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
