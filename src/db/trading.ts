@@ -360,16 +360,21 @@ export async function processTradingAlert(alertText: string) {
                 if (activeTrades.size > 0) {
                     for (const [tradeId, trade] of activeTrades) {
                         if (trade.ticker !== ticker) continue;
-                        const nowTrade = nowMs; 
+                        const nowTrade = nowMs;
+                        const openTimeStr = new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' }); 
                         
                         // 🎯 EVALUACIÓN DE TP1
                         if (!trade.tp1Hit) {
                             const tp1Hit = trade.direction === 'BUY' 
-                                ? highPrice >= trade.tp1Price 
-                                : lowPrice <= trade.tp1Price;
+                            ? highPrice >= trade.tp1Price 
+                            : lowPrice <= trade.tp1Price;
+
                             if (tp1Hit) {
+                            // 🛡️ FILTRO ANTI-DUPLICADOS (Vercel Race Condition)
+                                if (isDuplicate(`TP1_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+
                                 trade.tp1Hit = true;
-                                trade.slPrice = trade.entryPrice; // 🛡️ BREAK EVEN DINÁMICO
+                                trade.slPrice = trade.entryPrice;
                                 
                                 const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
                                 const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
@@ -388,6 +393,7 @@ export async function processTradingAlert(alertText: string) {
                                 }
                                 
                                 const tp1Msg = `🟡 *TP1 ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
+                                    `🕒 Apertura: ${openTimeStr}\n` + // <--- Nueva línea
                                     `📥 Entrada: ${trade.entryPrice}\n` +
                                     `🎯 TP1: ${trade.tp1Price} ✅\n` +
                                     `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
@@ -402,9 +408,13 @@ export async function processTradingAlert(alertText: string) {
                         // 🚀 EVALUACIÓN DE TP2
                         if (trade.tp2Price > 0) {
                             const tp2Hit = trade.direction === 'BUY' 
-                                ? highPrice >= trade.tp2Price 
-                                : lowPrice <= trade.tp2Price;
+                            ? highPrice >= trade.tp2Price 
+                            : lowPrice <= trade.tp2Price;
+
                             if (tp2Hit) {
+                            // 🛡️ FILTRO ANTI-DUPLICADOS
+                                if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+
                                 trade.tp2Hit = true;
                                 const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
                                 const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
@@ -431,6 +441,7 @@ export async function processTradingAlert(alertText: string) {
                                 else consecutiveLosses = 0;
                                 
                                 const tp2Msg = `🟢 *TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}*\n\n` +
+                                    `🕒 Apertura: ${openTimeStr}\n` + // <--- Nueva línea
                                     `📥 Entrada: ${trade.entryPrice}\n` +
                                     `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
                                     `🚀 TP2: ${trade.tp2Price} ✅\n` +
@@ -447,8 +458,11 @@ export async function processTradingAlert(alertText: string) {
                         const slHit = trade.direction === 'BUY' 
                             ? lowPrice <= trade.slPrice 
                             : highPrice >= trade.slPrice;
+
                         if (slHit) {
-                            const isBreakEven = trade.tp1Hit; // 🛡️ Detectar si ya estábamos en BE
+                        // 🛡️ FILTRO ANTI-DUPLICADOS
+                            if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                            const isBreakEven = trade.tp1Hit;
                             const pnlPct = isBreakEven ? 0 : Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
                             const finalResult = isBreakEven ? 'BE' : 'LOSS';
                             const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
@@ -490,19 +504,21 @@ export async function processTradingAlert(alertText: string) {
                             
                             const slMsg = isBreakEven 
                                 ? `🛡️ *BREAK EVEN ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
-                                  `📥 Entrada: ${trade.entryPrice}\n` +
-                                  `🎯 TP1 tocado: Sí (Parcial asegurado)\n` +
-                                  `🛑 SL: ${trade.slPrice} (Cerrado sin riesgo)\n` +
-                                  `📊 PnL: 0.00%\n` +
-                                  `⏱️ Duración: ${durationMin} min`
+                                `🕒 Apertura: ${openTimeStr}\n` + // <--- Nueva línea
+                                `📥 Entrada: ${trade.entryPrice}\n` +
+                                `🎯 TP1 tocado: Sí (Parcial asegurado)\n` +
+                                `🛑 SL: ${trade.slPrice} (Cerrado sin riesgo)\n` +
+                                `📊 PnL: 0.00%\n` +
+                                `⏱️ Duración: ${durationMin} min`
                                 : `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
-                                  `📥 Entrada: ${trade.entryPrice}\n` +
-                                  `🛑 SL: ${trade.slPrice} ❌\n` +
-                                  `🎯 TP1 tocado: No\n` +
-                                  `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
-                                  `⏱️ Duración: ${durationMin} min\n\n` +
-                                  `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
-                                  `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+                                `🕒 Apertura: ${openTimeStr}\n` + // <--- Nueva línea
+                                `📥 Entrada: ${trade.entryPrice}\n` +
+                                `🛑 SL: ${trade.slPrice} ❌\n` +
+                                `🎯 TP1 tocado: No\n` +
+                                `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
+                                `⏱️ Duración: ${durationMin} min\n\n` +
+                                `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
+                                `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
 
                             sendTelegramAlert(slMsg).catch(() => {});
                             console.log(`[JOURNAL] ${isBreakEven ? '🛡️ BE alcanzado' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
