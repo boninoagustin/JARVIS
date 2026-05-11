@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
 import { collection, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Activity, Zap, Navigation, AlertTriangle } from 'lucide-react';
+import { Activity, Zap, Crosshair, AlertTriangle } from 'lucide-react';
+
+interface ImpulseLeg {
+  dir: 'BUY' | 'SELL';
+  origin: number;
+  extreme: number;
+  oteScored?: boolean;
+  isValidated?: boolean;
+}
 
 interface RadarState {
   id: string;
@@ -10,7 +18,23 @@ interface RadarState {
   scoreSell: { points: number };
   zones: any[];
   lastPrice?: number;
-  nextZones?: { dir: string, top: number, btm: number, medal: string, tf: string, score: number }[];
+  activeImpulseBuy?: ImpulseLeg | null;
+  activeImpulseSell?: ImpulseLeg | null;
+}
+
+/** Calcula el precio del 50% OTE (Fibonacci) del impulse leg */
+function getOte50(leg: ImpulseLeg): number {
+  const range = Math.abs(leg.extreme - leg.origin);
+  return leg.dir === 'BUY'
+    ? leg.extreme - range * 0.50
+    : leg.extreme + range * 0.50;
+}
+
+/** Cantidad de decimales según activo */
+function getDecimals(ticker: string): number {
+  if (/BTC|ETH|US30|NAS/i.test(ticker)) return 2;
+  if (/JPY/i.test(ticker)) return 3;
+  return 5;
 }
 
 const getIcon = (dir: string) => {
@@ -84,7 +108,7 @@ export default function RadarHeatmap() {
               <th>PUNTOS COMPRA</th>
               <th>PUNTOS VENTA</th>
               <th>TERMÓMETRO</th>
-              <th style={{ minWidth: '180px' }}>PRÓXIMAS ZONAS</th>
+              <th style={{ minWidth: '180px' }}>OTE 50%</th>
             </tr>
           </thead>
           <tbody>
@@ -96,12 +120,29 @@ export default function RadarHeatmap() {
               const maxPoints = Math.max(buyPoints, sellPoints);
               const isHot = maxPoints >= 5;
               const isCritical = maxPoints >= 8;
-              const nextZones = asset.nextZones || [];
+              const decimals = getDecimals(asset.id);
+
+              // Recopilar OTE 50% de los impulse legs activos
+              const oteLevels: { dir: 'BUY' | 'SELL'; price: number; scored: boolean }[] = [];
+              if (asset.activeImpulseBuy) {
+                oteLevels.push({
+                  dir: 'BUY',
+                  price: getOte50(asset.activeImpulseBuy),
+                  scored: !!asset.activeImpulseBuy.oteScored,
+                });
+              }
+              if (asset.activeImpulseSell) {
+                oteLevels.push({
+                  dir: 'SELL',
+                  price: getOte50(asset.activeImpulseSell),
+                  scored: !!asset.activeImpulseSell.oteScored,
+                });
+              }
               
               return (
                 <tr key={asset.id}>
                   <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{asset.id}</td>
-                  <td className="mono">{asset.lastPrice?.toFixed(5) || 'N/A'}</td>
+                  <td className="mono">{asset.lastPrice?.toFixed(decimals) || 'N/A'}</td>
                   <td>{getIcon(asset.marketBias?.['240'])}</td>
                   <td>{getIcon(asset.marketBias?.['60'])}</td>
                   <td>{getIcon(asset.marketBias?.['15'])}</td>
@@ -125,20 +166,25 @@ export default function RadarHeatmap() {
                   </td>
                   <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      {nextZones.length > 0 ? nextZones.slice(0, 2).map((z, i) => {
-                        const tfMap: Record<string, string> = { '3': '3M', '15': '15M', '60': '1H', '240': '4H' };
-                        return (
-                          <div key={i} style={{ 
-                            display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem',
-                            color: z.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', opacity: 0.85
+                      {oteLevels.length > 0 ? oteLevels.map((ote, i) => (
+                        <div key={i} style={{ 
+                          display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem',
+                          color: ote.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
+                          opacity: ote.scored ? 0.45 : 0.9
+                        }}>
+                          <Crosshair size={10} />
+                          <span className="mono">{ote.price.toFixed(decimals)}</span>
+                          <span style={{ 
+                            padding: '1px 4px', borderRadius: '3px', fontSize: '0.65rem',
+                            backgroundColor: ote.scored 
+                              ? 'rgba(100,100,100,0.15)' 
+                              : ote.dir === 'BUY' ? 'rgba(0,200,100,0.1)' : 'rgba(255,60,60,0.1)',
+                            color: ote.scored ? 'var(--text-tertiary)' : 'var(--accent-gold)'
                           }}>
-                            <Navigation size={10} style={{ transform: z.dir === 'BUY' ? 'rotate(-90deg)' : 'rotate(90deg)' }} />
-                            <span className="mono">{z.btm?.toFixed(5)}-{z.top?.toFixed(5)}</span>
-                            <span style={{ padding: '1px 4px', borderRadius: '3px', fontSize: '0.65rem',
-                              backgroundColor: 'rgba(255,170,0,0.1)', color: 'var(--accent-gold)' }}>{z.medal} {tfMap[z.tf] || z.tf}</span>
-                          </div>
-                        );
-                      }) : (
+                            {ote.dir === 'BUY' ? '🟢' : '🔴'} {ote.scored ? 'TOCADO' : 'PENDIENTE'}
+                          </span>
+                        </div>
+                      )) : (
                         <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>
                       )}
                     </div>
