@@ -726,29 +726,47 @@ export async function processTradingAlert(alertText: string) {
 
                 // --- CAPA 4: VALIDACIÓN DEL CHOCH ---
                 if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { 
-                    if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) return;
-
-                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Sweep_') || e.includes('DIV_') || e.includes('Breaker_') || e.includes('ZoneTouched_') || e.includes('TL_Sweep_') || e.includes('OTE_') || e.includes('CONFLUENCIA_'));
                     
-                    let orphanPenalty = 0;
-                    if (!hasHTFBacking) {
-                        orphanPenalty = state.zones.length > 0 ? 2 : 3;
+                    // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
+                    if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
+                        console.log(`[RADAR] CHoCH ignorado por Cooldown en ${ticker}. Vaciando residuos de memoria.`);
+                        activeScore.points = 0; 
+                        activeScore.events = [];
+                        return;
                     }
 
+                    // 🗺️ 2. DEFINICIÓN DE CONTEXTO
+                    // Ojo acá: hasHTFBacking determina si estamos "flotando en la nada" o apoyados en una zona pesada
+                    // 🛡️ Filtro estricto: Las Divergencias y Sweeps de 3M NO otorgan status de "Respaldo HTF"
+                    const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('ZoneTouched_') ||e.includes('OTE_') ||(e.includes('DIV_') && !e.includes('_3')) || (e.includes('Sweep_') && !e.includes('_3')) ||(e.includes('TL_Sweep_') && !e.includes('_3')));
+                    
+                    const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
                     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
                     const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                     const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
-
+                    
                     let baseBiasPoints = isMacroAligned ? 5 : 0;
                     
                     let vwapBonus = 0;
                     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') { vwapBonus = 2; activeScore.events.push('VWAP_Discount'); } 
                     else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') { vwapBonus = 2; activeScore.events.push('VWAP_Premium'); }
 
+                    // Sumamos todo el puntaje bruto inicial
                     let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; 
-                    if (orphanPenalty > 0) totalPoints -= orphanPenalty;
-                    if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+                    let orphanPenalty = 0;
 
+                    // 🛡️ 3. EL VETO ABSOLUTO (KILLSWITCH ANTI-INFLACIÓN)
+                    if (!hasHTFBacking && is15MAgainst) {
+                        totalPoints = 0; // Aniquilación total de puntos, sin importar cuánto acumuló antes
+                        console.log(`[VETO] CHoCH anulado en ${ticker}. Flotando sin respaldo HTF y contra 15M.`);
+                    } else {
+                        // Si sobrevive al veto, aplicamos los peajes estructurales normales
+                        orphanPenalty = !hasHTFBacking ? 3 : 0;
+                        if (orphanPenalty > 0) totalPoints -= orphanPenalty;
+                        if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+                    }
+
+                    // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                     const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
 
                     let confluenceReport = `🗺️ *Contexto Macro:*\n`;
@@ -759,6 +777,7 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
                     if (orphanPenalty > 0) confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts\n`;
 
+                    // 🎯 5. VALIDACIÓN FINAL Y GATILLO
                     let sessionThresholds: { buy: number; sell: number } | null = null;
                     const isBacktest = tsMatch !== null;
                     if (isBacktest) {
@@ -785,10 +804,12 @@ export async function processTradingAlert(alertText: string) {
                         }
                         
                         if (totalPoints >= minPtsRequired) {
+                            // Si cruzó el umbral con fuerza, borra la memoria del bando contrario
                             oppositeScore.points = 0; oppositeScore.events = [];
                         }
                         
                         state.lastSniperAlert = nowMs;
+                        // Borramos la memoria propia para no arrastrar puntos al próximo setup
                         activeScore.points = 0; activeScore.events = [];
                     }
                 }
