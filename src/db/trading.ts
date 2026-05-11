@@ -196,7 +196,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
-        if (range <= 0.00001) return { updatedLeg: leg };
+        const minRange = currentPrice * 0.0005; 
+        if (range < minRange) return { updatedLeg: leg };
 
         const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.50) : leg.extreme + (range * 0.79);
         const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.50);
