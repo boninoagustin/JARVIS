@@ -32,6 +32,7 @@ interface Session {
 export default function BacktestingPanel() {
   const [ticker, setTicker] = useState('EURUSD');
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState('');
   const [configNote, setConfigNote] = useState('');
   const [minBuyPoints, setMinBuyPoints] = useState(5);
   const [minSellPoints, setMinSellPoints] = useState(5);
@@ -86,7 +87,7 @@ export default function BacktestingPanel() {
     try {
       await addDoc(collection(db, 'app_commands'), {
         command: 'start_backtesting',
-        params: { ticker, startDate, configNote, minBuyPoints, minSellPoints },
+        params: { ticker, startDate, endDate: endDate || undefined, configNote, minBuyPoints, minSellPoints },
         status: 'pending',
         timestamp: serverTimestamp()
       });
@@ -135,7 +136,7 @@ export default function BacktestingPanel() {
                 </h3>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
                         <div>
                             <label style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '4px' }}>ACTIVO</label>
                             <input 
@@ -144,10 +145,20 @@ export default function BacktestingPanel() {
                                 style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
                             />
                         </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                         <div>
                             <label style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '4px' }}>FECHA INICIO</label>
                             <input 
                                 type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                                style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '4px' }}>FECHA FIN (Opcional)</label>
+                            <input 
+                                type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
                                 style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
                             />
                         </div>

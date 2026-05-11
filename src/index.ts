@@ -92,6 +92,12 @@ async function main() {
                 console.error('[FIREBASE TRADING] Listener error:', error);
             });
 
+        console.log('[APP] Resetting backtesting status...');
+        await db.collection('app_settings').doc('backtesting_status').set({
+            active: false,
+            lastUpdate: Date.now()
+        }, { merge: true });
+
         console.log('[APP] Starting Command Listener...');
         db.collection('app_commands')
             .where('status', '==', 'pending')
@@ -105,7 +111,7 @@ async function main() {
                             console.log(`[COMMAND] Received: ${command}`);
                             if (command === 'start_backtesting') {
                                 const { startBacktesting } = await import('./services/backtesting.js');
-                                await startBacktesting(params.ticker, params.startDate, params.configNote, params.minBuyPoints, params.minSellPoints);
+                                await startBacktesting(params.ticker, params.startDate, params.configNote, params.minBuyPoints, params.minSellPoints, params.endDate);
                             } else if (command === 'stop_backtesting') {
                                 const { stopBacktesting } = await import('./services/backtesting.js');
                                 await stopBacktesting();

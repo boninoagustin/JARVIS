@@ -6,16 +6,18 @@ let pollingInterval: NodeJS.Timeout | null = null;
 let isBacktesting = false;
 let currentSessionId: string | null = null;
 let currentSessionThresholds: { buy: number; sell: number } | null = null;
+let currentSessionEndDateMs: number | null = null;
 
-export async function startBacktesting(ticker: string, startDate: string, configNote?: string, minBuyPoints?: number, minSellPoints?: number) {
+export async function startBacktesting(ticker: string, startDate: string, configNote?: string, minBuyPoints?: number, minSellPoints?: number, endDate?: string) {
     if (isBacktesting) {
         await stopBacktesting();
     }
 
     currentSessionId = `BT_${Date.now()}`;
     currentSessionThresholds = { buy: minBuyPoints || 5, sell: minSellPoints || 5 };
+    currentSessionEndDateMs = endDate ? new Date(endDate).getTime() : null;
     
-    console.log(`[BACKTESTING] Starting session ${currentSessionId} for ${ticker} from ${startDate}. Thresholds: B:${currentSessionThresholds.buy} S:${currentSessionThresholds.sell}`);
+    console.log(`[BACKTESTING] Starting session ${currentSessionId} for ${ticker} from ${startDate} to ${endDate || 'now'}. Thresholds: B:${currentSessionThresholds.buy} S:${currentSessionThresholds.sell}`);
     isBacktesting = true;
 
     try {
@@ -43,16 +45,13 @@ export async function startBacktesting(ticker: string, startDate: string, config
         console.log('[BACKTESTING] Waiting 10s for indicator to load...');
         await new Promise(r => setTimeout(r, 10000));
 
-        // 4. Start autoplay at 1x
-        console.log('[BACKTESTING] Starting autoplay...');
-        await executeToolByName('replay_autoplay', { speed: 1000 });
-
-        // 5. Update status in DB
+        // 4. Update status in DB
         if (db) {
             await db.collection('app_settings').doc('backtesting_status').set({
                 active: true,
                 ticker,
                 startDate,
+                endDate: endDate || null,
                 sessionId: currentSessionId,
                 configNote,
                 minBuyPoints: currentSessionThresholds.buy,
@@ -65,6 +64,7 @@ export async function startBacktesting(ticker: string, startDate: string, config
                 id: currentSessionId,
                 ticker,
                 startDate,
+                endDate: endDate || null,
                 configNote,
                 minBuyPoints: currentSessionThresholds.buy,
                 minSellPoints: currentSessionThresholds.sell,
@@ -73,8 +73,16 @@ export async function startBacktesting(ticker: string, startDate: string, config
             });
         }
 
-        // 6. Start polling console
+        // 5. Start polling console EARLY to catch initial SYNC_ZONES
+        console.log('[BACKTESTING] Starting polling to catch initial SYNC_ZONES...');
         startPolling();
+        
+        // Wait 4 seconds for the initial sync to be processed by Jarvis before moving the market
+        await new Promise(r => setTimeout(r, 4000));
+
+        // 6. Start autoplay at 1x
+        console.log('[BACKTESTING] Starting autoplay...');
+        await executeToolByName('replay_autoplay', { speed: 1000 });
 
         return { success: true };
     } catch (err: any) {
@@ -166,6 +174,18 @@ function startPolling() {
                     console.log(`[BACKTESTING] New log detected: ${line}`);
                     await processTradingAlert(line);
                     lastSeenLogs.push(line);
+                    
+                    if (currentSessionEndDateMs) {
+                        const tsMatch = line.match(/TS:\s*([0-9]+)/i);
+                        if (tsMatch) {
+                            const tsMs = parseInt(tsMatch[1], 10);
+                            if (tsMs >= currentSessionEndDateMs) {
+                                console.log(`[BACKTESTING] End date reached (${new Date(tsMs).toISOString()}). Stopping backtesting.`);
+                                stopBacktesting(); // Non-blocking to let interval clear itself safely
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 
