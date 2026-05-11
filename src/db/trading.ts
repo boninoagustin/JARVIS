@@ -107,6 +107,7 @@ interface ActiveTrade {
     tp2Hit: boolean;          
     timestamp: number;
 }
+
 const activeTrades = new Map<string, ActiveTrade>();
 let consecutiveLosses = 0; 
 let streakKillswitchUntil = 0;
@@ -119,8 +120,16 @@ let dynamicBotConfig = {
     baseRiskPercentage: 1.0
 };
 
+// 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
 if (db) {
     try {
+        db.collection('active_trades').get().then(snap => {
+            snap.forEach(doc => {
+                activeTrades.set(doc.id, doc.data() as ActiveTrade);
+            });
+            console.log(`[RADAR] 🧠 Memoria restaurada: ${activeTrades.size} trades activos cargados.`);
+        });
+
         db.collection('app_settings').doc('global').onSnapshot((snap) => {
             if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
         });
@@ -175,7 +184,6 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
-// 🆕 Función Pura Extraída con Mechas
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
@@ -190,8 +198,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         const range = Math.abs(leg.extreme - leg.origin);
         if (range <= 0.00001) return { updatedLeg: leg };
 
-        const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.62) : leg.extreme + (range * 0.79);
-        const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.62);
+        const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.50) : leg.extreme + (range * 0.79);
+        const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.50);
 
         if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored && leg.isValidated) {
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
@@ -210,7 +218,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-                console.log(`[FIBO] 🎯 OTE CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
+                console.log(`[FIBO] 🎯 RETROCESO 50% CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
 
                 const oteData = {
                     tradeId, 
@@ -224,7 +232,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     marketBias: { ...state.marketBias }
                 };
 
-                activeTrades.set(tradeId, {
+                const newTrade: ActiveTrade = {
                     tradeId, ticker, direction: leg.dir,
                     entryPrice: currentPrice,
                     tp1Price: leg.extreme,
@@ -233,7 +241,11 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     tp1Hit: false,
                     tp2Hit: false,
                     timestamp: nowMs
-                });
+                };
+
+                // 💾 Sincronización en RAM y Firebase
+                activeTrades.set(tradeId, newTrade);
+                if (db) db.collection('active_trades').doc(tradeId).set(newTrade).catch(() => {});
 
                 return { updatedLeg: leg, triggerOte: true, oteData };
             }
@@ -324,14 +336,11 @@ export async function processTradingAlert(alertText: string) {
                 if (!priceMatch) return;
 
                 const currentPrice = parseFloat(priceMatch[1]);
-                
-                // 🆕 Extraemos las mechas para el backtesting
                 const highMatch = alertText.match(/High:\s*([0-9.]+)/i);
                 const lowMatch = alertText.match(/Low:\s*([0-9.]+)/i);
                 const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
                 const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
 
-                // 🔴 CRÍTICO: Guardar precio ANTERIOR antes de actualizar, para detección de dirección
                 const previousPrice = state.lastPrice; 
                 state.lastPrice = currentPrice;
                 const hasPreviousPrice = previousPrice !== null;
@@ -344,19 +353,28 @@ export async function processTradingAlert(alertText: string) {
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; }
 
+                // =========================================================
+                // GESTIÓN DE TRADES ACTIVOS (TP Y SL)
+                // =========================================================
                 if (activeTrades.size > 0) {
                     for (const [tradeId, trade] of activeTrades) {
                         if (trade.ticker !== ticker) continue;
                         const nowTrade = nowMs; 
                         
+                        // 🎯 EVALUACIÓN DE TP1
                         if (!trade.tp1Hit) {
                             const tp1Hit = trade.direction === 'BUY' 
                                 ? highPrice >= trade.tp1Price 
                                 : lowPrice <= trade.tp1Price;
                             if (tp1Hit) {
                                 trade.tp1Hit = true;
+                                trade.slPrice = trade.entryPrice; // 🛡️ BREAK EVEN DINÁMICO
+                                
                                 const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
                                 const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
+                                
+                                // 💾 Sincronizar actualización de TP1 y SL a Break Even
+                                if (db) db.collection('active_trades').doc(trade.tradeId).update({ tp1Hit: true, slPrice: trade.entryPrice }).catch(() => {});
                                 
                                 if (trade.journalId) {
                                     const { db: fireDb } = await import('./memory.js');
@@ -372,14 +390,15 @@ export async function processTradingAlert(alertText: string) {
                                     `📥 Entrada: ${trade.entryPrice}\n` +
                                     `🎯 TP1: ${trade.tp1Price} ✅\n` +
                                     `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
-                                    `🛑 SL: ${trade.slPrice}\n` +
+                                    `🛑 Nuevo SL: ${trade.slPrice} (Break Even)\n` +
                                     `⏱️ Duración: ${durationStr}\n\n` +
-                                    `💡 Sugerencia: Mover SL a BE o tomar parcial.`;
+                                    `💡 SL protegido automáticamente a Break Even.`;
                                 sendTelegramAlert(tp1Msg).catch(() => {});
-                                console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — duración ${durationStr}`);
+                                console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — SL movido a BE`);
                             }
                         }
                         
+                        // 🚀 EVALUACIÓN DE TP2
                         if (trade.tp2Price > 0) {
                             const tp2Hit = trade.direction === 'BUY' 
                                 ? highPrice >= trade.tp2Price 
@@ -402,7 +421,11 @@ export async function processTradingAlert(alertText: string) {
                                     }
                                 }
                                 recordResult(tradeId, 'WIN', parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                                
+                                // 💾 Eliminar de RAM y Firebase al cerrar
                                 activeTrades.delete(tradeId);
+                                if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+
                                 if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
                                 else consecutiveLosses = 0;
                                 
@@ -414,19 +437,20 @@ export async function processTradingAlert(alertText: string) {
                                     `⏱️ Duración total: ${durationMin} min\n\n` +
                                     `🏆 ¡Trade completo! ${consecutiveLosses > 0 ? `Racha protección: ${consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
                                 sendTelegramAlert(tp2Msg).catch(() => {});
-                                console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId} | PnL: +${pnlPct.toFixed(2)}% | ${durationMin}min`);
+                                console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId}`);
                                 continue;
                             }
                         }
                         
-                        // En backtesting, Stop Loss evaluado por mecha.
+                        // 🛑 EVALUACIÓN DE STOP LOSS (O BREAK EVEN)
                         const slHit = trade.direction === 'BUY' 
                             ? lowPrice <= trade.slPrice 
                             : highPrice >= trade.slPrice;
                         if (slHit) {
-                            const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+                            const isBreakEven = trade.tp1Hit; // 🛡️ Detectar si ya estábamos en BE
+                            const pnlPct = isBreakEven ? 0 : Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+                            const finalResult = isBreakEven ? 'BE' : 'LOSS';
                             const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
-                            const tp1Touched = trade.tp1Hit ? 'Sí (parcial)' : 'No';
                             
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
@@ -434,18 +458,23 @@ export async function processTradingAlert(alertText: string) {
                                     fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         slHit: true,
                                         slTimestamp: nowTrade,
-                                        result: 'LOSS',
-                                        pnl: parseFloat(pnlPct.toFixed(2)),
+                                        result: finalResult,
+                                        pnl: isBreakEven ? 0 : -parseFloat(pnlPct.toFixed(2)),
                                         durationMin,
                                     }).catch(() => {});
                                 }
                             }
-                            recordResult(tradeId, 'LOSS', parseFloat(pnlPct.toFixed(2))).catch(() => {});
-                            activeTrades.delete(tradeId);
-                            consecutiveLosses++;
                             
-                            if (consecutiveLosses >= 5) {
-                                streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
+                            if (!isBreakEven) recordResult(tradeId, 'LOSS', parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                            
+                            // 💾 Eliminar de RAM y Firebase al cerrar
+                            activeTrades.delete(tradeId);
+                            if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+
+                            // Lógica de racha perdedora (ignorar si es Break Even)
+                            if (!isBreakEven) {
+                                consecutiveLosses++;
+                                if (consecutiveLosses >= 5) streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
                             }
                             
                             const protectionMsg = consecutiveLosses >= 5 
@@ -458,16 +487,24 @@ export async function processTradingAlert(alertText: string) {
                                             ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
                                             : '';
                             
-                            const slMsg = `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
-                                `📥 Entrada: ${trade.entryPrice}\n` +
-                                `🛑 SL: ${trade.slPrice} ❌\n` +
-                                `🎯 TP1 tocado: ${tp1Touched}\n` +
-                                `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
-                                `⏱️ Duración: ${durationMin} min\n\n` +
-                                `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
-                                `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+                            const slMsg = isBreakEven 
+                                ? `🛡️ *BREAK EVEN ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
+                                  `📥 Entrada: ${trade.entryPrice}\n` +
+                                  `🎯 TP1 tocado: Sí (Parcial asegurado)\n` +
+                                  `🛑 SL: ${trade.slPrice} (Cerrado sin riesgo)\n` +
+                                  `📊 PnL: 0.00%\n` +
+                                  `⏱️ Duración: ${durationMin} min`
+                                : `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
+                                  `📥 Entrada: ${trade.entryPrice}\n` +
+                                  `🛑 SL: ${trade.slPrice} ❌\n` +
+                                  `🎯 TP1 tocado: No\n` +
+                                  `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
+                                  `⏱️ Duración: ${durationMin} min\n\n` +
+                                  `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
+                                  `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+
                             sendTelegramAlert(slMsg).catch(() => {});
-                            console.log(`[JOURNAL] 🔴 SL alcanzado (LOSS): ${ticker} ${trade.direction} #${tradeId} | PnL: -${pnlPct.toFixed(2)}% | ${durationMin}min | Racha: ${consecutiveLosses}`);
+                            console.log(`[JOURNAL] ${isBreakEven ? '🛡️ BE alcanzado' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
                             continue;
                         }
                     }
@@ -746,7 +783,6 @@ export async function processTradingAlert(alertText: string) {
                             activeLeg.bestZone = bestZone;
                         }
                         
-                        // 🛡️ Solo resetea el lado opuesto si es un Setup A+ fuerte
                         if (totalPoints >= minPtsRequired) {
                             oppositeScore.points = 0; oppositeScore.events = [];
                         }
@@ -855,6 +891,8 @@ export async function processTradingAlert(alertText: string) {
                     const activeTrade = activeTrades.get(oteData.tradeId);
                     if (activeTrade) {
                         activeTrade.journalId = journalId;
+                        // 💾 Actualizar el journalId en Firebase
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
                     }
                 }
             }
@@ -872,7 +910,6 @@ export function startWatchdog() {
     if (watchdogStarted) return;
     watchdogStarted = true;
     
-    // Check VIX every 15 minutes
     const checkVix = async () => {
         try {
             const fetch = (await import('node-fetch')).default;
@@ -881,7 +918,7 @@ export function startWatchdog() {
             const data: any = await res.json();
             if (data.c && data.c > 30) {
                 console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
-                vixKillswitchUntil = Date.now() + 20 * 60 * 1000; // Fail-safe de 20 min
+                vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
             } else {
                 vixKillswitchUntil = 0;
             }
@@ -890,7 +927,7 @@ export function startWatchdog() {
         }
     };
     setInterval(checkVix, 15 * 60 * 1000);
-    checkVix(); // Initial check
+    checkVix(); 
 
     setInterval(() => {
         const now = Date.now();
@@ -899,6 +936,7 @@ export function startWatchdog() {
         for (const [id, trade] of activeTrades) {
             if (now - trade.timestamp > SEVEN_DAYS) {
                 activeTrades.delete(id);
+                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
                 console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
             }
         }
