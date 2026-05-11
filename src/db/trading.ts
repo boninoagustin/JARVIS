@@ -53,6 +53,7 @@ interface ImpulseLeg {
     dir: 'BUY' | 'SELL';
     origin: number;
     extreme: number;
+    createdAt: number;         // 🆕 Timestamp de creación (anti-pingpong)
     tp2?: number | null;       
     oteScored?: boolean;       
     isValidated?: boolean;     
@@ -92,7 +93,7 @@ const emptyState = (): RadarState => ({
     activeImpulseSell: null
 });
 
-const SETUP_MEMORY_WINDOW_MS = 14400000; // 4 Horas
+const SETUP_MEMORY_WINDOW_MS = 21600000; // 6 Horas (cubre London → NY completo)
 
 interface ActiveTrade {
     tradeId: string;
@@ -203,6 +204,15 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.50);
 
         if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored && leg.isValidated) {
+            // 🛡️ Filtro R:R mínimo 1.5:1 — no entrar en trades con ratio desfavorable
+            const riskDistance = Math.abs(currentPrice - leg.origin);
+            const rewardDistance = Math.abs(leg.extreme - currentPrice);
+            const rrRatio = riskDistance > 0 ? rewardDistance / riskDistance : 0;
+            if (rrRatio < 1.5) {
+                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R ${rrRatio.toFixed(2)} < 1.5 mínimo`);
+                return { updatedLeg: leg };
+            }
+
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
             const eventName = `🎯_OTE_Retracement_3M`;
             
@@ -226,6 +236,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     direction: leg.dir,
                     dirText: leg.dir === 'BUY' ? 'COMPRA' : 'VENTA',
                     stopLoss, tp1, tp2,
+                    entryPrice: currentPrice,
                     points: (leg.chochPoints || 0) + 4, 
                     events: [...(leg.chochEvents || []), eventName],
                     confluenceReport: leg.chochReport || '',
@@ -415,6 +426,10 @@ export async function processTradingAlert(alertText: string) {
                             // 🛡️ FILTRO ANTI-DUPLICADOS
                                 if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
+                                // 💾 Eliminar de RAM inmediatamente de forma síncrona
+                                activeTrades.delete(tradeId);
+                                if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+
                                 trade.tp2Hit = true;
                                 const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
                                 const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
@@ -432,10 +447,6 @@ export async function processTradingAlert(alertText: string) {
                                     }
                                 }
                                 recordResult(tradeId, 'WIN', parseFloat(pnlPct.toFixed(2))).catch(() => {});
-                                
-                                // 💾 Eliminar de RAM y Firebase al cerrar
-                                activeTrades.delete(tradeId);
-                                if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                                 if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
                                 else consecutiveLosses = 0;
@@ -462,6 +473,11 @@ export async function processTradingAlert(alertText: string) {
                         if (slHit) {
                         // 🛡️ FILTRO ANTI-DUPLICADOS
                             if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                            
+                            // 💾 Eliminar de RAM inmediatamente de forma síncrona para evitar race conditions
+                            activeTrades.delete(tradeId);
+                            if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+
                             const isBreakEven = trade.tp1Hit;
                             const pnlPct = isBreakEven ? 0 : Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
                             const finalResult = isBreakEven ? 'BE' : 'LOSS';
@@ -481,10 +497,6 @@ export async function processTradingAlert(alertText: string) {
                             }
                             
                             if (!isBreakEven) recordResult(tradeId, 'LOSS', parseFloat(pnlPct.toFixed(2))).catch(() => {});
-                            
-                            // 💾 Eliminar de RAM y Firebase al cerrar
-                            activeTrades.delete(tradeId);
-                            if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                             // Lógica de racha perdedora (ignorar si es Break Even)
                             if (!isBreakEven) {
@@ -636,6 +648,21 @@ export async function processTradingAlert(alertText: string) {
                             if (activeLeg) {
                                 const isInsideRange = actualPrice > Math.min(activeLeg.origin, activeLeg.extreme) && actualPrice < Math.max(activeLeg.origin, activeLeg.extreme);
                                 if (isInsideRange) shouldCreateNew = false;
+                                
+                                // 🛡️ Anti-Pingpong: No crear leg nuevo si el anterior tiene < 5 min
+                                const LEG_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutos
+                                if (activeLeg.createdAt && (nowMs - activeLeg.createdAt) < LEG_COOLDOWN_MS) {
+                                    shouldCreateNew = false;
+                                    console.log(`[FIBO] ⚠️ CHoCH ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 5 min)`);
+                                }
+                            }
+
+                            // 🛡️ Rango mínimo del impulso: |extreme - origin| debe superar 2x minRange
+                            const impulseRange = Math.abs(actualPrice - newOrigin);
+                            const minImpulseRange = actualPrice * 0.001; // 0.1% del precio
+                            if (impulseRange < minImpulseRange) {
+                                shouldCreateNew = false;
+                                console.log(`[FIBO] ⚠️ CHoCH ${currentDirection} en ${ticker}: rango ${impulseRange.toFixed(5)} < mínimo ${minImpulseRange.toFixed(5)}`);
                             }
                             
                             if (shouldCreateNew) {
@@ -647,6 +674,7 @@ export async function processTradingAlert(alertText: string) {
                                     dir: currentDirection as 'BUY' | 'SELL',
                                     origin: newOrigin,
                                     extreme: actualPrice,
+                                    createdAt: nowMs,
                                     tp2: macroTarget,
                                     oteScored: false
                                 };
@@ -737,6 +765,24 @@ export async function processTradingAlert(alertText: string) {
                 if (addedPoints > 0) {
                     activeScore.points += addedPoints;
                     activeScore.lastUpdate = nowMs;
+                    
+                    // 🔄 Re-validación tardía: si hay un leg pendiente sin confluencia de zona,
+                    // ahora que llegó un evento de zona, re-evaluar si ya se puede validar
+                    if (prefix !== 'EVENTO_CHOCH') {
+                        const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
+                        if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
+                            const hasZoneNow = activeScore.events.some(e => 
+                                e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
+                                e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
+                                e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
+                            );
+                            if (hasZoneNow) {
+                                pendingLeg.isValidated = true;
+                                pendingLeg.chochEvents = [...activeScore.events, 'CHoCH_3M'];
+                                console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO tardíamente con confluencia: ${addedPoints} pts de ${prefix}`);
+                            }
+                        }
+                    }
                 }
 
                 // --- CAPA 4: VALIDACIÓN DEL CHOCH ---
@@ -811,7 +857,20 @@ export async function processTradingAlert(alertText: string) {
                     if (totalPoints >= Math.max(minPtsRequired - 3, 5)) {
                         const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                         if (activeLeg) {
-                            activeLeg.isValidated = true;
+                            // 🛡️ Requiere al menos 1 evento de zona real (no solo CHoCH + macro)
+                            const hasZoneConfluence = activeScore.events.some(e => 
+                                e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
+                                e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
+                                e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
+                            );
+                            
+                            if (hasZoneConfluence) {
+                                activeLeg.isValidated = true;
+                            } else {
+                                console.log(`[RADAR] ⚠️ Leg ${currentDirection} en ${ticker} con ${totalPoints} pts pero SIN confluencia de zona. OTE en espera.`);
+                                activeLeg.isValidated = false;
+                            }
+                            
                             activeLeg.chochPoints = totalPoints;
                             activeLeg.chochEvents = [...activeScore.events, 'CHoCH_3M'];
                             activeLeg.chochReport = confluenceReport;
@@ -918,7 +977,7 @@ export async function processTradingAlert(alertText: string) {
                     timestamp: nowMs,
                     mode: isBacktest ? 'backtesting' : 'live',
                     sessionId,
-                    entryPrice: parseFloat(oteData.tp1) * (oteData.direction === 'BUY' ? 0.999 : 1.001), 
+                    entryPrice: oteData.entryPrice, 
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
