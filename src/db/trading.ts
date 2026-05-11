@@ -561,15 +561,14 @@ export async function processTradingAlert(alertText: string) {
                             activeScore.points += pts;
                             activeScore.lastUpdate = nowMs;
                             touchedThisPing.push({ zone, eventName, pts });
-                        }
-                        
-                        if (confluenceMultiplier > 1.0) {
-                            const tfTags = confluenceTFs.map(t => parseTF(t)).join('+');
-                            console.log(`[RADAR] 🧲 CONFLUENCIA ${confluenceMultiplier}x en ${ticker} ${zone.dir}: ${zTf} + (${tfTags}) = ${pts} pts`);
+                                               
+                            if (confluenceMultiplier > 1.0) {
+                                const tfTags = confluenceTFs.map(t => parseTF(t)).join('+');
+                                console.log(`[RADAR] 🧲 CONFLUENCIA ${confluenceMultiplier}x en ${ticker} ${zone.dir}: ${zTf} + (${tfTags}) = ${pts} pts`);
+                            }
                         }
                     }
-                }
-
+                }                   
                 for (const dir of ['BUY', 'SELL'] as const) {
                     const dirZones = touchedThisPing.filter(t => t.zone.dir === dir);
                     if (dirZones.length < 2) continue;
