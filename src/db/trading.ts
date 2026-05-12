@@ -808,27 +808,50 @@ export async function processTradingAlert(alertText: string) {
                     return;
                 }
 
-                // 🗺️ 2. DEFINICIÓN DE CONTEXTO Y MEMORIA ESPACIAL
+                // 🗺️ 2. ANÁLISIS ESPACIAL HOLÍSTICO (reemplaza hasHTFBacking secuencial)
+                // Busca respaldo en el MAPA de zonas, no en la mochila de eventos pasados.
                 const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                 const chOrigin = activeLeg ? activeLeg.origin : null;
-                const spatialBuffer = getBuffer(ticker, chOrigin || state.lastPrice || 0);
+                const chExtreme = activeLeg ? activeLeg.extreme : null;
+                const spatialBuffer = getBuffer(ticker, chOrigin ?? state.lastPrice ?? 0);
+                const chLow = chOrigin && chExtreme ? Math.min(chOrigin, chExtreme) : null;
+                const chHigh = chOrigin && chExtreme ? Math.max(chOrigin, chExtreme) : null;
 
-                // 🛡️ MEMORIA ESPACIAL: ¿El origen del CHoCH nació dentro de una zona Macro?
-                const isSpatiallyBacked = chOrigin ? state.zones.some(z => 
+                // CASO A: El ORIGEN del CHoCH nació DENTRO de una zona macro
+                const caseA_OriginInZone = chOrigin ? state.zones.some(z => 
                     z.dir === currentDirection && 
                     chOrigin <= (z.top + spatialBuffer) && 
                     chOrigin >= (z.btm - spatialBuffer)
                 ) : false;
 
-                const hasHTFBacking = isSpatiallyBacked || activeScore.events.some(e => 
+                // CASO B: El PRECIO de la vela CHoCH TOCÓ una zona macro en su recorrido
+                const caseB_PathTouchedZone = (chLow !== null && chHigh !== null) ? state.zones.some(z =>
+                    z.dir === currentDirection &&
+                    // La vela del CHoCH intersecta con la zona (overlap de rangos)
+                    chHigh >= (z.btm - spatialBuffer) && 
+                    chLow <= (z.top + spatialBuffer)
+                ) : false;
+
+                // CASO C: Zona contraria DENTRO del rango del CHoCH (trampa / liquidity grab)
+                const caseC_TrapZone = (chLow !== null && chHigh !== null) ? state.zones.filter(z =>
+                    z.dir !== currentDirection &&
+                    z.top >= chLow && z.btm <= chHigh
+                ).length : 0;
+
+                // El respaldo viene del mapa espacial Y/O de la mochila secuencial
+                const hasSpatialBacking = caseA_OriginInZone || caseB_PathTouchedZone;
+                const hasSequentialBacking = activeScore.events.some(e => 
                     e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
                     e.includes('ZoneTouched_') || e.includes('OTE_') ||
                     (e.includes('DIV_') && !e.includes('_3')) || 
                     (e.includes('Sweep_') && !e.includes('_3')) ||
                     (e.includes('TL_Sweep_') && !e.includes('_3'))
                 );
+                const hasHTFBacking = hasSpatialBacking || hasSequentialBacking;
                 
-                if (isSpatiallyBacked) console.log(`[RADAR] 🗺️ Confluencia Espacial: El origen del CHoCH (${chOrigin}) nació dentro de una zona Macro validada.`);
+                if (caseA_OriginInZone) console.log(`[RADAR] 🗺️ Caso A | Origen ${chOrigin} nació dentro de zona macro.`);
+                if (caseB_PathTouchedZone && !caseA_OriginInZone) console.log(`[RADAR] 🗺️ Caso B | Vela CHoCH (${chLow}-${chHigh}) tocó zona macro en su camino.`);
+                if (caseC_TrapZone > 0) console.log(`[RADAR] ⚠️ Caso C | ${caseC_TrapZone} zona(s) contraria(s) dentro del CHoCH → posible trampa.`);
                 
                 const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
                 const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
@@ -849,6 +872,9 @@ export async function processTradingAlert(alertText: string) {
                 orphanPenalty = !hasHTFBacking ? 5 : 0;
                 if (orphanPenalty > 0) totalPoints -= orphanPenalty;
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+                // Penalización por zona trampa (Caso C)
+                const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
+                if (trapPenalty > 0) totalPoints -= trapPenalty;
 
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
@@ -859,6 +885,10 @@ export async function processTradingAlert(alertText: string) {
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; 
                 confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
+                if (hasSpatialBacking && !hasSequentialBacking) confluenceReport += `🗺️ *Respaldo Espacial:* Detectado por mapa de zonas ✅\n`;
+                if (caseA_OriginInZone) confluenceReport += `   📍 Caso A: Origen dentro de zona macro\n`;
+                if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
+                if (caseC_TrapZone > 0) confluenceReport += `⚠️ *Alerta Trampa:* ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
                 if (orphanPenalty > 0) confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts\n`;
 
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
