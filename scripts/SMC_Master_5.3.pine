@@ -111,7 +111,7 @@ grp_str = "🔨 Estructura y Sweeps"
 showBos         = input.bool(true, "Mostrar BOS / CHoCH", group=grp_str)
 
 in_str_bars = input.int(10, "Sensibilidad BOS (Micro)", group=grp_str)
-str_bars    = preset_3m ? 5 : preset_15m ? 8 : preset_1h ? 10 : preset_4h ? 12 : in_str_bars 
+str_bars    = preset_3m ? 8 : preset_15m ? 8 : preset_1h ? 10 : preset_4h ? 12 : in_str_bars 
 
 require_body_break = input.bool(true, "CHoCH/BOS exige cierre con cuerpo (no solo wick)", group=grp_str)
 
@@ -234,7 +234,7 @@ f_ia_alert(id, sym, msg) =>
     else
         log.info(id + " | " + msg)
 
-// 🆕 v5.3: Alerta con frecuencia configurable
+// 🆕 v5.3: Alerta con frecuencia configurable (para PING usa freq_all)
 f_ia_alert_freq(id, sym, msg, freq) =>
     if barstate.isrealtime
         alert(id + " | " + sym + " | " + msg, freq)
@@ -1445,11 +1445,10 @@ if use_heartbeat and barstate.isconfirmed and hb_counter >= 20
     
     f_ia_alert("HEARTBEAT", syminfo.ticker, "TF: " + timeframe.period + " | Bias: " + (crt_bias > 0 ? "BUY" : crt_bias < 0 ? "SELL" : "NEUTRAL") + " | Zones: " + str.tostring(zone_count) + " | VWAP: " + vwap_status)
 
-// --- PING PRICE (Cada cierre de vela en 3M) ---
+// 🆕 v5.3: PING 1 vez por cierre de vela (Cuida la cuota de Firebase)
 if use_ping and barstate.isconfirmed
-    // 🆕 v5.3: PING incluye High/Low (mechas) para backtesting y SL
-    f_ia_alert_freq("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | TS: " + str.tostring(time), alert.freq_once_per_bar_close)
-
+    f_ia_alert("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | TS: " + str.tostring(time))
+    
 // --- SYNC ZONES (Mapa de zonas para Jarvis) ---
 var bool sync_has_divs = false
 if use_sync and barstate.isconfirmed and in_kz

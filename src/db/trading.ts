@@ -826,15 +826,10 @@ export async function processTradingAlert(alertText: string) {
                 let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; 
                 let orphanPenalty = 0;
 
-                // 🛡️ 3. EL VETO ABSOLUTO (KILLSWITCH ANTI-INFLACIÓN)
-                if (!hasHTFBacking && is15MAgainst) {
-                    totalPoints = 0; 
-                    console.log(`[VETO] CHoCH anulado en ${ticker}. Flotando sin respaldo HTF y contra 15M.`);
-                } else {
-                    orphanPenalty = !hasHTFBacking ? 3 : 0;
-                    if (orphanPenalty > 0) totalPoints -= orphanPenalty;
-                    if (is4HAgainst && is1HAgainst) totalPoints -= 3;
-                }
+                // 🛡️ 3. PENALIZACIÓN POR FALTA DE RESPALDO HTF (sin veto absoluto)
+                orphanPenalty = !hasHTFBacking ? 5 : 0;
+                if (orphanPenalty > 0) totalPoints -= orphanPenalty;
+                if (is4HAgainst && is1HAgainst) totalPoints -= 3;
 
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
