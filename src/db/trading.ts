@@ -817,20 +817,41 @@ export async function processTradingAlert(alertText: string) {
                 const chLow = chOrigin && chExtreme ? Math.min(chOrigin, chExtreme) : null;
                 const chHigh = chOrigin && chExtreme ? Math.max(chOrigin, chExtreme) : null;
 
-                // CASO A: El ORIGEN del CHoCH nació DENTRO de una zona macro
-                const caseA_OriginInZone = chOrigin ? state.zones.some(z => 
-                    z.dir === currentDirection && 
-                    chOrigin <= (z.top + spatialBuffer) && 
-                    chOrigin >= (z.btm - spatialBuffer)
-                ) : false;
+                // 🏋️ Pesos espaciales: TF más alto → más respaldo macro
+                const SPATIAL_WEIGHT: Record<string, number> = { '15': 1.0, '60': 1.5, '240': 2.0 };
 
-                // CASO B: El PRECIO de la vela CHoCH TOCÓ una zona macro en su recorrido
-                const caseB_PathTouchedZone = (chLow !== null && chHigh !== null) ? state.zones.some(z =>
-                    z.dir === currentDirection &&
-                    // La vela del CHoCH intersecta con la zona (overlap de rangos)
-                    chHigh >= (z.btm - spatialBuffer) && 
-                    chLow <= (z.top + spatialBuffer)
-                ) : false;
+                // CASO A: El ORIGEN del CHoCH nació DENTRO de una zona macro
+                let caseA_OriginInZone = false;
+                let caseA_MaxWeight = 0;
+                let caseA_BestTF = '';
+                if (chOrigin) {
+                    for (const z of state.zones) {
+                        if (z.dir !== currentDirection) continue;
+                        if (chOrigin <= (z.top + spatialBuffer) && chOrigin >= (z.btm - spatialBuffer)) {
+                            const w = SPATIAL_WEIGHT[z.tf || ''] || 1.0;
+                            if (w > caseA_MaxWeight) { caseA_MaxWeight = w; caseA_BestTF = z.tf || ''; }
+                            caseA_OriginInZone = true;
+                        }
+                    }
+                }
+
+                // CASO B: La VELA del CHoCH TOCÓ una zona macro en su recorrido
+                let caseB_PathTouchedZone = false;
+                let caseB_MaxWeight = 0;
+                let caseB_BestTF = '';
+                if (chLow !== null && chHigh !== null) {
+                    for (const z of state.zones) {
+                        if (z.dir !== currentDirection) continue;
+                        if (chHigh >= (z.btm - spatialBuffer) && chLow <= (z.top + spatialBuffer)) {
+                            const w = SPATIAL_WEIGHT[z.tf || ''] || 1.0;
+                            if (w > caseB_MaxWeight) { caseB_MaxWeight = w; caseB_BestTF = z.tf || ''; }
+                            caseB_PathTouchedZone = true;
+                        }
+                    }
+                }
+
+                const spatialMaxWeight = Math.max(caseA_MaxWeight, caseB_MaxWeight);
+                const spatialBonus = Math.round(spatialMaxWeight * 5);
 
                 // CASO C: Zona contraria DENTRO del rango del CHoCH (trampa / liquidity grab)
                 const caseC_TrapZone = (chLow !== null && chHigh !== null) ? state.zones.filter(z =>
@@ -868,9 +889,15 @@ export async function processTradingAlert(alertText: string) {
                 let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; 
                 let orphanPenalty = 0;
 
-                // 🛡️ 3. PENALIZACIÓN POR FALTA DE RESPALDO HTF (sin veto absoluto)
-                orphanPenalty = !hasHTFBacking ? 5 : 0;
-                if (orphanPenalty > 0) totalPoints -= orphanPenalty;
+                // 🛡️ 3. BONO ESPACIAL + PENALIZACIONES
+                // El bono espacial reemplaza la penalización cuando hay respaldo por mapa
+                if (hasSpatialBacking && spatialBonus > 0) {
+                    totalPoints += spatialBonus; // +5 a +10 pts según TF
+                    orphanPenalty = 0; // sin penalización porque el mapa respalda
+                } else {
+                    orphanPenalty = !hasHTFBacking ? 5 : 0;
+                    if (orphanPenalty > 0) totalPoints -= orphanPenalty;
+                }
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
                 // Penalización por zona trampa (Caso C)
                 const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
@@ -885,9 +912,12 @@ export async function processTradingAlert(alertText: string) {
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; 
                 confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
-                if (hasSpatialBacking && !hasSequentialBacking) confluenceReport += `🗺️ *Respaldo Espacial:* Detectado por mapa de zonas ✅\n`;
-                if (caseA_OriginInZone) confluenceReport += `   📍 Caso A: Origen dentro de zona macro\n`;
-                if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
+                if (hasSpatialBacking) {
+                    const tfLabel = spatialMaxWeight >= 2.0 ? '4H' : spatialMaxWeight >= 1.5 ? '1H' : '15M';
+                    confluenceReport += `🗺️ *Respaldo Espacial:* +${spatialBonus} pts (zona ${tfLabel}, peso ×${spatialMaxWeight})\n`;
+                    if (caseA_OriginInZone) confluenceReport += `   📍 Caso A: Origen dentro de zona macro\n`;
+                    if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
+                }
                 if (caseC_TrapZone > 0) confluenceReport += `⚠️ *Alerta Trampa:* ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
                 if (orphanPenalty > 0) confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts\n`;
 
