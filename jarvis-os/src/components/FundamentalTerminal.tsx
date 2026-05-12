@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, onSnapshot, setDoc, collection, query } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, query, collection } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Terminal, ShieldAlert, Newspaper, TrendingUp, BrainCircuit, Bitcoin, Briefcase, AlertTriangle, RefreshCw } from 'lucide-react';
 
@@ -26,7 +26,17 @@ interface Fundamentals {
   sentiment: Record<string, SentimentData>;
 }
 
+interface MacroIndicator {
+  label: string;
+  value: string;
+  status: string;
+  interpretation: string;
+}
+
+// ─── Config ───
+const AI_BRIDGE_URL = import.meta.env.VITE_AI_BRIDGE_URL || 'http://localhost:8001';
 const DEFAULT_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
+const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
 
 // ─── Skeleton Components ───
 const SkeletonBlock = ({ height = '20px', width = '100%' }: { height?: string; width?: string }) => (
@@ -39,8 +49,9 @@ export default function FundamentalTerminal() {
   const [tradedAssets, setTradedAssets] = useState<string[]>([]);
   const [loadingFundamentals, setLoadingFundamentals] = useState(true);
   const [errorFundamentals, setErrorFundamentals] = useState<string | null>(null);
-  const [macroData, setMacroData] = useState<any[]>([]);
+  const [macroData, setMacroData] = useState<MacroIndicator[]>([]);
   const [loadingMacro, setLoadingMacro] = useState(true);
+  const [macroError, setMacroError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubGlobal = onSnapshot(doc(db, 'app_settings', 'global'), (docSnap) => {
@@ -70,7 +81,7 @@ export default function FundamentalTerminal() {
       setTradedAssets(assets.sort());
     });
 
-    // Fetch macro data
+    // Fetch macro data from AI Bridge (real-time VIX, DXY, US10Y)
     fetchMacroData();
 
     return () => {
@@ -82,12 +93,43 @@ export default function FundamentalTerminal() {
 
   const fetchMacroData = async () => {
     setLoadingMacro(true);
+    setMacroError(null);
     try {
-      const { fetchMacroIndicators } = await import('../services/macro_data');
-      const data = await fetchMacroIndicators();
-      setMacroData(data);
+      // Fetch en paralelo: VIX, DXY, US10Y desde Finnhub directo
+      const [vixRes, dxyRes, us10yRes] = await Promise.all([
+        fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_KEY}`),
+        fetch(`https://finnhub.io/api/v1/quote?symbol=ICE_DX&token=${FINNHUB_KEY}`),
+        fetch(`https://finnhub.io/api/v1/quote?symbol=US10Y&token=${FINNHUB_KEY}`),
+      ]);
+
+      const vix = vixRes.ok ? (await vixRes.json())?.c : null;
+      const dxy = dxyRes.ok ? (await dxyRes.json())?.c : null;
+      const us10y = us10yRes.ok ? (await us10yRes.json())?.c : null;
+
+      const indicators: MacroIndicator[] = [
+        {
+          label: 'VIX (Volatilidad)',
+          value: vix ? vix.toFixed(2) : '—',
+          status: vix && vix > 30 ? 'status-sell' : vix && vix > 25 ? 'status-neutral' : 'status-buy',
+          interpretation: vix && vix > 30 ? 'TÓXICO 🚫' : vix && vix > 25 ? 'ALTO ⚠️' : 'Normal ✅',
+        },
+        {
+          label: 'DXY (US Dollar Index)',
+          value: dxy ? dxy.toFixed(2) : '—',
+          status: 'status-neutral',
+          interpretation: dxy ? (dxy > 105 ? 'USD Fuerte 🟢' : 'USD Débil 🔴') : '—',
+        },
+        {
+          label: 'US10Y (Bono 10 Años)',
+          value: us10y ? us10y.toFixed(3) + '%' : '—',
+          status: 'status-neutral',
+          interpretation: us10y ? (us10y > 4.5 ? 'Yields Altos 📈' : 'Yields Normales 📉') : '—',
+        },
+      ];
+
+      setMacroData(indicators);
     } catch {
-      // keep defaults
+      setMacroError('Error conectando con Finnhub');
     } finally {
       setLoadingMacro(false);
     }
@@ -107,10 +149,6 @@ export default function FundamentalTerminal() {
     if (status === 'status-buy') return { bg: 'rgba(0, 255, 0, 0.05)', border: 'rgba(0, 255, 0, 0.2)' };
     if (status === 'status-sell') return { bg: 'rgba(255, 51, 51, 0.05)', border: 'rgba(255, 51, 51, 0.2)' };
     return { bg: 'rgba(255, 170, 0, 0.05)', border: 'rgba(255, 170, 0, 0.2)' };
-  };
-
-  const statusMap: Record<string, string> = {
-    buy: 'status-buy', sell: 'status-sell', neutral: 'status-neutral', alert: 'status-alert'
   };
 
   const displayAssets = tradedAssets.length > 0 ? tradedAssets : DEFAULT_ASSETS;
@@ -185,8 +223,11 @@ export default function FundamentalTerminal() {
               <SkeletonBlock height="40px" />
               <SkeletonBlock height="40px" />
               <SkeletonBlock height="40px" />
-              <SkeletonBlock height="40px" />
-              <SkeletonBlock height="40px" />
+            </div>
+          ) : macroError ? (
+            <div style={{ textAlign: 'center', padding: '20px', color: 'var(--accent-red)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+              <AlertTriangle size={20} />
+              <span>{macroError}</span>
             </div>
           ) : (
           <table className="data-table">
@@ -203,19 +244,12 @@ export default function FundamentalTerminal() {
                   <td>{m.label}</td>
                   <td className="mono">{m.value}</td>
                   <td>
-                    <span className={`status ${statusMap[m.status] || 'status-neutral'}`} style={{ fontSize: '0.8rem' }}>
+                    <span className={`status ${m.status || 'status-neutral'}`} style={{ fontSize: '0.8rem' }}>
                       {m.interpretation}
                     </span>
                   </td>
                 </tr>
               ))}
-              {macroData.length === 0 && (
-                <tr>
-                  <td colSpan={3} style={{ textAlign: 'center', padding: '16px', color: 'var(--text-tertiary)' }}>
-                    Conectando con APIs de mercado...
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
           )}
