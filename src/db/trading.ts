@@ -1,8 +1,6 @@
 import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
-import { evaluateWithKronos } from '../services/kronos.js';
-import { evaluateWithMixture } from '../llm/mixture.js';
 import { logTrade, recordResult } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
@@ -184,9 +182,11 @@ const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includ
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 async function sendTelegramAlert(message: string) {
+    // 🛡️ Sanitizar: Telegram HTML solo necesita escapar < > &
+    const safe = message.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&(?!lt;|gt;|amp;)/g, '&amp;');
     for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
-        try { await bot.api.sendMessage(userId, message, { parse_mode: 'Markdown' }); } 
-        catch (err: any) { try { await bot.api.sendMessage(userId, message); } catch (e) { } }
+        try { await bot.api.sendMessage(userId, safe, { parse_mode: 'HTML' }); } 
+        catch (err: any) { try { await bot.api.sendMessage(userId, safe); } catch (e) { } }
     }
 }
 
@@ -415,7 +415,7 @@ export async function processTradingAlert(alertText: string) {
                                 }
                             }
                             
-                            const tp1Msg = `🟡 *TP1 ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
+                            const tp1Msg = `🟡 <b>TP1 ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` + 
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ✅\n` +
@@ -463,7 +463,7 @@ export async function processTradingAlert(alertText: string) {
                             if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
                             else consecutiveLosses = 0;
                             
-                            const tp2Msg = `🟢 *TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}*\n\n` +
+                            const tp2Msg = `🟢 <b>TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` + 
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
@@ -527,14 +527,14 @@ export async function processTradingAlert(alertText: string) {
                                         : '';
                         
                         const slMsg = isBreakEven 
-                            ? `🛡️ *BREAK EVEN ALCANZADO | ${ticker} | ${trade.direction}*\n\n` +
+                            ? `🛡️ <b>BREAK EVEN ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
                             `🕒 Apertura: ${openTimeStr}\n` + 
                             `📥 Entrada: ${trade.entryPrice}\n` +
                             `🎯 TP1 tocado: Sí (Parcial asegurado)\n` +
                             `🛑 SL: ${trade.slPrice} (Cerrado sin riesgo)\n` +
                             `📊 PnL: 0.00%\n` +
                             `⏱️ Duración: ${durationMin} min`
-                            : `🔴 *SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}*\n\n` +
+                            : `🔴 <b>SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}</b>\n\n` +
                             `🕒 Apertura: ${openTimeStr}\n` + 
                             `📥 Entrada: ${trade.entryPrice}\n` +
                             `🛑 SL: ${trade.slPrice} ❌\n` +
@@ -906,20 +906,20 @@ export async function processTradingAlert(alertText: string) {
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
 
-                let confluenceReport = `🗺️ *Contexto Macro:*\n`;
+                let confluenceReport = `🗺️ <b>Contexto Macro:</b>\n`;
                 confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; 
-                confluenceReport += `⚖️ *Bono de Alineación Macro:* +${baseBiasPoints} Pts\n`;
+                confluenceReport += `⚖️ <b>Bono de Alineación Macro:</b> +${baseBiasPoints} Pts\n`;
                 if (hasSpatialBacking) {
                     const tfLabel = spatialMaxWeight >= 2.0 ? '4H' : spatialMaxWeight >= 1.5 ? '1H' : '15M';
-                    confluenceReport += `🗺️ *Respaldo Espacial:* +${spatialBonus} pts (zona ${tfLabel}, peso ×${spatialMaxWeight})\n`;
+                    confluenceReport += `🗺️ <b>Respaldo Espacial:</b> +${spatialBonus} pts (zona ${tfLabel}, peso ×${spatialMaxWeight})\n`;
                     if (caseA_OriginInZone) confluenceReport += `   📍 Caso A: Origen dentro de zona macro\n`;
                     if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
                 }
-                if (caseC_TrapZone > 0) confluenceReport += `⚠️ *Alerta Trampa:* ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
-                if (orphanPenalty > 0) confluenceReport += `⚠️ *Penalización CHoCH Huérfano:* -${orphanPenalty} Pts\n`;
+                if (caseC_TrapZone > 0) confluenceReport += `⚠️ <b>Alerta Trampa:</b> ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
+                if (orphanPenalty > 0) confluenceReport += `⚠️ <b>Penalización CHoCH Huérfano:</b> -${orphanPenalty} Pts\n`;
 
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
                 let sessionThresholds: { buy: number; sell: number } | null = null;
@@ -1006,8 +1006,6 @@ export async function processTradingAlert(alertText: string) {
             if (!isDuplicate(fingerprint, nowMs)) {
                 
                 const isBacktest = tsMatch !== null;
-                let kronosResult = { isConfirmed: true, details: "Backtesting: IA omitida." };
-                let mixtureResult: any = null;
                 let sessionId: string | undefined;
 
                 if (isBacktest) {
@@ -1015,33 +1013,17 @@ export async function processTradingAlert(alertText: string) {
                     sessionId = getCurrentSessionId() || undefined;
                 }
 
-                if (!isBacktest) {
-                    const [kRes, mRes] = await Promise.all([
-                        evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL').catch((e: any) => ({
-                            trend: null as null, isConfirmed: false, details: `🔴 Kronos Error: ${e.message}`
-                        })),
-                        evaluateWithMixture(
-                            `Activo: ${ticker}\nPuntos: ${oteData.points}\nConfluencias: ${oteData.events?.join(', ')}\n${oteData.confluenceReport}`,
-                            oteData.direction as 'BUY' | 'SELL'
-                        ).catch(() => null)
-                    ]);
-                    kronosResult = kRes as any;
-                    mixtureResult = mRes;
-                }
-
-                let kronosAnnotation = isBacktest ? "" : (kronosResult as any).trend === null ? `\n\n🤖 *Kronos AI:* ${(kronosResult as any).details}` : `\n\n🤖 *Kronos AI:* ${(kronosResult as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kronosResult as any).details}`;
-
-                let msg = `${isBacktest ? "🧪 *BACKTESTING* | " : "🔥 "}*ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}*\n\n`;
+                let msg = `${isBacktest ? "🧪 <b>BACKTESTING</b> | " : "🔥 "}<b>ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}</b>\n\n`;
                 msg += oteData.confluenceReport;
-                msg += `🎯 *Puntaje Total:* ${oteData.points} Puntos\n`;
-                msg += `🧱 *Confluencias:* ${oteData.events?.join(', ')}\n\n`;
+                msg += `🎯 <b>Puntaje Total:</b> ${oteData.points} Puntos\n`;
+                msg += `🧱 <b>Confluencias:</b> ${oteData.events?.join(', ')}\n\n`;
 
                 let avisoRiesgo = oteData.points >= 8
                     ? `Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`
                     : `Setup de puntaje medio. Riesgo reducido (${dynamicBotConfig.baseRiskPercentage / 2}%).`;
 
-                msg += `🧠 *Jarvis:* Llegada a zona OTE confirmada. ${avisoRiesgo}\n\n`;
-                msg += `📐 *Niveles de Ejecución (GATILLO):*\n`;
+                msg += `🧠 <b>Jarvis:</b> Llegada a zona OTE confirmada. ${avisoRiesgo}\n\n`;
+                msg += `📐 <b>Niveles de Ejecución (GATILLO):</b>\n`;
                 msg += `🎯 Precio de Entrada: OTE Actual\n`;
                 msg += `🛑 Stop Loss Sugerido: ${oteData.stopLoss}\n`;
                 msg += `💰 Take Profit 1 (Interno): ${oteData.tp1}\n`;
@@ -1051,9 +1033,6 @@ export async function processTradingAlert(alertText: string) {
                     msg += `\n📍 Zona Estructural: ${oteData.bestZone.medal || 'OB'} ${oteData.bestZone.tf ? parseTF(oteData.bestZone.tf) : ''}`;
                 }
 
-                msg += kronosAnnotation;
-                if (mixtureResult) msg += `\n\n${mixtureResult.summary}`;
-
                 if (!isBacktest) {
                     await sendTelegramAlert(msg);
                 }
@@ -1062,8 +1041,8 @@ export async function processTradingAlert(alertText: string) {
                     ticker, direction: oteData.direction as 'BUY' | 'SELL',
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
-                    kronosVerdict: isBacktest ? 'SKIP_BT' : (kronosResult.isConfirmed ? 'CONFIRMED' : 'DIVERGENCE'),
-                    mixtureConsensus: mixtureResult?.consensus,
+                    kronosVerdict: 'IA_DISABLED',
+                    mixtureConsensus: 'IA_DISABLED',
                     timestamp: nowMs,
                     mode: isBacktest ? 'backtesting' : 'live',
                     sessionId,
@@ -1131,7 +1110,7 @@ export function startWatchdog() {
                 if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
                 
                 const durationMin = Math.round(age / 60000);
-                const timeoutMsg = `⏰ *TRADE CERRADO POR TIMEOUT | ${trade.ticker} | ${trade.direction}*\n\n` +
+                const timeoutMsg = `⏰ <b>TRADE CERRADO POR TIMEOUT | ${trade.ticker} | ${trade.direction}</b>\n\n` +
                     `🕒 Apertura: ${new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })}\n` +
                     `📥 Entrada: ${trade.entryPrice}\n` +
                     `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +

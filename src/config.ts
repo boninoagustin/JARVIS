@@ -19,7 +19,7 @@ export const config = {
   GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
   GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
-
+  FIRESTORE_PROJECT_ID: process.env.FIRESTORE_PROJECT_ID || 'jarvis-ef6b0',
 };
 
 // Security Validations
@@ -29,8 +29,4 @@ if (!config.TELEGRAM_BOT_TOKEN) {
 
 if (config.TELEGRAM_ALLOWED_USER_IDS.length === 0) {
   throw new Error('CRITICAL: TELEGRAM_ALLOWED_USER_IDS is missing or invalid in .env');
-}
-
-if (!config.GEMINI_API_KEY && !config.GROQ_API_KEY && !config.OPENROUTER_API_KEY) {
-    console.warn('WARNING: No LLM API keys found. The agent will not be able to think.');
 }
