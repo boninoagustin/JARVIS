@@ -808,8 +808,27 @@ export async function processTradingAlert(alertText: string) {
                     return;
                 }
 
-                // 🗺️ 2. DEFINICIÓN DE CONTEXTO
-                const hasHTFBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('ZoneTouched_') ||e.includes('OTE_') ||(e.includes('DIV_') && !e.includes('_3')) || (e.includes('Sweep_') && !e.includes('_3')) ||(e.includes('TL_Sweep_') && !e.includes('_3')));
+                // 🗺️ 2. DEFINICIÓN DE CONTEXTO Y MEMORIA ESPACIAL
+                const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
+                const chOrigin = activeLeg ? activeLeg.origin : null;
+                const spatialBuffer = getBuffer(ticker, chOrigin || state.lastPrice || 0);
+
+                // 🛡️ MEMORIA ESPACIAL: ¿El origen del CHoCH nació dentro de una zona Macro?
+                const isSpatiallyBacked = chOrigin ? state.zones.some(z => 
+                    z.dir === currentDirection && 
+                    chOrigin <= (z.top + spatialBuffer) && 
+                    chOrigin >= (z.btm - spatialBuffer)
+                ) : false;
+
+                const hasHTFBacking = isSpatiallyBacked || activeScore.events.some(e => 
+                    e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
+                    e.includes('ZoneTouched_') || e.includes('OTE_') ||
+                    (e.includes('DIV_') && !e.includes('_3')) || 
+                    (e.includes('Sweep_') && !e.includes('_3')) ||
+                    (e.includes('TL_Sweep_') && !e.includes('_3'))
+                );
+                
+                if (isSpatiallyBacked) console.log(`[RADAR] 🗺️ Confluencia Espacial: El origen del CHoCH (${chOrigin}) nació dentro de una zona Macro validada.`);
                 
                 const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
                 const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
