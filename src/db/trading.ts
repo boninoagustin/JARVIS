@@ -1006,11 +1006,23 @@ export async function processTradingAlert(alertText: string) {
             if (!isDuplicate(fingerprint, nowMs)) {
                 
                 const isBacktest = tsMatch !== null;
+                let kronosAnnotation = '';
+                let kronosVerdict: string = 'SKIP';
                 let sessionId: string | undefined;
 
                 if (isBacktest) {
                     const { getCurrentSessionId } = await import('../services/backtesting.js');
                     sessionId = getCurrentSessionId() || undefined;
+                } else {
+                    // Kronos AI local (LSTM, sin quota externa)
+                    try {
+                        const { evaluateWithKronos } = await import('../services/kronos.js');
+                        const kRes = await evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL');
+                        kronosVerdict = (kRes as any).isConfirmed ? 'CONFIRMED' : 'DIVERGENCE';
+                        kronosAnnotation = (kRes as any).trend === null 
+                            ? `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).details}`
+                            : `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kRes as any).details}`;
+                    } catch { kronosVerdict = 'ERROR'; }
                 }
 
                 let msg = `${isBacktest ? "🧪 <b>BACKTESTING</b> | " : "🔥 "}<b>ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}</b>\n\n`;
@@ -1033,6 +1045,8 @@ export async function processTradingAlert(alertText: string) {
                     msg += `\n📍 Zona Estructural: ${oteData.bestZone.medal || 'OB'} ${oteData.bestZone.tf ? parseTF(oteData.bestZone.tf) : ''}`;
                 }
 
+                msg += kronosAnnotation;
+
                 if (!isBacktest) {
                     await sendTelegramAlert(msg);
                 }
@@ -1041,7 +1055,7 @@ export async function processTradingAlert(alertText: string) {
                     ticker, direction: oteData.direction as 'BUY' | 'SELL',
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
-                    kronosVerdict: 'IA_DISABLED',
+                    kronosVerdict: isBacktest ? 'SKIP_BT' : kronosVerdict,
                     mixtureConsensus: 'IA_DISABLED',
                     timestamp: nowMs,
                     mode: isBacktest ? 'backtesting' : 'live',
