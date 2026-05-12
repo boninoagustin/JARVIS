@@ -27,7 +27,7 @@ export interface TradeRecord {
     mixtureConsensus?: string;
     timestamp: number;
     date: string;              // YYYY-MM-DD for daily grouping
-    result?: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'PARTIAL_TP1';
+    result?: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'PARTIAL_TP1' | 'TIMEOUT';
     pnl?: number;
     durationMin?: number;       // 🆕 Duración del trade en minutos (entrada → cierre)
     mode?: 'live' | 'backtesting'; // 🆕 Modo de ejecución (default: live)
@@ -102,7 +102,7 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
  */
 export async function recordResult(
     tradeId: string,
-    result: 'WIN' | 'LOSS' | 'BREAKEVEN',
+    result: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'TIMEOUT',
     pnl?: number
 ): Promise<boolean> {
     if (!db) return false;

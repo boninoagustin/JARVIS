@@ -1039,9 +1039,39 @@ export function startWatchdog() {
     setInterval(() => {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+        const TRADE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 horas sin PINGs = cierre automático
         
         for (const [id, trade] of activeTrades) {
-            if (now - trade.timestamp > SEVEN_DAYS) {
+            const age = now - trade.timestamp;
+            const lastSeen = tickerLastSeen.get(trade.ticker) || 0;
+            const inactivity = now - lastSeen;
+            
+            // Cierre por timeout: 6 horas sin actividad
+            if (inactivity > TRADE_TIMEOUT_MS) {
+                activeTrades.delete(id);
+                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
+                
+                const durationMin = Math.round(age / 60000);
+                const timeoutMsg = `⏰ *TRADE CERRADO POR TIMEOUT | ${trade.ticker} | ${trade.direction}*\n\n` +
+                    `🕒 Apertura: ${new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })}\n` +
+                    `📥 Entrada: ${trade.entryPrice}\n` +
+                    `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
+                    `🛑 SL: ${trade.slPrice}\n` +
+                    `📊 Resultado: Indeterminado (sin datos de precio)\n` +
+                    `⏱️ Duración total: ${durationMin} min\n\n` +
+                    `⚠️ TradingView dejó de enviar alertas para ${trade.ticker}. Trade cerrado automáticamente.`;
+                sendTelegramAlert(timeoutMsg).catch(() => {});
+                console.log(`[JOURNAL] ⏰ Trade ${id} (${trade.ticker}) cerrado por timeout tras ${Math.round(inactivity / 60000)} min sin PINGs.`);
+                
+                // Registrar en journal como TIMEOUT
+                if (trade.journalId) {
+                    recordResult(trade.journalId, 'TIMEOUT').catch(() => {});
+                }
+                continue;
+            }
+            
+            // Limpieza de trades huérfanos (7 días)
+            if (age > SEVEN_DAYS) {
                 activeTrades.delete(id);
                 if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
                 console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
