@@ -234,7 +234,7 @@ f_ia_alert(id, sym, msg) =>
     else
         log.info(id + " | " + msg)
 
-// 🆕 v5.3: Alerta con frecuencia configurable (para PING usa freq_all)
+// 🆕 v5.3: Alerta con frecuencia configurable
 f_ia_alert_freq(id, sym, msg, freq) =>
     if barstate.isrealtime
         alert(id + " | " + sym + " | " + msg, freq)
@@ -1448,7 +1448,7 @@ if use_heartbeat and barstate.isconfirmed and hb_counter >= 20
 // --- PING PRICE (Cada cierre de vela en 3M) ---
 if use_ping and barstate.isconfirmed
     // 🆕 v5.3: PING incluye High/Low (mechas) para backtesting y SL
-    f_ia_alert_freq("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | TS: " + str.tostring(time), alert.freq_all)
+    f_ia_alert_freq("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | TS: " + str.tostring(time), alert.freq_once_per_bar_close)
 
 // --- SYNC ZONES (Mapa de zonas para Jarvis) ---
 var bool sync_has_divs = false
