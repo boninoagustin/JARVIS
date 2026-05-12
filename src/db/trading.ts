@@ -1008,6 +1008,8 @@ export async function processTradingAlert(alertText: string) {
                 const isBacktest = tsMatch !== null;
                 let kronosAnnotation = '';
                 let kronosVerdict: string = 'SKIP';
+                let swarmAnnotation = '';
+                let swarmConsensus: string = 'SKIP';
                 let sessionId: string | undefined;
 
                 if (isBacktest) {
@@ -1023,6 +1025,47 @@ export async function processTradingAlert(alertText: string) {
                             ? `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).details}`
                             : `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kRes as any).details}`;
                     } catch { kronosVerdict = 'ERROR'; }
+
+                    // 🐝 Enjambre de IA (DeepSeek: Técnico + Fundamental + Riesgo → Juez)
+                    try {
+                        const fetch = (await import('node-fetch')).default;
+                        const swarmRes = await fetch('http://127.0.0.1:8001/api/analyze-trade', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                ticker,
+                                direction: oteData.direction,
+                                entryPrice: oteData.entryPrice,
+                                stopLoss: parseFloat(oteData.stopLoss),
+                                tp1Price: parseFloat(oteData.tp1),
+                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                points: oteData.points,
+                                events: oteData.events || [],
+                                confluenceReport: oteData.confluenceReport || '',
+                                marketBias: oteData.marketBias || {},
+                                consecutiveLosses,
+                                winRate: 0
+                            }),
+                            signal: AbortSignal.timeout(15000)
+                        });
+                        if (swarmRes.ok) {
+                            const swarm = await swarmRes.json() as any;
+                            swarmConsensus = swarm.decision === 'EJECUTAR' ? 'APPROVED' : 'REJECTED';
+                            const voteCount = swarm.votes?.filter((v: any) => v.decision === 'APROBADO').length || 0;
+                            const totalVotes = swarm.votes?.length || 0;
+                            swarmAnnotation = `\n\n🗳️ <b>Votación Multi-IA (DeepSeek):</b> ${swarmConsensus === 'APPROVED' ? '🟢 APROBADO' : '🔴 RECHAZADO'} (${voteCount}/${totalVotes})\n`;
+                            if (swarm.votes) {
+                                for (const v of swarm.votes) {
+                                    const icon = v.decision === 'APROBADO' ? '✅' : '❌';
+                                    swarmAnnotation += `${icon} <b>${v.agent}:</b> ${v.decision === 'APROBADO' ? 'APPROVE' : 'REJECT'} — ${v.reason.split('\n')[0].substring(0, 120)}\n`;
+                                }
+                            }
+                            swarmAnnotation += `⚖️ <b>Juez:</b> ${swarm.summary || 'Sin resumen'}`;
+                        }
+                    } catch (swarmErr: any) {
+                        swarmConsensus = 'ERROR';
+                        console.log(`[SWARM] AI Bridge no disponible: ${swarmErr.message}`);
+                    }
                 }
 
                 let msg = `${isBacktest ? "🧪 <b>BACKTESTING</b> | " : "🔥 "}<b>ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}</b>\n\n`;
@@ -1046,6 +1089,7 @@ export async function processTradingAlert(alertText: string) {
                 }
 
                 msg += kronosAnnotation;
+                msg += swarmAnnotation;
 
                 if (!isBacktest) {
                     await sendTelegramAlert(msg);
@@ -1056,7 +1100,7 @@ export async function processTradingAlert(alertText: string) {
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
                     kronosVerdict: isBacktest ? 'SKIP_BT' : kronosVerdict,
-                    mixtureConsensus: 'IA_DISABLED',
+                    mixtureConsensus: swarmConsensus,
                     timestamp: nowMs,
                     mode: isBacktest ? 'backtesting' : 'live',
                     sessionId,

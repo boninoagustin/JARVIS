@@ -1,0 +1,39 @@
+# JARVIS AI Bridge — Docker Compose
+# Levanta el microservicio Python con FastAPI + DeepSeek + OpenBB
+#
+# Uso:
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose down
+
+version: "3.9"
+
+services:
+  ai_bridge:
+    build:
+      context: ./ai_bridge
+      dockerfile: Dockerfile
+    container_name: jarvis-ai-bridge
+    ports:
+      - "8001:8001"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    restart: unless-stopped
+    networks:
+      - jarvis_net
+
+  # Opcional: Kronos API (si querés unificar ambos en Docker)
+  # kronos:
+  #   build:
+  #     context: ./kronos_api
+  #     dockerfile: Dockerfile
+  #   container_name: jarvis-kronos
+  #   ports:
+  #     - "8000:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - jarvis_net
+
+networks:
+  jarvis_net:
+    driver: bridge
