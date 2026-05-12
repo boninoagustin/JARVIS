@@ -34,7 +34,6 @@ interface MacroIndicator {
 }
 
 // ─── Config ───
-const AI_BRIDGE_URL = import.meta.env.VITE_AI_BRIDGE_URL || 'http://localhost:8001';
 const DEFAULT_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
 const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
 
