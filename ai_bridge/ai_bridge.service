@@ -1,0 +1,19 @@
+[Unit]
+Description=JARVIS AI Bridge — DeepSeek Multi-Agent Swarm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agustinbonino
+WorkingDirectory=/home/agustinbonino/Descargas/JARVIS/ai_bridge
+Environment=PATH=/home/agustinbonino/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DEEPSEEK_API_KEY=sk-af1a4afec21a48449ad4dd77fa12fa27
+ExecStart=/home/agustinbonino/Descargas/JARVIS/ai_bridge/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
