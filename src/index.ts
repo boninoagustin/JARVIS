@@ -165,6 +165,31 @@ async function main() {
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }
+
+    // 🏥 Healthcheck HTTP endpoint (monitoreo local y UptimeRobot)
+    import('http').then(({ createServer }) => {
+        createServer((_req, res) => {
+            const now = Date.now();
+            const status = {
+                online: true,
+                uptime: Math.round(process.uptime()),
+                activeTrades: 0, // se actualiza abajo
+                lastPing: 0,
+                killswitches: { streak: streakKillswitchUntil > 0, vix: vixKillswitchUntil > 0 },
+                consecutiveLosses,
+            };
+            // Import dinámico para leer estado desde trading module
+            import('./db/trading.js').then(tm => {
+                status.activeTrades = (tm as any).getActiveTradeCount?.() ?? 0;
+                status.lastPing = (tm as any).getLastPingTime?.() ?? 0;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(status));
+            }).catch(() => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(status));
+            });
+        }).listen(3691, () => console.log('[HEALTH] HTTP server on port 3691'));
+    });
 }
 
 main();

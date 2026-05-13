@@ -113,6 +113,11 @@ const activeTrades = new Map<string, ActiveTrade>();
 const localRadarStates = new Map<string, RadarState>();
 const lastFirebaseSave = new Map<string, number>();
 
+// 🏥 Export para healthcheck
+let lastPingTime = 0;
+export const getActiveTradeCount = () => activeTrades.size;
+export const getLastPingTime = () => lastPingTime;
+
 let consecutiveLosses = 0; 
 let streakKillswitchUntil = 0;
 let vixKillswitchUntil = 0;
@@ -360,7 +365,10 @@ export async function processTradingAlert(alertText: string) {
             const syncKey = `${ticker}_${sourceTf}`;
             const lastSync = lastSyncTime.get(syncKey) || 0;
             const throttleMs = SYNC_THROTTLE_MS[sourceTf] || 60000;
-            if (nowMs - lastSync < throttleMs) return;
+            if (nowMs - lastSync < throttleMs) {
+                console.log(`[SYNC] ⏭️ SYNC_ZONES throttled para ${ticker} ${sourceTf} (último: hace ${Math.round((nowMs - lastSync)/1000)}s, límite: ${throttleMs/1000}s)`);
+                return;
+            }
             lastSyncTime.set(syncKey, nowMs);
             
             const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
@@ -401,6 +409,7 @@ export async function processTradingAlert(alertText: string) {
             const hasPreviousPrice = previousPrice !== null;
             // Actualizar después de guardar la referencia
             state.lastPrice = currentPrice;
+            lastPingTime = nowMs; // 🏥 Healthcheck
             // Guardar también el precio previo para referencia en el siguiente tick
             (state as any).previousPrice = previousPrice;
 
