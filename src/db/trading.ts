@@ -118,7 +118,7 @@ let streakKillswitchUntil = 0;
 let vixKillswitchUntil = 0;
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 150000,     // 🔧 2.5 min (antes 5 min) — alineado a vela 3M, evita perder setups consecutivos
+    sniperCooldownMs: 90000,      // 🔧 1.5 min (antes 2.5 min) — vela 3M cierra cada 3 min, 90s permite capturar setups sin esperar vela completa
     minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
     minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
     baseRiskPercentage: 1.0
@@ -371,6 +371,11 @@ export async function processTradingAlert(alertText: string) {
                 const rawZones = JSON.parse(payloadStr) as any[];
                 const parsedZones: RadarZone[] = rawZones.map(normalizeZone).filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
                 parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
+                // 🔍 Log de TP/SL si están disponibles para diagnóstico
+                const zonesWithTPSL = parsedZones.filter(z => z.tp !== undefined || z.sl !== undefined);
+                if (zonesWithTPSL.length > 0) {
+                    console.log(`[SYNC_ZONES] ${ticker} ${sourceTf}: ${zonesWithTPSL.length}/${parsedZones.length} zonas con TP/SL explícito`);
+                }
 
                 if (state.lastSyncDate !== todayStr) {
                     state.zones = [];
@@ -399,13 +404,18 @@ export async function processTradingAlert(alertText: string) {
             // Guardar también el precio previo para referencia en el siguiente tick
             (state as any).previousPrice = previousPrice;
 
-            const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
-            state.activeImpulseBuy = buyRes.updatedLeg;
-            if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; }
+            // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
+            const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil;
+            
+            if (!isKillswitched) {
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                state.activeImpulseBuy = buyRes.updatedLeg;
+                if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; }
 
-            const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
-            state.activeImpulseSell = sellRes.updatedLeg;
-            if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; }
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                state.activeImpulseSell = sellRes.updatedLeg;
+                if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; }
+            }
 
             // =========================================================
             // GESTIÓN DE TRADES ACTIVOS (TP Y SL)
@@ -1057,11 +1067,13 @@ export async function processTradingAlert(alertText: string) {
         // =========================================================================
         if (triggerOte && oteData) {
             if (nowMs < streakKillswitchUntil) {
-                console.log(`[KILLSWITCH] Setup ignorado por racha perdedora.`);
+                const remainingMin = Math.round((streakKillswitchUntil - nowMs) / 60000);
+                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
                 return;
             }
             if (nowMs < vixKillswitchUntil) {
-                console.log(`[KILLSWITCH] Setup ignorado por alta volatilidad (VIX > 30).`);
+                const remainingMin = Math.round((vixKillswitchUntil - nowMs) / 60000);
+                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
                 return;
             }
 
@@ -1155,8 +1167,8 @@ export async function processTradingAlert(alertText: string) {
                     const zTf = z.tf ? parseTF(z.tf) : '';
                     const zMedal = z.medal || 'OB';
                     const zScore = z.score !== undefined ? ` (Score: ${z.score}/10)` : '';
-                    const zTP = z.tp !== undefined ? ` | TP: ${z.tp}` : '';
-                    const zSL = z.sl !== undefined ? ` | SL: ${z.sl}` : '';
+                    const zTP = z.tp != null ? ` | 🎯 TP: ${z.tp}` : '';
+                    const zSL = z.sl != null ? ` | 🛑 SL: ${z.sl}` : '';
                     msg += `\n📍 <b>Zona Estructural:</b> ${zMedal} ${zTf}${zScore}${zTP}${zSL}`;
                     if (z.top && z.btm) msg += `\n   Rango: ${z.btm} → ${z.top}`;
                 }
