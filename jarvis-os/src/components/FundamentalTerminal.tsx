@@ -370,30 +370,47 @@ export default function FundamentalTerminal() {
       {/* ROW 4: Síntesis */}
       <div className="panel" style={{ marginTop: 'var(--spacing-lg)' }}>
         <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-          <BrainCircuit size={18} color="var(--accent-blue)" /> SÍNTESIS DIRECCIONAL POR ACTIVO
+          <BrainCircuit size={18} color="var(--accent-blue)" /> SÍNTESIS DIRECCIONAL POR ACTIVO (DATOS REALES)
         </h3>
         <div className="grid-2">
           {displayAssets.map(asset => {
+            const vix = macroData[0]?.value;
+            const dxy = macroData[1]?.value;
+            const us10y = macroData[2]?.value;
+            const vixNum = parseFloat(vix);
+            const dxyNum = parseFloat(dxy);
+            const us10yNum = parseFloat(us10y);
+            
             let action = 'NEUTRAL', color = 'var(--text-tertiary)';
             let bgColor = 'rgba(255, 255, 255, 0.02)', border = '1px solid var(--border-color)';
-            let reasoning = 'Esperando confluencia de datos...';
+            let reasoning = 'Esperando datos macro...';
 
-            if (asset === 'BTCUSD') {
-              action = 'LONG PENDIENTE'; color = 'var(--accent-green)';
-              bgColor = 'rgba(0, 255, 0, 0.05)'; border = '1px solid rgba(0, 255, 0, 0.2)';
-              reasoning = 'Macro: Risk On. On-Chain: Salida neta de exchanges alcista. Sentimiento IA: Fuerte.';
-            } else if (asset === 'US100') {
-              action = 'PRECAUCIÓN'; color = 'var(--accent-gold)';
+            if (isNaN(vixNum)) {
+              reasoning = 'Cargando indicadores macro...';
+            } else if (vixNum > 30) {
+              action = 'PRECAUCIÓN'; color = 'var(--accent-red)';
+              bgColor = 'rgba(255, 51, 51, 0.05)'; border = '1px solid rgba(255, 51, 51, 0.2)';
+              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad tóxica. No operar o reducir tamaño.`;
+            } else if (vixNum > 25) {
+              action = 'RIESGO ALTO'; color = 'var(--accent-gold)';
               bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
-              reasoning = 'Macro: Yields altos presionan. Calendario: Earnings próximos (NVDA). Sentimiento: Mixto.';
-            } else if (asset === 'EURUSD') {
+              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad elevada. Usar riesgo reducido (0.5%).`;
+            } else if (asset === 'EURUSD' && !isNaN(dxyNum) && dxyNum > 105) {
               action = 'SHORT FAVORECIDO'; color = 'var(--accent-red)';
               bgColor = 'rgba(255, 51, 51, 0.05)'; border = '1px solid rgba(255, 51, 51, 0.2)';
-              reasoning = 'Macro: DXY fuerte presiona. Calendario: NFP viernes. Sentimiento: Débil.';
-            } else if (asset === 'XAUUSD') {
-              action = 'RANGO VOLÁTIL'; color = 'var(--accent-gold)';
+              reasoning = `DXY ${dxyNum.toFixed(1)}: USD fuerte presiona al par. VIX ${vixNum.toFixed(1)}: normal.`;
+            } else if (asset === 'US100' && !isNaN(us10yNum) && us10yNum > 4.5) {
+              action = 'PRESIÓN BAJISTA'; color = 'var(--accent-gold)';
               bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
-              reasoning = 'Yields altos vs Riesgo geopolítico. Neutralizados. Operar extremos.';
+              reasoning = `US10Y ${us10yNum.toFixed(2)}%: yields altos presionan tech. VIX ${vixNum.toFixed(1)}.`;
+            } else if (asset === 'XAUUSD' && !isNaN(dxyNum) && dxyNum > 105 && !isNaN(us10yNum) && us10yNum > 4.5) {
+              action = 'RANGO BAJISTA'; color = 'var(--accent-gold)';
+              bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
+              reasoning = `DXY fuerte + yields altos = presión bajista en oro. VIX ${vixNum.toFixed(1)}.`;
+            } else {
+              action = 'ENTORNO FAVORABLE'; color = 'var(--accent-green)';
+              bgColor = 'rgba(0, 255, 0, 0.05)'; border = '1px solid rgba(0, 255, 0, 0.2)';
+              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad normal. Condiciones aptas para operar.`;
             }
 
             return (
