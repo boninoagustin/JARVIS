@@ -118,9 +118,9 @@ let streakKillswitchUntil = 0;
 let vixKillswitchUntil = 0;
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 120000,     
-    minPointsForBuy: 5,           
-    minPointsForSell: 5,          
+    sniperCooldownMs: 150000,     // 🔧 2.5 min (antes 5 min) — alineado a vela 3M, evita perder setups consecutivos
+    minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
+    minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
     baseRiskPercentage: 1.0
 };
 
@@ -193,6 +193,32 @@ async function sendTelegramAlert(message: string) {
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
+
+    // 🔧 FIX 1: Stale leg cleaner — legs de más de 4 horas se invalidan automáticamente
+    const MAX_LEG_AGE_MS = 4 * 60 * 60 * 1000;
+    if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
+        console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 240 min).`);
+        return { updatedLeg: null };
+    }
+
+    // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y tiene ≥9pts, el leg se anula
+    const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+    const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
+    if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= 9 && (nowMs - oppositeScore.lastUpdate) < 900000) {
+        console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+        return { updatedLeg: null };
+    }
+
+    // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
+    const range = Math.abs(leg.extreme - leg.origin);
+    const atrEstimate = range * 0.3;
+    const priceBeyondExtreme = leg.dir === 'BUY' 
+        ? (currentPrice > leg.extreme + atrEstimate) 
+        : (currentPrice < leg.extreme - atrEstimate);
+    if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
+        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
+        return { updatedLeg: null };
+    }
 
     if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
     else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
@@ -365,9 +391,13 @@ export async function processTradingAlert(alertText: string) {
             const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
             const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
 
+            // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice; 
-            state.lastPrice = currentPrice;
             const hasPreviousPrice = previousPrice !== null;
+            // Actualizar después de guardar la referencia
+            state.lastPrice = currentPrice;
+            // Guardar también el precio previo para referencia en el siguiente tick
+            (state as any).previousPrice = previousPrice;
 
             const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
             state.activeImpulseBuy = buyRes.updatedLeg;
@@ -713,6 +743,13 @@ export async function processTradingAlert(alertText: string) {
                     return true;
                 });
                 if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
+                // 🔧 FIX: Limpiar también las zonas rotas del mapa de zonas en RAM
+                state.zones = state.zones.filter(z => {
+                    if (z.tf !== eventTf) return true;
+                    if (currentDirection === 'BUY' && z.dir === 'SELL') return true; // zona SELL rota por presión BUY
+                    if (currentDirection === 'SELL' && z.dir === 'BUY') return true; // zona BUY rota por presión SELL
+                    return false; // misma dirección = zona rota, eliminarla
+                });
                 return;
             }
 
@@ -757,6 +794,29 @@ export async function processTradingAlert(alertText: string) {
             }
             else if (prefix === 'EVENTO_SMC_DIV') {
                 if (!activeScore.events.includes(`DIV_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`DIV_${readableTf}`); }
+            }
+            else if (prefix === 'EVENTO_BOS') {
+                // BOS sin CHoCH — solo actualiza bias, puntos bajos (no crea impulse leg)
+                state.marketBias[eventTf] = currentDirection;
+                addedPoints = 1; 
+            }
+            else if (prefix === 'HEARTBEAT') {
+                // Watchdog: solo actualiza lastHeartbeat, no suma puntos
+                state.lastHeartbeat = nowMs;
+                // Extraer conteo de zonas para diagnóstico
+                const zonesMatch = alertText.match(/Zones:\s*(\d+)/i);
+                const biasMatch = alertText.match(/Bias:\s*(BUY|SELL|NEUTRAL)/i);
+                if (zonesMatch) console.log(`[HEARTBEAT] ${ticker} ${eventTf}: ${zonesMatch[1]} zonas activas, bias ${biasMatch?.[1] || '?'}`);
+            }
+            else if (prefix === 'ZONE_TOUCHED') {
+                // Alerta específica de toque de zona — más precisa que PING_PRICE
+                const zoneMedal = alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i)?.[1] || 'OB';
+                const zoneScore = parseInt(alertText.match(/Score:\s*([0-9]+)/i)?.[1] || '2');
+                const eventName = `🎯_ZoneTouched_${zoneMedal}_${readableTf}`;
+                if (!activeScore.events.includes(eventName)) {
+                    addedPoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
+                    activeScore.events.push(eventName);
+                }
             }
             else if (prefix === 'EVENTO_SWEEP_TL') {
                 if (!activeScore.events.includes(`📉_TL_Sweep_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`📉_TL_Sweep_${readableTf}`); }
@@ -895,7 +955,9 @@ export async function processTradingAlert(alertText: string) {
                     totalPoints += spatialBonus; // +5 a +10 pts según TF
                     orphanPenalty = 0; // sin penalización porque el mapa respalda
                 } else {
-                    orphanPenalty = !hasHTFBacking ? 5 : 0;
+                    // 🔧 FIX: Penalización reducida de -5 a -3. Si no hay zonas en memoria (recién iniciado),
+                    // el CHoCH puede pasar igual si acumuló suficientes puntos por otras vías.
+                    orphanPenalty = !hasHTFBacking ? 3 : 0;
                     if (orphanPenalty > 0) totalPoints -= orphanPenalty;
                 }
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
@@ -919,7 +981,8 @@ export async function processTradingAlert(alertText: string) {
                     if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
                 }
                 if (caseC_TrapZone > 0) confluenceReport += `⚠️ <b>Alerta Trampa:</b> ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
-                if (orphanPenalty > 0) confluenceReport += `⚠️ <b>Penalización CHoCH Huérfano:</b> -${orphanPenalty} Pts\n`;
+                if (orphanPenalty > 0) confluenceReport += `⚠️ <b>Penalización CHoCH sin zonas macro:</b> -${orphanPenalty} Pts (las zonas HTF aún no sincronizaron o expiraron)\n`;
+                if (!hasSpatialBacking && !hasSequentialBacking && orphanPenalty === 0) confluenceReport += `ℹ️ <b>Sin respaldo de zonas:</b> se permite por bono macro suficiente\n`;
 
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
                 let sessionThresholds: { buy: number; sell: number } | null = null;
@@ -1086,8 +1149,16 @@ export async function processTradingAlert(alertText: string) {
                 msg += `💰 Take Profit 1 (Interno): ${oteData.tp1}\n`;
                 msg += `🚀 Take Profit 2 (Externo): ${oteData.tp2}\n`;
 
+                // 📍 Mostrar la mejor zona estructural detectada (TP/SL desde el mapa)
                 if (oteData.bestZone) {
-                    msg += `\n📍 Zona Estructural: ${oteData.bestZone.medal || 'OB'} ${oteData.bestZone.tf ? parseTF(oteData.bestZone.tf) : ''}`;
+                    const z = oteData.bestZone;
+                    const zTf = z.tf ? parseTF(z.tf) : '';
+                    const zMedal = z.medal || 'OB';
+                    const zScore = z.score !== undefined ? ` (Score: ${z.score}/10)` : '';
+                    const zTP = z.tp !== undefined ? ` | TP: ${z.tp}` : '';
+                    const zSL = z.sl !== undefined ? ` | SL: ${z.sl}` : '';
+                    msg += `\n📍 <b>Zona Estructural:</b> ${zMedal} ${zTf}${zScore}${zTP}${zSL}`;
+                    if (z.top && z.btm) msg += `\n   Rango: ${z.btm} → ${z.top}`;
                 }
 
                 msg += kronosAnnotation;
