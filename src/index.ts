@@ -191,13 +191,21 @@ async function main() {
             });
         });
 
+        let healthRetries = 0;
+        const MAX_HEALTH_RETRIES = 3;
+
         server.on('error', (err: NodeJS.ErrnoException) => {
             if (err.code === 'EADDRINUSE') {
-                console.warn(`[HEALTH] ⚠️ Port 3691 in use — retrying in 5s...`);
-                setTimeout(() => {
-                    server.close();
-                    server.listen(3691);
-                }, 5000);
+                if (healthRetries < MAX_HEALTH_RETRIES) {
+                    healthRetries++;
+                    console.warn(`[HEALTH] ⚠️ Port 3691 in use — retry ${healthRetries}/${MAX_HEALTH_RETRIES} in 5s...`);
+                    setTimeout(() => {
+                        server.close();
+                        server.listen({ port: 3691, reuseAddr: true });
+                    }, 5000);
+                } else {
+                    console.warn(`[HEALTH] ⚠️ Port 3691 busy after ${MAX_HEALTH_RETRIES} retries. Healthcheck DISABLED (non-critical).`);
+                }
             } else {
                 console.error(`[HEALTH] ❌ Server error:`, err.message);
             }

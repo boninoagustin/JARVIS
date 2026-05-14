@@ -9,7 +9,8 @@ User=agustinbonino
 WorkingDirectory=/home/agustinbonino/Descargas/JARVIS
 Environment=PATH=/home/agustinbonino/.nvm/versions/node/v24.13.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 🔧 Mata procesos huérfanos que ocupen el puerto 3691 antes de arrancar (evita EADDRINUSE)
-ExecStartPre=/bin/bash -c 'fuser -k 3691/tcp 2>/dev/null; sleep 2; true'
+# Usa fuser -k y si falla, fuerza con ss + xargs (más agresivo)
+ExecStartPre=/bin/bash -c 'fuser -k 3691/tcp 2>/dev/null; sleep 1; ss -tlnp "sport = :3691" | grep -oP "pid=\K[0-9]+" | xargs -r kill -9 2>/dev/null; sleep 2; true'
 ExecStart=/home/agustinbonino/.nvm/versions/node/v24.13.0/bin/npx tsx src/index.ts
 Restart=on-failure
 RestartSec=10
