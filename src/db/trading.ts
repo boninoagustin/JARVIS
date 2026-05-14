@@ -692,7 +692,7 @@ export async function processTradingAlert(alertText: string) {
             const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
             let addedPoints = 0;
 
-            if (prefix === 'EVENTO_CHOCH') {
+            if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
                 state.marketBias[eventTf] = currentDirection;
                 
                 if (eventTf === '3') {
@@ -714,7 +714,7 @@ export async function processTradingAlert(alertText: string) {
                             const LEG_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutos
                             if (activeLeg.createdAt && (nowMs - activeLeg.createdAt) < LEG_COOLDOWN_MS) {
                                 shouldCreateNew = false;
-                                console.log(`[FIBO] ⚠️ CHoCH ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 5 min)`);
+                                console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 5 min)`);
                             }
                         }
 
@@ -723,7 +723,7 @@ export async function processTradingAlert(alertText: string) {
                         const minImpulseRange = actualPrice * 0.001; // 0.1% del precio
                         if (impulseRange < minImpulseRange) {
                             shouldCreateNew = false;
-                            console.log(`[FIBO] ⚠️ CHoCH ${currentDirection} en ${ticker}: rango ${impulseRange.toFixed(5)} < mínimo ${minImpulseRange.toFixed(5)}`);
+                            console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} en ${ticker}: rango ${impulseRange.toFixed(5)} < mínimo ${minImpulseRange.toFixed(5)}`);
                         }
                         
                         if (shouldCreateNew) {
@@ -745,11 +745,8 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                 }
-                addedPoints = 3; 
-            }
-            else if (prefix === 'EVENTO_BOS') {
-                state.marketBias[eventTf] = currentDirection;
-                addedPoints = 1; 
+                // CHoCH da 3 puntos (fuerte), BOS da 1 punto (continuación)
+                addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1; 
             }
 
             if (prefix === 'ZONE_BROKEN') {
@@ -859,7 +856,7 @@ export async function processTradingAlert(alertText: string) {
                 
                 // 🔄 Re-validación tardía: si hay un leg pendiente sin confluencia de zona,
                 // ahora que llegó un evento de zona, re-evaluar si ya se puede validar
-                if (prefix !== 'EVENTO_CHOCH') {
+                if (prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS') {
                     const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
                         const hasZoneNow = activeScore.events.some(e => 
@@ -876,12 +873,13 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
 
-            // --- CAPA 4: VALIDACIÓN DEL CHOCH ---
-            if (prefix === 'EVENTO_CHOCH' && eventTf === '3') { 
+            // --- CAPA 4: VALIDACIÓN DEL CHOCH / BOS ---
+            if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && eventTf === '3') { 
+                const triggerType = prefix === 'EVENTO_CHOCH' ? 'CHoCH🚀' : 'BOS🔨';
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
                 if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
-                    console.log(`[RADAR] CHoCH ignorado por Cooldown en ${ticker}. Vaciando residuos de memoria.`);
+                    console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker}. Vaciando residuos de memoria.`);
                     activeScore.points = 0; 
                     activeScore.events = [];
                     return;
@@ -991,7 +989,7 @@ export async function processTradingAlert(alertText: string) {
                 confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
-                confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection}\n\n`; 
+                confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection} (${triggerType})\n\n`; 
                 confluenceReport += `⚖️ <b>Bono de Alineación Macro:</b> +${baseBiasPoints} Pts\n`;
                 if (hasSpatialBacking) {
                     const tfLabel = spatialMaxWeight >= 2.0 ? '4H' : spatialMaxWeight >= 1.5 ? '1H' : '15M';
@@ -1044,7 +1042,7 @@ export async function processTradingAlert(alertText: string) {
                         }
                         
                         activeLeg.chochPoints = totalPoints;
-                        activeLeg.chochEvents = [...activeScore.events, 'CHoCH_3M'];
+                        activeLeg.chochEvents = [...activeScore.events, `${triggerType}_3M`];
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
                     }
