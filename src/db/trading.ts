@@ -1296,7 +1296,21 @@ export function startWatchdog() {
         }
 
         for (const [ticker, lastSeen] of tickerLastSeen) {
-            if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) console.warn(`[WATCHDOG] ⚠️ ${ticker}: SIN ALERTAS hace ${Math.round((now - lastSeen) / 60000)} minutos.`);
+            const inactiveMin = Math.round((now - lastSeen) / 60000);
+            if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
+                // 🔔 Alerta proactiva de desconexión
+                const state = localRadarStates.get(ticker);
+                const lastHb = state?.lastHeartbeat || 0;
+                const hbInactiveMin = Math.round((now - lastHb) / 60000);
+                const disconnectionMsg = `🔌 <b>ALERTA DE DESCONEXIÓN | ${ticker}</b>\n\n` +
+                    `⏱️ Sin alertas: ${inactiveMin} minutos\n` +
+                    `💓 Último HEARTBEAT: hace ${hbInactiveMin > 0 ? hbInactiveMin + ' min' : 'N/A'}\n` +
+                    `📡 Posible falla en TradingView → Vercel → Firebase\n\n` +
+                    `🧠 JARVIS sigue escuchando pero no recibe datos de ${ticker}.`;
+                sendTelegramAlert(disconnectionMsg).catch(() => {});
+                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta enviada.`);
+                tickerLastSeen.delete(ticker);
+            }
         }
     }, WATCHDOG_INTERVAL_MS);
 }
