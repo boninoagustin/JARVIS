@@ -1022,17 +1022,24 @@ export async function processTradingAlert(alertText: string) {
                 if (totalPoints >= Math.max(minPtsRequired - 3, 5)) {
                     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (activeLeg) {
-                        // 🛡️ Requiere al menos 1 evento de zona real (no solo CHoCH + macro)
+                        // 🛡️ Requiere al menos 1 evento de zona real O respaldo espacial del mapa de zonas
                         const hasZoneConfluence = activeScore.events.some(e => 
                             e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
                             e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
                             e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
                         );
                         
-                        if (hasZoneConfluence) {
+                        // El respaldo espacial (Caso A/B) también valida: si el CHoCH nació en zona macro
+                        // o la tocó en su recorrido, no necesita eventos secuenciales adicionales.
+                        const efectiveValidation = hasZoneConfluence || hasSpatialBacking;
+                        
+                        if (efectiveValidation) {
                             activeLeg.isValidated = true;
+                            if (hasSpatialBacking && !hasZoneConfluence) {
+                                console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO por respaldo ESPACIAL (sin eventos secuenciales). Punta: ${totalPoints} pts.`);
+                            }
                         } else {
-                            console.log(`[RADAR] ⚠️ Leg ${currentDirection} en ${ticker} con ${totalPoints} pts pero SIN confluencia de zona. OTE en espera.`);
+                            console.log(`[RADAR] ⚠️ Leg ${currentDirection} en ${ticker} con ${totalPoints} pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.`);
                             activeLeg.isValidated = false;
                         }
                         

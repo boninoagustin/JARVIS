@@ -8,6 +8,8 @@ Type=simple
 User=agustinbonino
 WorkingDirectory=/home/agustinbonino/Descargas/JARVIS
 Environment=PATH=/home/agustinbonino/.nvm/versions/node/v24.13.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 🔧 Mata procesos huérfanos que ocupen el puerto 3691 antes de arrancar (evita EADDRINUSE)
+ExecStartPre=/bin/bash -c 'fuser -k 3691/tcp 2>/dev/null; sleep 2; true'
 ExecStart=/home/agustinbonino/.nvm/versions/node/v24.13.0/bin/npx tsx src/index.ts
 Restart=on-failure
 RestartSec=10

@@ -167,8 +167,9 @@ async function main() {
     }
 
     // 🏥 Healthcheck HTTP endpoint (monitoreo local y UptimeRobot)
+    // 🔧 Usa SO_REUSEADDR para evitar EADDRINUSE tras reinicios del sistema
     import('http').then(({ createServer }) => {
-        createServer((_req, res) => {
+        const server = createServer((_req, res) => {
             const now = Date.now();
             const status = {
                 online: true,
@@ -188,7 +189,23 @@ async function main() {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(status));
             });
-        }).listen(3691, () => console.log('[HEALTH] HTTP server on port 3691'));
+        });
+
+        server.on('error', (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EADDRINUSE') {
+                console.warn(`[HEALTH] ⚠️ Port 3691 in use — retrying in 5s...`);
+                setTimeout(() => {
+                    server.close();
+                    server.listen(3691);
+                }, 5000);
+            } else {
+                console.error(`[HEALTH] ❌ Server error:`, err.message);
+            }
+        });
+
+        server.listen({ port: 3691, reuseAddr: true }, () => {
+            console.log('[HEALTH] HTTP server on port 3691');
+        });
     });
 }
 
