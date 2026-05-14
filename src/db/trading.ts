@@ -972,9 +972,18 @@ export async function processTradingAlert(alertText: string) {
                     totalPoints += spatialBonus; // +5 a +10 pts según TF
                     orphanPenalty = 0; // sin penalización porque el mapa respalda
                 } else {
-                    // 🔧 FIX: Penalización reducida de -5 a -3. Si no hay zonas en memoria (recién iniciado),
-                    // el CHoCH puede pasar igual si acumuló suficientes puntos por otras vías.
-                    orphanPenalty = !hasHTFBacking ? 3 : 0;
+                    // 🔧 FIX: Penalización de -3 si no hay zonas en memoria.
+                    // PERO: si el puntaje bruto sin penalizar ya es ≥12, la penalización se ANULA.
+                    // Esto permite entradas en reversiones contra tendencia (ej: EURUSD 4H/1H SELL
+                    // pero 3M BUY acumuló 21 pts por CHoCH + Sweep + DIV — es un setup válido).
+                    const rawPenalty = !hasHTFBacking ? 3 : 0;
+                    const wouldBeAfterPenalty = totalPoints - rawPenalty;
+                    if (rawPenalty > 0 && totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
+                        // ⚡ BYPASS: puntaje alto vence la penalización
+                        orphanPenalty = 0;
+                    } else {
+                        orphanPenalty = rawPenalty;
+                    }
                     if (orphanPenalty > 0) totalPoints -= orphanPenalty;
                 }
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
@@ -998,7 +1007,12 @@ export async function processTradingAlert(alertText: string) {
                     if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
                 }
                 if (caseC_TrapZone > 0) confluenceReport += `⚠️ <b>Alerta Trampa:</b> ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
-                if (orphanPenalty > 0) confluenceReport += `⚠️ <b>Penalización CHoCH sin zonas macro:</b> -${orphanPenalty} Pts (las zonas HTF aún no sincronizaron o expiraron)\n`;
+                if (orphanPenalty > 0 && totalPoints >= 12) {
+                    // High-score bypass: la penalización se anuló por puntaje alto
+                    confluenceReport += `⚡ <b>BYPASS PUNTAJE ALTO:</b> Penalización de -${orphanPenalty} pts ANULADA (${totalPoints + orphanPenalty} pts brutos ≥ 12). Entrada validada sin zonas macro.\n`;
+                } else if (orphanPenalty > 0) {
+                    confluenceReport += `⚠️ <b>Penalización CHoCH sin zonas macro:</b> -${orphanPenalty} Pts (las zonas HTF aún no sincronizaron o expiraron)\n`;
+                }
                 if (!hasSpatialBacking && !hasSequentialBacking && orphanPenalty === 0) confluenceReport += `ℹ️ <b>Sin respaldo de zonas:</b> se permite por bono macro suficiente\n`;
 
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
@@ -1029,11 +1043,17 @@ export async function processTradingAlert(alertText: string) {
                         
                         // El respaldo espacial (Caso A/B) también valida: si el CHoCH nació en zona macro
                         // o la tocó en su recorrido, no necesita eventos secuenciales adicionales.
-                        const efectiveValidation = hasZoneConfluence || hasSpatialBacking;
+                        // ⚡ HIGH_SCORE_BYPASS: si acumuló ≥12 pts por eventos puros (CHoCH + Sweeps + DIV),
+                        // se valida aunque no haya zonas en memoria. Caso típico: reversión contra tendencia
+                        // donde 4H/1H son SELL pero 3M hace CHoCH BUY con múltiples confluencias.
+                        const HIGH_SCORE_BYPASS = 12;
+                        const efectiveValidation = hasZoneConfluence || hasSpatialBacking || (totalPoints >= HIGH_SCORE_BYPASS);
                         
                         if (efectiveValidation) {
                             activeLeg.isValidated = true;
-                            if (hasSpatialBacking && !hasZoneConfluence) {
+                            if (!hasZoneConfluence && !hasSpatialBacking && totalPoints >= HIGH_SCORE_BYPASS) {
+                                console.log(`[RADAR] ⚡ Leg ${currentDirection} en ${ticker} VALIDADO por PUNTAJE ALTO (${totalPoints} pts ≥ ${HIGH_SCORE_BYPASS}) sin zonas en memoria.`);
+                            } else if (hasSpatialBacking && !hasZoneConfluence) {
                                 console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO por respaldo ESPACIAL (sin eventos secuenciales). Punta: ${totalPoints} pts.`);
                             }
                         } else {
