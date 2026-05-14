@@ -233,13 +233,33 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
-        const minRange = currentPrice * 0.0005; 
-        if (range < minRange) return { updatedLeg: leg };
+        // 🔧 FIX: minRange adaptado por tipo de ticker (mismo criterio que minImpulseRange)
+        let minRange: number;
+        if (ticker.includes('BTC') || ticker.includes('ETH')) {
+            minRange = currentPrice * 0.0003; // 0.03% para crypto
+        } else if (ticker.includes('JPY')) {
+            minRange = 0.015; // 1.5 pips para pares JPY
+        } else if (ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('SPX') || ticker.includes('DXY')) {
+            minRange = currentPrice * 0.0002; // 0.02% para índices
+        } else {
+            minRange = 0.00010; // 1.0 pip para forex majors
+        }
 
         const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.50) : leg.extreme + (range * 0.79);
         const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.50);
 
-        if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored && leg.isValidated) {
+        // 🔓 OTE entry: el leg fue creado por un CHoCH que ya pasó todos los filtros de puntaje.
+        // No re-validamos con leg.isValidated porque el reset del score borra los eventos
+        // de zona ANTES de llegar aquí, causando que el 90% de los legs queden isValidated=false.
+        // Si el leg existe y no fue invalidado por precio ni expiración, el OTE es válido.
+        // PERO: legs con < 8 chochPoints y sin validación se filtran (baja calidad).
+        if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored) {
+            // 🔧 Filtro de calidad: si el leg no fue validado Y tiene pocos puntos, no entrar
+            const MIN_OTE_POINTS = 8;
+            if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
+                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
+                return { updatedLeg: leg };
+            }
             // 🛡️ Filtro R:R mínimo 1.5:1 — no entrar en trades con ratio desfavorable
             const riskDistance = Math.abs(currentPrice - leg.origin);
             const rewardDistance = Math.abs(leg.extreme - currentPrice);
@@ -710,17 +730,30 @@ export async function processTradingAlert(alertText: string) {
                             const isInsideRange = actualPrice > Math.min(activeLeg.origin, activeLeg.extreme) && actualPrice < Math.max(activeLeg.origin, activeLeg.extreme);
                             if (isInsideRange) shouldCreateNew = false;
                             
-                            // 🛡️ Anti-Pingpong: No crear leg nuevo si el anterior tiene < 5 min
-                            const LEG_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutos
+                            // 🛡️ Anti-Pingpong: No crear leg nuevo si el anterior tiene < 3 min
+                            // 🔧 Reducido de 5min a 3min para scalping 3M (vela cierra cada 3 min, 
+                            // un leg puede completarse en 1-2 velas y ya estar listo para el siguiente)
+                            const LEG_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos
                             if (activeLeg.createdAt && (nowMs - activeLeg.createdAt) < LEG_COOLDOWN_MS) {
                                 shouldCreateNew = false;
                                 console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 5 min)`);
                             }
                         }
 
-                        // 🛡️ Rango mínimo del impulso: |extreme - origin| debe superar 2x minRange
+                        // 🛡️ Rango mínimo del impulso: |extreme - origin| debe superar el umbral
+                        // Umbral adaptado por ticker (forex majors ~2 pips, crypto ~0.02%, índices ~0.05%)
                         const impulseRange = Math.abs(actualPrice - newOrigin);
-                        const minImpulseRange = actualPrice * 0.001; // 0.1% del precio
+                        let minImpulseRange: number;
+                        if (ticker.includes('BTC') || ticker.includes('ETH')) {
+                            minImpulseRange = actualPrice * 0.0005; // 0.05% para crypto
+                        } else if (ticker.includes('JPY')) {
+                            minImpulseRange = 0.02; // 2 pips para pares JPY
+                        } else if (ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('SPX') || ticker.includes('DXY')) {
+                            minImpulseRange = actualPrice * 0.0003; // 0.03% para índices
+                        } else {
+                            // Forex majors (EURUSD, GBPUSD, etc.): ~1-2 pips
+                            minImpulseRange = 0.00015; // 1.5 pips
+                        }
                         if (impulseRange < minImpulseRange) {
                             shouldCreateNew = false;
                             console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} en ${ticker}: rango ${impulseRange.toFixed(5)} < mínimo ${minImpulseRange.toFixed(5)}`);
