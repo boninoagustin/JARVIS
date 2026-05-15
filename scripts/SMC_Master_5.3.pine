@@ -1060,7 +1060,7 @@ if showBos
             line.new(curr_ph_idx, curr_ph, bar_index, curr_ph, color=color.new(#089981, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_ph, lbl_txt, color=color.new(color.black, 100), textcolor=#089981, style=label.style_label_lower_right, size=size.tiny)
             
-            if alert_choch and in_kz
+            if alert_choch
                 f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(min_low))
             
             int ob_cand_idx = origin_idx
@@ -1132,7 +1132,7 @@ if showBos
             line.new(curr_pl_idx, curr_pl, bar_index, curr_pl, color=color.new(#f23645, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_pl, lbl_txt, color=color.new(color.black, 100), textcolor=#f23645, style=label.style_label_upper_right, size=size.tiny)
             
-            if alert_choch and in_kz
+            if alert_choch
                 f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(max_high))
             
             int ob_cand_idx = origin_idx
