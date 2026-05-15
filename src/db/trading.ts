@@ -260,12 +260,15 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
                 return { updatedLeg: leg };
             }
-            // 🛡️ Filtro R:R mínimo 1.5:1 — no entrar en trades con ratio desfavorable
-            const riskDistance = Math.abs(currentPrice - leg.origin);
-            const rewardDistance = Math.abs(leg.extreme - currentPrice);
-            const rrRatio = riskDistance > 0 ? rewardDistance / riskDistance : 0;
-            if (rrRatio < 1.5) {
-                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R ${rrRatio.toFixed(2)} < 1.5 mínimo`);
+            // 🛡️ Filtro R:R teórico del OTE (50%-79% de retroceso del impulso)
+            // El R:R se calcula sobre los niveles ESTRUCTURALES del OTE, no sobre el precio
+            // actual de la vela (que puede estar desviado del OTE exacto).
+            // A 50% retroceso: R:R = 1.0, a 79% retroceso: R:R = 3.76
+            const riskDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.21; // peor caso: 79% fib
+            const rewardDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.50; // 50% fib OTE
+            const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 0;
+            if (rrRatioOTE < 1.2) {
+                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
                 return { updatedLeg: leg };
             }
 
