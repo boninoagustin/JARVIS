@@ -286,7 +286,7 @@ type div_data
 type fvg_zone
     float top
     float btm
-    int   idx
+    int   idx_time
     bool  is_bull
     bool  is_inv
     bool  inv_retested
@@ -695,12 +695,12 @@ bool valid_bull_fvg = low[0] > high[2] and close[1] > open[1] and (low[0] - high
 bool valid_bear_fvg = high[0] < low[2] and close[1] < open[1] and (low[2] - high[0]) > (atr_global * fvg_min_atr) and (low[2] - high[0]) <= (atr_global * fvg_max_atr) and fvg_body_pct >= fvg_exp_req
 
 if valid_bull_fvg and barstate.isconfirmed
-    box bx = show_fvg ? box.new(bar_index[2], low[0], bar_index, high[2], bgcolor=color.new(#089981, 85), border_color=color.new(#089981, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#089981, 50)) : box(na)
-    array.unshift(fvgs, fvg_zone.new(low[0], high[2], bar_index[2], true, false, false, bx, false))
+    box bx = show_fvg ? box.new(time[2], low[0], time, high[2], xloc=xloc.bar_time, bgcolor=color.new(#089981, 85), border_color=color.new(#089981, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#089981, 50)) : box(na)
+    array.unshift(fvgs, fvg_zone.new(low[0], high[2], time[2], true, false, false, bx, false))
 
 if valid_bear_fvg and barstate.isconfirmed
-    box bx = show_fvg ? box.new(bar_index[2], low[2], bar_index, high[0], bgcolor=color.new(#f23645, 85), border_color=color.new(#f23645, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#f23645, 50)) : box(na)
-    array.unshift(fvgs, fvg_zone.new(low[2], high[0], bar_index[2], false, false, false, bx, false))
+    box bx = show_fvg ? box.new(time[2], low[2], time, high[0], xloc=xloc.bar_time, bgcolor=color.new(#f23645, 85), border_color=color.new(#f23645, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#f23645, 50)) : box(na)
+    array.unshift(fvgs, fvg_zone.new(low[2], high[0], time[2], false, false, false, bx, false))
 
 float curr_body = math.abs(close - open)
 float curr_range_safe = math.max(high - low, syminfo.mintick)
@@ -711,7 +711,7 @@ if array.size(fvgs) > 0
         fz = array.get(fvgs, i)
         
         if not na(fz.bx)
-            box.set_right(fz.bx, bar_index)
+            box.set_right(fz.bx, time)
 
         if not fz.is_inv
             if fz.is_bull
@@ -724,7 +724,7 @@ if array.size(fvgs) > 0
                             color c_bd = color.new(color.orange, 40)
                             color bg_c = is_aligned ? color.new(color.orange, 90) : color.new(color.orange, 100)
                             if na(fz.bx)
-                                fz.bx := box.new(fz.idx, fz.top, bar_index, fz.btm, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↘", text_color=c_bd, text_size=size.tiny)
+                                fz.bx := box.new(fz.idx_time, fz.top, time, fz.btm, xloc=xloc.bar_time, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↘", text_color=c_bd, text_size=size.tiny)
                             else
                                 box.set_bgcolor(fz.bx, bg_c)
                                 box.set_border_color(fz.bx, c_bd)
@@ -756,7 +756,7 @@ if array.size(fvgs) > 0
                             color c_bd = color.new(#089981, 40)
                             color bg_c = is_aligned ? color.new(#089981, 90) : color.new(#089981, 100)
                             if na(fz.bx)
-                                fz.bx := box.new(fz.idx, fz.top, bar_index, fz.btm, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↗", text_color=c_bd, text_size=size.tiny)
+                                fz.bx := box.new(fz.idx_time, fz.top, time, fz.btm, xloc=xloc.bar_time, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↗", text_color=c_bd, text_size=size.tiny)
                             else
                                 box.set_bgcolor(fz.bx, bg_c)
                                 box.set_border_color(fz.bx, c_bd)
