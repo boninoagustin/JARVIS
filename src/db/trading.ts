@@ -1,7 +1,7 @@
 import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
-import { logTrade, recordResult } from '../services/journal.js';
+import { logTrade, recordResult, getPerformance } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
@@ -163,7 +163,10 @@ const DEDUP_WINDOW_MS = 60000;
 const lastSyncTime = new Map<string, number>();
 const SYNC_THROTTLE_MS: Record<string, number> = { '3': 0, '15': 120000, '60': 300000, '240': 600000 };
 const tickerLastSeen = new Map<string, number>();
-const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; 
+const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000;
+
+// 🛡️ v5.4: Lock por ticker para evitar race conditions (alertas duplicadas en mismo ms)
+const tickerLocks = new Map<string, Promise<void>>();
 
 function isDuplicate(fingerprint: string, nowMs: number): boolean {
     for (const [key, ts] of recentAlertCache) {
@@ -343,6 +346,16 @@ export async function processTradingAlert(alertText: string) {
 
     if (globalKillswitches[ticker]) return;
 
+    // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
+    // Dos PINGs del mismo ticker se procesan secuencialmente, no en paralelo
+    const previousLock = tickerLocks.get(ticker) || Promise.resolve();
+    let releaseLock: () => void;
+    const newLock = new Promise<void>(resolve => { releaseLock = resolve; });
+    tickerLocks.set(ticker, newLock);
+    
+    try {
+        await previousLock; // Esperar que termine el procesamiento anterior de este ticker
+
     tickerLastSeen.set(ticker, nowMs);
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
@@ -456,6 +469,15 @@ export async function processTradingAlert(alertText: string) {
                 for (const [tradeId, trade] of activeTrades) {
                     if (trade.ticker !== ticker) continue;
                     const nowTrade = nowMs;
+                    
+                    // 🛡️ v5.4: Anti-instantáneo — no evaluar TP/SL si el trade se creó hace < 5s
+                    // Evita que un trade se cierre en el mismo ciclo que se abrió (falsos TP1)
+                    const tradeAgeMs = nowTrade - trade.timestamp;
+                    if (tradeAgeMs < 5000) {
+                        console.log(`[TRADE] ⏭️ ${ticker} #${tradeId}: omitiendo eval TP/SL (antigüedad ${tradeAgeMs}ms < 5s)`);
+                        continue;
+                    }
+                    
                     const openTimeStr = new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' }); 
                     
                     // 🎯 EVALUACIÓN DE TP1
@@ -914,10 +936,12 @@ export async function processTradingAlert(alertText: string) {
                 const triggerType = prefix === 'EVENTO_CHOCH' ? 'CHoCH🚀' : 'BOS🔨';
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
+                // 🔧 v5.4: Si hay cooldown activo, NO reseteamos el score. Dejamos que los puntos
+                // se acumulen para el próximo CHoCH. Así los sweeps/DIVs que ocurren durante
+                // el cooldown no se pierden y el siguiente CHoCH tiene más probabilidad de gatillar.
                 if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
-                    console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker}. Vaciando residuos de memoria.`);
-                    activeScore.points = 0; 
-                    activeScore.events = [];
+                    console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${activeScore.points} pts).`);
+                    // NO reseteamos score — se acumula para el siguiente CHoCH
                     return;
                 }
 
@@ -1114,7 +1138,9 @@ export async function processTradingAlert(alertText: string) {
             else if (prefix === 'HEARTBEAT') state.lastHeartbeat = nowMs;
         }
 
-        const MAX_ZONE_AGE_MS: Record<string, number> = { '3': 1800000, '15': 7200000, '60': 28800000, '240': 86400000 };
+        // 🔧 FIX v5.4: 15M zones now live 6h (antes 2h) para cubrir el gap entre killzones
+        // London 4-6 ART → NY 10:30-12:30 ART = 4.5h sin sync. Con 6h las zonas sobreviven.
+        const MAX_ZONE_AGE_MS: Record<string, number> = { '3': 1800000, '15': 21600000, '60': 28800000, '240': 86400000 };
         state.zones = state.zones.filter(z => {
             if (!z.createdAt) return true; 
             return (nowMs - z.createdAt) < (MAX_ZONE_AGE_MS[z.tf || '60'] || 14400000);
@@ -1278,6 +1304,8 @@ export async function processTradingAlert(alertText: string) {
 
     } catch (e: any) {
         console.error(`[RADAR] Error crítico en memoria/Firebase:`, e.message);
+    } finally {
+        releaseLock!(); // 🛡️ v5.4: Liberar lock del ticker
     }
 }
 
@@ -1305,7 +1333,76 @@ export function startWatchdog() {
         }
     };
     setInterval(checkVix, 15 * 60 * 1000);
-    checkVix(); 
+    checkVix();
+
+    // 🆕 v5.4: RESUMEN DIARIO a las 18:00 ART (después del cierre de NY)
+    const scheduleDailySummary = () => {
+        const now = new Date();
+        // Convertir a hora Argentina (ART = UTC-3)
+        const artNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+        const artHour = artNow.getHours();
+        const artMin = artNow.getMinutes();
+        
+        // Disparar entre 18:00 y 18:05 ART
+        if (artHour === 18 && artMin >= 0 && artMin < 5) {
+            const today = artNow.toISOString().split('T')[0];
+            // Evitar duplicados: solo una vez por día
+            const lastSummaryDate = (globalThis as any).__lastSummaryDate;
+            if (lastSummaryDate === today) return;
+            (globalThis as any).__lastSummaryDate = today;
+            
+            getPerformance(1).then(async (metrics) => {
+                if (metrics.totalTrades === 0) return; // Sin trades hoy, no molestar
+                
+                const emoji = metrics.winRate >= 60 ? '🟢' : metrics.winRate >= 40 ? '🟡' : '🔴';
+                let summary = `${emoji} <b>📊 RESUMEN DIARIO | ${today}</b>\n\n`;
+                summary += `📈 <b>Señales Hoy:</b> ${metrics.totalTrades}\n`;
+                summary += `✅ Wins: ${metrics.wins} | ❌ Losses: ${metrics.losses} | 🛡️ BE: ${metrics.breakeven}\n`;
+                summary += `🎯 Win Rate: <b>${metrics.winRate}%</b>\n`;
+                
+                if (metrics.pending > 0) {
+                    summary += `⏳ Pendientes: ${metrics.pending} (aún en curso)\n`;
+                }
+                
+                // Performance por ticker
+                const tickerEntries = Object.entries(metrics.byTicker)
+                    .filter(([, s]) => (s.wins + s.losses) > 0)
+                    .sort(([, a], [, b]) => b.winRate - a.winRate);
+                
+                if (tickerEntries.length > 0) {
+                    summary += `\n<b>📋 Por Activo:</b>\n`;
+                    for (const [ticker, stats] of tickerEntries) {
+                        const icon = stats.winRate >= 60 ? '🟢' : stats.winRate >= 40 ? '🟡' : '🔴';
+                        summary += `${icon} ${ticker}: ${stats.wins}W/${stats.losses}L (${stats.winRate}%)\n`;
+                    }
+                }
+                
+                // Performance por calidad de setup
+                const gradeEntries = Object.entries(metrics.byGrade)
+                    .filter(([, s]) => (s.wins + s.losses) > 0)
+                    .sort(([a], [b]) => b.localeCompare(a));
+                
+                if (gradeEntries.length > 0) {
+                    summary += `\n<b>🏅 Por Calidad:</b>\n`;
+                    for (const [grade, stats] of gradeEntries) {
+                        summary += `  ${grade}: ${stats.wins}W/${stats.losses}L (${stats.winRate}%)\n`;
+                    }
+                }
+                
+                // Recomendación automática
+                if (metrics.winRate < 35 && metrics.totalTrades >= 3) {
+                    summary += `\n⚠️ <b>RECOMENDACIÓN:</b> Win rate bajo (${metrics.winRate}%). Considerá subir minPts +2 o activar solo macro alineados.`;
+                } else if (metrics.winRate >= 65 && metrics.totalTrades >= 5) {
+                    summary += `\n🔥 <b>DÍA SÓLIDO.</b> El sistema está funcionando bien. Mantené la configuración actual.`;
+                }
+                
+                await sendTelegramAlert(summary);
+                console.log(`[DAILY] 📊 Resumen enviado: ${metrics.totalTrades} trades, ${metrics.winRate}% WR`);
+            }).catch(e => console.error('[DAILY] Error generando resumen:', e));
+        }
+    };
+    setInterval(scheduleDailySummary, 5 * 60 * 1000); // Chequear cada 5 min
+    scheduleDailySummary(); // Ejecutar al iniciar por si justo son las 18 
 
     setInterval(() => {
         const now = Date.now();
