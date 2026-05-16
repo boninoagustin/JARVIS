@@ -361,7 +361,14 @@ export async function processTradingAlert(alertText: string) {
         console.error(`[RADAR] Error en lock para ${ticker}:`, e.message);
     }
 
-    tickerLastSeen.set(ticker, nowMs);
+    // 🔧 v5.5: SOLO tickers reales (no prefijos de eventos como HEARTBEAT, EVENTO_CHOCH...)
+    // Los prefijos de eventos llegan porque TradingView usa el prefijo como "ticker" en algunas alertas.
+    const FAKE_TICKERS = new Set(['HEARTBEAT', 'EVENTO_CHOCH', 'EVENTO_BOS', 'SWEEP_BROKEN', 
+                                   'DIV_BROKEN', 'EVENTO_SMC_DIV', 'EVENTO_SWEEP', 'EVENTO_SWEEP_TL',
+                                   'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE']);
+    if (!FAKE_TICKERS.has(prefix)) {
+        tickerLastSeen.set(ticker, nowMs);
+    }
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
     const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
@@ -1428,6 +1435,12 @@ export function startWatchdog() {
             const lastSeen = tickerLastSeen.get(trade.ticker) || 0;
             const inactivity = now - lastSeen;
             
+            // 🛡️ v5.5: Si tickerLastSeen está vacío para este ticker (post-reinicio), NO cerrar el trade
+            // El trade puede estar activo legítimamente y los PINGs no han llegado aún
+            if (lastSeen === 0 && tickerLastSeen.size === 0) {
+                continue; // No cerrar trades hasta que llegue el primer PING real
+            }
+            
             // Cierre por timeout: 6 horas sin actividad
             if (inactivity > TRADE_TIMEOUT_MS) {
                 activeTrades.delete(id);
@@ -1466,7 +1479,15 @@ export function startWatchdog() {
                 // 🔔 Alerta proactiva de desconexión
                 const state = localRadarStates.get(ticker);
                 const lastHb = state?.lastHeartbeat || 0;
-                const hbInactiveMin = Math.round((now - lastHb) / 60000);
+                // 🛡️ v5.5: Ignorar timestamps "viejos" que vienen de Firebase post-reinicio
+                // Si lastHeartbeat es 0 o menor que el timestamp de hace 2 horas, son datos inválidos
+                const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+                const hbAge = (lastHb > 0 && lastHb > (now - 86400000)) ? (now - lastHb) : 0;
+                const hbInactiveMin = Math.round(hbAge / 60000);
+                
+                // 🛡️ v5.5: Solo enviar alerta de desconexión si realmente está desconectado
+                // (>2 horas sin heartbeat Y sin otros eventos en el mismo período)
+                if (hbAge < TWO_HOURS_MS) continue; // Tiene heartbeat reciente, no está desconectado
                 const disconnectionMsg = `🔌 <b>ALERTA DE DESCONEXIÓN | ${ticker}</b>\n\n` +
                     `⏱️ Sin alertas: ${inactiveMin} minutos\n` +
                     `💓 Último HEARTBEAT: hace ${hbInactiveMin > 0 ? hbInactiveMin + ' min' : 'N/A'}\n` +
