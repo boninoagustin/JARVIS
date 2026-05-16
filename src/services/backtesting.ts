@@ -91,19 +91,38 @@ export async function replayUploadedLogs(
     }
 
     try {
-        // 4. Reproducir en orden cronológico
+        // 4. 🔮 FASE PRE-SYNC: procesar SYNC_ZONES de TODOS los TFs primero
+        //    Esto arma el mapa de zonas ANTES de que lleguen los PINGs de 3M.
+        //    Sin esto, Jarvis empieza sin zonas y no detecta nada las primeras horas.
+        const syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
+        const nonSyncEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
+        
+        console.log(`[REPLAY] 🔮 Pre-sync: ${syncEntries.length} SYNC_ZONES a procesar primero (${nonSyncEntries.length} resto)`);
+        
+        // Procesar SYNC_ZONES instantáneamente (sin esperar gaps)
+        for (const entry of syncEntries) {
+            if (signal.aborted) break;
+            await processTradingAlert(entry.line);
+        }
+        console.log(`[REPLAY] 🔮 Pre-sync completado. Mapa de zonas inicializado.`);
+
+        // 5. REPRODUCIR el resto cronológicamente
         let lastTs = validEntries[0]?.ts || 0;
-        let processed = 0;
+        let processed = syncEntries.length;
         const skippedNoTs = allEntries.length - validEntries.length;
         const startWallClock = Date.now();
 
-        for (const entry of validEntries) {
+        // Reordenar: los SYNC_ZONES ya procesados se saltean
+        const remainingEntries = allEntries
+            .filter(e => e.ts > 0 && !e.line.includes('SYNC_ZONES'))
+            .sort((a, b) => a.ts - b.ts);
+
+        for (const entry of remainingEntries) {
             if (signal.aborted) {
                 console.log(`[REPLAY] ⏹ Abortado por usuario (${processed}/${validEntries.length})`);
                 break;
             }
 
-            // Respetar gap temporal comprimido
             const gap = entry.ts - lastTs;
             if (gap > 0 && gap < 86400000) {
                 const waitMs = Math.min(gap / speedMs, 5000);

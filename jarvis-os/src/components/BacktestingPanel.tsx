@@ -253,7 +253,7 @@ export default function BacktestingPanel() {
                 )}
               </div>
               <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                📥 Pine Editor → Panel → Descargar log. Subí 1 por TF.
+                📥 Subí logs de 4H, 1H, 15M y 3M. El replay intercala <b>en paralelo</b> por timestamp. Las zonas de TFs altos sincronizan antes que los PINGs de 3M.
               </div>
             </div>
           </div>
