@@ -1371,6 +1371,26 @@ bool is_replay = not barstate.isrealtime and barstate.isconfirmed
 int max_draw_bars = is_replay ? (timeframe.multiplier <= 5 ? 60 : timeframe.multiplier <= 30 ? 40 : timeframe.multiplier <= 120 ? 25 : 15) : 500
 int max_boxes_replay = is_replay ? (timeframe.multiplier <= 15 ? 60 : 30) : 150
 
+// 🛡️ v5.5.1: LIMPIAR ARRAYS MASIVOS en modo replay para evitar error 50MB
+// En 4H con 200 barras = 33 días, los arrays acumulan cientos de objetos
+// que TradingView serializa → 49MB de respuesta → error.
+if is_replay
+    int replay_limit = timeframe.multiplier <= 15 ? 50 : timeframe.multiplier <= 60 ? 20 : 10
+    while array.size(all_obs) > replay_limit
+        array.pop(all_obs)
+    while array.size(fvgs) > replay_limit
+        del = array.pop(fvgs)
+    while array.size(active_pools) > replay_limit
+        pool = array.pop(active_pools)
+        line.delete(pool.l)
+        label.delete(pool.lbl)
+    while array.size(active_tls) > replay_limit
+        tl = array.pop(active_tls)
+        line.delete(tl.l)
+        label.delete(tl.lbl)
+    while array.size(active_divs) > replay_limit
+        array.pop(active_divs)
+
 if barstate.islast
     if array.size(ob_boxes_drawn) > 0
         for b in ob_boxes_drawn
@@ -1392,14 +1412,27 @@ if barstate.islast
             if ob.hidden or ob.mitigated or ob.score < min_score
                 continue
             
-            // 🛡️ v5.5: Límite de boxes dibujados (modo replay = 30-60, live = 150)
-            if drawn_count >= max_boxes_replay
-                break
-            drawn_count += 1
-            
-            bool should_show = (ob.medal == "Platino" and show_platino) or (ob.medal == "Oro" and show_oro) or (ob.medal == "Plata" and show_plata) or (ob.medal == "Bronce" and show_bronce) or (ob.medal == "CHoCH🚀" and show_choch)
-            if not should_show
-                continue
+            // 🛡️ v5.5: Límite aún más estricto para Replay - evitar error "response is too large"
+    // En Bar Replay, TODAS las barras se recalculan y TODOS los objetos se serializan.
+    // En 4H con 200 barras = 33 días → cientos de boxes, labels, líneas → 50MB.
+    // Solución: si es replay, solo dibujamos las últimas N barras visibles según TF.
+    int maxBarsReplay = is_replay ? (timeframe.multiplier <= 5 ? 60 : 
+                                      timeframe.multiplier <= 15 ? 30 : 
+                                      timeframe.multiplier <= 60 ? 15 : 8) : 99999
+    int maxBoxesReplay = is_replay ? (timeframe.multiplier <= 5 ? 50 : 
+                                       timeframe.multiplier <= 15 ? 20 : 
+                                       timeframe.multiplier <= 60 ? 8 : 4) : 99999
+    
+    int barsFromEnd = bar_index - last_bar_time >= 0 ? bar_index - last_bar_time : 0
+    
+    for i = 0 to math.min(array.size(all_obs) - 1, 200)
+        ob = array.get(all_obs, i)
+        
+        if ob.hidden or ob.mitigated
+            continue
+        
+        if ob.score < min_score and not ob.is_choch_ob
+            continue
 
             bool god_overlap = f_ob_has_god_fvg(ob.top, ob.btm, ob.is_bull)
             string display_text = god_overlap ? "💎 GOD ZONE" : ob.medal
