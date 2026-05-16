@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, query, where, orderBy, limit, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Play, Calendar, TrendingUp, BarChart2, BookOpen, Upload, FileText } from 'lucide-react';
+import { Play, Calendar, TrendingUp, BarChart2, BookOpen, Upload } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface TradeLog {
@@ -145,7 +145,7 @@ export default function BacktestingPanel() {
   };
 
   // 🆕 v5.1: Parsear archivo de log de Pine Script
-  const parseLogFile = (content: string, tf: string): string[] => {
+  const parseLogFile = (content: string, _tf: string): string[] => {
     const lines = content.split('\n').filter(l => {
       const trimmed = l.trim();
       // Filtrar líneas que tengan TS (timestamp), ignorar líneas vacías y headers
