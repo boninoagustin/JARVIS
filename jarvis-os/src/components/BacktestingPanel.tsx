@@ -115,11 +115,58 @@ export default function BacktestingPanel() {
     setUploading(true);
     try {
       const sessionId = `BT_${Date.now()}`;
-      const promises = Array.from(uploadedLogs.entries()).map(([tf, lines]) =>
-        setDoc(doc(db, 'backtesting_logs', `${sessionId}_${tf}`), {
-          sessionId, tf, lines, lineCount: lines.length, createdAt: serverTimestamp()
-        })
-      );
+      const CHUNK_SIZE_BYTES = 500_000; // 500KB por chunk (Firestore limit: 1MB)
+      
+      const promises = Array.from(uploadedLogs.entries()).map(async ([tf, lines]) => {
+        const docRef = doc(db, 'backtesting_logs', `${sessionId}_${tf}`);
+        
+        // 🛡️ v5.5: Chunking para evitar error de 1MB en Firestore
+        // Si el log supera 500KB, se parte en chunks y se guarda como subcolección
+        const totalJson = JSON.stringify(lines);
+        const totalBytes = new TextEncoder().encode(totalJson).length;
+        
+        if (totalBytes <= CHUNK_SIZE_BYTES) {
+          // Caso normal: entra en un solo documento
+          return setDoc(docRef, {
+            sessionId, tf, lines, lineCount: lines.length, 
+            chunked: false, totalBytes,
+            createdAt: serverTimestamp()
+          });
+        }
+        
+        // Caso chunked: partir en trozos de 500KB
+        const chunks: string[][] = [];
+        let currentChunk: string[] = [];
+        let currentBytes = 0;
+        
+        for (const line of lines) {
+          const lineBytes = new TextEncoder().encode(line).length + 1; // +1 por coma/salto
+          if (currentBytes + lineBytes > CHUNK_SIZE_BYTES && currentChunk.length > 0) {
+            chunks.push(currentChunk);
+            currentChunk = [];
+            currentBytes = 0;
+          }
+          currentChunk.push(line);
+          currentBytes += lineBytes;
+        }
+        if (currentChunk.length > 0) chunks.push(currentChunk);
+        
+        console.log(`[BACKTEST] ${tf}: ${lines.length} líneas → ${chunks.length} chunks (${(totalBytes/1024).toFixed(1)} KB)`);
+        
+        // Guardar metadata + chunks como subcolección
+        await setDoc(docRef, {
+          sessionId, tf, lineCount: lines.length,
+          chunked: true, totalChunks: chunks.length, totalBytes,
+          createdAt: serverTimestamp()
+        });
+        
+        const chunkPromises = chunks.map((c, i) =>
+          setDoc(doc(db, 'backtesting_logs', `${sessionId}_${tf}`, 'chunks', `chunk_${i}`), {
+            index: i, lines: c, lineCount: c.length
+          })
+        );
+        return Promise.all(chunkPromises);
+      });
       await Promise.all(promises);
 
       await addDoc(collection(db, 'app_commands'), {

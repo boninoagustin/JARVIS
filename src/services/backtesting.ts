@@ -200,7 +200,19 @@ export async function replayBacktestingFromFirestore(
             const docSnap = await db.collection('backtesting_logs').doc(`${sessionId}_${tf}`).get();
             if (docSnap.exists) {
                 const data = docSnap.data();
-                if (data && Array.isArray(data.lines)) {
+                if (data && data.chunked) {
+                    // 🛡️ v5.5: Leer chunks de subcolección
+                    const chunksSnap = await db.collection('backtesting_logs').doc(`${sessionId}_${tf}`).collection('chunks').orderBy('index', 'asc').get();
+                    const allLines: string[] = [];
+                    chunksSnap.forEach(chunkDoc => {
+                        const chunk = chunkDoc.data();
+                        if (chunk && Array.isArray(chunk.lines)) {
+                            allLines.push(...chunk.lines);
+                        }
+                    });
+                    logs.set(tf, allLines);
+                    console.log(`[REPLAY] ✓ ${tf}: ${allLines.length} líneas (${data.totalChunks} chunks, ${(data.totalBytes/1024).toFixed(1)} KB)`);
+                } else if (data && Array.isArray(data.lines)) {
                     logs.set(tf, data.lines);
                     console.log(`[REPLAY] ✓ ${tf}: ${data.lines.length} líneas`);
                 }

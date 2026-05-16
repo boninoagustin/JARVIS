@@ -12,8 +12,8 @@ interface RadarZone {
     lvl?: string;
     medal?: string;
     score?: number;
-    tp?: number;
-    sl?: number;
+    tp?: number;       // 🆕 v5.4: Take Profit desde el indicador
+    sl?: number;       // 🆕 v5.4: Stop Loss desde el indicador
     mid?: number;
     atr?: number;
     t?: string;      
@@ -123,7 +123,8 @@ let streakKillswitchUntil = 0;
 let vixKillswitchUntil = 0;
 let globalKillswitches: Record<string, boolean> = {};
 let dynamicBotConfig = {
-    sniperCooldownMs: 90000,      // 🔧 1.5 min (antes 2.5 min) — vela 3M cierra cada 3 min, 90s permite capturar setups sin esperar vela completa
+    sniperCooldownMs: 180000,      // 🔧 v5.4: 3 min (antes 5 min) — se alinea con cierre de vela 3M. Un CHoCH válido
+                                   // puede completarse en 1-2 velas de 3M y ya estar listo para el siguiente.
     minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
     minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
     baseRiskPercentage: 1.0

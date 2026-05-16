@@ -2,7 +2,7 @@
 // SMC Master 5.1 [JARVIS Edition] — Generado el 15/05/2026
 //@version=5
 
-indicator("SMC Master 5.1 [JARVIS v5.4]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("SMC Master 5.1 [JARVIS v5.4]", overlay=true, max_boxes_count=150, max_lines_count=80, max_labels_count=80, max_bars_back=500)
 
 // =========================================================================
 // 0. 🌟 PRESETS AUTOMÁTICOS (MATRIZ BIDIMENSIONAL INTELIGENTE)
@@ -1360,6 +1360,14 @@ while array.size(breaker_obs) > 15
 // =========================================================================
 // 12. 🧮 RENDERIZADO Y DASHBOARD (PALETA LIGHT MODE / FONDO BLANCO)
 // =========================================================================
+
+// 🛡️ v5.5: BAR REPLAY GUARD — Reduce drásticamente los objetos en modo replay
+// En Bar Replay, TODAS las barras se recalculan sin barstate.isrealtime,
+// y con 200 barras de 4H = 33 días de objetos acumulados → error 50MB.
+bool is_replay = not barstate.isrealtime and barstate.isconfirmed
+int max_draw_bars = is_replay ? (timeframe.multiplier <= 5 ? 60 : timeframe.multiplier <= 30 ? 40 : timeframe.multiplier <= 120 ? 25 : 15) : 500
+int max_boxes_replay = is_replay ? (timeframe.multiplier <= 15 ? 60 : 30) : 150
+
 if barstate.islast
     if array.size(ob_boxes_drawn) > 0
         for b in ob_boxes_drawn
@@ -1374,11 +1382,17 @@ if barstate.islast
     color col_bear_text   = color.new(#f23645, 0)
 
     // 🟢 Dibujo de Zonas Normales
+    int drawn_count = 0
     if array.size(all_obs) > 0
         for i = 0 to array.size(all_obs) - 1
             ob = array.get(all_obs, i)
             if ob.hidden or ob.mitigated or ob.score < min_score
                 continue
+            
+            // 🛡️ v5.5: Límite de boxes dibujados (modo replay = 30-60, live = 150)
+            if drawn_count >= max_boxes_replay
+                break
+            drawn_count += 1
             
             bool should_show = (ob.medal == "Platino" and show_platino) or (ob.medal == "Oro" and show_oro) or (ob.medal == "Plata" and show_plata) or (ob.medal == "Bronce" and show_bronce) or (ob.medal == "CHoCH🚀" and show_choch)
             if not should_show
@@ -1401,6 +1415,10 @@ if barstate.islast
             ob = array.get(breaker_obs, i)
             if ob.hidden
                 continue
+            
+            if drawn_count >= max_boxes_replay
+                break
+            drawn_count += 1
             
             bool god_brk = ob.medal == "God Breaker"
             string brk_text = god_brk ? "💎 God Breaker" : "♻️ Breaker"
