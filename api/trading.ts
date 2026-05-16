@@ -3,48 +3,43 @@ import { db } from '../src/db/memory.js';
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: Request) {
-    // 🏥 Healthcheck GET se maneja en otro handler
+export default async function handler(req: any, res: any) {
+    // 🏥 Healthcheck GET
     if (req.method === 'GET') {
-        return new Response(JSON.stringify({
+        return res.status(200).json({
             online: true,
             firebase: !!db,
             timestamp: new Date().toISOString(),
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        });
+    }
+
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
     if (!db) {
-        return new Response(JSON.stringify({ error: 'Firebase not initialized' }), { status: 500 });
+        return res.status(500).json({ error: 'Firebase not initialized' });
     }
 
     try {
-        const alertText = await req.text();
-        console.log(`[WEBHOOK TW] ${alertText.substring(0, 150)}...`);
+        // 📥 Leer el raw body como texto y guardarlo a Firebase
+        const alertText = typeof req.body === 'string' ? req.body : 
+                         req.body?.text || JSON.stringify(req.body);
+        
+        console.log(`[WEBHOOK TW] ${alertText.substring(0, 120)}...`);
 
-        // Escribir a Firebase SIN esperar confirmación
+        // 🔥 FIRE & FORGET: escribir sin await para responder rápido a TradingView
         db.collection('trading_incoming').add({
             alertText,
             received_at: new Date().toISOString(),
             status: 'pending'
-        }).catch(e => console.error('[WEBHOOK TW] Firestore write error:', e.message));
+        }).catch((e: any) => console.error('[WEBHOOK TW] Firestore write error:', e.message));
 
-        // Responder inmediatamente sin esperar a Firestore
-        return new Response(JSON.stringify({ ok: true }), { 
-            status: 200, 
-            headers: { 'Content-Type': 'application/json' } 
-        });
+        // ⚡ Responder inmediatamente
+        return res.status(200).json({ ok: true });
 
     } catch (e: any) {
         console.error('[WEBHOOK TW] Error:', e.message);
-        return new Response(JSON.stringify({ error: 'Bad Request' }), { status: 400 });
+        return res.status(500).json({ error: 'Internal Error' });
     }
-}
-
-// GET healthcheck
-export async function GET() {
-    return new Response(JSON.stringify({
-        online: true,
-        firebase: !!db,
-        timestamp: new Date().toISOString(),
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
