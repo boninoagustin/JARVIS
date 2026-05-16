@@ -1033,11 +1033,12 @@ export async function processTradingAlert(alertText: string) {
                     totalPoints += spatialBonus; // +5 a +10 pts según TF
                     orphanPenalty = 0; // sin penalización porque el mapa respalda
                 } else {
-                    // 🔧 FIX: Penalización de -3 si no hay zonas en memoria.
+                    // 🔧 FIX: Penalización por CHoCH huérfano (sin zonas en memoria).
+                    // Crypto (BTC/ETH): -1 pt (mercado 24/7, CHoCHs más frecuentes, zonas más volátiles)
+                    // Forex/Índices: -3 pts (sesiones definidas, zonas más estables)
                     // PERO: si el puntaje bruto sin penalizar ya es ≥12, la penalización se ANULA.
-                    // Esto permite entradas en reversiones contra tendencia (ej: EURUSD 4H/1H SELL
-                    // pero 3M BUY acumuló 21 pts por CHoCH + Sweep + DIV — es un setup válido).
-                    const rawPenalty = !hasHTFBacking ? 3 : 0;
+                    const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
+                    const rawPenalty = !hasHTFBacking ? (isCrypto ? 1 : 3) : 0;
                     const wouldBeAfterPenalty = totalPoints - rawPenalty;
                     if (rawPenalty > 0 && totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
                         // ⚡ BYPASS: puntaje alto vence la penalización
@@ -1084,9 +1085,15 @@ export async function processTradingAlert(alertText: string) {
                     sessionThresholds = getCurrentSessionThresholds();
                 }
 
+                // 🔧 v5.5: Mínimo de puntos dinámico por tipo de activo
+                // Crypto (BTC/ETH): 4 pts (24/7, más oportunidades pero más ruido)
+                // Forex/Índices: 5 pts (sesiones definidas, zonas más estables)
                 let minPtsRequired = currentDirection === 'BUY' 
                     ? (sessionThresholds?.buy || dynamicBotConfig.minPointsForBuy) 
                     : (sessionThresholds?.sell || dynamicBotConfig.minPointsForSell);
+                
+                const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
+                if (isCrypto) minPtsRequired = Math.max(minPtsRequired - 1, 3); // Crypto: 1 punto menos
                 
                 if (consecutiveLosses >= 2) minPtsRequired += 2;
 
