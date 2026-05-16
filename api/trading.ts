@@ -1,50 +1,50 @@
 import { db } from '../src/db/memory.js';
 
-export const maxDuration = 10;
+export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
 
-export default async function handler(req: any, res: any) {
-    // 🏥 Healthcheck GET (UptimeRobot / monitoreo)
+export async function POST(req: Request) {
+    // 🏥 Healthcheck GET se maneja en otro handler
     if (req.method === 'GET') {
-        return res.status(200).json({
+        return new Response(JSON.stringify({
             online: true,
             firebase: !!db,
             timestamp: new Date().toISOString(),
-        });
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method Not Allowed' });
+    if (!db) {
+        return new Response(JSON.stringify({ error: 'Firebase not initialized' }), { status: 500 });
     }
 
     try {
-        let alertText = '';
-        if (typeof req.body === 'string') {
-            alertText = req.body;
-        } else if (req.body && req.body.text) {
-            alertText = req.body.text;
-        } else {
-            alertText = JSON.stringify(req.body);
-        }
+        const alertText = await req.text();
+        console.log(`[WEBHOOK TW] ${alertText.substring(0, 150)}...`);
 
-        console.log(`[WEBHOOK TRADINGVIEW] Alerta recibida:`, alertText.substring(0, 200));
-
-        if (!db) {
-            throw new Error('Firebase not initialized');
-        }
-
-        // Escribimos el update a Firebase sin procesarlo en Vercel
-        await db.collection('trading_incoming').add({
+        // Escribir a Firebase SIN esperar confirmación
+        db.collection('trading_incoming').add({
             alertText,
             received_at: new Date().toISOString(),
             status: 'pending'
+        }).catch(e => console.error('[WEBHOOK TW] Firestore write error:', e.message));
+
+        // Responder inmediatamente sin esperar a Firestore
+        return new Response(JSON.stringify({ ok: true }), { 
+            status: 200, 
+            headers: { 'Content-Type': 'application/json' } 
         });
 
-        res.status(200).json({ ok: true, message: 'Alerta SMC encolada' });
-
     } catch (e: any) {
-        console.error('[WEBHOOK TRADINGVIEW] Error inicial:', e.message);
-        if (!res.headersSent) {
-            return res.status(500).json({ error: 'Error procesando alerta' });
-        }
+        console.error('[WEBHOOK TW] Error:', e.message);
+        return new Response(JSON.stringify({ error: 'Bad Request' }), { status: 400 });
     }
+}
+
+// GET healthcheck
+export async function GET() {
+    return new Response(JSON.stringify({
+        online: true,
+        firebase: !!db,
+        timestamp: new Date().toISOString(),
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
