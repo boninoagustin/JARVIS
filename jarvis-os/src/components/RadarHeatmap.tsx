@@ -17,6 +17,7 @@ interface RadarState {
   scoreBuy: { points: number };
   scoreSell: { points: number };
   zones: any[];
+  nextZones?: any[];      // 🆕 Zonas ordenadas por puntaje para el día
   lastPrice?: number;
   activeImpulseBuy?: ImpulseLeg | null;
   activeImpulseSell?: ImpulseLeg | null;
@@ -45,16 +46,9 @@ const getIcon = (dir: string) => {
 
 const SkeletonRow = () => (
   <tr>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
-    <td><div className="skeleton skeleton-row" /></td>
+    {Array.from({ length: 11 }, (_, i) => (
+      <td key={i}><div className="skeleton skeleton-row" /></td>
+    ))}
   </tr>
 );
 
@@ -105,10 +99,11 @@ export default function RadarHeatmap() {
               <th>1H (TREND)</th>
               <th>15M (MICRO)</th>
               <th>GATILLO (3M)</th>
-              <th>PUNTOS COMPRA</th>
-              <th>PUNTOS VENTA</th>
+              <th>PUNTOS C</th>
+              <th>PUNTOS V</th>
               <th>TERMÓMETRO</th>
               <th style={{ minWidth: '180px' }}>OTE 50%</th>
+              <th style={{ minWidth: '150px' }}>PRÓX. ZONAS</th>
             </tr>
           </thead>
           <tbody>
@@ -186,6 +181,33 @@ export default function RadarHeatmap() {
                         </div>
                       )) : (
                         <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.7rem' }}>
+                      {(asset.nextZones && asset.nextZones.length > 0) 
+                        ? asset.nextZones.slice(0, 3).map((z: any, zi: number) => (
+                        <div key={zi} style={{
+                          display: 'flex', alignItems: 'center', gap: '4px',
+                          color: z.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
+                          opacity: 0.85
+                        }}>
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>
+                            {z.tf ? (z.tf === '240' ? '4H' : z.tf === '60' ? '1H' : z.tf === '15' ? '15M' : '3M') : '?'}
+                          </span>
+                          <span className="mono">{z.btm?.toFixed(decimals)}→{z.top?.toFixed(decimals)}</span>
+                          <span style={{
+                            fontSize: '0.55rem', padding: '0px 3px', borderRadius: '2px',
+                            backgroundColor: z.medal?.includes('Platino') ? 'rgba(142,36,170,0.2)' : 
+                                           z.medal?.includes('Oro') ? 'rgba(245,127,23,0.2)' : 'rgba(100,100,100,0.1)',
+                            color: 'var(--text-tertiary)'
+                          }}>
+                            {z.medal?.substring(0, 4) || 'OB'}
+                          </span>
+                        </div>
+                      )) : (
+                        <span style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem' }}>—</span>
                       )}
                     </div>
                   </td>
