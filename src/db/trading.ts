@@ -1052,6 +1052,8 @@ export async function processTradingAlert(alertText: string) {
                 // Penalización por zona trampa (Caso C)
                 const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
                 if (trapPenalty > 0) totalPoints -= trapPenalty;
+                // Aplicar penalización de huérfano después de calcular todos los bonus
+                if (orphanPenalty > 0) totalPoints -= orphanPenalty;
 
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';

@@ -249,8 +249,11 @@ f_short_medal(string medal) =>
     medal == "Platino" ? "PLAT" : medal == "Oro" ? "ORO" : medal == "Plata" ? "PLATA" : medal == "Bronce" ? "BRONCE" : medal == "CHoCH🚀" ? "CHoCH" : medal == "Breaker" ? "Breaker" : medal == "God Breaker" ? "God_Brk" : medal
 
 // 🆕 v5.1: Safe JSON float — returns "null" for na values instead of "NaN"
+// v5.1.1: FIX — formatea a string con precisión limitada para evitar que la alerta exceda 4096 chars
+// Usa str.tostring() sin formato para que TradingView no agregue ceros innecesarios
+// (ej: 1.05 en vez de 1.050000)
 f_json_float(float val) =>
-    na(val) ? "null" : str.tostring(math.round_to_mintick(val))
+    na(val) ? "null" : str.tostring(val)
 
 // 🆕 v5.1: Safe JSON int — returns "null" for na values
 f_json_int(int val) =>
@@ -1459,6 +1462,9 @@ var bool sync_has_divs = false
 if use_sync and barstate.isconfirmed and in_kz
     string ob_json = ""
     int ob_count = 0
+    // 🛡️ v5.1.1: Límite agresivo para el payload JSON. TradingView tiene máximo 4096 chars
+    // por alerta. El prefijo ocupa ~100 chars y el resto ([, ]) ~50. Mantenemos ob_json ≤ 3800.
+    int MAX_JSON_CHARS = 3800
     
     if array.size(all_obs) > 0
         for i = 0 to array.size(all_obs) - 1
@@ -1466,7 +1472,7 @@ if use_sync and barstate.isconfirmed and in_kz
             if ob_res.hidden or ob_res.mitigated
                 continue
             
-            if str.length(ob_json) > 3500
+            if str.length(ob_json) > MAX_JSON_CHARS
                 break
             
             if ob_count > 0
@@ -1481,15 +1487,12 @@ if use_sync and barstate.isconfirmed and in_kz
             
             ob_count += 1
     
-    // 🆕 v5.1: Breakers activos en el JSON
-    if array.size(breaker_obs) > 0
+    // 🛡️ v5.1.1: Solo incluir Breakers si hay espacio suficiente en el JSON
+    if array.size(breaker_obs) > 0 and str.length(ob_json) <= MAX_JSON_CHARS
         for bi = 0 to array.size(breaker_obs) - 1
             brk = array.get(breaker_obs, bi)
-            if brk.hidden
+            if brk.hidden or str.length(ob_json) > MAX_JSON_CHARS
                 continue
-            
-            if str.length(ob_json) > 3500
-                break
                 
             if ob_count > 0
                 ob_json += ","
@@ -1502,12 +1505,12 @@ if use_sync and barstate.isconfirmed and in_kz
             
             ob_count += 1
 
-    // 🆕 v5.1: Divergencias activas en el JSON
-    if show_divs and array.size(active_divs) > 0
+    // 🛡️ v5.1.1: Solo incluir Divergencias si hay espacio disponible
+    if show_divs and array.size(active_divs) > 0 and str.length(ob_json) <= MAX_JSON_CHARS
         for di = 0 to array.size(active_divs) - 1
             div = array.get(active_divs, di)
             
-            if str.length(ob_json) > 3500
+            if str.length(ob_json) > MAX_JSON_CHARS
                 break
                 
             if ob_count > 0
@@ -1526,5 +1529,6 @@ if use_sync and barstate.isconfirmed and in_kz
     
     if ob_count > 0
         string trend_str = active_trend > 0 ? "BUY" : active_trend < 0 ? "SELL" : "NEUTRAL"
-        string sync_msg = "TF: " + timeframe.period + " | Trend: " + trend_str + " | Predict IA: " + (crt_bias > 0 ? "BUY" : crt_bias < 0 ? "SELL" : "NEUTRAL") + " | VWAP: " + vwap_status + " | Payload: [" + ob_json + "]"
+        // 🛡️ v5.1.1: Prefijo mínimo sin Predict IA/VWAP para ahorrar caracteres
+        string sync_msg = "TF: " + timeframe.period + " | Trend: " + trend_str + " | Payload: [" + ob_json + "]"
         f_ia_alert("SYNC_ZONES", syminfo.ticker, sync_msg)
