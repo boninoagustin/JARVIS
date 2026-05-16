@@ -356,6 +356,10 @@ export async function processTradingAlert(alertText: string) {
     
     try {
         await previousLock; // Esperar que termine el procesamiento anterior de este ticker
+    } catch (e: any) {
+        // Error en el lock secuencial (raro, pero manejado)
+        console.error(`[RADAR] Error en lock para ${ticker}:`, e.message);
+    }
 
     tickerLastSeen.set(ticker, nowMs);
 
