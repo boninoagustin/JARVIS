@@ -1492,12 +1492,13 @@ if use_sync and barstate.isconfirmed and in_kz
             if ob_count > 0
                 ob_json += ","
             
-            // 🆕 v5.1: JSON mejorado con tf, tp y sl calculados con ATR
+            // 🆕 v5.1: JSON ultra-compacto para no exceder 4096 chars de TradingView
+            // Cada zona: ~90 chars (vs ~150 antes). Campos: t=TF, d=dirección, p=top, b=btm, 
+            // lv=nivel, md=medalla, sc=score, tp=take profit, sl=stop loss, a=ATR
             string sl_str = ob_res.is_bull ? f_json_float(ob_res.btm - atr_global * 0.5) : f_json_float(ob_res.top + atr_global * 0.5)
             string tp_str = ob_res.is_bull ? f_json_float(ob_res.top + atr_global * 1.5) : f_json_float(ob_res.btm - atr_global * 1.5)
-            string mid_str = f_json_float((ob_res.top + ob_res.btm) / 2.0)
-            
-            ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(ob_res.top) + ',"b":' + f_json_float(ob_res.btm) + ',"mi":' + mid_str + ',"lv":"' + ob_res.level + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + f_json_int(ob_res.score) + ',"tp":' + tp_str + ',"sl":' + sl_str + ',"a":' + f_json_float(atr_global) + '}'
+
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(ob_res.top) + ',"b":' + f_json_float(ob_res.btm) + ',"lv":"' + ob_res.level + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + f_json_int(ob_res.score) + ',"tp":' + tp_str + ',"sl":' + sl_str + ',"a":' + f_json_float(atr_global) + '}'
             
             ob_count += 1
     
@@ -1515,7 +1516,7 @@ if use_sync and barstate.isconfirmed and in_kz
             string brk_tp = brk.is_bull ? f_json_float(brk.top + atr_global * 1.5) : f_json_float(brk.btm - atr_global * 1.5)
             string brk_mid = f_json_float((brk.top + brk.btm) / 2.0)
             
-            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(brk.top) + ',"b":' + f_json_float(brk.btm) + ',"mi":' + brk_mid + ',"lv":"' + brk.level + '","md":"' + (brk.medal == "God Breaker" ? "GOD_BRK" : "BRK") + '","sc":' + f_json_int(brk.score) + ',"tp":' + brk_tp + ',"sl":' + brk_sl + ',"a":' + f_json_float(atr_global) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(brk.top) + ',"b":' + f_json_float(brk.btm) + ',"lv":"' + brk.level + '","md":"' + (brk.medal == "God Breaker" ? "GOD_BRK" : "BRK") + '","sc":' + f_json_int(brk.score) + ',"tp":' + brk_tp + ',"sl":' + brk_sl + ',"a":' + f_json_float(atr_global) + '}'
             
             ob_count += 1
 
@@ -1536,7 +1537,7 @@ if use_sync and barstate.isconfirmed and in_kz
             string div_sl = div.is_bull ? f_json_float(div_btm - atr_global * 0.5) : f_json_float(div_top + atr_global * 0.5)
             string div_tp = div.is_bull ? f_json_float(div_top + atr_global * 1.5) : f_json_float(div_btm - atr_global * 1.5)
             
-            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(div_top) + ',"b":' + f_json_float(div_btm) + ',"mi":' + f_json_float(div_mid) + ',"lv":"DIV","md":"SMC_DIV","sc":4,"tp":' + div_tp + ',"sl":' + div_sl + ',"a":' + f_json_float(atr_global) + '}'
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(div_top) + ',"b":' + f_json_float(div_btm) + ',"lv":"DIV","md":"SMC_DIV","sc":4,"tp":' + div_tp + ',"sl":' + div_sl + ',"a":' + f_json_float(atr_global) + '}'
             
             ob_count += 1
             sync_has_divs := true
