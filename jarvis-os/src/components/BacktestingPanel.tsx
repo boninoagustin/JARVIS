@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, where, orderBy, limit, addDoc, serverTimestamp, doc } from 'firebase/firestore';
+import { useState, useEffect, useRef } from 'react';
+import { collection, onSnapshot, query, where, orderBy, limit, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Play, Calendar, TrendingUp, BarChart2, BookOpen } from 'lucide-react';
+import { Play, Calendar, TrendingUp, BarChart2, BookOpen, Upload, FileText } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface TradeLog {
@@ -27,6 +27,9 @@ interface Session {
     timestamp: number;
     status: string;
     configNote?: string;
+    mode?: string;
+    totalEvents?: number;
+    processedEvents?: number;
 }
 
 export default function BacktestingPanel() {
@@ -37,10 +40,17 @@ export default function BacktestingPanel() {
   const [minBuyPoints, setMinBuyPoints] = useState(5);
   const [minSellPoints, setMinSellPoints] = useState(5);
   const [isRunning, setIsRunning] = useState(false);
+  const [isReplaying, setIsReplaying] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const { toast } = useToast();
+
+  // 🆕 v5.1: Upload de logs multi-TF
+  const TF_LABELS = ['3', '15', '60', '240'] as const;
+  const [uploadedLogs, setUploadedLogs] = useState<Map<string, string[]>>(new Map());
+  const [uploading, setUploading] = useState(false);
+  const fileInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
 
   useEffect(() => {
     // 1. Escuchar estado de la sesión activa
@@ -66,6 +76,16 @@ export default function BacktestingPanel() {
         unsubStatus();
         unsubSessions();
     };
+  }, []);
+
+  // 🆕 v5.1: Sincronizar estado de replay con el backend
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'app_settings', 'backtesting_status'), (snap) => {
+      if (snap.exists()) {
+        setIsReplaying(snap.data().replaying || false);
+      }
+    });
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -108,6 +128,102 @@ export default function BacktestingPanel() {
       toast('Sesión finalizada', 'success');
     } catch (e) {
       toast('Error al detener', 'error');
+    }
+  };
+
+  const handleStopReplay = async () => {
+    try {
+      await addDoc(collection(db, 'app_commands'), {
+        command: 'stop_replay',
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+      toast('Replay detenido', 'success');
+    } catch (e) {
+      toast('Error al detener replay', 'error');
+    }
+  };
+
+  // 🆕 v5.1: Parsear archivo de log de Pine Script
+  const parseLogFile = (content: string, tf: string): string[] => {
+    const lines = content.split('\n').filter(l => {
+      const trimmed = l.trim();
+      // Filtrar líneas que tengan TS (timestamp), ignorar líneas vacías y headers
+      return trimmed.length > 0 && trimmed.includes(' | TS: ');
+    });
+    return lines;
+  };
+
+  // 🆕 v5.1: Handler de upload por timeframe
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, tf: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const content = ev.target?.result as string;
+      const parsed = parseLogFile(content, tf);
+      setUploadedLogs(prev => {
+        const next = new Map(prev);
+        next.set(tf, parsed);
+        return next;
+      });
+      toast(`✅ ${tf}: ${parsed.length} líneas con TS`, 'success');
+    };
+    reader.onerror = () => toast(`❌ Error leyendo ${file.name}`, 'error');
+    reader.readAsText(file);
+  };
+
+  // 🆕 v5.1: Enviar logs a Firestore y lanzar replay
+  const handleStartReplay = async () => {
+    if (uploadedLogs.size === 0) {
+      toast('Subí al menos 1 log antes de reproducir', 'error');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Crear sessionId compartido
+      const sessionId = `BT_REPLAY_${Date.now()}`;
+
+      // Guardar cada TF en un documento separado (Firestore tiene límite 1MB/doc)
+      const promises: Promise<void>[] = [];
+      for (const [tf, lines] of uploadedLogs.entries()) {
+        promises.push(
+          setDoc(doc(db, 'backtesting_logs', `${sessionId}_${tf}`), {
+            sessionId,
+            tf,
+            lines,
+            lineCount: lines.length,
+            createdAt: serverTimestamp()
+          })
+        );
+      }
+      await Promise.all(promises);
+
+      // Enviar comando al bot local
+      await addDoc(collection(db, 'app_commands'), {
+        command: 'replay_backtesting',
+        params: {
+          sessionId,
+          ticker: ticker || 'EURUSD',
+          configNote,
+          minBuyPoints,
+          minSellPoints,
+          tfs: Array.from(uploadedLogs.keys())
+        },
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+
+      setCurrentSessionId(sessionId);
+      toast(`🚀 Replay lanzado: ${uploadedLogs.size} TFs`, 'success');
+      setUploadedLogs(new Map());
+    } catch (e: any) {
+      console.error('[Replay] Error:', e);
+      toast(`Error: ${e.message}`, 'error');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -198,6 +314,89 @@ export default function BacktestingPanel() {
                             🛑 DETENER Y GUARDAR
                         </button>
                     )}
+                </div>
+            </div>
+
+            {/* 🆕 v5.1: SUBIR LOGS MULTI-TF (Backtesting Offline) */}
+            <div className="panel">
+                <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Upload size={18} color="var(--accent-gold)" /> SUBIR LOGS PINE EDITOR
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {TF_LABELS.map(tf => (
+                        <div key={tf} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ 
+                                minWidth: '36px', fontWeight: 700, fontSize: '0.8rem',
+                                color: tf === '3' ? 'var(--accent-red)' : tf === '240' ? '#7c4dff' : 'var(--accent-gold)'
+                            }}>
+                                {tf === '3' ? '3M' : tf === '15' ? '15M' : tf === '60' ? '1H' : '4H'}
+                            </span>
+                            <input
+                                type="file"
+                                accept=".txt,.log,.csv"
+                                onChange={(e) => handleFileUpload(e, tf)}
+                                disabled={isReplaying || uploading}
+                                ref={(el) => { fileInputRefs.current.set(tf, el); }}
+                                style={{ 
+                                    flex: 1, padding: '6px', fontSize: '0.7rem',
+                                    backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)',
+                                    borderRadius: '4px', color: 'var(--text-primary)'
+                                }}
+                            />
+                            {uploadedLogs.has(tf) && (
+                                <span style={{ color: 'var(--accent-green)', fontSize: '0.7rem', fontWeight: 600, minWidth: '55px', textAlign: 'right' }}>
+                                    ✓ {uploadedLogs.get(tf)!.length}
+                                </span>
+                            )}
+                        </div>
+                    ))}
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        {!isReplaying ? (
+                            <button
+                                type="button"
+                                onClick={handleStartReplay}
+                                disabled={uploadedLogs.size === 0 || uploading}
+                                style={{
+                                    flex: 1, padding: '10px',
+                                    backgroundColor: uploadedLogs.size > 0 ? '#7c4dff' : 'var(--bg-secondary)',
+                                    color: 'white', border: 'none', borderRadius: '4px',
+                                    fontWeight: 700, cursor: uploadedLogs.size > 0 ? 'pointer' : 'not-allowed',
+                                    opacity: uploadedLogs.size > 0 ? 1 : 0.5
+                                }}
+                            >
+                                ▶ REPRODUCIR {uploadedLogs.size > 0 ? `(${uploadedLogs.size} TFs)` : ''}
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={handleStopReplay}
+                                style={{
+                                    flex: 1, padding: '10px',
+                                    backgroundColor: 'var(--accent-red)', color: 'white',
+                                    border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer'
+                                }}
+                            >
+                                ⏹ DETENER REPLAY
+                            </button>
+                        )}
+                        {uploadedLogs.size > 0 && !isReplaying && (
+                            <button
+                                type="button"
+                                onClick={() => setUploadedLogs(new Map())}
+                                style={{
+                                    padding: '10px 14px', backgroundColor: 'transparent',
+                                    color: 'var(--text-tertiary)', border: '1px solid var(--border-color)',
+                                    borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem'
+                                }}
+                            >
+                                Limpiar
+                            </button>
+                        )}
+                    </div>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                        📥 Descargá logs desde Pine Editor → Panel → Descargar. Subí 1 archivo por TF.
+                    </div>
                 </div>
             </div>
 

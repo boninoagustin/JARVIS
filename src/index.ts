@@ -115,6 +115,12 @@ async function main() {
                             } else if (command === 'stop_backtesting') {
                                 const { stopBacktesting } = await import('./services/backtesting.js');
                                 await stopBacktesting();
+                            } else if (command === 'replay_backtesting') {
+                                const { replayBacktestingFromFirestore } = await import('./services/backtesting.js');
+                                await replayBacktestingFromFirestore(params.sessionId, params.ticker, params.configNote, params.minBuyPoints, params.minSellPoints);
+                            } else if (command === 'stop_replay') {
+                                const { stopReplay } = await import('./services/backtesting.js');
+                                await stopReplay();
                             }
                             
                             await db?.collection('app_commands').doc(docId).delete();

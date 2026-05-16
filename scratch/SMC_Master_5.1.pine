@@ -226,17 +226,19 @@ use_heartbeat    = preset_3m ? true : preset_15m ? true : preset_1h ? true : pre
 // =========================================================================
 // Alerta estándar (una por cierre de vela)
 f_ia_alert(id, sym, msg) =>
+    string final_msg = msg + " | TS: " + str.tostring(time)
     if barstate.isrealtime
-        alert(id + " | " + sym + " | " + msg, alert.freq_once_per_bar_close)
+        alert(id + " | " + sym + " | " + final_msg, alert.freq_once_per_bar_close)
     else
-        log.info(id + " | " + msg)
+        log.info(id + " | " + final_msg)
 
 // 🆕 Alerta con frecuencia configurable (para PING usa freq_all)
 f_ia_alert_freq(id, sym, msg, freq) =>
+    string final_msg = msg + " | TS: " + str.tostring(time)
     if barstate.isrealtime
-        alert(id + " | " + sym + " | " + msg, freq)
+        alert(id + " | " + sym + " | " + final_msg, freq)
     else
-        log.info(id + " | " + msg)
+        log.info(id + " | " + final_msg)
 
 // Compact price formatting to avoid 4096-char alert limit
 f_compact_price(float price) =>
@@ -1432,7 +1434,7 @@ if use_heartbeat and barstate.isconfirmed and hb_counter >= 20
 
 // 🆕 v5.1: PING 1 vez por cierre de vela (Cuida la cuota de Firebase)
 if use_ping and barstate.isconfirmed
-    f_ia_alert("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | TS: " + str.tostring(time))
+    f_ia_alert("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status)
     
 // --- SYNC ZONES (Mapa de zonas para Jarvis) ---
 var bool sync_has_divs = false
