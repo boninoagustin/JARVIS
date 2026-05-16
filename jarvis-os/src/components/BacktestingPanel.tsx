@@ -46,6 +46,7 @@ export default function BacktestingPanel() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [uploadedLogs, setUploadedLogs] = useState<Map<string, string[]>>(new Map());
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null); // 🆕 Guarda el sessionId de los logs subidos
   const [uploading, setUploading] = useState(false);
   const fileInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
   const { toast } = useToast();
@@ -98,6 +99,10 @@ export default function BacktestingPanel() {
       setUploadedLogs(prev => {
         const next = new Map(prev);
         next.set(tf, parsed);
+        // 🆕 Auto-generar sessionId al subir el primer archivo
+        if (!pendingSessionId) {
+          setPendingSessionId(`BT_${Date.now()}`);
+        }
         return next;
       });
       const tfName = tf === '3' ? '3M' : tf === '15' ? '15M' : tf === '60' ? '1H' : '4H';
@@ -114,7 +119,11 @@ export default function BacktestingPanel() {
     }
     setUploading(true);
     try {
-      const sessionId = `BT_${Date.now()}`;
+      // 🔧 FIX: Usar el sessionId guardado al subir los logs, no crear uno nuevo
+      const sessionId = pendingSessionId || `BT_${Date.now()}`;
+      if (!pendingSessionId) {
+        console.log('[BACKTEST] ⚠️ No hay sessionId pendiente, usando uno nuevo. Subí los logs primero.');
+      }
       const CHUNK_SIZE_BYTES = 500_000; // 500KB por chunk (Firestore limit: 1MB)
       
       const promises = Array.from(uploadedLogs.entries()).map(async ([tf, lines]) => {
@@ -178,6 +187,7 @@ export default function BacktestingPanel() {
       setCurrentSessionId(sessionId);
       toast(`🚀 Replay lanzado: ${uploadedLogs.size} TFs`, 'success');
       setUploadedLogs(new Map());
+      setPendingSessionId(null); // 🆕 Limpiar después de lanzar
     } catch (e: any) {
       toast(`Error: ${e.message}`, 'error');
     } finally {
