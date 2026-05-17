@@ -1488,14 +1488,10 @@ export function startWatchdog() {
                 // 🛡️ v5.5: Solo enviar alerta de desconexión si realmente está desconectado
                 // (>2 horas sin heartbeat Y sin otros eventos en el mismo período)
                 if (hbAge < TWO_HOURS_MS) continue; // Tiene heartbeat reciente, no está desconectado
-                const disconnectionMsg = `🔌 <b>ALERTA DE DESCONEXIÓN | ${ticker}</b>\n\n` +
-                    `⏱️ Sin alertas: ${inactiveMin} minutos\n` +
-                    `💓 Último HEARTBEAT: hace ${hbInactiveMin > 0 ? hbInactiveMin + ' min' : 'N/A'}\n` +
-                    `📡 Posible falla en TradingView → Vercel → Firebase\n\n` +
-                    `🧠 JARVIS sigue escuchando pero no recibe datos de ${ticker}.`;
-                sendTelegramAlert(disconnectionMsg).catch(() => {});
-                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta enviada.`);
-                tickerLastSeen.delete(ticker);
+                
+                // 🛡️ v5.5.1: Solo alertar 1 vez por desconexión — no spamear
+                tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
+                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta Silenciosa.`);
             }
         }
     }, WATCHDOG_INTERVAL_MS);
