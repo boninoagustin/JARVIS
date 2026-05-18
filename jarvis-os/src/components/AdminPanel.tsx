@@ -9,6 +9,7 @@ interface BotConfig {
   minPointsForBuy: number;
   minPointsForSell: number;
   baseRiskPercentage: number;
+  slBufferPercent: number;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -16,6 +17,7 @@ const DEFAULT_CONFIG: BotConfig = {
   minPointsForBuy: 6,
   minPointsForSell: 6,
   baseRiskPercentage: 1.0,
+  slBufferPercent: 0.1,
 };
 
 export default function AdminPanel() {
@@ -97,12 +99,12 @@ export default function AdminPanel() {
           <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
               <label style={{ fontWeight: 600 }}>Puntos mínimos para BUY (Radar)</label>
-              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForBuy} / 8</span>
+              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForBuy} / 20</span>
             </div>
             <input 
               type="range" 
               min="1" 
-              max="8" 
+              max="20" 
               step="1"
               value={config.minPointsForBuy}
               onChange={(e) => handleChange('minPointsForBuy', parseInt(e.target.value))}
@@ -113,12 +115,12 @@ export default function AdminPanel() {
           <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
               <label style={{ fontWeight: 600 }}>Puntos mínimos para SELL (Radar)</label>
-              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForSell} / 8</span>
+              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForSell} / 20</span>
             </div>
             <input 
               type="range" 
               min="1" 
-              max="8" 
+              max="20" 
               step="1"
               value={config.minPointsForSell}
               onChange={(e) => handleChange('minPointsForSell', parseInt(e.target.value))}
@@ -156,6 +158,26 @@ export default function AdminPanel() {
               onChange={(e) => handleChange('baseRiskPercentage', parseFloat(e.target.value))}
             />
             <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>Riesgo recomendado para el cálculo de tamaño de posición (Informativo por ahora).</p>
+          </div>
+
+          <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px', borderColor: 'var(--accent-red)', borderWidth: '1px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <label style={{ fontWeight: 600 }}>🛡️ SL Buffer — Margen extra sobre el Origin (%)</label>
+              <span className="mono" style={{ color: 'var(--accent-red)' }}>{config.slBufferPercent}%</span>
+            </div>
+            <input 
+              type="range" 
+              min="0" 
+              max="0.5" 
+              step="0.01"
+              value={config.slBufferPercent}
+              onChange={(e) => handleChange('slBufferPercent', parseFloat(e.target.value))}
+            />
+            <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
+              Porcentaje extra que se agrega al precio de origin del impulso para colocar el Stop Loss.
+              Esto le da margen al trade para absorber sweeps de liquidez sin activar el SL prematuramente.
+              <br/><span style={{ color: 'var(--accent-gold)', fontWeight: 600 }}>Ejemplo BTCUSD a $78,000: 0.1% = ~$78 de margen extra.</span>
+            </p>
           </div>
 
         </div>

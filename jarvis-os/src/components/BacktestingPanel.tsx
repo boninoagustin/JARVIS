@@ -1,399 +1,359 @@
-import { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, query, where, orderBy, limit, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { TrendingUp, BarChart2, BookOpen, Upload } from 'lucide-react';
+import { useState, useRef, useCallback } from 'react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText } from 'lucide-react';
 import { useToast } from './Toast';
+import { parseCSV, runBacktest } from '../services/backtestEngine';
+import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
-interface TradeLog {
+interface UploadedFile {
+  name: string;
+  tf: string;
+  lines: string[];
+  lineCount: number;
+}
+
+interface SessionHistory {
   id: string;
   ticker: string;
-  direction: string;
-  grade: string;
-  points?: number;
-  result?: string;
-  timestamp: number;
-  mode?: string;
-  sessionId?: string;
-  pnl?: number;
-  entryPrice?: number;
-  tp1Price?: number;
-  slPrice?: number;
+  date: string;
+  trades: number;
+  winRate: string;
+  pnl: string;
+  status: string;
+  tradeData?: BacktestTrade[];
 }
-
-interface Session {
-    id: string;
-    ticker: string;
-    startDate: string;
-    endDate?: string;
-    timestamp: number;
-    status: string;
-    configNote?: string;
-    mode?: string;
-    totalEvents?: number;
-    processedEvents?: number;
-    tfCount?: number;
-}
-
-const TF_LABELS = ['3', '15', '60', '240'] as const;
 
 export default function BacktestingPanel() {
-  const [ticker, setTicker] = useState('EURUSD');
-  const [configNote, setConfigNote] = useState('');
+  const [ticker, setTicker] = useState('BTCUSD');
   const [minBuyPoints, setMinBuyPoints] = useState(5);
   const [minSellPoints, setMinSellPoints] = useState(5);
-  const [isReplaying, setIsReplaying] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [trades, setTrades] = useState<TradeLog[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [uploadedLogs, setUploadedLogs] = useState<Map<string, string[]>>(new Map());
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null); // 🆕 Guarda el sessionId de los logs subidos
-  const [uploading, setUploading] = useState(false);
-  const fileInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
+  const [slBufferPercent, setSlBufferPercent] = useState(0.1);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [trades, setTrades] = useState<BacktestTrade[]>([]);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [sessions, setSessions] = useState<SessionHistory[]>(() => {
+    try { return JSON.parse(localStorage.getItem('bt_sessions') || '[]'); } catch { return []; }
+  });
+  const [showLog, setShowLog] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
-  // Escuchar estado de replay
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'app_settings', 'backtesting_status'), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setIsReplaying(data.replaying || false);
-        if (data.sessionId) setCurrentSessionId(data.sessionId);
-        if (data.replaying) {
-          setMinBuyPoints(data.minBuyPoints || 5);
-          setMinSellPoints(data.minSellPoints || 5);
-        }
-      }
+  const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '3': 3 };
+  const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '3': '3M' };
+  const TF_COLOR: Record<string, string> = { '240': '#7c4dff', '60': '#0088ff', '15': 'var(--accent-gold)', '3': 'var(--accent-red)' };
+
+  const handleFilesUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const content = ev.target?.result as string;
+        const { lines, detectedTF } = parseCSV(content);
+        if (lines.length === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
+        setUploadedFiles(prev => {
+          const filtered = prev.filter(f => f.tf !== detectedTF);
+          return [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
+            .sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
+        });
+        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lines.length} eventos cargados`, 'success');
+      };
+      reader.readAsText(file);
     });
-    return unsub;
-  }, []);
+    e.target.value = '';
+  }, [toast]);
 
-  // Escuchar sesiones históricas
-  useEffect(() => {
-    const q = query(collection(db, 'backtesting_sessions'), orderBy('timestamp', 'desc'), limit(10));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setSessions(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Session)));
-    });
-    return unsub;
-  }, []);
+  const handleRun = useCallback(() => {
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
 
-  // Escuchar trades
-  useEffect(() => {
-    if (!currentSessionId) {
-      const q = query(collection(db, 'trade_journal'), where('mode', '==', 'backtesting'), orderBy('timestamp', 'desc'), limit(50));
-      return onSnapshot(q, (snap) => setTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeLog))));
-    }
-    const q = query(collection(db, 'trade_journal'), where('sessionId', '==', currentSessionId), orderBy('timestamp', 'desc'));
-    return onSnapshot(q, (snap) => setTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeLog))));
-  }, [currentSessionId]);
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
-  const parseLogFile = (content: string, _tf: string): string[] => {
-    return content.split('\n').filter(l => l.trim().length > 0 && l.includes(' | TS: '));
-  };
+    // Run in next tick to allow UI update
+    setTimeout(() => {
+      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent }, (pct, currentTrades) => {
+        setProgress(pct);
+        setTrades([...currentTrades]);
+      });
+      setResult(res);
+      setTrades(res.trades);
+      setProgress(100);
+      setIsRunning(false);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, tf: string) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const parsed = parseLogFile(ev.target?.result as string, tf);
-      setUploadedLogs(prev => {
-        const next = new Map(prev);
-        next.set(tf, parsed);
-        // 🆕 Auto-generar sessionId al subir el primer archivo
-        if (!pendingSessionId) {
-          setPendingSessionId(`BT_${Date.now()}`);
-        }
+      // Save to history
+      const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
+      const wins = closed.filter(t => t.result === 'WIN').length;
+      const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
+      const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0).toFixed(2);
+      const session: SessionHistory = {
+        id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
+        trades: res.trades.length, winRate: wr, pnl, status: 'completed',
+        tradeData: res.trades,
+      };
+      setSessions(prev => {
+        const next = [session, ...prev].slice(0, 20);
+        localStorage.setItem('bt_sessions', JSON.stringify(next));
         return next;
       });
-      const tfName = tf === '3' ? '3M' : tf === '15' ? '15M' : tf === '60' ? '1H' : '4H';
-      toast(`✅ ${tfName}: ${parsed.length} líneas`, 'success');
-    };
-    reader.onerror = () => toast(`❌ Error leyendo ${file.name}`, 'error');
-    reader.readAsText(file);
-  };
+      setSelectedSession(session.id);
+      toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
+    }, 50);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, toast]);
 
-  const handleStartReplay = async () => {
-    if (uploadedLogs.size === 0) {
-      toast('Subí al menos 1 log antes de reproducir', 'error');
-      return;
-    }
-    setUploading(true);
-    try {
-      // 🔧 FIX: Usar el sessionId guardado al subir los logs, no crear uno nuevo
-      const sessionId = pendingSessionId || `BT_${Date.now()}`;
-      if (!pendingSessionId) {
-        console.log('[BACKTEST] ⚠️ No hay sessionId pendiente, usando uno nuevo. Subí los logs primero.');
-      }
-      const CHUNK_SIZE_BYTES = 500_000; // 500KB por chunk (Firestore limit: 1MB)
-      
-      const promises = Array.from(uploadedLogs.entries()).map(async ([tf, lines]) => {
-        const docRef = doc(db, 'backtesting_logs', `${sessionId}_${tf}`);
-        
-        // 🛡️ v5.5: Chunking para evitar error de 1MB en Firestore
-        // Si el log supera 500KB, se parte en chunks y se guarda como subcolección
-        const totalJson = JSON.stringify(lines);
-        const totalBytes = new TextEncoder().encode(totalJson).length;
-        
-        if (totalBytes <= CHUNK_SIZE_BYTES) {
-          // Caso normal: entra en un solo documento
-          return setDoc(docRef, {
-            sessionId, tf, lines, lineCount: lines.length, 
-            chunked: false, totalBytes,
-            createdAt: serverTimestamp()
-          });
-        }
-        
-        // Caso chunked: partir en trozos de 500KB
-        const chunks: string[][] = [];
-        let currentChunk: string[] = [];
-        let currentBytes = 0;
-        
-        for (const line of lines) {
-          const lineBytes = new TextEncoder().encode(line).length + 1; // +1 por coma/salto
-          if (currentBytes + lineBytes > CHUNK_SIZE_BYTES && currentChunk.length > 0) {
-            chunks.push(currentChunk);
-            currentChunk = [];
-            currentBytes = 0;
-          }
-          currentChunk.push(line);
-          currentBytes += lineBytes;
-        }
-        if (currentChunk.length > 0) chunks.push(currentChunk);
-        
-        console.log(`[BACKTEST] ${tf}: ${lines.length} líneas → ${chunks.length} chunks (${(totalBytes/1024).toFixed(1)} KB)`);
-        
-        // Guardar metadata + chunks como subcolección
-        await setDoc(docRef, {
-          sessionId, tf, lineCount: lines.length,
-          chunked: true, totalChunks: chunks.length, totalBytes,
-          createdAt: serverTimestamp()
-        });
-        
-        const chunkPromises = chunks.map((c, i) =>
-          setDoc(doc(db, 'backtesting_logs', `${sessionId}_${tf}`, 'chunks', `chunk_${i}`), {
-            index: i, lines: c, lineCount: c.length
-          })
-        );
-        return Promise.all(chunkPromises);
-      });
-      await Promise.all(promises);
-
-      await addDoc(collection(db, 'app_commands'), {
-        command: 'replay_backtesting',
-        params: { sessionId, ticker: ticker || 'EURUSD', configNote, minBuyPoints, minSellPoints, tfs: Array.from(uploadedLogs.keys()) },
-        status: 'pending', timestamp: serverTimestamp()
-      });
-
-      setCurrentSessionId(sessionId);
-      toast(`🚀 Replay lanzado: ${uploadedLogs.size} TFs`, 'success');
-      setUploadedLogs(new Map());
-      setPendingSessionId(null); // 🆕 Limpiar después de lanzar
-    } catch (e: any) {
-      toast(`Error: ${e.message}`, 'error');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleStopReplay = async () => {
-    try {
-      await addDoc(collection(db, 'app_commands'), { command: 'stop_replay', status: 'pending', timestamp: serverTimestamp() });
-      toast('Replay detenido', 'success');
-    } catch (e) {
-      toast('Error al detener', 'error');
-    }
-  };
-
+  // Metrics
   const metrics = (() => {
-    const closed = trades.filter(t => t.result && t.result !== 'SKIP');
+    const closed = trades.filter(t => t.result && t.result !== 'TIMEOUT');
     const wins = closed.filter(t => t.result === 'WIN').length;
-    return {
-      wr: closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0',
-      pnl: closed.reduce((acc, t) => acc + (t.pnl || 0), 0).toFixed(2),
-      count: closed.length
-    };
+    const losses = closed.filter(t => t.result === 'LOSS').length;
+    const be = closed.filter(t => t.result === 'BE').length;
+    const open = trades.filter(t => !t.result).length;
+    const pnlTotal = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+    const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
+    let maxDD = 0, peak = 0;
+    closed.forEach(t => {
+      peak += (t.pnl || 0);
+      if (peak < maxDD) maxDD = peak;
+    });
+    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2) };
   })();
+
+  const resultColor = (r?: string) => r === 'WIN' ? 'var(--accent-green)' : r === 'LOSS' ? 'var(--accent-red)' : r === 'BE' ? 'var(--accent-gold)' : 'var(--text-tertiary)';
 
   return (
     <div className="animate-fadeIn">
       <div className="panel-header">
-        <span><Upload size={14} style={{ marginRight: 8 }} /> BACKTESTING POR LOGS v2.0 {isReplaying && <span className="live-dot"></span>}</span>
+        <span><Upload size={14} style={{ marginRight: 8 }} /> BACKTESTING STANDALONE v3.0 {isRunning && <span className="live-dot"></span>}</span>
+        <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Motor local — sin servidor requerido</span>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '24px' }}>
-        {/* COLUMNA IZQUIERDA */}
+        {/* LEFT COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
-          {/* SUBIR LOGS */}
+          {/* UPLOAD */}
           <div className="panel">
             <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Upload size={18} color="var(--accent-gold)" /> SUBIR LOGS PINE EDITOR
+              <Upload size={18} color="var(--accent-gold)" /> SUBIR LOGS CSV
             </h3>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>ACTIVO</label>
-                  <input type="text" value={ticker}
-                    onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                    className="mono" placeholder="EURUSD"
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>NOTA</label>
-                  <input type="text" value={configNote}
-                    onChange={(e) => setConfigNote(e.target.value)}
-                    placeholder="SMC v5.1..."
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                  />
-                </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>ACTIVO</label>
+                <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} className="mono" placeholder="BTCUSD"
+                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
               </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
                 <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN PTS COMPRA</label>
-                  <input type="number" value={minBuyPoints} onChange={(e) => setMinBuyPoints(Number(e.target.value))}
-                    className="mono"
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                  />
+                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN BUY</label>
+                  <input type="number" value={minBuyPoints} onChange={e => setMinBuyPoints(Number(e.target.value))} className="mono"
+                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN PTS VENTA</label>
-                  <input type="number" value={minSellPoints} onChange={(e) => setMinSellPoints(Number(e.target.value))}
-                    className="mono"
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                  />
+                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN SELL</label>
+                  <input type="number" value={minSellPoints} onChange={e => setMinSellPoints(Number(e.target.value))} className="mono"
+                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
                 </div>
-              </div>
-
-              {TF_LABELS.map(tf => (
-                <div key={tf} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{
-                    minWidth: '36px', fontWeight: 700, fontSize: '0.8rem',
-                    color: tf === '3' ? 'var(--accent-red)' : tf === '240' ? '#7c4dff' : 'var(--accent-gold)'
-                  }}>
-                    {tf === '3' ? '3M' : tf === '15' ? '15M' : tf === '60' ? '1H' : '4H'}
-                  </span>
-                  <input type="file" accept=".txt,.log,.csv"
-                    onChange={(e) => handleFileUpload(e, tf)}
-                    disabled={isReplaying || uploading}
-                    ref={(el) => { fileInputRefs.current.set(tf, el); }}
-                    style={{ flex: 1, padding: '6px', fontSize: '0.7rem', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }}
-                  />
-                  {uploadedLogs.has(tf) && (
-                    <span style={{ color: 'var(--accent-green)', fontSize: '0.7rem', fontWeight: 600, minWidth: '50px', textAlign: 'right' }}>
-                      ✓ {uploadedLogs.get(tf)!.length}
-                    </span>
-                  )}
-                </div>
-              ))}
-
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                {!isReplaying ? (
-                  <button type="button" onClick={handleStartReplay}
-                    disabled={uploadedLogs.size === 0 || uploading}
-                    style={{ flex: 1, padding: '10px', backgroundColor: uploadedLogs.size > 0 ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedLogs.size > 0 ? 'pointer' : 'not-allowed', opacity: uploadedLogs.size > 0 ? 1 : 0.5 }}>
-                    ▶ REPRODUCIR {uploadedLogs.size > 0 ? `(${uploadedLogs.size} TFs)` : ''}
-                  </button>
-                ) : (
-                  <button type="button" onClick={handleStopReplay}
-                    style={{ flex: 1, padding: '10px', backgroundColor: 'var(--accent-red)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer' }}>
-                    ⏹ DETENER REPLAY
-                  </button>
-                )}
-                {uploadedLogs.size > 0 && !isReplaying && (
-                  <button type="button" onClick={() => setUploadedLogs(new Map())}
-                    style={{ padding: '10px 14px', backgroundColor: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}>
-                    Limpiar
-                  </button>
-                )}
-              </div>
-              <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                📥 Subí logs de 4H, 1H, 15M y 3M. El replay intercala <b>en paralelo</b> por timestamp. Las zonas de TFs altos sincronizan antes que los PINGs de 3M.
               </div>
             </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.05)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600 }}>🛡️ SL BUFFER</label>
+              <input type="range" min="0" max="0.5" step="0.01" value={slBufferPercent} onChange={e => setSlBufferPercent(parseFloat(e.target.value))}
+                style={{ flex: 1 }} />
+              <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{slBufferPercent}%</span>
+            </div>
+
+            <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--accent-gold)'; }}
+              onDragLeave={e => { e.currentTarget.style.borderColor = 'var(--border-color)'; }}
+              onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--border-color)'; if (e.dataTransfer.files.length) { const dt = new DataTransfer(); Array.from(e.dataTransfer.files).forEach(f => dt.items.add(f)); const input = fileInputRef.current; if (input) { input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); } } }}>
+              <FileText size={24} color="var(--text-tertiary)" style={{ marginBottom: '8px' }} />
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                Click o arrastrá los 4 CSV del Pine Editor
+              </div>
+              <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Auto-detecta TF por contenido (3M, 15M, 1H, 4H)
+              </div>
+            </div>
+            <input ref={fileInputRef} type="file" accept=".csv,.txt,.log" multiple onChange={handleFilesUpload} style={{ display: 'none' }} />
+
+            {uploadedFiles.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
+                {uploadedFiles.map(f => (
+                  <div key={f.tf} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.8rem', color: TF_COLOR[f.tf] || 'var(--text-primary)', minWidth: '32px' }}>
+                      {TF_LABEL[f.tf] || f.tf}
+                    </span>
+                    <span style={{ flex: 1, fontSize: '0.65rem', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.name}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-green)', fontWeight: 600 }}>
+                      ✓ {f.lineCount}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" onClick={handleRun} disabled={uploadedFiles.length === 0 || isRunning}
+                style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Play size={14} /> REPRODUCIR ({uploadedFiles.length} TFs)
+              </button>
+              {uploadedFiles.length > 0 && !isRunning && (
+                <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}
+                  style={{ padding: '10px 14px', backgroundColor: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}>
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+
+            {isRunning && (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ height: '4px', backgroundColor: 'var(--border-color)', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${progress}%`, backgroundColor: '#7c4dff', transition: 'width 0.3s ease', borderRadius: '2px' }} />
+                </div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '4px', textAlign: 'center' }}>
+                  {progress}% — {trades.length} trades detectados
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* MÉTRICAS */}
+          {/* METRICS */}
           <div className="panel">
             <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <BarChart2 size={18} color="var(--accent-gold)" /> MÉTRICAS SESIÓN
+              <BarChart2 size={18} color="var(--accent-gold)" /> MÉTRICAS
             </h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>WIN RATE</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{metrics.wr}%</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>PNL ACUM.</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 700, color: metrics.pnl.startsWith('-') ? 'var(--accent-red)' : 'var(--accent-green)' }}>{metrics.pnl}%</div>
-              </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+              {[
+                { label: 'WIN RATE', value: `${metrics.wr}%`, color: 'var(--accent-gold)' },
+                { label: 'PNL ACUM.', value: `${metrics.pnl}%`, color: parseFloat(metrics.pnl) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
+                { label: 'TRADES', value: `${metrics.total}`, color: 'var(--text-primary)' },
+              ].map(m => (
+                <div key={m.label} style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{m.label}</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: m.color }}>{m.value}</div>
+                </div>
+              ))}
             </div>
-            <div style={{ marginTop: '10px', fontSize: '0.75rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-              {metrics.count} trades cerrados
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginTop: '8px' }}>
+              {[
+                { label: 'WINS', value: metrics.wins, color: 'var(--accent-green)' },
+                { label: 'LOSSES', value: metrics.losses, color: 'var(--accent-red)' },
+                { label: 'BE', value: metrics.be, color: 'var(--accent-gold)' },
+                { label: 'OPEN', value: metrics.open, color: 'var(--text-tertiary)' },
+              ].map(m => (
+                <div key={m.label} style={{ textAlign: 'center', padding: '6px', fontSize: '0.7rem' }}>
+                  <span style={{ color: m.color, fontWeight: 700 }}>{m.value}</span> <span style={{ color: 'var(--text-tertiary)' }}>{m.label}</span>
+                </div>
+              ))}
             </div>
+            {result && (
+              <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '8px', textAlign: 'center' }}>
+                {result.processedEvents.toLocaleString()} eventos procesados | {result.startDate} → {result.endDate}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* COLUMNA DERECHA */}
+        {/* RIGHT COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+          {/* TRADES TABLE */}
           <div className="panel" style={{ flex: 1 }}>
-            <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <TrendingUp size={18} color="var(--accent-gold)" /> TRADES DETECTADOS {isReplaying && <span className="live-dot"></span>}
+            <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <TrendingUp size={18} color="var(--accent-gold)" /> TRADES DETECTADOS {isRunning && <span className="live-dot"></span>}
+              </span>
+              {trades.length > 0 && (
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
+                  {trades.length} total
+                </span>
+              )}
             </h3>
-            <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>FECHA (SIM)</th>
-                    <th>DIR</th>
-                    <th>PTS</th>
-                    <th>RESULTADO</th>
-                    <th>PNL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.map(t => (
-                    <tr key={t.id}>
-                      <td className="mono">{new Date(t.timestamp).toLocaleString()}</td>
-                      <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'}>{t.direction}</td>
-                      <td>{t.points}</td>
-                      <td>{t.result || 'OPEN'}</td>
-                      <td className={t.pnl && t.pnl > 0 ? 'text-green' : 'text-red'}>{t.pnl ? `${t.pnl}%` : '—'}</td>
+            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              {trades.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
+                  {isRunning ? 'Procesando logs...' : 'Subí logs y hacé click en REPRODUCIR'}
+                </div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL</th><th>DUR</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {trades.map(t => (
+                      <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{new Date(t.timestamp).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td style={{ color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700 }}>{t.direction}</td>
+                        <td style={{ color: t.points >= 8 ? 'var(--accent-gold)' : 'var(--text-secondary)' }}>{t.points}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.entryPrice.toFixed(2)}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp1Price.toFixed(2)}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toFixed(2)}</td>
+                        <td style={{ color: resultColor(t.result), fontWeight: 700 }}>{t.result || 'OPEN'}</td>
+                        <td className="mono" style={{ color: (t.pnl || 0) > 0 ? 'var(--accent-green)' : (t.pnl || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
+                          {t.pnl !== undefined ? `${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}%` : '—'}
+                        </td>
+                        <td className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
+                          {t.durationMin ? `${t.durationMin}m` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
 
+          {/* SESSION HISTORY */}
           <div className="panel">
             <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <BookOpen size={18} color="var(--accent-gold)" /> HISTORIAL DE SESIONES
             </h3>
-            <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px' }}>
-              {sessions.map(s => (
-                <div key={s.id} onClick={() => setCurrentSessionId(s.id)} style={{
-                  minWidth: '200px', padding: '12px', cursor: 'pointer',
-                  backgroundColor: currentSessionId === s.id ? 'rgba(255,170,0,0.1)' : 'var(--bg-base)',
-                  border: `1px solid ${currentSessionId === s.id ? 'var(--accent-gold)' : 'var(--border-color)'}`,
-                  borderRadius: '4px'
-                }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.ticker}</div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
-                    {s.startDate}{s.endDate && ` → ${s.endDate}`}
+            {sessions.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>
+                Sin sesiones previas
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px' }}>
+                {sessions.map(s => (
+                  <div key={s.id}
+                    style={{ minWidth: '180px', padding: '12px', cursor: 'pointer', backgroundColor: selectedSession === s.id ? 'rgba(255,170,0,0.1)' : 'var(--bg-base)', border: `1px solid ${selectedSession === s.id ? 'var(--accent-gold)' : 'var(--border-color)'}`, borderRadius: '4px', flexShrink: 0, position: 'relative' }}>
+                    <div onClick={() => {
+                      if (selectedSession === s.id) { setSelectedSession(null); }
+                      else { setSelectedSession(s.id); if (s.tradeData) setTrades(s.tradeData); }
+                    }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.ticker}</div>
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.date}</div>
+                      <div style={{ fontSize: '0.7rem', marginTop: '4px' }}>
+                        <span style={{ color: 'var(--accent-gold)' }}>{s.winRate}% WR</span>
+                        <span style={{ color: 'var(--text-tertiary)', margin: '0 4px' }}>|</span>
+                        <span style={{ color: parseFloat(s.pnl) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{s.pnl}%</span>
+                      </div>
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.trades} trades</div>
+                    </div>
+                    <button type="button" onClick={(e) => {
+                      e.stopPropagation();
+                      setSessions(prev => {
+                        const next = prev.filter(x => x.id !== s.id);
+                        localStorage.setItem('bt_sessions', JSON.stringify(next));
+                        return next;
+                      });
+                      if (selectedSession === s.id) { setSelectedSession(null); setTrades([]); }
+                      toast('Sesión eliminada', 'success');
+                    }} style={{ position: 'absolute', top: '6px', right: '6px', background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', borderRadius: '2px', lineHeight: 1 }}
+                    title="Eliminar sesión">✕</button>
                   </div>
-                  <div style={{ fontSize: '0.65rem', color: s.status === 'completed' ? 'var(--accent-green)' : s.status === 'running' ? 'var(--accent-gold)' : 'var(--text-tertiary)' }}>
-                    {s.status} {s.mode === 'replay' ? '(replay)' : ''}
-                  </div>
-                  {s.processedEvents !== undefined && (
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.processedEvents}/{s.totalEvents || '?'} eventos</div>
-                  )}
-                  {s.tfCount && <div style={{ fontSize: '0.6rem', color: '#7c4dff' }}>{s.tfCount} TFs</div>}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

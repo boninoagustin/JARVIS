@@ -127,7 +127,8 @@ let dynamicBotConfig = {
                                    // puede completarse en 1-2 velas de 3M y ya estar listo para el siguiente.
     minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
     minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
-    baseRiskPercentage: 1.0
+    baseRiskPercentage: 1.0,
+    slBufferPercent: 0.1           // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
 };
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -150,7 +151,8 @@ if (db) {
                     sniperCooldownMs: Number(data.sniperCooldownMs) || dynamicBotConfig.sniperCooldownMs,
                     minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
                     minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
-                    baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage
+                    baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage,
+                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent
                 };
             }
         });
@@ -286,7 +288,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 leg.oteScored = true;
                 
                 const decimals = getDecimals(ticker);
-                const stopLoss = leg.origin.toFixed(decimals);
+                const slBuffer = leg.origin * (dynamicBotConfig.slBufferPercent / 100);
+                const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
+                const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
                 const tp2 = leg.tp2 ? leg.tp2.toFixed(decimals) : 'Buscando DOL macro...';
 
@@ -312,7 +316,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     entryPrice: currentPrice,
                     tp1Price: leg.extreme,
                     tp2Price: leg.tp2 || 0,
-                    slPrice: leg.origin,
+                    slPrice: adjustedSL,
                     tp1Hit: false,
                     tp2Hit: false,
                     timestamp: nowMs
@@ -948,12 +952,9 @@ export async function processTradingAlert(alertText: string) {
                 const triggerType = prefix === 'EVENTO_CHOCH' ? 'CHoCH🚀' : 'BOS🔨';
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
-                // 🔧 v5.4: Si hay cooldown activo, NO reseteamos el score. Dejamos que los puntos
-                // se acumulen para el próximo CHoCH. Así los sweeps/DIVs que ocurren durante
-                // el cooldown no se pierden y el siguiente CHoCH tiene más probabilidad de gatillar.
+                // Durante el cooldown, NO reseteamos el score — se acumula para el siguiente CHoCH.
                 if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
                     console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${activeScore.points} pts).`);
-                    // NO reseteamos score — se acumula para el siguiente CHoCH
                     return;
                 }
 
@@ -1063,8 +1064,6 @@ export async function processTradingAlert(alertText: string) {
                 // Penalización por zona trampa (Caso C)
                 const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
                 if (trapPenalty > 0) totalPoints -= trapPenalty;
-                // Aplicar penalización de huérfano después de calcular todos los bonus
-                if (orphanPenalty > 0) totalPoints -= orphanPenalty;
 
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
@@ -1277,18 +1276,6 @@ export async function processTradingAlert(alertText: string) {
                 msg += `🛑 Stop Loss Sugerido: ${oteData.stopLoss}\n`;
                 msg += `💰 Take Profit 1 (Interno): ${oteData.tp1}\n`;
                 msg += `🚀 Take Profit 2 (Externo): ${oteData.tp2}\n`;
-
-                // 📍 Mostrar la mejor zona estructural detectada (TP/SL desde el mapa)
-                if (oteData.bestZone) {
-                    const z = oteData.bestZone;
-                    const zTf = z.tf ? parseTF(z.tf) : '';
-                    const zMedal = z.medal || 'OB';
-                    const zScore = z.score !== undefined ? ` (Score: ${z.score}/10)` : '';
-                    const zTP = z.tp != null ? ` | 🎯 TP: ${z.tp}` : '';
-                    const zSL = z.sl != null ? ` | 🛑 SL: ${z.sl}` : '';
-                    msg += `\n📍 <b>Zona Estructural:</b> ${zMedal} ${zTf}${zScore}${zTP}${zSL}`;
-                    if (z.top && z.btm) msg += `\n   Rango: ${z.btm} → ${z.top}`;
-                }
 
                 msg += kronosAnnotation;
                 msg += swarmAnnotation;
