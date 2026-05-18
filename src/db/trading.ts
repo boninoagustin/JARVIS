@@ -518,13 +518,13 @@ export async function processTradingAlert(alertText: string) {
                             if (isDuplicate(`TP1_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             trade.tp1Hit = true;
-                            trade.slPrice = trade.entryPrice;
+                            // SL remains unchanged: no BE
                             
                             const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
                             const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
                             
-                            // 💾 Sincronizar actualización de TP1 y SL a Break Even
-                            if (db) db.collection('active_trades').doc(trade.tradeId).update({ tp1Hit: true, slPrice: trade.entryPrice }).catch(() => {});
+                            // 💾 Sincronizar actualización de TP1 (SL no cambia)
+                            if (db) db.collection('active_trades').doc(trade.tradeId).update({ tp1Hit: true }).catch(() => {});
                             
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
@@ -541,11 +541,11 @@ export async function processTradingAlert(alertText: string) {
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ✅\n` +
                                 `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
-                                `🛑 Nuevo SL: ${trade.slPrice} (Break Even)\n` +
+                                `🛑 SL (Se mantiene): ${trade.slPrice}\n` +
                                 `⏱️ Duración: ${durationStr}\n\n` +
-                                `💡 SL protegido automáticamente a Break Even.`;
+                                `💡 Toma parcial ejecutada (50%). El SL original se mantiene.`;
                             sendTelegramAlert(tp1Msg).catch(() => {});
-                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — SL movido a BE`);
+                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL se mantiene`);
                         }
                     }
                     
@@ -564,7 +564,9 @@ export async function processTradingAlert(alertText: string) {
                             if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                             trade.tp2Hit = true;
-                            const pnlPct = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+                            const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
+                            const pnlTp2Pct = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
+                            const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * 0.5 + pnlTp2Pct * 0.5) : pnlTp2Pct;
                             const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
                             
                             if (trade.journalId) {
@@ -574,12 +576,12 @@ export async function processTradingAlert(alertText: string) {
                                         tp2Hit: true,
                                         tp2Timestamp: nowTrade,
                                         result: 'WIN',
-                                        pnl: parseFloat(pnlPct.toFixed(2)),
+                                        pnl: parseFloat(finalPnlPct.toFixed(2)),
                                         durationMin,
                                     }).catch(() => {});
                                 }
                             }
-                            recordResult(tradeId, 'WIN', parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                            recordResult(tradeId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
 
                             if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
                             else consecutiveLosses = 0;
@@ -589,7 +591,7 @@ export async function processTradingAlert(alertText: string) {
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
                                 `🚀 TP2: ${trade.tp2Price} ✅\n` +
-                                `📊 PnL: +${pnlPct.toFixed(2)}%\n` +
+                                `📊 PnL: +${finalPnlPct.toFixed(2)}%\n` +
                                 `⏱️ Duración total: ${durationMin} min\n\n` +
                                 `🏆 ¡Trade completo! ${consecutiveLosses > 0 ? `Racha protección: ${consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
                             sendTelegramAlert(tp2Msg).catch(() => {});
@@ -611,9 +613,11 @@ export async function processTradingAlert(alertText: string) {
                         activeTrades.delete(tradeId);
                         if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
-                        const isBreakEven = trade.tp1Hit;
-                        const pnlPct = isBreakEven ? 0 : Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
-                        const finalResult = isBreakEven ? 'BE' : 'LOSS';
+                        const isPartialClose = trade.tp1Hit;
+                        const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+                        const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
+                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - slLossPct * 0.5) : -slLossPct;
+                        const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BE' : 'LOSS') : 'LOSS';
                         const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
                         
                         if (trade.journalId) {
@@ -623,16 +627,17 @@ export async function processTradingAlert(alertText: string) {
                                     slHit: true,
                                     slTimestamp: nowTrade,
                                     result: finalResult,
-                                    pnl: isBreakEven ? 0 : -parseFloat(pnlPct.toFixed(2)),
+                                    pnl: parseFloat(finalPnlPct.toFixed(2)),
                                     durationMin,
                                 }).catch(() => {});
                             }
                         }
                         
-                        if (!isBreakEven) recordResult(tradeId, 'LOSS', parseFloat(pnlPct.toFixed(2))).catch(() => {});
+                        // Si tomamos parciales, igual registramos la operación para no castigar
+                        if (!isPartialClose) recordResult(tradeId, 'LOSS', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
 
-                        // Lógica de racha perdedora (ignorar si es Break Even)
-                        if (!isBreakEven) {
+                        // Lógica de racha perdedora (ignorar si se tomaron parciales)
+                        if (!isPartialClose) {
                             consecutiveLosses++;
                             if (consecutiveLosses >= 5) streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
                         }
@@ -646,27 +651,24 @@ export async function processTradingAlert(alertText: string) {
                                     : consecutiveLosses === 2 
                                         ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
                                         : '';
-                        
-                        const slMsg = isBreakEven 
-                            ? `🛡️ <b>BREAK EVEN ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
-                            `🕒 Apertura: ${openTimeStr}\n` + 
-                            `📥 Entrada: ${trade.entryPrice}\n` +
-                            `🎯 TP1 tocado: Sí (Parcial asegurado)\n` +
-                            `🛑 SL: ${trade.slPrice} (Cerrado sin riesgo)\n` +
-                            `📊 PnL: 0.00%\n` +
-                            `⏱️ Duración: ${durationMin} min`
-                            : `🔴 <b>SL ALCANZADO (LOSS) | ${ticker} | ${trade.direction}</b>\n\n` +
-                            `🕒 Apertura: ${openTimeStr}\n` + 
-                            `📥 Entrada: ${trade.entryPrice}\n` +
-                            `🛑 SL: ${trade.slPrice} ❌\n` +
-                            `🎯 TP1 tocado: No\n` +
-                            `📊 PnL: -${pnlPct.toFixed(2)}%\n` +
-                            `⏱️ Duración: ${durationMin} min\n\n` +
-                            `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
-                            `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+                        const slMsg = isPartialClose 
+                            ? `⚠️ <b>STOP LOSS POST-PARCIAL | ${ticker} | ${trade.direction}</b>\n\n` +
+                              `📥 Entrada: ${trade.entryPrice}\n` +
+                              `🎯 TP1 Parcial: Tomado al ${trade.tp1Price}\n` +
+                              `🛑 SL Alcanzado: ${trade.slPrice}\n` +
+                              `📊 PnL Final: ${finalPnlPct > 0 ? '+' : ''}${finalPnlPct.toFixed(2)}%\n` +
+                              `⏱️ Duración total: ${durationMin} min`
+                            : `🔴 <b>STOP LOSS (LOSS) | ${ticker} | ${trade.direction}</b>\n\n` +
+                              `🕒 Apertura: ${openTimeStr}\n` +
+                              `📥 Entrada: ${trade.entryPrice}\n` +
+                              `🛑 SL Alcanzado: ${trade.slPrice} ❌\n` +
+                              `📊 PnL: ${finalPnlPct.toFixed(2)}%\n` +
+                              `⏱️ Duración: ${durationMin} min\n\n` +
+                              `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
+                              `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
 
                         sendTelegramAlert(slMsg).catch(() => {});
-                        console.log(`[JOURNAL] ${isBreakEven ? '🛡️ BE alcanzado' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
+                        console.log(`[JOURNAL] ${isPartialClose ? '⚠️ SL Post-Parcial' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
                         continue;
                     }
                 }

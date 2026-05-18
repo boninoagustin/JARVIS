@@ -254,7 +254,7 @@ function processAlert(
         const tp1Hit = trade.direction === 'BUY' ? highPrice >= trade.tp1Price : lowPrice <= trade.tp1Price;
         if (tp1Hit) {
           trade.tp1Hit = true;
-          trade.slPrice = trade.entryPrice; // Move SL to break even
+          // trade.slPrice = trade.entryPrice; // SL remains unchanged
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
         }
@@ -266,9 +266,12 @@ function processAlert(
         if (tp2Hit) {
           trade.result = 'WIN';
           trade.resultTp2 = 'WIN';
-          const pnl = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
-          trade.pnl = pnl;
-          trade.pnlTp2 = pnl;
+          const pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
+          const pnlTp2 = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
+          const finalPnl = trade.tp1Hit ? (pnlTp1 * 0.5 + pnlTp2 * 0.5) : pnlTp2;
+          
+          trade.pnl = finalPnl;
+          trade.pnlTp2 = finalPnl;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -279,16 +282,20 @@ function processAlert(
       // SL
       const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
       if (slHit) {
-        trade.result = trade.tp1Hit ? 'BE' : 'LOSS';
-        const lossPnl = -(Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100);
+        const isPartialClose = trade.tp1Hit;
+        const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+        const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
+        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - slLossPct * 0.5) : -slLossPct;
+        const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BE' : 'LOSS') : 'LOSS';
+
+        trade.result = finalResult;
+        trade.pnl = finalPnlPct;
+        trade.resultTp2 = finalResult;
+        trade.pnlTp2 = finalPnlPct;
         
-        trade.pnl = trade.tp1Hit ? 0 : lossPnl;
-        trade.resultTp2 = trade.tp1Hit ? 'BE' : 'LOSS';
-        trade.pnlTp2 = trade.tp1Hit ? 0 : lossPnl;
-        
-        if (!trade.tp1Hit) {
+        if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
-          trade.pnlTp1 = lossPnl;
+          trade.pnlTp1 = -slLossPct;
         }
 
         trade.closeTimestamp = nowMs;
