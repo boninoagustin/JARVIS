@@ -155,7 +155,12 @@ export default function BacktestingPanel() {
             const config = { ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger };
             const res = runBacktest(logs, config);
             
-            const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
+            // Apply session filter if active
+            const sessionTrades = sessionFilter === 'ALL'
+              ? res.trades
+              : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+            
+            const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
             const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
             
             if (pnl > bestPnl) {
@@ -196,12 +201,13 @@ export default function BacktestingPanel() {
             });
             setSelectedSession(session.id);
             setIsRunning(false);
-            toast(`✅ Optimización finalizada. PnL Máximo: $${bestPnl.toFixed(2)}`, 'success');
+            const sessionLabel = sessionFilter === 'ALL' ? '' : ` (${sessionFilter})`;
+            toast(`✅ Optimización finalizada${sessionLabel}. PnL Máximo: $${bestPnl.toFixed(2)}`, 'success');
         }
     };
     
     setTimeout(() => processChunk(0), 100);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, entryTrigger, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, entryTrigger, sessionFilter, toast]);
 
   // Session filter helper (Argentina UTC-3)
   const getSessionForTimestamp = (ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' => {
