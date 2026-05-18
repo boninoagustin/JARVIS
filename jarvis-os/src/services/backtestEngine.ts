@@ -96,8 +96,11 @@ function evaluateImpulse(
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
         const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent || 0);
         const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBufferAmt : leg.origin + slBufferAmt;
+        
+        const shouldTriggerOte = config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH';
+        
         return {
-          updatedLeg: leg, triggerOte: true,
+          updatedLeg: leg, triggerOte: shouldTriggerOte,
           oteData: {
             tradeId, direction: leg.dir,
             entryPrice: entryLevel, // Use precise entry level
