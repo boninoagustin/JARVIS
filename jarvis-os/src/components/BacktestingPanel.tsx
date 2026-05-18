@@ -256,16 +256,76 @@ export default function BacktestingPanel() {
     const losses = closed.filter(t => t.result === 'LOSS').length;
     const be = closed.filter(t => t.result === 'BE').length;
     const open = filteredTrades.filter(t => !t.result).length;
-    const pnlTotal = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
-    const pnlTp1Total = closed.reduce((acc, t) => acc + (t.rMultipleTp1 || 0) * riskUsd, 0);
-    const pnlTp2Total = closed.reduce((acc, t) => acc + (t.rMultipleTp2 || 0) * riskUsd, 0);
+    
+    const pnlTotalUsd = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
+    const pnlTotalR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+    
     const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
+    
     let maxDD = 0, peak = 0;
+    let grossProfitUsd = 0, grossLossUsd = 0;
+    let maxConsLosses = 0, currentLossStreak = 0;
+    let totalDuration = 0, tradesWithDuration = 0;
+    
+    let tp1OnlyCount = 0, tp2Count = 0, slCount = 0, beCount = 0;
+
     closed.forEach(t => {
-      peak += (t.rMultiple || 0) * riskUsd;
+      const r = t.rMultiple || 0;
+      const profitUsd = r * riskUsd;
+      
+      // Drawdown (Usd based)
+      peak += profitUsd;
       if (peak < maxDD) maxDD = peak;
+
+      // Profit Factor
+      if (profitUsd > 0) grossProfitUsd += profitUsd;
+      else grossLossUsd += Math.abs(profitUsd);
+
+      // Consecutive Losses
+      if (t.result === 'LOSS') {
+        currentLossStreak++;
+        if (currentLossStreak > maxConsLosses) maxConsLosses = currentLossStreak;
+      } else if (t.result === 'WIN') {
+        currentLossStreak = 0;
+      }
+
+      // Duration
+      if (t.durationMin) {
+        totalDuration += t.durationMin;
+        tradesWithDuration++;
+      }
+
+      // Distribution
+      if (t.result === 'WIN') {
+          if (t.resultTp2 === 'WIN') tp2Count++;
+          else tp1OnlyCount++;
+      } else if (t.result === 'LOSS') {
+          slCount++;
+      } else if (t.result === 'BE') {
+          beCount++;
+      }
     });
-    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: filteredTrades.length, maxDD: maxDD.toFixed(2), closed };
+
+    const profitFactor = grossLossUsd > 0 ? (grossProfitUsd / grossLossUsd).toFixed(2) : (grossProfitUsd > 0 ? '∞' : '0.00');
+    const expectancyR = closed.length > 0 ? (pnlTotalR / closed.length).toFixed(2) : '0.00';
+    const avgDurationMin = tradesWithDuration > 0 ? Math.round(totalDuration / tradesWithDuration) : 0;
+    
+    const formatDuration = (mins: number) => {
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    };
+
+    return { 
+        wins, losses, be, open, wr, 
+        pnlUsd: pnlTotalUsd.toFixed(2), 
+        pnlR: pnlTotalR.toFixed(2),
+        count: closed.length, total: filteredTrades.length, 
+        maxDDUsd: maxDD.toFixed(2), closed,
+        profitFactor, expectancyR, maxConsLosses, avgDuration: formatDuration(avgDurationMin),
+        tp1OnlyCount, tp2Count, slCount, beCount
+    };
   })();
 
   const equityData = [{ name: 'Start', TP1: 0, TP2: 0 }];
@@ -428,32 +488,68 @@ export default function BacktestingPanel() {
           {/* METRICS */}
           <div className="panel">
             <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <BarChart2 size={18} color="var(--accent-gold)" /> MÉTRICAS
+              <BarChart2 size={18} color="var(--accent-gold)" /> DASHBOARD AVANZADO
             </h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
-              {[
-                { label: 'WIN RATE', value: `${metrics.wr}%`, color: 'var(--accent-gold)' },
-                { label: 'PNL (TP1)', value: `${metrics.pnlTp1}%`, color: parseFloat(metrics.pnlTp1) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
-                { label: 'PNL (TP2)', value: `${metrics.pnlTp2}%`, color: parseFloat(metrics.pnlTp2) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
-                { label: 'TRADES', value: `${metrics.total}`, color: 'var(--text-primary)' },
-              ].map(m => (
-                <div key={m.label} style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{m.label}</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: m.color }}>{m.value}</div>
+            
+            {/* ROW 1: Principales */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 0.8fr', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>WIN RATE</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{metrics.wr}%</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>PROFIT FACTOR</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: parseFloat(metrics.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(metrics.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{metrics.profitFactor}</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>PNL TOTAL</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: parseFloat(metrics.pnlR) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                  {parseFloat(metrics.pnlR) > 0 ? '+' : ''}{metrics.pnlR}R <span style={{ fontSize: '0.8rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ ${metrics.pnlUsd}</span>
                 </div>
-              ))}
+              </div>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>TRADES</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.count}</div>
+              </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginTop: '8px' }}>
-              {[
-                { label: 'WINS', value: metrics.wins, color: 'var(--accent-green)' },
-                { label: 'LOSSES', value: metrics.losses, color: 'var(--accent-red)' },
-                { label: 'BE', value: metrics.be, color: 'var(--accent-gold)' },
-                { label: 'OPEN', value: metrics.open, color: 'var(--text-tertiary)' },
-              ].map(m => (
-                <div key={m.label} style={{ textAlign: 'center', padding: '6px', fontSize: '0.7rem' }}>
-                  <span style={{ color: m.color, fontWeight: 700 }}>{m.value}</span> <span style={{ color: 'var(--text-tertiary)' }}>{m.label}</span>
-                </div>
-              ))}
+
+            {/* ROW 2: Analíticas */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>ESPERANZA MAT.</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: parseFloat(metrics.expectancyR) > 0 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{parseFloat(metrics.expectancyR) > 0 ? '+' : ''}{metrics.expectancyR}R</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>MAX DRAWDOWN</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-red)' }}>-${metrics.maxDDUsd.replace('-', '')}</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>PEOR RACHA (L)</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: metrics.maxConsLosses >= 5 ? 'var(--accent-red)' : 'var(--text-primary)' }}>{metrics.maxConsLosses}</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>DURACIÓN PROM.</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
+              </div>
+            </div>
+
+            {/* ROW 3: Distribución */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 0.5fr', gap: '6px' }}>
+              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
+                <span style={{ color: '#0088ff', fontWeight: 700 }}>{metrics.tp2Count}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP2</span>
+              </div>
+              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
+                <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{metrics.tp1OnlyCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP1</span>
+              </div>
+              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
+                <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>{metrics.beCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>BE</span>
+              </div>
+              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
+                <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>{metrics.slCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>SL</span>
+              </div>
+              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
+                <span style={{ color: 'var(--text-tertiary)', fontWeight: 700 }}>{metrics.open}</span> <span style={{ color: 'var(--text-tertiary)' }}>OP</span>
+              </div>
             </div>
             {result && (
               <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '8px', textAlign: 'center' }}>

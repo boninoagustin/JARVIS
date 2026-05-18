@@ -9,9 +9,11 @@ indicator("SMC Master 5.1 [JARVIS v5.4]", overlay=true, max_boxes_count=80, max_
 // =========================================================================
 grp_presets = "🌟 PERFIL DE ROL Y ADN DEL ACTIVO"
 
-tf_mode = input.string("Automático (Detectar TF)", "1. Rol del Gráfico (Temporalidad)", options=["Automático (Detectar TF)", "Manual (Usar Configuración Abajo)", "3M (Scalping Gatillo)", "15M (Estructura Intradía)", "1H (Zonas de Sesión)", "4H (Macro Ballenas)"], group=grp_presets)
-
-asset_mode = input.string("Automático (Detectar Activo)", "2. ADN del Activo (Volatilidad)", options=["Automático (Detectar Activo)", "Forex (EURUSD / Movimientos Limpios)", "Índices (US100 / Alta Volatilidad)", "Crypto (BTC / Mercado 24-7)"], group=grp_presets)
+preset_opt = input.string("Forex - 3. Balanceado", "Preset Estratégico", options=[
+  "Manual (Usar Configuración Abajo)", 
+  "Forex - 1. Ultra Conservador", "Forex - 2. Conservador", "Forex - 3. Balanceado", "Forex - 4. Agresivo", "Forex - 5. Ultra Agresivo",
+  "Índices - 1. Ultra Conservador", "Índices - 2. Conservador", "Índices - 3. Balanceado", "Índices - 4. Agresivo", "Índices - 5. Ultra Agresivo",
+  "Crypto - 1. Ultra Conservador", "Crypto - 2. Conservador", "Crypto - 3. Balanceado", "Crypto - 4. Agresivo", "Crypto - 5. Ultra Agresivo"], group=grp_presets)
 
 // 🤖 AUTO-DETECCIÓN DE TEMPORALIDAD
 bool auto_3m  = timeframe.isintraday and timeframe.multiplier <= 5
@@ -19,20 +21,29 @@ bool auto_15m = timeframe.isintraday and timeframe.multiplier > 5 and timeframe.
 bool auto_1h  = timeframe.isintraday and timeframe.multiplier > 30 and timeframe.multiplier <= 120
 bool auto_4h  = (timeframe.isintraday and timeframe.multiplier > 120) or timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
 
-bool preset_manual = tf_mode == "Manual (Usar Configuración Abajo)"
-bool preset_3m     = tf_mode == "Automático (Detectar TF)" ? auto_3m : tf_mode == "3M (Scalping Gatillo)"
-bool preset_15m    = tf_mode == "Automático (Detectar TF)" ? auto_15m : tf_mode == "15M (Estructura Intradía)"
-bool preset_1h     = tf_mode == "Automático (Detectar TF)" ? auto_1h : tf_mode == "1H (Zonas de Sesión)"
-bool preset_4h     = tf_mode == "Automático (Detectar TF)" ? auto_4h : tf_mode == "4H (Macro Ballenas)"
+// Determinar Activo según Preset
+bool preset_manual = preset_opt == "Manual (Usar Configuración Abajo)"
+bool is_fx = str.contains(preset_opt, "Forex")
+bool is_idx = str.contains(preset_opt, "Índices")
+bool is_crypto = str.contains(preset_opt, "Crypto")
 
-// 🤖 AUTO-DETECCIÓN DE ACTIVO
-bool auto_crypto = syminfo.type == "crypto"
-bool auto_idx    = syminfo.type == "index" or syminfo.type == "stock"
-bool auto_fx     = syminfo.type == "forex" or (not auto_crypto and not auto_idx)
+if preset_manual
+    is_crypto := syminfo.type == "crypto"
+    is_idx := syminfo.type == "index" or syminfo.type == "stock"
+    is_fx := syminfo.type == "forex" or (not is_crypto and not is_idx)
 
-bool is_crypto = asset_mode == "Automático (Detectar Activo)" ? auto_crypto : asset_mode == "Crypto (BTC / Mercado 24-7)"
-bool is_idx    = asset_mode == "Automático (Detectar Activo)" ? auto_idx : asset_mode == "Índices (US100 / Alta Volatilidad)"
-bool is_fx     = asset_mode == "Automático (Detectar Activo)" ? auto_fx : asset_mode == "Forex (EURUSD / Movimientos Limpios)"
+// Niveles de Riesgo (1: Ultra Cons, 5: Ultra Agre)
+int risk_lvl = 3
+if str.contains(preset_opt, "1. Ultra Conservador")
+    risk_lvl := 1
+else if str.contains(preset_opt, "2. Conservador")
+    risk_lvl := 2
+else if str.contains(preset_opt, "3. Balanceado")
+    risk_lvl := 3
+else if str.contains(preset_opt, "4. Agresivo")
+    risk_lvl := 4
+else if str.contains(preset_opt, "5. Ultra Agresivo")
+    risk_lvl := 5
 
 // =========================================================================
 // 1. ⚖️ DIRECCIÓN Y SESGO MACRO (BIAS)
@@ -49,14 +60,16 @@ bool use_scalp      = true
 // =========================================================================
 grp_show = "👁️ Visibilidad de Zonas (Filtros)"
 in_min_score = input.int(3, "Score Mínimo para Mostrar", minval=0, maxval=10, group=grp_show)
-min_score    = preset_3m ? 2 : preset_15m ? 3 : preset_1h ? 3 : preset_4h ? 3 : in_min_score
+int base_sc = auto_3m ? 2 : auto_15m ? 3 : auto_1h ? 3 : 3
+int dyn_min_score = math.max(0, math.min(10, base_sc + (3 - risk_lvl)))
+min_score = preset_manual ? in_min_score : dyn_min_score
 
 show_platino = input.bool(true, "Mostrar 🟣 Platino (Score 9-10)", group=grp_show)
 show_oro     = input.bool(true, "Mostrar 🟡 Oro (Score 7-8)", group=grp_show)
 show_plata   = input.bool(true, "Mostrar ⚪ Plata (Score 5-6)", group=grp_show)
 
 in_show_bronce = input.bool(false,"Mostrar 🟤 Bronce (Score 3-4)", group=grp_show)
-show_bronce    = preset_3m ? true : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_show_bronce
+show_bronce    = preset_manual ? in_show_bronce : risk_lvl >= 3
 
 show_choch   = input.bool(true, "Mostrar 🚀 CHoCH OB (Gatillo)", group=grp_show)
 show_god     = input.bool(true, "Mostrar 💎 GOD ZONE (Confluencia iFVG)", group=grp_show)
@@ -71,33 +84,41 @@ refine   = input.bool(true, "Refinar Zonas (Jerarquía Institucional)", group=gr
 require_displacement = input.bool(true, "Exigir Desplazamiento + BOS posterior (SMC Purist)", group=grp_vis)
 
 in_require_fvg_after_ob = input.bool(true, "Exigir FVG en las 3 velas siguientes al OB", group=grp_vis)
-require_fvg_after_ob    = is_idx ? false : is_crypto ? false : is_fx ? false : in_require_fvg_after_ob 
+require_fvg_after_ob    = preset_manual ? in_require_fvg_after_ob : risk_lvl <= 2 
 
 strictBreaker = input.bool(true, "Breakers Estrictos (Exige Volumen)", group=grp_vis)
 
 in_strictSweep = input.bool(true, "Exigir Sweep previo estricto para OBs", group=grp_vis)
-strictSweep    = is_idx ? false : is_crypto ? false : is_fx ? false : in_strictSweep 
+strictSweep    = preset_manual ? in_strictSweep : risk_lvl <= 2 
 
 in_max_active_obs = input.int(20, "Máximo OBs Activos (Performance)", minval=10, maxval=100, group=grp_vis)
-max_active_obs    = preset_3m ? 30 : preset_15m ? 12 : preset_1h ? 8 : preset_4h ? 6 : in_max_active_obs 
+int dyn_max_obs   = auto_3m ? 30 : auto_15m ? 12 : auto_1h ? 8 : 6
+max_active_obs    = preset_manual ? in_max_active_obs : dyn_max_obs 
 
 prox_atr    = input.float(0.5, "Distancia Mínima OBs (x ATR)", step=0.1, group=grp_vis)
 useBodyOB   = input.bool(true, 'Usar Cuerpo para la Zona (OB)', group=grp_vis)
 
 in_ob_min_body = input.float(0.4, "Mínimo Cuerpo en OB (%)", minval=0.0, maxval=1.0, step=0.05, group=grp_vis)
-ob_min_body    = is_idx ? 0.3 : is_crypto ? 0.4 : is_fx ? 0.2 : in_ob_min_body 
+float dyn_ob_min_body = is_idx ? 0.3 : is_crypto ? 0.4 : 0.2
+if not preset_manual
+    dyn_ob_min_body := dyn_ob_min_body + ((3 - risk_lvl) * 0.05)
+ob_min_body    = preset_manual ? in_ob_min_body : dyn_ob_min_body
 
 in_displ_atr_mult = input.float(1.0, "Tamaño Mínimo Vela Desplazamiento (x ATR)", step=0.1, group=grp_vis)
-displ_atr_mult    = is_idx ? 0.8 : is_crypto ? 0.7 : is_fx ? 0.5 : in_displ_atr_mult 
+float dyn_displ = is_idx ? 0.8 : is_crypto ? 0.7 : 0.5
+if not preset_manual
+    dyn_displ := dyn_displ + ((3 - risk_lvl) * 0.1)
+displ_atr_mult    = preset_manual ? in_displ_atr_mult : dyn_displ 
 
 vol_mult = input.float(1.2, "Mult. Volumen (Score)", step=0.1, group=grp_vis)
 
 in_max_touches = input.int(3, "Máximo Toques antes de Degradar OB", minval=1, maxval=10, group=grp_vis)
-max_touches    = preset_3m ? 3 : preset_15m ? 4 : preset_1h ? 3 : preset_4h ? 2 : in_max_touches 
+int dyn_max_touches = auto_3m ? 3 : auto_15m ? 4 : auto_1h ? 3 : 2
+max_touches    = preset_manual ? in_max_touches : dyn_max_touches 
 
 grp_legacy = "🏃‍♂️ Motor Scalping (Legacy 4.7)"
 in_use_inv_motor = input.bool(true, "Activar Búsqueda Inversa (FVG Origin)", group=grp_legacy)
-use_inv_motor    = preset_3m ? true : preset_15m ? true : preset_1h ? false : preset_4h ? false : in_use_inv_motor 
+use_inv_motor    = preset_manual ? in_use_inv_motor : (auto_3m or auto_15m)
 
 inv_lookback  = input.int(20, "Ventana Búsqueda Inversa (Velas)", group=grp_legacy)
 vwap_boost    = input.int(3, "Bonus Puntos por Toque VWAP", group=grp_legacy)
@@ -109,16 +130,19 @@ grp_str = "🔨 Estructura y Sweeps"
 showBos         = input.bool(true, "Mostrar BOS / CHoCH", group=grp_str)
 
 in_str_bars = input.int(8, "Sensibilidad BOS (Micro)", group=grp_str)
-str_bars    = preset_3m ? 6 : preset_15m ? 6 : preset_1h ? 8 : preset_4h ? 10 : in_str_bars 
+int dyn_str_bars = auto_3m ? 6 : auto_15m ? 6 : auto_1h ? 8 : 10
+if not preset_manual
+    dyn_str_bars := dyn_str_bars + (3 - risk_lvl)
+str_bars    = preset_manual ? in_str_bars : math.max(3, dyn_str_bars) 
 
 require_body_break = input.bool(true, "CHoCH/BOS exige cierre con cuerpo (no solo wick)", group=grp_str)
 
 in_choch_req_sweep = input.bool(false, "CHoCH Estricto: Exigir Sweep Previo (Manual)", group=grp_str)
-bool auto_sweep = is_fx and (preset_1h or preset_4h)
-choch_req_sweep = in_choch_req_sweep or auto_sweep
+bool auto_sweep = not preset_manual ? (risk_lvl <= 2 or (is_fx and (auto_1h or auto_4h))) : (is_fx and (auto_1h or auto_4h))
+choch_req_sweep = preset_manual ? in_choch_req_sweep : auto_sweep
 
 in_choch_req_mom   = input.bool(false, "CHoCH Estricto: Exigir Volumen/Momentum", group=grp_str)
-choch_req_mom      = in_choch_req_mom
+choch_req_mom      = preset_manual ? in_choch_req_mom : risk_lvl == 1
 
 showSweep       = input.bool(true, "Mostrar Etiquetas CRT / Sweeps", group=grp_str)
 
@@ -132,13 +156,22 @@ fvg_min_atr  = input.float(0.2, "Mínimo Tamaño FVG (x ATR)", step=0.1, group=g
 fvg_max_atr  = input.float(4.0, "Máximo Tamaño FVG (x ATR)", step=0.5, group=grp_fvg)
 
 in_fvg_exp_req = input.float(0.5, "Cuerpo Expansión FVG (%)", minval=0.0, maxval=1.0, group=grp_fvg)
-fvg_exp_req    = is_idx ? 0.3 : is_crypto ? 0.3 : is_fx ? 0.2 : in_fvg_exp_req
+float dyn_fvg_exp = is_idx ? 0.3 : is_crypto ? 0.3 : 0.2
+if not preset_manual
+    dyn_fvg_exp := dyn_fvg_exp + ((3 - risk_lvl) * 0.05)
+fvg_exp_req    = preset_manual ? in_fvg_exp_req : dyn_fvg_exp
 
 in_ifvg_min_atr = input.float(0.6, "Tamaño Mínimo iFVG (x ATR)", step=0.1, group=grp_fvg)
-ifvg_min_atr    = is_idx ? 0.3 : is_crypto ? 0.3 : is_fx ? 0.2 : in_ifvg_min_atr
+float dyn_ifvg_min = is_idx ? 0.3 : is_crypto ? 0.3 : 0.2
+if not preset_manual
+    dyn_ifvg_min := dyn_ifvg_min + ((3 - risk_lvl) * 0.05)
+ifvg_min_atr    = preset_manual ? in_ifvg_min_atr : dyn_ifvg_min
 
 in_ifvg_body_inv = input.float(0.5, "Cuerpo Mín. para Inversión iFVG (%)", minval=0.1, maxval=1.0, step=0.05, group=grp_fvg)
-ifvg_body_inv    = is_idx ? 0.3 : is_crypto ? 0.4 : is_fx ? 0.3 : in_ifvg_body_inv
+float dyn_ifvg_body = is_idx ? 0.3 : is_crypto ? 0.4 : 0.3
+if not preset_manual
+    dyn_ifvg_body := dyn_ifvg_body + ((3 - risk_lvl) * 0.05)
+ifvg_body_inv    = preset_manual ? in_ifvg_body_inv : dyn_ifvg_body
 
 require_ifvg_retest = input.bool(true, "Requerir Retest del iFVG para Validar", group=grp_fvg)
 
@@ -150,7 +183,10 @@ crt_3candle_model = input.bool(true, "Usar modelo CRT 3-velas (Range/Sweep/Close
 crt_inst_only = input.bool(false,"Solo Killzones (LO + NYO + NYPM)", group=grp_crt)
 
 in_crt_min_atr = input.float(0.5, "Tamaño Mínimo de Vela CRT (x ATR)", step=0.1, group=grp_crt)
-crt_min_atr    = is_idx ? 0.5 : is_crypto ? 0.4 : is_fx ? 0.3 : in_crt_min_atr 
+float dyn_crt_min = is_idx ? 0.5 : is_crypto ? 0.4 : 0.3
+if not preset_manual
+    dyn_crt_min := dyn_crt_min + ((3 - risk_lvl) * 0.1)
+crt_min_atr    = preset_manual ? in_crt_min_atr : dyn_crt_min 
 
 crt_close_inside = input.bool(true, "Exigir cierre dentro del rango previo (Vela 1)", group=grp_crt)
 
@@ -166,10 +202,16 @@ grp_mom = "🚀 Momentum Z-Score (Desplazamiento Dinámico)"
 zLen = input.int(50, "Periodos Z-Score", group=grp_mom)
 
 in_zThresh = input.float(2.5, "Umbral Explosivo Normal", step=0.5, group=grp_mom)
-zThresh    = is_idx ? 2.0 : is_crypto ? 1.8 : is_fx ? 1.5 : in_zThresh 
+float dyn_zThresh = is_idx ? 2.0 : is_crypto ? 1.8 : 1.5
+if not preset_manual
+    dyn_zThresh := dyn_zThresh + ((3 - risk_lvl) * 0.2)
+zThresh    = preset_manual ? in_zThresh : dyn_zThresh 
 
 in_zThresh_NY = input.float(3.0, "Umbral Explosivo NY (Mayor ruido)", step=0.5, group=grp_mom)
-zThresh_NY    = is_idx ? 2.5 : is_crypto ? 2.0 : is_fx ? 1.8 : in_zThresh_NY 
+float dyn_zThresh_NY = is_idx ? 2.5 : is_crypto ? 2.0 : 1.8
+if not preset_manual
+    dyn_zThresh_NY := dyn_zThresh_NY + ((3 - risk_lvl) * 0.2)
+zThresh_NY    = preset_manual ? in_zThresh_NY : dyn_zThresh_NY 
 
 grp_rsi = "⚡ RSI Divergencias (Agotamiento)"
 use_rsi      = input.bool(true, "Activar Motor RSI y Divergencias", group=grp_rsi) 
@@ -182,7 +224,7 @@ rsi_ext      = input.int(30, 'Nivel Extremo (30)', group=grp_rsi)
 // =========================================================================
 grp_kz = "⏳ Killzones (Horario Argentina)"
 in_use_kz = input.bool(true, "Filtrar Entradas por Killzone", group=grp_kz) 
-use_kz    = is_crypto ? false : preset_4h ? false : preset_3m ? true : preset_15m ? true : preset_1h ? true : in_use_kz
+use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : true)
 
 show_asia = input.bool(true, "Dibujar Rango Asiático", group=grp_kz)
 kz_asia = input.session("2000-0200", "Asia Rango (ART)", group=grp_kz)
@@ -196,30 +238,30 @@ tz     = "America/Argentina/Buenos_Aires"
 // =========================================================================
 grp_alerts = "🔔 Alertas Sniper (Notificaciones IA)"
 in_alert_sweep  = input.bool(true, "1. Alerta: Trampa (CRT / Sweep)", group=grp_alerts)
-alert_sweep     = preset_3m ? false : preset_15m ? true : preset_1h ? false : preset_4h ? false : in_alert_sweep
+alert_sweep     = preset_manual ? in_alert_sweep : (auto_15m ? true : false)
 
 in_alert_choch  = input.bool(true, "2. Alerta: Gatillo (CHoCH 🚀)", group=grp_alerts)
-alert_choch     = preset_3m ? true : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_alert_choch     
+alert_choch     = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_choch     
 
 in_alert_zone_touch = input.bool(true, "3. Alerta: Toque Zona (ZONE_TOUCHED)", group=grp_alerts)
-alert_zone_touch    = preset_3m ? true : preset_15m ? true : preset_1h ? false : preset_4h ? false : in_alert_zone_touch
+alert_zone_touch    = auto_3m ? true : auto_15m ? true : auto_1h ? false : auto_4h ? false : in_alert_zone_touch
 
 in_alert_div    = input.bool(true, "4. Alerta: Divergencia (SMC DIV)", group=grp_alerts)
-alert_div       = preset_3m ? true : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_alert_div 
+alert_div       = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_div 
 
 grp_radar = "📡 Radar Biónico (Conexión JARVIS JSON)"
 in_sync_strict = input.bool(false, "Sincronización Estricta (Solo a favor de Macro)", group=grp_radar)
-sync_strict    = preset_3m ? false : preset_15m ? false : preset_1h ? false : preset_4h ? false : in_sync_strict
+sync_strict    = auto_3m ? false : auto_15m ? false : auto_1h ? false : auto_4h ? false : in_sync_strict
 
 in_use_sync = input.bool(true, "Sincronizar Zonas (cada killzone)", group=grp_radar)
-use_sync    = preset_3m ? false : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_use_sync 
+use_sync    = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_sync 
 
 in_use_ping = input.bool(true, "Enviar PING de Precio al cerrar vela", group=grp_radar)
-use_ping    = preset_3m ? true : preset_15m ? false : preset_1h ? false : preset_4h ? false : in_use_ping
+use_ping    = auto_3m ? true : auto_15m ? false : auto_1h ? false : auto_4h ? false : in_use_ping
 
 // 🆕 v5.1: HEARTBEAT checkbox en el panel de Radar
 in_use_heartbeat = input.bool(true, "Enviar HEARTBEAT periódico (Watchdog)", group=grp_radar)
-use_heartbeat    = preset_3m ? true : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_use_heartbeat
+use_heartbeat    = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_heartbeat
 
 // =========================================================================
 // 💾 EXPORTACIÓN DE LOGS (Backtest) — v5.7
@@ -931,9 +973,9 @@ show_tl = input.bool(true, "Mostrar Líneas de Tendencia (Retail Liq)", group=gr
 tl_tol = input.float(0.4, "Tolerancia Rectitud (x ATR)", step=0.1, group=grp_tl)
 in_alert_tl = input.bool(true, "Alerta: Sweep de Trendline", group=grp_tl)
 tl_require_kz = input.bool(false, "Solo en Killzones (TL Swp)", group=grp_tl)
-alert_tl = preset_3m ? false : preset_15m ? true : preset_1h ? true : preset_4h ? false : in_alert_tl
+alert_tl = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? false : in_alert_tl
 
-int tl_max_bars = preset_3m ? 300 : preset_15m ? 200 : preset_1h ? 150 : preset_4h ? 100 : 150
+int tl_max_bars = auto_3m ? 300 : auto_15m ? 200 : auto_1h ? 150 : auto_4h ? 100 : 150
 
 var float pl1 = na, var int pl1_idx = na
 var float pl2 = na, var int pl2_idx = na
