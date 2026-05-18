@@ -1197,9 +1197,12 @@ export async function processTradingAlert(alertText: string) {
                             const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, dynamicBotConfig.slBufferPercent);
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
-                            const tp1 = activeLeg.extreme.toFixed(decimals);
                             const currentPrice = state.lastPrice ?? activeLeg.extreme;
                             const riskDist = Math.abs(currentPrice - adjustedSL);
+                            const fixedTP1 = currentDirection === 'BUY'
+                                ? currentPrice + riskDist
+                                : currentPrice - riskDist;
+                            const tp1 = fixedTP1.toFixed(decimals);
                             const fixedTP2 = currentDirection === 'BUY'
                                 ? currentPrice + (riskDist * dynamicBotConfig.fixedRR)
                                 : currentPrice - (riskDist * dynamicBotConfig.fixedRR);
