@@ -39,6 +39,7 @@ export default function BacktestingPanel() {
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
   const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('OTE');
+  const [riskUsd, setRiskUsd] = useState(50);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -179,7 +180,7 @@ export default function BacktestingPanel() {
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
             const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
-            const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0).toFixed(2);
+            const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0).toFixed(2);
             const session: SessionHistory = {
               id: `BT_OPT_${Date.now()}`, ticker, date: bestResult.startDate + ' → ' + bestResult.endDate,
               trades: bestResult.trades.length, winRate: wr, pnl, status: 'completed',
@@ -193,7 +194,7 @@ export default function BacktestingPanel() {
             });
             setSelectedSession(session.id);
             setIsRunning(false);
-            toast(`✅ Optimización finalizada. PnL Máximo: ${bestPnl.toFixed(2)}%`, 'success');
+            toast(`✅ Optimización finalizada. PnL Máximo: $${bestPnl.toFixed(2)}`, 'success');
         }
     };
     
@@ -207,13 +208,13 @@ export default function BacktestingPanel() {
     const losses = closed.filter(t => t.result === 'LOSS').length;
     const be = closed.filter(t => t.result === 'BE').length;
     const open = trades.filter(t => !t.result).length;
-    const pnlTotal = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
-    const pnlTp1Total = closed.reduce((acc, t) => acc + (t.pnlTp1 || 0), 0);
-    const pnlTp2Total = closed.reduce((acc, t) => acc + (t.pnlTp2 || 0), 0);
+    const pnlTotal = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
+    const pnlTp1Total = closed.reduce((acc, t) => acc + (t.rMultipleTp1 || 0) * riskUsd, 0);
+    const pnlTp2Total = closed.reduce((acc, t) => acc + (t.rMultipleTp2 || 0) * riskUsd, 0);
     const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
     let maxDD = 0, peak = 0;
     closed.forEach(t => {
-      peak += (t.pnl || 0);
+      peak += (t.rMultiple || 0) * riskUsd;
       if (peak < maxDD) maxDD = peak;
     });
     return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2), closed };
@@ -223,8 +224,8 @@ export default function BacktestingPanel() {
   let cumTp1 = 0;
   let cumTp2 = 0;
   metrics.closed.forEach((t, i) => {
-    cumTp1 += (t.pnlTp1 || 0);
-    cumTp2 += (t.pnlTp2 || 0);
+    cumTp1 += (t.rMultipleTp1 || 0) * riskUsd;
+    cumTp2 += (t.rMultipleTp2 || 0) * riskUsd;
     equityData.push({
       name: `T${i + 1}`,
       TP1: parseFloat(cumTp1.toFixed(2)),
@@ -300,6 +301,12 @@ export default function BacktestingPanel() {
               <input type="range" min="10" max="90" step="1" value={oteEntryPercent} onChange={e => setOteEntryPercent(parseFloat(e.target.value))}
                 style={{ flex: 1 }} />
               <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-gold)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{oteEntryPercent}%</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
+              <input type="number" min="1" step="1" value={riskUsd} onChange={e => setRiskUsd(parseFloat(e.target.value) || 0)}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
             </div>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
@@ -408,11 +415,11 @@ export default function BacktestingPanel() {
                   <LineChart data={equityData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                     <XAxis dataKey="name" stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} width={40} />
+                    <YAxis stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `$${val}`} width={40} />
                     <Tooltip 
                       contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.8rem' }}
                       itemStyle={{ padding: 0 }}
-                      formatter={(value: any) => [`${value}%`]}
+                      formatter={(value: any) => [`$${value}`]}
                     />
                     <Line type="monotone" dataKey="TP1" name="PNL TP1" stroke="var(--accent-green)" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="TP2" name="PNL TP2" stroke="#0088ff" strokeWidth={2} dot={false} />
@@ -461,11 +468,11 @@ export default function BacktestingPanel() {
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp1Price.toFixed(2)}</td>
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toFixed(2)}</td>
                         <td style={{ color: resultColor(t.result), fontWeight: 700 }}>{t.result || 'OPEN'}</td>
-                        <td className="mono" style={{ color: (t.pnlTp1 || 0) > 0 ? 'var(--accent-green)' : (t.pnlTp1 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
-                          {t.pnlTp1 !== undefined ? `${t.pnlTp1 >= 0 ? '+' : ''}${t.pnlTp1.toFixed(2)}%` : '—'}
+                        <td className="mono" style={{ color: (t.rMultipleTp1 || 0) > 0 ? 'var(--accent-green)' : (t.rMultipleTp1 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
+                          {t.rMultipleTp1 !== undefined ? `${(t.rMultipleTp1 * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp1 * riskUsd).toFixed(2)}` : '—'}
                         </td>
-                        <td className="mono" style={{ color: (t.pnlTp2 || 0) > 0 ? 'var(--accent-green)' : (t.pnlTp2 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
-                          {t.pnlTp2 !== undefined ? `${t.pnlTp2 >= 0 ? '+' : ''}${t.pnlTp2.toFixed(2)}%` : '—'}
+                        <td className="mono" style={{ color: (t.rMultipleTp2 || 0) > 0 ? 'var(--accent-green)' : (t.rMultipleTp2 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
+                          {t.rMultipleTp2 !== undefined ? `${(t.rMultipleTp2 * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp2 * riskUsd).toFixed(2)}` : '—'}
                         </td>
                         <td className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
                           {t.durationMin ? `${t.durationMin}m` : '—'}
