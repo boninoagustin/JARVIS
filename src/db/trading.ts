@@ -134,6 +134,76 @@ let dynamicBotConfig = {
     entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH'
 };
 
+// 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
+interface AssetSessionConfig {
+    minPointsForBuy: number;
+    minPointsForSell: number;
+    slBufferPercent: number;
+    fixedRR: number;
+    oteEntryPercent: number;
+    entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+    enabled: boolean; // permite deshabilitar un activo/sesión
+}
+
+// Map: "BTCUSD_LONDON" -> config
+const assetSessionConfigs = new Map<string, AssetSessionConfig>();
+
+// Detecta la sesión actual basándose en hora de Argentina (UTC-3)
+function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
+    const now = new Date();
+    const arStr = now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', minute: 'numeric', hour12: false });
+    const [hourStr, minStr] = arStr.split(':');
+    const h = parseInt(hourStr);
+    const m = parseInt(minStr || '0');
+    const t = h + m / 60;
+    if (t >= 21 || t < 6) return 'ASIA';
+    if (t >= 4 && t < 13) return 'LONDON';
+    if (t >= 10.5 && t < 17) return 'NY';
+    return 'OFF';
+}
+
+// Resuelve la config para un ticker: ticker+session > ticker+ALL > global
+function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { sessionEnabled: boolean } {
+    const session = getCurrentSession();
+    const specificKey = `${ticker}_${session}`;
+    const globalKey = `${ticker}_ALL`;
+    
+    // 1. Config específica de activo+sesión
+    const specific = assetSessionConfigs.get(specificKey);
+    if (specific) {
+        console.log(`[CONFIG] 📋 Usando config: ${specificKey}`);
+        return {
+            ...dynamicBotConfig,
+            minPointsForBuy: specific.minPointsForBuy,
+            minPointsForSell: specific.minPointsForSell,
+            slBufferPercent: specific.slBufferPercent,
+            fixedRR: specific.fixedRR,
+            oteEntryPercent: specific.oteEntryPercent,
+            entryTrigger: specific.entryTrigger,
+            sessionEnabled: specific.enabled
+        };
+    }
+    
+    // 2. Config global del activo
+    const global = assetSessionConfigs.get(globalKey);
+    if (global) {
+        console.log(`[CONFIG] 📋 Usando config global: ${globalKey}`);
+        return {
+            ...dynamicBotConfig,
+            minPointsForBuy: global.minPointsForBuy,
+            minPointsForSell: global.minPointsForSell,
+            slBufferPercent: global.slBufferPercent,
+            fixedRR: global.fixedRR,
+            oteEntryPercent: global.oteEntryPercent,
+            entryTrigger: global.entryTrigger,
+            sessionEnabled: global.enabled
+        };
+    }
+    
+    // 3. Fallback a config global
+    return { ...dynamicBotConfig, sessionEnabled: true };
+}
+
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
 if (db) {
     try {
@@ -161,6 +231,23 @@ if (db) {
                     entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger
                 };
             }
+        });
+
+        // 🆕 v6.0: Listener para configs por activo+sesión
+        db.collection('asset_configs').onSnapshot((snap) => {
+            snap.forEach(doc => {
+                const data = doc.data() as Partial<AssetSessionConfig>;
+                assetSessionConfigs.set(doc.id, {
+                    minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
+                    minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
+                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
+                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
+                    entryTrigger: (data.entryTrigger as any) || dynamicBotConfig.entryTrigger,
+                    enabled: data.enabled !== false // default enabled
+                });
+            });
+            console.log(`[CONFIG] 🧠 ${assetSessionConfigs.size} configs por activo+sesión cargadas:`, [...assetSessionConfigs.keys()].join(', '));
         });
     } catch (e) {
         console.error('[TRADING] Error iniciando listeners de configuración', e);
@@ -287,7 +374,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             minRange = 0.00010; // 1.0 pip para forex majors
         }
 
-        const fibRatio = dynamicBotConfig.oteEntryPercent / 100;
+        const config = getConfigForTicker(ticker);
+        const fibRatio = config.oteEntryPercent / 100;
         const entryLevel = leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio);
 
         // 🔓 OTE entry: el leg fue creado por un CHoCH que ya pasó todos los filtros de puntaje.
@@ -328,14 +416,14 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 
                 const decimals = getDecimals(ticker);
                 // 🔧 FIX: Calculamos la distancia del stop loss usando el buffer dinámico por activo
-                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, dynamicBotConfig.slBufferPercent);
+                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent);
                 const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
                 const riskDist = Math.abs(currentPrice - adjustedSL);
                 const fixedTP2 = leg.dir === 'BUY'
-                    ? currentPrice + (riskDist * dynamicBotConfig.fixedRR)
-                    : currentPrice - (riskDist * dynamicBotConfig.fixedRR);
+                    ? currentPrice + (riskDist * config.fixedRR)
+                    : currentPrice - (riskDist * config.fixedRR);
                 const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -999,7 +1087,8 @@ export async function processTradingAlert(alertText: string) {
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
                 // Durante el cooldown, NO reseteamos el score — se acumula para el siguiente CHoCH.
-                if (nowMs - (state.lastSniperAlert ?? 0) < dynamicBotConfig.sniperCooldownMs) {
+                const config = getConfigForTicker(ticker);
+                if (nowMs - (state.lastSniperAlert ?? 0) < config.sniperCooldownMs) {
                     console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${activeScore.points} pts).`);
                     return;
                 }
@@ -1146,9 +1235,14 @@ export async function processTradingAlert(alertText: string) {
                 // 🔧 v5.5: Mínimo de puntos dinámico por tipo de activo
                 // Crypto (BTC/ETH): 4 pts (24/7, más oportunidades pero más ruido)
                 // Forex/Índices: 5 pts (sesiones definidas, zonas más estables)
+                if (!config.sessionEnabled) {
+                    console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión`);
+                    return;
+                }
+
                 let minPtsRequired = currentDirection === 'BUY' 
-                    ? (sessionThresholds?.buy || dynamicBotConfig.minPointsForBuy) 
-                    : (sessionThresholds?.sell || dynamicBotConfig.minPointsForSell);
+                    ? (sessionThresholds?.buy || config.minPointsForBuy) 
+                    : (sessionThresholds?.sell || config.minPointsForSell);
                 
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
                 if (isCrypto) minPtsRequired = Math.max(minPtsRequired - 1, 3); // Crypto: 1 punto menos
@@ -1192,9 +1286,9 @@ export async function processTradingAlert(alertText: string) {
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
 
-                        if (efectiveValidation && (dynamicBotConfig.entryTrigger === 'CHOCH' || dynamicBotConfig.entryTrigger === 'BOTH')) {
+                        if (efectiveValidation && (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH')) {
                             const decimals = getDecimals(ticker);
-                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, dynamicBotConfig.slBufferPercent);
+                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent);
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
                             const currentPrice = state.lastPrice ?? activeLeg.extreme;
@@ -1204,8 +1298,8 @@ export async function processTradingAlert(alertText: string) {
                                 : currentPrice - riskDist;
                             const tp1 = fixedTP1.toFixed(decimals);
                             const fixedTP2 = currentDirection === 'BUY'
-                                ? currentPrice + (riskDist * dynamicBotConfig.fixedRR)
-                                : currentPrice - (riskDist * dynamicBotConfig.fixedRR);
+                                ? currentPrice + (riskDist * config.fixedRR)
+                                : currentPrice - (riskDist * config.fixedRR);
                             const tp2 = fixedTP2.toFixed(decimals);
                             const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
                             
@@ -1218,7 +1312,7 @@ export async function processTradingAlert(alertText: string) {
                                 isChochEntry: true
                             };
                             triggerOte = true;
-                            if (dynamicBotConfig.entryTrigger === 'CHOCH') {
+                            if (config.entryTrigger === 'CHOCH') {
                                 activeLeg.oteScored = true;
                             }
                         }
@@ -1343,9 +1437,10 @@ export async function processTradingAlert(alertText: string) {
                 msg += `🎯 <b>Puntaje Total:</b> ${oteData.points} Puntos\n`;
                 msg += `🧱 <b>Confluencias:</b> ${oteData.events?.join(', ')}\n\n`;
 
+                const config = getConfigForTicker(ticker);
                 let avisoRiesgo = oteData.points >= 8
-                    ? `Operar con riesgo estándar (${dynamicBotConfig.baseRiskPercentage}%).`
-                    : `Setup de puntaje medio. Riesgo reducido (${dynamicBotConfig.baseRiskPercentage / 2}%).`;
+                    ? `Operar con riesgo estándar (${config.baseRiskPercentage}%).`
+                    : `Setup de puntaje medio. Riesgo reducido (${config.baseRiskPercentage / 2}%).`;
 
                 msg += `🧠 <b>Jarvis:</b> Llegada a zona OTE confirmada. ${avisoRiesgo}\n\n`;
                 msg += `📐 <b>Niveles de Ejecución (GATILLO):</b>\n`;

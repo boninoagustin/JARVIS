@@ -5,6 +5,8 @@ import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 import { getDecimals } from '../services/backtestTypes';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { db } from '../firebase';
+import { doc, setDoc } from 'firebase/firestore';
 
 interface UploadedFile {
   name: string;
@@ -58,6 +60,25 @@ export default function BacktestingPanel() {
   const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '3': 3 };
   const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '3': '3M' };
   const TF_COLOR: Record<string, string> = { '240': '#7c4dff', '60': '#0088ff', '15': 'var(--accent-gold)', '3': 'var(--accent-red)' };
+
+  const handlePushToBot = async () => {
+    try {
+      const configDoc = `${ticker}_${sessionFilter}`;
+      await setDoc(doc(db, 'asset_configs', configDoc), {
+        minPointsForBuy: minBuyPoints,
+        minPointsForSell: minSellPoints,
+        slBufferPercent: slBufferPercent,
+        fixedRR: fixedRR,
+        oteEntryPercent: oteEntryPercent,
+        entryTrigger: entryTrigger,
+        enabled: true,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      toast(`✅ Configurada ${configDoc} en JARVIS`, 'success');
+    } catch (err: any) {
+      toast(`❌ Error guardando: ${err.message}`, 'error');
+    }
+  };
 
   const handleFilesUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -377,6 +398,12 @@ export default function BacktestingPanel() {
               <button type="button" onClick={handleOptimize} disabled={uploadedFiles.length === 0 || isRunning}
                 style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? 'var(--accent-gold)' : 'var(--bg-secondary)', color: 'black', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Wand2 size={14} /> OPTIMIZAR
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <button type="button" onClick={handlePushToBot}
+                style={{ flex: 1, padding: '10px', backgroundColor: '#0088ff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Upload size={14} /> EXPORTAR A JARVIS
               </button>
               {uploadedFiles.length > 0 && !isRunning && (
                 <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}
