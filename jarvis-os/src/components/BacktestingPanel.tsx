@@ -116,12 +116,15 @@ export default function BacktestingPanel() {
     const slOptions = [0, 0.05, 0.1, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
     const oteOptions = [50, 62, 79];
+    const scoreOptions = [5, 8, 12, 15, 20]; // Puntos mínimos simétricos
 
-    const combinations: {sl:number, rr:number, ote:number}[] = [];
+    const combinations: {sl:number, rr:number, ote:number, score:number}[] = [];
     for (const sl of slOptions) {
       for (const rr of rrOptions) {
         for (const ote of oteOptions) {
-          combinations.push({ sl, rr, ote });
+          for (const score of scoreOptions) {
+            combinations.push({ sl, rr, ote, score });
+          }
         }
       }
     }
@@ -131,12 +134,12 @@ export default function BacktestingPanel() {
     let bestConfig: any = null;
 
     const processChunk = (startIndex: number) => {
-        const chunkSize = 5;
+        const chunkSize = 10;
         const endIndex = Math.min(startIndex + chunkSize, combinations.length);
         
         for (let i = startIndex; i < endIndex; i++) {
             const c = combinations[i];
-            const config = { ticker, minBuyPoints, minSellPoints, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote };
+            const config = { ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote };
             const res = runBacktest(logs, config);
             
             const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -159,6 +162,8 @@ export default function BacktestingPanel() {
             setSlBufferPercent(bestConfig.slBufferPercent);
             setFixedRR(bestConfig.fixedRR);
             setOteEntryPercent(bestConfig.oteEntryPercent);
+            setMinBuyPoints(bestConfig.minBuyPoints);
+            setMinSellPoints(bestConfig.minSellPoints);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
