@@ -26,6 +26,20 @@ export function parseCSV(content: string): { lines: string[]; detectedTF: string
   return { lines, detectedTF: tf };
 }
 
+// --- Dynamic SL Buffer Calculator ---
+export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
+  const t = ticker.toUpperCase();
+  if (t.includes('JPY')) return bufferConfig * 0.1;
+  const forexPairs = ['EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+  if (forexPairs.some(fiat => t.includes(fiat)) && !t.includes('BTC') && !t.includes('ETH')) {
+      return bufferConfig * 0.001;
+  }
+  const indices = ['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'];
+  if (indices.some(idx => t.includes(idx))) return bufferConfig * 100;
+  if (t.includes('XAU') || t.includes('GOLD')) return bufferConfig * 10;
+  return originPrice * (bufferConfig / 100);
+}
+
 // --- EVALUATE IMPULSE (ported from backend) ---
 function evaluateImpulse(
   leg: ImpulseLeg | null | undefined, currentPrice: number,
@@ -80,7 +94,7 @@ function evaluateImpulse(
 
         const decimals = getDecimals(ticker);
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const slBufferAmt = leg.origin * ((config.slBufferPercent || 0) / 100);
+        const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent || 0);
         const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBufferAmt : leg.origin + slBufferAmt;
         return {
           updatedLeg: leg, triggerOte: true,

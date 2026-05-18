@@ -205,6 +205,36 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
+// --- Dynamic SL Buffer Calculator ---
+export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
+    const t = ticker.toUpperCase();
+    
+    // 1. Forex JPY Pairs (1 pip = 0.01)
+    if (t.includes('JPY')) {
+        return bufferConfig * 0.1; // e.g. 0.1 -> 0.01 (1 pip)
+    }
+    
+    // 2. Forex Majors/Minors (1 pip = 0.0001)
+    const forexPairs = ['EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+    if (forexPairs.some(fiat => t.includes(fiat)) && !t.includes('BTC') && !t.includes('ETH')) {
+        return bufferConfig * 0.001; // e.g. 0.1 -> 0.0001 (1 pip)
+    }
+    
+    // 3. Indices
+    const indices = ['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'];
+    if (indices.some(idx => t.includes(idx))) {
+        return bufferConfig * 100; // e.g. 0.1 -> 10 points
+    }
+    
+    // 4. Metals (Gold)
+    if (t.includes('XAU') || t.includes('GOLD')) {
+        return bufferConfig * 10; // e.g. 0.1 -> $1
+    }
+    
+    // 5. Default / Crypto (Treat as Percentage)
+    return originPrice * (bufferConfig / 100);
+}
+
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
@@ -295,7 +325,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 leg.oteScored = true;
                 
                 const decimals = getDecimals(ticker);
-                const slBuffer = leg.origin * (dynamicBotConfig.slBufferPercent / 100);
+                // 🔧 FIX: Calculamos la distancia del stop loss usando el buffer dinámico por activo
+                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, dynamicBotConfig.slBufferPercent);
                 const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);

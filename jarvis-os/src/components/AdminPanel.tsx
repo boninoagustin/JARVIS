@@ -166,8 +166,8 @@ export default function AdminPanel() {
 
           <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px', borderColor: 'var(--accent-red)', borderWidth: '1px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-              <label style={{ fontWeight: 600 }}>🛡️ SL Buffer — Margen extra sobre el Origin (%)</label>
-              <span className="mono" style={{ color: 'var(--accent-red)' }}>{config.slBufferPercent}%</span>
+              <label style={{ fontWeight: 600 }}>🛡️ SL Buffer — Relativo según Activo</label>
+              <span className="mono" style={{ color: 'var(--accent-red)' }}>{config.slBufferPercent}</span>
             </div>
             <input 
               type="range" 
