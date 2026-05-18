@@ -455,7 +455,7 @@ export default function BacktestingPanel() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL (TP1)</th><th>PNL (TP2)</th><th>PNL (TOTAL)</th><th>DUR</th>
+                      <th>FECHA</th><th>DIR</th><th>GRADO</th><th>PTS</th><th>EVENTOS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>TP2</th><th>RESULTADO</th><th>PNL (TP1)</th><th>PNL (TP2)</th><th>PNL (TOTAL)</th><th>R (TOTAL)</th><th>DUR</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -463,10 +463,15 @@ export default function BacktestingPanel() {
                       <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{new Date(t.timestamp).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                         <td style={{ color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700 }}>{t.direction}</td>
+                        <td style={{ fontWeight: 700, color: t.grade?.startsWith('A') ? 'var(--accent-gold)' : t.grade?.startsWith('B') ? '#0088ff' : 'var(--text-secondary)' }}>{t.grade || '-'}</td>
                         <td style={{ color: t.points >= 8 ? 'var(--accent-gold)' : 'var(--text-secondary)' }}>{t.points}</td>
-                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.entryPrice.toFixed(2)}</td>
-                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp1Price.toFixed(2)}</td>
-                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toFixed(2)}</td>
+                        <td style={{ maxWidth: '100px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.65rem', color: 'var(--text-tertiary)' }} title={t.events?.join(', ')}>
+                          {t.events?.map(e => e.replace('🎯_', '').replace('_3M', '')).join(', ') || '-'}
+                        </td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.entryPrice.toString()}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp1Price.toString()}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toString()}</td>
+                        <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp2Price ? t.tp2Price.toString() : '—'}</td>
                         <td style={{ color: resultColor(t.result), fontWeight: 700 }}>{t.result || 'OPEN'}</td>
                         <td className="mono" style={{ color: (t.rMultipleTp1 || 0) > 0 ? 'var(--accent-green)' : (t.rMultipleTp1 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
                           {t.rMultipleTp1 !== undefined ? `${(t.rMultipleTp1 * riskUsd) > 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp1 * riskUsd).toFixed(2)}` : '—'}
@@ -476,6 +481,9 @@ export default function BacktestingPanel() {
                         </td>
                         <td className="mono" style={{ color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700 }}>
                           {t.rMultiple !== undefined ? `${(t.rMultiple * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultiple * riskUsd).toFixed(2)}` : '—'}
+                        </td>
+                        <td className="mono" style={{ color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700 }}>
+                          {t.rMultiple !== undefined ? `${t.rMultiple > 0 ? '+' : ''}${t.rMultiple.toFixed(2)}R` : '—'}
                         </td>
                         <td className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
                           {t.durationMin ? `${t.durationMin}m` : '—'}
