@@ -176,8 +176,6 @@ async function main() {
                 uptime: Math.round(process.uptime()),
                 activeTrades: 0, // se actualiza abajo
                 lastPing: 0,
-                killswitches: { streak: streakKillswitchUntil > 0, vix: vixKillswitchUntil > 0 },
-                consecutiveLosses,
             };
             // Import dinámico para leer estado desde trading module
             import('./db/trading.js').then(tm => {
