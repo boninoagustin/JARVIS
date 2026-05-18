@@ -21,6 +21,13 @@ interface SessionHistory {
   pnl: string;
   status: string;
   tradeData?: BacktestTrade[];
+  config?: {
+    minBuyPoints: number;
+    minSellPoints: number;
+    slBufferPercent: number;
+    fixedRR: number;
+    oteEntryPercent: number;
+  };
 }
 
 export default function BacktestingPanel() {
@@ -95,6 +102,7 @@ export default function BacktestingPanel() {
         id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
         tradeData: res.trades,
+        config: { minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent }
       };
       setSessions(prev => {
         const next = [session, ...prev].slice(0, 20);
@@ -173,6 +181,7 @@ export default function BacktestingPanel() {
               id: `BT_OPT_${Date.now()}`, ticker, date: bestResult.startDate + ' → ' + bestResult.endDate,
               trades: bestResult.trades.length, winRate: wr, pnl, status: 'completed',
               tradeData: bestResult.trades,
+              config: bestConfig
             };
             setSessions(prev => {
               const next = [session, ...prev].slice(0, 20);
@@ -472,7 +481,17 @@ export default function BacktestingPanel() {
                     style={{ minWidth: '180px', padding: '12px', cursor: 'pointer', backgroundColor: selectedSession === s.id ? 'rgba(255,170,0,0.1)' : 'var(--bg-base)', border: `1px solid ${selectedSession === s.id ? 'var(--accent-gold)' : 'var(--border-color)'}`, borderRadius: '4px', flexShrink: 0, position: 'relative' }}>
                     <div onClick={() => {
                       if (selectedSession === s.id) { setSelectedSession(null); }
-                      else { setSelectedSession(s.id); if (s.tradeData) setTrades(s.tradeData); }
+                      else { 
+                        setSelectedSession(s.id); 
+                        if (s.tradeData) setTrades(s.tradeData); 
+                        if (s.config) {
+                          setMinBuyPoints(s.config.minBuyPoints);
+                          setMinSellPoints(s.config.minSellPoints);
+                          setSlBufferPercent(s.config.slBufferPercent);
+                          setFixedRR(s.config.fixedRR);
+                          setOteEntryPercent(s.config.oteEntryPercent);
+                        }
+                      }
                     }}>
                       <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.ticker}</div>
                       <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.date}</div>
