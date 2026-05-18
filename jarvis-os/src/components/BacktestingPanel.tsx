@@ -27,6 +27,7 @@ interface SessionHistory {
     slBufferPercent: number;
     fixedRR: number;
     oteEntryPercent: number;
+    entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
   };
 }
 
@@ -37,6 +38,7 @@ export default function BacktestingPanel() {
   const [slBufferPercent, setSlBufferPercent] = useState(0.1);
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
+  const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('OTE');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -84,7 +86,7 @@ export default function BacktestingPanel() {
 
     // Run in next tick to allow UI update
     setTimeout(() => {
-      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent }, (pct, currentTrades) => {
+      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
       });
@@ -102,7 +104,7 @@ export default function BacktestingPanel() {
         id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
         tradeData: res.trades,
-        config: { minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent }
+        config: { minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger }
       };
       setSessions(prev => {
         const next = [session, ...prev].slice(0, 20);
@@ -112,7 +114,7 @@ export default function BacktestingPanel() {
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, toast]);
 
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -126,12 +128,12 @@ export default function BacktestingPanel() {
     const oteOptions = [50, 62, 79];
     const scoreOptions = [5, 8, 12, 15, 20]; // Puntos mínimos simétricos
 
-    const combinations: {sl:number, rr:number, ote:number, score:number}[] = [];
+    const combinations: {sl:number, rr:number, ote:number, score:number, trigger: 'CHOCH' | 'OTE' | 'BOTH'}[] = [];
     for (const sl of slOptions) {
       for (const rr of rrOptions) {
         for (const ote of oteOptions) {
           for (const score of scoreOptions) {
-            combinations.push({ sl, rr, ote, score });
+            combinations.push({ sl, rr, ote, score, trigger: entryTrigger });
           }
         }
       }
@@ -147,7 +149,7 @@ export default function BacktestingPanel() {
         
         for (let i = startIndex; i < endIndex; i++) {
             const c = combinations[i];
-            const config = { ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote };
+            const config = { ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger };
             const res = runBacktest(logs, config);
             
             const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -170,6 +172,7 @@ export default function BacktestingPanel() {
             setSlBufferPercent(bestConfig.slBufferPercent);
             setFixedRR(bestConfig.fixedRR);
             setOteEntryPercent(bestConfig.oteEntryPercent);
+            setEntryTrigger(bestConfig.entryTrigger);
             setMinBuyPoints(bestConfig.minBuyPoints);
             setMinSellPoints(bestConfig.minSellPoints);
             
@@ -195,7 +198,7 @@ export default function BacktestingPanel() {
     };
     
     setTimeout(() => processChunk(0), 100);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, entryTrigger, toast]);
 
   // Metrics
   const metrics = (() => {
@@ -254,17 +257,27 @@ export default function BacktestingPanel() {
                 <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} className="mono" placeholder="BTCUSD"
                   style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN BUY</label>
-                  <input type="number" value={minBuyPoints} onChange={e => setMinBuyPoints(Number(e.target.value))} className="mono"
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN SELL</label>
-                  <input type="number" value={minSellPoints} onChange={e => setMinSellPoints(Number(e.target.value))} className="mono"
-                    style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
+              <div>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>TIPO GATILLO</label>
+                <select value={entryTrigger} onChange={e => setEntryTrigger(e.target.value as 'CHOCH' | 'OTE' | 'BOTH')}
+                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}>
+                  <option value="OTE">Fibonacci (OTE)</option>
+                  <option value="CHOCH">Ruptura (CHOCH)</option>
+                  <option value="BOTH">Ambos</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN BUY</label>
+                <input type="number" value={minBuyPoints} onChange={e => setMinBuyPoints(Number(e.target.value))} className="mono"
+                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN SELL</label>
+                <input type="number" value={minSellPoints} onChange={e => setMinSellPoints(Number(e.target.value))} className="mono"
+                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
               </div>
             </div>
 

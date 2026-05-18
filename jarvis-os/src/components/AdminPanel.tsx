@@ -12,6 +12,7 @@ interface BotConfig {
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -22,6 +23,7 @@ const DEFAULT_CONFIG: BotConfig = {
   slBufferPercent: 0.1,
   fixedRR: 2.0,
   oteEntryPercent: 50,
+  entryTrigger: 'OTE',
 };
 
 export default function AdminPanel() {
@@ -39,7 +41,7 @@ export default function AdminPanel() {
     return () => unsubscribe();
   }, []);
 
-  const handleChange = (key: keyof BotConfig, value: number) => {
+  const handleChange = (key: keyof BotConfig, value: number | string) => {
     setConfig(prev => ({ ...prev, [key]: value }));
     setSaveFeedback('idle');
   };
@@ -219,6 +221,25 @@ export default function AdminPanel() {
             <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
               Nivel de retroceso Fibonacci donde se ejecutará la entrada en la zona OTE.
               <br/><span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Ejemplo: 50 = 50%, 62 = 61.8%, 79 = 78.6%</span>
+            </p>
+          </div>
+
+          <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <label style={{ fontWeight: 600 }}>🚀 Tipo de Gatillo (Entrada)</label>
+              <span className="mono" style={{ color: 'var(--text-primary)' }}>{config.entryTrigger}</span>
+            </div>
+            <select 
+              value={config.entryTrigger}
+              onChange={(e) => handleChange('entryTrigger', e.target.value)}
+              style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
+            >
+              <option value="OTE">Fibonacci (OTE)</option>
+              <option value="CHOCH">Ruptura Inicial (CHOCH)</option>
+              <option value="BOTH">Ambos</option>
+            </select>
+            <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
+              Define en qué momento JARVIS ingresará al trade. OTE = Espera retroceso, CHOCH = Entra al confirmar la ruptura.
             </p>
           </div>
 

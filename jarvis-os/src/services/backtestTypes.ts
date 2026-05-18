@@ -39,6 +39,7 @@ export interface BacktestConfig {
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
 }
 
 export interface BacktestResult {

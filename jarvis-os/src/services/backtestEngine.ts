@@ -522,6 +522,29 @@ function processAlert(
       activeLeg.chochEvents = [...activeScore.events];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
+      if (efectiveValidation && (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH')) {
+        const decimals = getDecimals(ticker);
+        const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent);
+        const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
+        const stopLoss = adjustedSL.toFixed(decimals);
+        const tp1 = activeLeg.extreme.toFixed(decimals);
+        const currentPrice = state.lastPrice || (currentDirection === 'BUY' ? activeLeg.extreme : activeLeg.extreme);
+        const riskDist = Math.abs(currentPrice - adjustedSL);
+        const fixedTP2 = currentDirection === 'BUY'
+          ? currentPrice + (riskDist * (config.fixedRR || 2.0))
+          : currentPrice - (riskDist * (config.fixedRR || 2.0));
+        const tp2 = fixedTP2.toFixed(decimals);
+        const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
+        const oteData = {
+          tradeId, direction: currentDirection,
+          entryPrice: currentPrice,
+          stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `EVENTO_CHOCH_3M`]
+        };
+        createTrade(oteData, nowMs, trades, activeTrades);
+        if (config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
+      }
+
       if (totalPoints >= minPtsRequired) {
         const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
         oppositeScore.points = 0; oppositeScore.events = [];

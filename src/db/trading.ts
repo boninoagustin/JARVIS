@@ -130,7 +130,8 @@ let dynamicBotConfig = {
     baseRiskPercentage: 1.0,
     slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
     fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
-    oteEntryPercent: 50            // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
+    oteEntryPercent: 50,           // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
+    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH'
 };
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -156,7 +157,8 @@ if (db) {
                     baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage,
                     slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
                     fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
-                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
+                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger
                 };
             }
         });
@@ -1189,6 +1191,33 @@ export async function processTradingAlert(alertText: string) {
                         activeLeg.chochEvents = [...activeScore.events, `${triggerType}_3M`];
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
+
+                        if (efectiveValidation && (dynamicBotConfig.entryTrigger === 'CHOCH' || dynamicBotConfig.entryTrigger === 'BOTH')) {
+                            const decimals = getDecimals(ticker);
+                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, dynamicBotConfig.slBufferPercent);
+                            const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
+                            const stopLoss = adjustedSL.toFixed(decimals);
+                            const tp1 = activeLeg.extreme.toFixed(decimals);
+                            const riskDist = Math.abs(currentPrice - adjustedSL);
+                            const fixedTP2 = currentDirection === 'BUY'
+                                ? currentPrice + (riskDist * dynamicBotConfig.fixedRR)
+                                : currentPrice - (riskDist * dynamicBotConfig.fixedRR);
+                            const tp2 = fixedTP2.toFixed(decimals);
+                            const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
+                            
+                            oteData = {
+                                tradeId, direction: currentDirection,
+                                dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
+                                stopLoss, tp1, tp2, entryPrice: currentPrice,
+                                points: totalPoints, events: [...activeScore.events, `${triggerType}_3M`],
+                                bestZone, marketBias: { ...state.marketBias },
+                                isChochEntry: true
+                            };
+                            triggerOte = true;
+                            if (dynamicBotConfig.entryTrigger === 'CHOCH') {
+                                activeLeg.oteScored = true;
+                            }
+                        }
                     }
                     
                     if (totalPoints >= minPtsRequired) {
