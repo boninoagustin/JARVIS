@@ -3,6 +3,7 @@ import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText } from 
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 interface UploadedFile {
   name: string;
@@ -121,8 +122,21 @@ export default function BacktestingPanel() {
       peak += (t.pnl || 0);
       if (peak < maxDD) maxDD = peak;
     });
-    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2) };
+    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2), closed };
   })();
+
+  const equityData = [{ name: 'Start', TP1: 0, TP2: 0 }];
+  let cumTp1 = 0;
+  let cumTp2 = 0;
+  metrics.closed.forEach((t, i) => {
+    cumTp1 += (t.pnlTp1 || 0);
+    cumTp2 += (t.pnlTp2 || 0);
+    equityData.push({
+      name: `T${i + 1}`,
+      TP1: parseFloat(cumTp1.toFixed(2)),
+      TP2: parseFloat(cumTp2.toFixed(2)),
+    });
+  });
 
   const resultColor = (r?: string) => r === 'WIN' ? 'var(--accent-green)' : r === 'LOSS' ? 'var(--accent-red)' : r === 'BE' ? 'var(--accent-gold)' : 'var(--text-tertiary)';
 
@@ -277,6 +291,28 @@ export default function BacktestingPanel() {
                 {result.processedEvents.toLocaleString()} eventos procesados | {result.startDate} → {result.endDate}
               </div>
             )}
+            
+            {/* EQUITY CURVE */}
+            {metrics.closed.length > 0 && (
+              <div style={{ marginTop: '24px', height: '200px', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px', padding: '16px 16px 16px 0' }}>
+                <h4 style={{ marginLeft: '16px', marginBottom: '12px', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>CURVA DE CAPITAL (EQUITY CURVE)</h4>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={equityData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                    <XAxis dataKey="name" stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} width={40} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.8rem' }}
+                      itemStyle={{ padding: 0 }}
+                      formatter={(value: any) => [`${value}%`]}
+                    />
+                    <Line type="monotone" dataKey="TP1" name="PNL TP1" stroke="var(--accent-green)" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="TP2" name="PNL TP2" stroke="#0088ff" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            
           </div>
         </div>
 
