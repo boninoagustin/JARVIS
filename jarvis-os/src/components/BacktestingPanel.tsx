@@ -455,7 +455,7 @@ export default function BacktestingPanel() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL (TP1)</th><th>PNL (TP2)</th><th>DUR</th>
+                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL (TP1)</th><th>PNL (TP2)</th><th>PNL (TOTAL)</th><th>DUR</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -469,10 +469,13 @@ export default function BacktestingPanel() {
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toFixed(2)}</td>
                         <td style={{ color: resultColor(t.result), fontWeight: 700 }}>{t.result || 'OPEN'}</td>
                         <td className="mono" style={{ color: (t.rMultipleTp1 || 0) > 0 ? 'var(--accent-green)' : (t.rMultipleTp1 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
-                          {t.rMultipleTp1 !== undefined ? `${(t.rMultipleTp1 * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp1 * riskUsd).toFixed(2)}` : '—'}
+                          {t.rMultipleTp1 !== undefined ? `${(t.rMultipleTp1 * riskUsd) > 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp1 * riskUsd).toFixed(2)}` : '—'}
                         </td>
                         <td className="mono" style={{ color: (t.rMultipleTp2 || 0) > 0 ? 'var(--accent-green)' : (t.rMultipleTp2 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
-                          {t.rMultipleTp2 !== undefined ? `${(t.rMultipleTp2 * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp2 * riskUsd).toFixed(2)}` : '—'}
+                          {t.rMultipleTp2 !== undefined ? `${(t.rMultipleTp2 * riskUsd) > 0 ? '+$' : '-$'}${Math.abs(t.rMultipleTp2 * riskUsd).toFixed(2)}` : '—'}
+                        </td>
+                        <td className="mono" style={{ color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700 }}>
+                          {t.rMultiple !== undefined ? `${(t.rMultiple * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultiple * riskUsd).toFixed(2)}` : '—'}
                         </td>
                         <td className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
                           {t.durationMin ? `${t.durationMin}m` : '—'}

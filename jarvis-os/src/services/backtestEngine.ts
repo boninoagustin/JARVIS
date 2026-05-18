@@ -312,12 +312,14 @@ function processAlert(
         trade.resultTp2 = finalResult;
         trade.pnlTp2 = finalPnlPct;
         trade.rMultiple = finalPnlPct / slLossPct;
-        trade.rMultipleTp2 = isPartialClose ? (-slLossPct / slLossPct) * 0.5 : (-slLossPct / slLossPct);
         
         if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
           trade.pnlTp1 = -slLossPct;
-          trade.rMultipleTp1 = -1;
+          trade.rMultipleTp1 = undefined; // Don't show confusing -50 in TP1
+          trade.rMultipleTp2 = undefined; // Don't show confusing -50 in TP2
+        } else {
+          trade.rMultipleTp2 = (-slLossPct / slLossPct) * 0.5;
         }
 
         trade.closeTimestamp = nowMs;
