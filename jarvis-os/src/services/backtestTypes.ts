@@ -35,6 +35,7 @@ export interface BacktestTrade {
 export interface BacktestConfig {
   ticker: string; minBuyPoints: number; minSellPoints: number;
   slBufferPercent: number;
+  fixedRR: number;
 }
 
 export interface BacktestResult {

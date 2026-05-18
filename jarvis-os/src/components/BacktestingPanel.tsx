@@ -27,6 +27,7 @@ export default function BacktestingPanel() {
   const [minBuyPoints, setMinBuyPoints] = useState(5);
   const [minSellPoints, setMinSellPoints] = useState(5);
   const [slBufferPercent, setSlBufferPercent] = useState(0.1);
+  const [fixedRR, setFixedRR] = useState(2.0);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -74,7 +75,7 @@ export default function BacktestingPanel() {
 
     // Run in next tick to allow UI update
     setTimeout(() => {
-      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent }, (pct, currentTrades) => {
+      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
       });
@@ -101,7 +102,7 @@ export default function BacktestingPanel() {
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, toast]);
 
   // Metrics
   const metrics = (() => {
@@ -159,11 +160,18 @@ export default function BacktestingPanel() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.05)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.05)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.15)' }}>
               <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600 }}>🛡️ SL BUFFER</label>
               <input type="range" min="0" max="0.5" step="0.01" value={slBufferPercent} onChange={e => setSlBufferPercent(parseFloat(e.target.value))}
                 style={{ flex: 1 }} />
               <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{slBufferPercent}%</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(0,136,255,0.05)', borderRadius: '4px', border: '1px solid rgba(0,136,255,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: '#0088ff', whiteSpace: 'nowrap', fontWeight: 600 }}>🎯 TP2 R:R</label>
+              <input type="range" min="1" max="5" step="0.1" value={fixedRR} onChange={e => setFixedRR(parseFloat(e.target.value))}
+                style={{ flex: 1 }} />
+              <span className="mono" style={{ fontSize: '0.75rem', color: '#0088ff', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{fixedRR}x</span>
             </div>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}

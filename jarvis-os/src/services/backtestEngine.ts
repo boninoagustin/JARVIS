@@ -87,7 +87,13 @@ function evaluateImpulse(
             entryPrice: currentPrice,
             stopLoss: adjustedSL.toFixed(decimals),
             tp1: leg.extreme.toFixed(decimals),
-            tp2: leg.tp2 ? leg.tp2.toFixed(decimals) : '0',
+            tp2: (() => {
+              const riskDist = Math.abs(currentPrice - adjustedSL);
+              const fixedTP2 = leg.dir === 'BUY'
+                ? currentPrice + (riskDist * (config.fixedRR || 2.0))
+                : currentPrice - (riskDist * (config.fixedRR || 2.0));
+              return fixedTP2.toFixed(decimals);
+            })(),
             points: (leg.chochPoints || 0) + 4,
             events: [...(leg.chochEvents || []), eventName],
             bestZone: leg.bestZone || null,

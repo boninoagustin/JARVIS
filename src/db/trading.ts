@@ -128,7 +128,8 @@ let dynamicBotConfig = {
     minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
     minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
     baseRiskPercentage: 1.0,
-    slBufferPercent: 0.1           // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
+    slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
+    fixedRR: 2.0                   // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
 };
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -152,7 +153,8 @@ if (db) {
                     minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
                     minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
                     baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage,
-                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent
+                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
+                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR
                 };
             }
         });
@@ -292,7 +294,11 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
-                const tp2 = leg.tp2 ? leg.tp2.toFixed(decimals) : 'Buscando DOL macro...';
+                const riskDist = Math.abs(currentPrice - adjustedSL);
+                const fixedTP2 = leg.dir === 'BUY'
+                    ? currentPrice + (riskDist * dynamicBotConfig.fixedRR)
+                    : currentPrice - (riskDist * dynamicBotConfig.fixedRR);
+                const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -315,7 +321,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     tradeId, ticker, direction: leg.dir,
                     entryPrice: currentPrice,
                     tp1Price: leg.extreme,
-                    tp2Price: leg.tp2 || 0,
+                    tp2Price: fixedTP2,
                     slPrice: adjustedSL,
                     tp1Hit: false,
                     tp2Hit: false,

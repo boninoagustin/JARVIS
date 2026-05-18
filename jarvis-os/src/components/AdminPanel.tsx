@@ -10,6 +10,7 @@ interface BotConfig {
   minPointsForSell: number;
   baseRiskPercentage: number;
   slBufferPercent: number;
+  fixedRR: number;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -18,6 +19,7 @@ const DEFAULT_CONFIG: BotConfig = {
   minPointsForSell: 6,
   baseRiskPercentage: 1.0,
   slBufferPercent: 0.1,
+  fixedRR: 2.0,
 };
 
 export default function AdminPanel() {
@@ -177,6 +179,25 @@ export default function AdminPanel() {
               Porcentaje extra que se agrega al precio de origin del impulso para colocar el Stop Loss.
               Esto le da margen al trade para absorber sweeps de liquidez sin activar el SL prematuramente.
               <br/><span style={{ color: 'var(--accent-gold)', fontWeight: 600 }}>Ejemplo BTCUSD a $78,000: 0.1% = ~$78 de margen extra.</span>
+            </p>
+          </div>
+
+          <div style={{ padding: '16px', border: '1px solid #0088ff', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <label style={{ fontWeight: 600 }}>🎯 TP2 Fijo — Risk:Reward Ratio</label>
+              <span className="mono" style={{ color: '#0088ff' }}>{config.fixedRR}x</span>
+            </div>
+            <input 
+              type="range" 
+              min="1" 
+              max="5" 
+              step="0.1"
+              value={config.fixedRR}
+              onChange={(e) => handleChange('fixedRR', parseFloat(e.target.value))}
+            />
+            <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
+              Ratio fijo para calcular el TP2. Se multiplica el riesgo (distancia entry→SL) por este factor.
+              <br/><span style={{ color: 'var(--accent-gold)', fontWeight: 600 }}>Ejemplo: Entry $78,000, SL $77,922 → Riesgo $78. TP2 a 2x = $78,156</span>
             </p>
           </div>
 
