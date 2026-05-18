@@ -555,7 +555,7 @@ function processAlert(
         const oteData = {
           tradeId, direction: currentDirection,
           entryPrice: currentPrice,
-          stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `EVENTO_CHOCH_3M`]
+          stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
         };
         createTrade(oteData, nowMs, trades, activeTrades);
         if (config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;

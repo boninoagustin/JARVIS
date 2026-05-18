@@ -54,6 +54,7 @@ export default function BacktestingPanel() {
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
+  const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
@@ -123,7 +124,7 @@ export default function BacktestingPanel() {
       const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
       const wins = closed.filter(t => t.result === 'WIN').length;
       const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
-      const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0).toFixed(2);
+      const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0).toFixed(2);
       const session: SessionHistory = {
         id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
@@ -182,7 +183,7 @@ export default function BacktestingPanel() {
               : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
             
             const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-            const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+            const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
             
             if (pnl > bestPnl) {
                 bestPnl = pnl;
@@ -208,7 +209,7 @@ export default function BacktestingPanel() {
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
             const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
-            const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0).toFixed(2);
+            const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0).toFixed(2);
             const session: SessionHistory = {
               id: `BT_OPT_${Date.now()}`, ticker, date: bestResult.startDate + ' → ' + bestResult.endDate,
               trades: bestResult.trades.length, winRate: wr, pnl, status: 'completed',
@@ -223,7 +224,7 @@ export default function BacktestingPanel() {
             setSelectedSession(session.id);
             setIsRunning(false);
             const sessionLabel = sessionFilter === 'ALL' ? '' : ` (${sessionFilter})`;
-            toast(`✅ Optimización finalizada${sessionLabel}. PnL Máximo: $${bestPnl.toFixed(2)}`, 'success');
+            toast(`✅ Optimización finalizada${sessionLabel}. PnL Máximo: ${bestPnl.toFixed(2)}R`, 'success');
         }
     };
     
@@ -249,13 +250,22 @@ export default function BacktestingPanel() {
     ? trades
     : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
+  const doubleFilteredTrades = tradeFilter === 'ALL'
+    ? filteredTrades
+    : filteredTrades.filter(t => {
+        if (tradeFilter === 'BOS') return t.events?.some(e => e.includes('EVENTO_BOS'));
+        if (tradeFilter === 'CHOCH') return t.events?.some(e => e.includes('EVENTO_CHOCH'));
+        if (tradeFilter === 'OTE') return t.events?.some(e => e.includes('OTE_Retracement'));
+        return true;
+    });
+
   // Metrics
   const metrics = (() => {
-    const closed = filteredTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+    const closed = doubleFilteredTrades.filter(t => t.result && t.result !== 'TIMEOUT');
     const wins = closed.filter(t => t.result === 'WIN').length;
     const losses = closed.filter(t => t.result === 'LOSS').length;
     const be = closed.filter(t => t.result === 'BE').length;
-    const open = filteredTrades.filter(t => !t.result).length;
+    const open = doubleFilteredTrades.filter(t => !t.result).length;
     
     const pnlTotalUsd = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
     const pnlTotalR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
@@ -321,7 +331,7 @@ export default function BacktestingPanel() {
         wins, losses, be, open, wr, 
         pnlUsd: pnlTotalUsd.toFixed(2), 
         pnlR: pnlTotalR.toFixed(2),
-        count: closed.length, total: filteredTrades.length, 
+        count: closed.length, total: doubleFilteredTrades.length, 
         maxDDUsd: maxDD.toFixed(2), closed,
         profitFactor, expectancyR, maxConsLosses, avgDuration: formatDuration(avgDurationMin),
         tp1OnlyCount, tp2Count, slCount, beCount
@@ -460,17 +470,23 @@ export default function BacktestingPanel() {
                 <Wand2 size={14} /> OPTIMIZAR
               </button>
             </div>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button type="button" onClick={handlePushToBot}
-                style={{ flex: 1, padding: '10px', backgroundColor: '#0088ff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                <Upload size={14} /> EXPORTAR A JARVIS
-              </button>
-              {uploadedFiles.length > 0 && !isRunning && (
-                <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}
-                  style={{ padding: '10px 14px', backgroundColor: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}>
-                  <Trash2 size={14} />
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" onClick={handlePushToBot}
+                  style={{ flex: 1, padding: '10px', backgroundColor: '#0088ff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Upload size={14} /> EXPORTAR A JARVIS
                 </button>
-              )}
+                {uploadedFiles.length > 0 && !isRunning && (
+                  <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}
+                    style={{ padding: '10px 14px', backgroundColor: 'transparent', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}>
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 10px' }}>
+                Guarda esta configuración (SL, TP, Gatillos) en Firebase para que el Bot de Telegram la use en vivo.
+              </div>
             </div>
 
             {isRunning && (
@@ -592,15 +608,15 @@ export default function BacktestingPanel() {
               </span>
               {trades.length > 0 && (
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                  {filteredTrades.length}{sessionFilter !== 'ALL' ? `/${trades.length}` : ''} total
+                  {doubleFilteredTrades.length}{tradeFilter !== 'ALL' || sessionFilter !== 'ALL' ? `/${trades.length}` : ''} total
                 </span>
               )}
             </h3>
             {/* Session Filter */}
             {trades.length > 0 && (
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
                 {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
-                  const labels: Record<string, string> = { ALL: '🌍 Todos', LONDON: '🇬🇧 Londres (04-13h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-06h)' };
+                  const labels: Record<string, string> = { ALL: '🌍 Todas las Sesiones', LONDON: '🇬🇧 Londres (04-13h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-06h)' };
                   const isActive = sessionFilter === s;
                   return (
                     <button key={s} onClick={() => setSessionFilter(s)}
@@ -612,6 +628,27 @@ export default function BacktestingPanel() {
                         fontWeight: isActive ? 700 : 400, transition: 'all 0.2s'
                       }}>
                       {labels[s]}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {/* Trade Filter */}
+            {trades.length > 0 && (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                {(['ALL', 'CHOCH', 'BOS', 'OTE'] as const).map(f => {
+                  const labels: Record<string, string> = { ALL: '⚡ Todos los Gatillos', CHOCH: '🚀 Solo CHoCH', BOS: '🔨 Solo BOS', OTE: '📉 Solo OTE (Fibo)' };
+                  const isActive = tradeFilter === f;
+                  return (
+                    <button key={f} onClick={() => setTradeFilter(f)}
+                      style={{
+                        padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
+                        border: isActive ? '1px solid #0088ff' : '1px solid var(--border-color)',
+                        background: isActive ? 'rgba(0,136,255,0.1)' : 'transparent',
+                        color: isActive ? '#0088ff' : 'var(--text-secondary)',
+                        fontWeight: isActive ? 700 : 400, transition: 'all 0.2s'
+                      }}>
+                      {labels[f]}
                     </button>
                   );
                 })}
@@ -630,7 +667,7 @@ export default function BacktestingPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTrades.map(t => {
+                    {doubleFilteredTrades.map(t => {
                       const dec = getDecimals(ticker);
                       return (
                       <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>
@@ -669,17 +706,19 @@ export default function BacktestingPanel() {
           {/* SESSION HISTORY */}
           <div className="panel">
             <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <BookOpen size={18} color="var(--accent-gold)" /> HISTORIAL DE SESIONES
+              <BookOpen size={18} color="var(--accent-gold)" /> HISTORIAL DE SESIONES (RÁPIDAS)
             </h3>
             {sessions.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>
-                Sin sesiones previas
+                Sin sesiones previas guardadas.
               </div>
             ) : (
-              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px' }}>
-                {sessions.map(s => (
+              <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '10px' }}>
+                {sessions.map(s => {
+                  const pnlNum = parseFloat(s.pnl);
+                  return (
                   <div key={s.id}
-                    style={{ minWidth: '180px', padding: '12px', cursor: 'pointer', backgroundColor: selectedSession === s.id ? 'rgba(255,170,0,0.1)' : 'var(--bg-base)', border: `1px solid ${selectedSession === s.id ? 'var(--accent-gold)' : 'var(--border-color)'}`, borderRadius: '4px', flexShrink: 0, position: 'relative' }}>
+                    style={{ minWidth: '220px', padding: '14px', cursor: 'pointer', backgroundColor: selectedSession === s.id ? 'rgba(255,170,0,0.1)' : 'var(--bg-base)', border: `1px solid ${selectedSession === s.id ? 'var(--accent-gold)' : 'var(--border-color)'}`, borderRadius: '6px', flexShrink: 0, position: 'relative' }}>
                     <div onClick={() => {
                       if (selectedSession === s.id) { setSelectedSession(null); }
                       else { 
@@ -691,17 +730,32 @@ export default function BacktestingPanel() {
                           setSlBufferPercent(s.config.slBufferPercent);
                           setFixedRR(s.config.fixedRR);
                           setOteEntryPercent(s.config.oteEntryPercent);
+                          setEntryTrigger(s.config.entryTrigger);
                         }
                       }
                     }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.ticker}</div>
-                      <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.date}</div>
-                      <div style={{ fontSize: '0.7rem', marginTop: '4px' }}>
-                        <span style={{ color: 'var(--accent-gold)' }}>{s.winRate}% WR</span>
-                        <span style={{ color: 'var(--text-tertiary)', margin: '0 4px' }}>|</span>
-                        <span style={{ color: parseFloat(s.pnl) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{s.pnl}%</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{s.ticker}</span>
+                        <span style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: pnlNum >= 0 ? 'rgba(32,191,107,0.1)' : 'rgba(255,51,51,0.1)', color: pnlNum >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700 }}>
+                          {pnlNum > 0 ? '+' : ''}{pnlNum.toFixed(2)}R
+                        </span>
                       </div>
-                      <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{s.trades} trades</div>
+                      
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '8px' }}>{s.date}</div>
+                      
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
+                        <span><span style={{ color: 'var(--text-tertiary)' }}>WR:</span> <span style={{ color: 'var(--accent-gold)', fontWeight: 600 }}>{s.winRate}%</span></span>
+                        <span><span style={{ color: 'var(--text-tertiary)' }}>Trades:</span> <span style={{ fontWeight: 600 }}>{s.trades}</span></span>
+                      </div>
+                      
+                      {s.config && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '0.65rem' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>⚙️ Trigger: <span style={{ color: '#0088ff', fontWeight: 600 }}>{s.config.entryTrigger}</span></span>
+                          <span style={{ color: 'var(--text-secondary)' }}>🎯 RR: <span style={{ fontWeight: 600 }}>{s.config.fixedRR}x</span></span>
+                          <span style={{ color: 'var(--text-secondary)' }}>🛡️ SL: <span style={{ fontWeight: 600 }}>{s.config.slBufferPercent}</span></span>
+                          <span style={{ color: 'var(--text-secondary)' }}>📉 OTE: <span style={{ fontWeight: 600 }}>{s.config.oteEntryPercent}%</span></span>
+                        </div>
+                      )}
                     </div>
                     <button type="button" onClick={(e) => {
                       e.stopPropagation();
@@ -712,10 +766,10 @@ export default function BacktestingPanel() {
                       });
                       if (selectedSession === s.id) { setSelectedSession(null); setTrades([]); }
                       toast('Sesión eliminada', 'success');
-                    }} style={{ position: 'absolute', top: '6px', right: '6px', background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '0.7rem', padding: '2px 4px', borderRadius: '2px', lineHeight: 1 }}
+                    }} style={{ position: 'absolute', top: '8px', right: '8px', background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '0.8rem', padding: '2px', borderRadius: '4px' }}
                     title="Eliminar sesión">✕</button>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
