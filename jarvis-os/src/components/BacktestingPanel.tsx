@@ -28,6 +28,7 @@ export default function BacktestingPanel() {
   const [minSellPoints, setMinSellPoints] = useState(5);
   const [slBufferPercent, setSlBufferPercent] = useState(0.1);
   const [fixedRR, setFixedRR] = useState(2.0);
+  const [oteEntryPercent, setOteEntryPercent] = useState(50);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -75,7 +76,7 @@ export default function BacktestingPanel() {
 
     // Run in next tick to allow UI update
     setTimeout(() => {
-      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR }, (pct, currentTrades) => {
+      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
       });
@@ -102,7 +103,7 @@ export default function BacktestingPanel() {
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, toast]);
 
   // Metrics
   const metrics = (() => {
@@ -174,6 +175,13 @@ export default function BacktestingPanel() {
               <input type="range" min="1" max="5" step="0.1" value={fixedRR} onChange={e => setFixedRR(parseFloat(e.target.value))}
                 style={{ flex: 1 }} />
               <span className="mono" style={{ fontSize: '0.75rem', color: '#0088ff', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{fixedRR}x</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', whiteSpace: 'nowrap', fontWeight: 600 }}>📉 OTE ENTRY</label>
+              <input type="range" min="10" max="90" step="1" value={oteEntryPercent} onChange={e => setOteEntryPercent(parseFloat(e.target.value))}
+                style={{ flex: 1 }} />
+              <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-gold)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{oteEntryPercent}%</span>
             </div>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}

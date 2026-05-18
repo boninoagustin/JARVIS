@@ -11,6 +11,7 @@ interface BotConfig {
   baseRiskPercentage: number;
   slBufferPercent: number;
   fixedRR: number;
+  oteEntryPercent: number;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -20,6 +21,7 @@ const DEFAULT_CONFIG: BotConfig = {
   baseRiskPercentage: 1.0,
   slBufferPercent: 0.1,
   fixedRR: 2.0,
+  oteEntryPercent: 50,
 };
 
 export default function AdminPanel() {
@@ -101,12 +103,12 @@ export default function AdminPanel() {
           <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
               <label style={{ fontWeight: 600 }}>Puntos mínimos para BUY (Radar)</label>
-              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForBuy} / 20</span>
+              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForBuy} / 100</span>
             </div>
             <input 
               type="range" 
               min="1" 
-              max="20" 
+              max="100" 
               step="1"
               value={config.minPointsForBuy}
               onChange={(e) => handleChange('minPointsForBuy', parseInt(e.target.value))}
@@ -117,12 +119,12 @@ export default function AdminPanel() {
           <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
               <label style={{ fontWeight: 600 }}>Puntos mínimos para SELL (Radar)</label>
-              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForSell} / 20</span>
+              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.minPointsForSell} / 100</span>
             </div>
             <input 
               type="range" 
               min="1" 
-              max="20" 
+              max="100" 
               step="1"
               value={config.minPointsForSell}
               onChange={(e) => handleChange('minPointsForSell', parseInt(e.target.value))}
@@ -198,6 +200,25 @@ export default function AdminPanel() {
             <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
               Ratio fijo para calcular el TP2. Se multiplica el riesgo (distancia entry→SL) por este factor.
               <br/><span style={{ color: 'var(--accent-gold)', fontWeight: 600 }}>Ejemplo: Entry $78,000, SL $77,922 → Riesgo $78. TP2 a 2x = $78,156</span>
+            </p>
+          </div>
+
+          <div style={{ padding: '16px', border: '1px solid var(--accent-gold)', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <label style={{ fontWeight: 600 }}>📉 Nivel Entrada OTE (%)</label>
+              <span className="mono" style={{ color: 'var(--accent-gold)' }}>{config.oteEntryPercent}%</span>
+            </div>
+            <input 
+              type="range" 
+              min="10" 
+              max="90" 
+              step="1"
+              value={config.oteEntryPercent}
+              onChange={(e) => handleChange('oteEntryPercent', parseFloat(e.target.value))}
+            />
+            <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '8px' }}>
+              Nivel de retroceso Fibonacci donde se ejecutará la entrada en la zona OTE.
+              <br/><span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Ejemplo: 50 = 50%, 62 = 61.8%, 79 = 78.6%</span>
             </p>
           </div>
 

@@ -129,7 +129,8 @@ let dynamicBotConfig = {
     minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
     baseRiskPercentage: 1.0,
     slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
-    fixedRR: 2.0                   // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
+    fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
+    oteEntryPercent: 50            // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
 };
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -154,7 +155,8 @@ if (db) {
                     minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
                     baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage,
                     slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
-                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR
+                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent
                 };
             }
         });
@@ -253,15 +255,18 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             minRange = 0.00010; // 1.0 pip para forex majors
         }
 
-        const oteTop = leg.dir === 'BUY' ? leg.extreme - (range * 0.50) : leg.extreme + (range * 0.79);
-        const oteBtm = leg.dir === 'BUY' ? leg.extreme - (range * 0.79) : leg.extreme + (range * 0.50);
+        const fibRatio = dynamicBotConfig.oteEntryPercent / 100;
+        const entryLevel = leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio);
 
         // 🔓 OTE entry: el leg fue creado por un CHoCH que ya pasó todos los filtros de puntaje.
         // No re-validamos con leg.isValidated porque el reset del score borra los eventos
         // de zona ANTES de llegar aquí, causando que el 90% de los legs queden isValidated=false.
         // Si el leg existe y no fue invalidado por precio ni expiración, el OTE es válido.
         // PERO: legs con < 8 chochPoints y sin validación se filtran (baja calidad).
-        if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored) {
+        
+        const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
+        
+        if (isEntryHit && !leg.oteScored) {
             // 🔧 Filtro de calidad: si el leg no fue validado Y tiene pocos puntos, no entrar
             const MIN_OTE_POINTS = 8;
             if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {

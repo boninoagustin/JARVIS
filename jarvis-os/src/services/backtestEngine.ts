@@ -56,10 +56,12 @@ function evaluateImpulse(
 
   if (!impulseInvalidated) {
     const r2 = Math.abs(leg.extreme - leg.origin);
-    const oteTop = leg.dir === 'BUY' ? leg.extreme - (r2 * 0.50) : leg.extreme + (r2 * 0.79);
-    const oteBtm = leg.dir === 'BUY' ? leg.extreme - (r2 * 0.79) : leg.extreme + (r2 * 0.50);
+    const fibRatio = (config.oteEntryPercent || 50) / 100;
+    const entryLevel = leg.dir === 'BUY' ? leg.extreme - (r2 * fibRatio) : leg.extreme + (r2 * fibRatio);
 
-    if (highPrice >= Math.min(oteTop, oteBtm) && lowPrice <= Math.max(oteTop, oteBtm) && !leg.oteScored) {
+    const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
+
+    if (isEntryHit && !leg.oteScored) {
       const MIN_OTE_POINTS = 8;
       if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
         return { updatedLeg: leg };
@@ -84,14 +86,14 @@ function evaluateImpulse(
           updatedLeg: leg, triggerOte: true,
           oteData: {
             tradeId, direction: leg.dir,
-            entryPrice: currentPrice,
+            entryPrice: entryLevel, // Use precise entry level
             stopLoss: adjustedSL.toFixed(decimals),
             tp1: leg.extreme.toFixed(decimals),
             tp2: (() => {
-              const riskDist = Math.abs(currentPrice - adjustedSL);
+              const riskDist = Math.abs(entryLevel - adjustedSL);
               const fixedTP2 = leg.dir === 'BUY'
-                ? currentPrice + (riskDist * (config.fixedRR || 2.0))
-                : currentPrice - (riskDist * (config.fixedRR || 2.0));
+                ? entryLevel + (riskDist * (config.fixedRR || 2.0))
+                : entryLevel - (riskDist * (config.fixedRR || 2.0));
               return fixedTP2.toFixed(decimals);
             })(),
             points: (leg.chochPoints || 0) + 4,
