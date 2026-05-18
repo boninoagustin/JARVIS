@@ -51,6 +51,7 @@ export default function BacktestingPanel() {
   });
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
@@ -202,13 +203,32 @@ export default function BacktestingPanel() {
     setTimeout(() => processChunk(0), 100);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, entryTrigger, toast]);
 
+  // Session filter helper (Argentina UTC-3)
+  const getSessionForTimestamp = (ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' => {
+    const d = new Date(ts);
+    const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
+    const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
+    const timeDecimal = arHour + arMin / 60;
+    // Asia: 21:00 - 06:00 AR
+    if (timeDecimal >= 21 || timeDecimal < 6) return 'ASIA';
+    // London: 04:00 - 13:00 AR
+    if (timeDecimal >= 4 && timeDecimal < 13) return 'LONDON';
+    // NY: 10:30 - 17:00 AR
+    if (timeDecimal >= 10.5 && timeDecimal < 17) return 'NY';
+    return 'OFF';
+  };
+
+  const filteredTrades = sessionFilter === 'ALL'
+    ? trades
+    : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+
   // Metrics
   const metrics = (() => {
-    const closed = trades.filter(t => t.result && t.result !== 'TIMEOUT');
+    const closed = filteredTrades.filter(t => t.result && t.result !== 'TIMEOUT');
     const wins = closed.filter(t => t.result === 'WIN').length;
     const losses = closed.filter(t => t.result === 'LOSS').length;
     const be = closed.filter(t => t.result === 'BE').length;
-    const open = trades.filter(t => !t.result).length;
+    const open = filteredTrades.filter(t => !t.result).length;
     const pnlTotal = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
     const pnlTp1Total = closed.reduce((acc, t) => acc + (t.rMultipleTp1 || 0) * riskUsd, 0);
     const pnlTp2Total = closed.reduce((acc, t) => acc + (t.rMultipleTp2 || 0) * riskUsd, 0);
@@ -218,7 +238,7 @@ export default function BacktestingPanel() {
       peak += (t.rMultiple || 0) * riskUsd;
       if (peak < maxDD) maxDD = peak;
     });
-    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2), closed };
+    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: filteredTrades.length, maxDD: maxDD.toFixed(2), closed };
   })();
 
   const equityData = [{ name: 'Start', TP1: 0, TP2: 0 }];
@@ -443,10 +463,31 @@ export default function BacktestingPanel() {
               </span>
               {trades.length > 0 && (
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                  {trades.length} total
+                  {filteredTrades.length}{sessionFilter !== 'ALL' ? `/${trades.length}` : ''} total
                 </span>
               )}
             </h3>
+            {/* Session Filter */}
+            {trades.length > 0 && (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+                  const labels: Record<string, string> = { ALL: '🌍 Todos', LONDON: '🇬🇧 Londres (04-13h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-06h)' };
+                  const isActive = sessionFilter === s;
+                  return (
+                    <button key={s} onClick={() => setSessionFilter(s)}
+                      style={{
+                        padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
+                        border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
+                        background: isActive ? 'rgba(255,193,7,0.15)' : 'transparent',
+                        color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
+                        fontWeight: isActive ? 700 : 400, transition: 'all 0.2s'
+                      }}>
+                      {labels[s]}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {trades.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
@@ -460,7 +501,7 @@ export default function BacktestingPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {trades.map(t => {
+                    {filteredTrades.map(t => {
                       const dec = getDecimals(ticker);
                       return (
                       <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>
