@@ -286,11 +286,16 @@ const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includ
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 async function sendTelegramAlert(message: string) {
-    // 🛡️ Sanitizar: Telegram HTML solo necesita escapar < > &
-    const safe = message.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&(?!lt;|gt;|amp;)/g, '&amp;');
     for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
-        try { await bot.api.sendMessage(userId, safe, { parse_mode: 'HTML' }); } 
-        catch (err: any) { try { await bot.api.sendMessage(userId, safe); } catch (e) { } }
+        try { 
+            await bot.api.sendMessage(userId, message, { parse_mode: 'HTML' }); 
+        } catch (err: any) { 
+            console.error(`[TELEGRAM] HTML Parse Error (${userId}):`, err.message);
+            // Fallback a texto plano eliminando etiquetas si el HTML falla
+            const safeText = message.replace(/<[^>]*>?/gm, '');
+            try { await bot.api.sendMessage(userId, safeText); } 
+            catch (e: any) { console.error(`[TELEGRAM] Fallback Error (${userId}):`, e.message); } 
+        }
     }
 }
 

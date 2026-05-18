@@ -79,14 +79,19 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
     const date = new Date(record.timestamp).toISOString().split('T')[0];
 
     try {
-        await db.collection(JOURNAL_COLLECTION).doc(id).set({
-            ...record,
-            id,
-            date,
-            tp1Hit: record.tp1Hit || false,
-            tp2Hit: record.tp2Hit || false,
-            slHit: record.slHit || false,
-        });
+        // Eliminar propiedades undefined para evitar errores en Firestore
+        const cleanRecord = Object.fromEntries(
+            Object.entries({
+                ...record,
+                id,
+                date,
+                tp1Hit: record.tp1Hit || false,
+                tp2Hit: record.tp2Hit || false,
+                slHit: record.slHit || false,
+            }).filter(([_, v]) => v !== undefined)
+        );
+
+        await db.collection(JOURNAL_COLLECTION).doc(id).set(cleanRecord);
         console.log(`[JOURNAL] Trade #${id} logged: ${record.ticker} ${record.direction} ${record.grade} (${record.points} pts) | SL:${record.slPrice} TP1:${record.tp1Price} TP2:${record.tp2Price}`);
         return id;
     } catch (err: any) {
