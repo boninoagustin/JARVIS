@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2 } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -105,6 +105,83 @@ export default function BacktestingPanel() {
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, toast]);
+
+  const handleOptimize = useCallback(() => {
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
+
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+
+    const slOptions = [0, 0.05, 0.1, 0.2];
+    const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
+    const oteOptions = [50, 62, 79];
+
+    const combinations: {sl:number, rr:number, ote:number}[] = [];
+    for (const sl of slOptions) {
+      for (const rr of rrOptions) {
+        for (const ote of oteOptions) {
+          combinations.push({ sl, rr, ote });
+        }
+      }
+    }
+
+    let bestResult: BacktestResult | null = null;
+    let bestPnl = -Infinity;
+    let bestConfig: any = null;
+
+    const processChunk = (startIndex: number) => {
+        const chunkSize = 5;
+        const endIndex = Math.min(startIndex + chunkSize, combinations.length);
+        
+        for (let i = startIndex; i < endIndex; i++) {
+            const c = combinations[i];
+            const config = { ticker, minBuyPoints, minSellPoints, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote };
+            const res = runBacktest(logs, config);
+            
+            const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
+            const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+            
+            if (pnl > bestPnl) {
+                bestPnl = pnl;
+                bestResult = res;
+                bestConfig = config;
+            }
+        }
+        
+        setProgress(Math.floor((endIndex / combinations.length) * 100));
+        
+        if (endIndex < combinations.length) {
+            setTimeout(() => processChunk(endIndex), 20);
+        } else if (bestResult && bestConfig) {
+            setResult(bestResult);
+            setTrades(bestResult.trades);
+            setSlBufferPercent(bestConfig.slBufferPercent);
+            setFixedRR(bestConfig.fixedRR);
+            setOteEntryPercent(bestConfig.oteEntryPercent);
+            
+            const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
+            const wins = closed.filter(t => t.result === 'WIN').length;
+            const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
+            const pnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0).toFixed(2);
+            const session: SessionHistory = {
+              id: `BT_OPT_${Date.now()}`, ticker, date: bestResult.startDate + ' → ' + bestResult.endDate,
+              trades: bestResult.trades.length, winRate: wr, pnl, status: 'completed',
+              tradeData: bestResult.trades,
+            };
+            setSessions(prev => {
+              const next = [session, ...prev].slice(0, 20);
+              localStorage.setItem('bt_sessions', JSON.stringify(next));
+              return next;
+            });
+            setSelectedSession(session.id);
+            setIsRunning(false);
+            toast(`✅ Optimización finalizada. PnL Máximo: ${bestPnl.toFixed(2)}%`, 'success');
+        }
+    };
+    
+    setTimeout(() => processChunk(0), 100);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, toast]);
 
   // Metrics
   const metrics = (() => {
@@ -234,7 +311,11 @@ export default function BacktestingPanel() {
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="button" onClick={handleRun} disabled={uploadedFiles.length === 0 || isRunning}
                 style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                <Play size={14} /> REPRODUCIR ({uploadedFiles.length} TFs)
+                <Play size={14} /> SIMULAR
+              </button>
+              <button type="button" onClick={handleOptimize} disabled={uploadedFiles.length === 0 || isRunning}
+                style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? 'var(--accent-gold)' : 'var(--bg-secondary)', color: 'black', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                <Wand2 size={14} /> OPTIMIZAR
               </button>
               {uploadedFiles.length > 0 && !isRunning && (
                 <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}
