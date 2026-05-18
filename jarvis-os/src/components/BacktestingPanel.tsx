@@ -112,13 +112,15 @@ export default function BacktestingPanel() {
     const be = closed.filter(t => t.result === 'BE').length;
     const open = trades.filter(t => !t.result).length;
     const pnlTotal = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+    const pnlTp1Total = closed.reduce((acc, t) => acc + (t.pnlTp1 || 0), 0);
+    const pnlTp2Total = closed.reduce((acc, t) => acc + (t.pnlTp2 || 0), 0);
     const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
     let maxDD = 0, peak = 0;
     closed.forEach(t => {
       peak += (t.pnl || 0);
       if (peak < maxDD) maxDD = peak;
     });
-    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2) };
+    return { wins, losses, be, open, wr, pnl: pnlTotal.toFixed(2), pnlTp1: pnlTp1Total.toFixed(2), pnlTp2: pnlTp2Total.toFixed(2), count: closed.length, total: trades.length, maxDD: maxDD.toFixed(2) };
   })();
 
   const resultColor = (r?: string) => r === 'WIN' ? 'var(--accent-green)' : r === 'LOSS' ? 'var(--accent-red)' : r === 'BE' ? 'var(--accent-gold)' : 'var(--text-tertiary)';
@@ -237,10 +239,11 @@ export default function BacktestingPanel() {
             <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <BarChart2 size={18} color="var(--accent-gold)" /> MÉTRICAS
             </h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
               {[
                 { label: 'WIN RATE', value: `${metrics.wr}%`, color: 'var(--accent-gold)' },
-                { label: 'PNL ACUM.', value: `${metrics.pnl}%`, color: parseFloat(metrics.pnl) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
+                { label: 'PNL (TP1)', value: `${metrics.pnlTp1}%`, color: parseFloat(metrics.pnlTp1) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
+                { label: 'PNL (TP2)', value: `${metrics.pnlTp2}%`, color: parseFloat(metrics.pnlTp2) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
                 { label: 'TRADES', value: `${metrics.total}`, color: 'var(--text-primary)' },
               ].map(m => (
                 <div key={m.label} style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
@@ -293,7 +296,7 @@ export default function BacktestingPanel() {
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL</th><th>DUR</th>
+                      <th>FECHA</th><th>DIR</th><th>PTS</th><th>ENTRADA</th><th>TP1</th><th>SL</th><th>RESULTADO</th><th>PNL (TP1)</th><th>PNL (TP2)</th><th>DUR</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -306,8 +309,11 @@ export default function BacktestingPanel() {
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{t.tp1Price.toFixed(2)}</td>
                         <td className="mono" style={{ fontSize: '0.7rem' }}>{t.slPrice.toFixed(2)}</td>
                         <td style={{ color: resultColor(t.result), fontWeight: 700 }}>{t.result || 'OPEN'}</td>
-                        <td className="mono" style={{ color: (t.pnl || 0) > 0 ? 'var(--accent-green)' : (t.pnl || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
-                          {t.pnl !== undefined ? `${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}%` : '—'}
+                        <td className="mono" style={{ color: (t.pnlTp1 || 0) > 0 ? 'var(--accent-green)' : (t.pnlTp1 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
+                          {t.pnlTp1 !== undefined ? `${t.pnlTp1 >= 0 ? '+' : ''}${t.pnlTp1.toFixed(2)}%` : '—'}
+                        </td>
+                        <td className="mono" style={{ color: (t.pnlTp2 || 0) > 0 ? 'var(--accent-green)' : (t.pnlTp2 || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem' }}>
+                          {t.pnlTp2 !== undefined ? `${t.pnlTp2 >= 0 ? '+' : ''}${t.pnlTp2.toFixed(2)}%` : '—'}
                         </td>
                         <td className="mono" style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
                           {t.durationMin ? `${t.durationMin}m` : '—'}

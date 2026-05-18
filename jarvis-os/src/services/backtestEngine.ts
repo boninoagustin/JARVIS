@@ -253,6 +253,8 @@ function processAlert(
         if (tp1Hit) {
           trade.tp1Hit = true;
           trade.slPrice = trade.entryPrice; // Move SL to break even
+          trade.resultTp1 = 'WIN';
+          trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
         }
       }
 
@@ -261,7 +263,10 @@ function processAlert(
         const tp2Hit = trade.direction === 'BUY' ? highPrice >= trade.tp2Price : lowPrice <= trade.tp2Price;
         if (tp2Hit) {
           trade.result = 'WIN';
-          trade.pnl = Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100;
+          trade.resultTp2 = 'WIN';
+          const pnl = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
+          trade.pnl = pnl;
+          trade.pnlTp2 = pnl;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -273,7 +278,17 @@ function processAlert(
       const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
       if (slHit) {
         trade.result = trade.tp1Hit ? 'BE' : 'LOSS';
-        trade.pnl = trade.tp1Hit ? 0 : -(Math.abs(currentPrice - trade.entryPrice) / trade.entryPrice * 100);
+        const lossPnl = -(Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100);
+        
+        trade.pnl = trade.tp1Hit ? 0 : lossPnl;
+        trade.resultTp2 = trade.tp1Hit ? 'BE' : 'LOSS';
+        trade.pnlTp2 = trade.tp1Hit ? 0 : lossPnl;
+        
+        if (!trade.tp1Hit) {
+          trade.resultTp1 = 'LOSS';
+          trade.pnlTp1 = lossPnl;
+        }
+
         trade.closeTimestamp = nowMs;
         trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
         activeTrades.delete(tradeId);
@@ -283,6 +298,9 @@ function processAlert(
       // Timeout: 6 hours
       if (tradeAge > 6 * 60 * 60 * 1000) {
         trade.result = 'TIMEOUT';
+        trade.resultTp2 = 'TIMEOUT';
+        if (!trade.tp1Hit) trade.resultTp1 = 'TIMEOUT';
+        
         trade.closeTimestamp = nowMs;
         trade.durationMin = Math.round(tradeAge / 60000);
         activeTrades.delete(tradeId);
