@@ -272,7 +272,7 @@ function processAlert(
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
           const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultipleTp1 = trade.pnlTp1 / slLossPct;
+          trade.rMultipleTp1 = (trade.pnlTp1 / slLossPct) * 0.5;
         }
       }
 
@@ -290,7 +290,7 @@ function processAlert(
           trade.pnlTp2 = finalPnl;
           const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
           trade.rMultiple = finalPnl / slLossPct;
-          trade.rMultipleTp2 = finalPnl / slLossPct;
+          trade.rMultipleTp2 = (pnlTp2 / slLossPct) * 0.5;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -312,7 +312,7 @@ function processAlert(
         trade.resultTp2 = finalResult;
         trade.pnlTp2 = finalPnlPct;
         trade.rMultiple = finalPnlPct / slLossPct;
-        trade.rMultipleTp2 = finalPnlPct / slLossPct;
+        trade.rMultipleTp2 = isPartialClose ? (-slLossPct / slLossPct) * 0.5 : (-slLossPct / slLossPct);
         
         if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
