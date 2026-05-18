@@ -2,7 +2,7 @@
 // SMC Master 5.1 [JARVIS Edition] — Generado el 15/05/2026
 //@version=5
 
-indicator("SMC Master 5.1 [JARVIS v5.4]", overlay=true, max_boxes_count=150, max_lines_count=80, max_labels_count=80, max_bars_back=500)
+indicator("SMC Master 5.1 [JARVIS v5.4]", overlay=true, max_boxes_count=80, max_lines_count=50, max_labels_count=50, max_bars_back=300)
 
 // =========================================================================
 // 0. 🌟 PRESETS AUTOMÁTICOS (MATRIZ BIDIMENSIONAL INTELIGENTE)
@@ -78,8 +78,8 @@ strictBreaker = input.bool(true, "Breakers Estrictos (Exige Volumen)", group=grp
 in_strictSweep = input.bool(true, "Exigir Sweep previo estricto para OBs", group=grp_vis)
 strictSweep    = is_idx ? false : is_crypto ? false : is_fx ? false : in_strictSweep 
 
-in_max_active_obs = input.int(30, "Máximo OBs Activos (Performance)", minval=10, maxval=100, group=grp_vis)
-max_active_obs    = preset_3m ? 40 : preset_15m ? 30 : preset_1h ? 20 : preset_4h ? 15 : in_max_active_obs 
+in_max_active_obs = input.int(20, "Máximo OBs Activos (Performance)", minval=10, maxval=100, group=grp_vis)
+max_active_obs    = preset_3m ? 30 : preset_15m ? 12 : preset_1h ? 8 : preset_4h ? 6 : in_max_active_obs 
 
 prox_atr    = input.float(0.5, "Distancia Mínima OBs (x ATR)", step=0.1, group=grp_vis)
 useBodyOB   = input.bool(true, 'Usar Cuerpo para la Zona (OB)', group=grp_vis)
@@ -99,7 +99,7 @@ grp_legacy = "🏃‍♂️ Motor Scalping (Legacy 4.7)"
 in_use_inv_motor = input.bool(true, "Activar Búsqueda Inversa (FVG Origin)", group=grp_legacy)
 use_inv_motor    = preset_3m ? true : preset_15m ? true : preset_1h ? false : preset_4h ? false : in_use_inv_motor 
 
-inv_lookback  = input.int(40, "Ventana Búsqueda Inversa (Velas)", group=grp_legacy)
+inv_lookback  = input.int(20, "Ventana Búsqueda Inversa (Velas)", group=grp_legacy)
 vwap_boost    = input.int(3, "Bonus Puntos por Toque VWAP", group=grp_legacy)
 
 // =========================================================================
@@ -108,8 +108,8 @@ vwap_boost    = input.int(3, "Bonus Puntos por Toque VWAP", group=grp_legacy)
 grp_str = "🔨 Estructura y Sweeps"
 showBos         = input.bool(true, "Mostrar BOS / CHoCH", group=grp_str)
 
-in_str_bars = input.int(10, "Sensibilidad BOS (Micro)", group=grp_str)
-str_bars    = preset_3m ? 8 : preset_15m ? 8 : preset_1h ? 10 : preset_4h ? 12 : in_str_bars 
+in_str_bars = input.int(8, "Sensibilidad BOS (Micro)", group=grp_str)
+str_bars    = preset_3m ? 6 : preset_15m ? 6 : preset_1h ? 8 : preset_4h ? 10 : in_str_bars 
 
 require_body_break = input.bool(true, "CHoCH/BOS exige cierre con cuerpo (no solo wick)", group=grp_str)
 
@@ -163,7 +163,7 @@ liq_sens        = input.float(1.0, "Sensibilidad Liquidez (Multiplicador ATR)", 
 peh_pel_tol     = input.float(0.15, "Tolerancia PEH/PEL (x ATR)", step=0.05, group=grp_liq)
 
 grp_mom = "🚀 Momentum Z-Score (Desplazamiento Dinámico)"
-zLen = input.int(100, "Periodos Z-Score", group=grp_mom)
+zLen = input.int(50, "Periodos Z-Score", group=grp_mom)
 
 in_zThresh = input.float(2.5, "Umbral Explosivo Normal", step=0.5, group=grp_mom)
 zThresh    = is_idx ? 2.0 : is_crypto ? 1.8 : is_fx ? 1.5 : in_zThresh 
@@ -222,14 +222,24 @@ in_use_heartbeat = input.bool(true, "Enviar HEARTBEAT periódico (Watchdog)", gr
 use_heartbeat    = preset_3m ? true : preset_15m ? true : preset_1h ? true : preset_4h ? true : in_use_heartbeat
 
 // =========================================================================
-// 🆕 v5.1: FUNCIONES DE ALERTA MEJORADAS
+// 💾 EXPORTACIÓN DE LOGS (Backtest) — v5.7
+// =========================================================================
+grp_logs = "💾 Exportación de Logs (Backtest)"
+export_logs = input.bool(false, "Generar Logs para Backtest", group=grp_logs)
+log_start = input.time(timestamp("2024-01-01T00:00:00"), "Fecha Inicio Exportación", group=grp_logs)
+log_end   = input.time(timestamp("2025-12-31T23:59:59"), "Fecha Fin Exportación", group=grp_logs)
+
+bool in_log_window = time >= log_start and time <= log_end
+
+// =========================================================================
+// 🆕 v5.7: FUNCIONES DE ALERTA CON EXPORTACIÓN DE LOGS
 // =========================================================================
 // Alerta estándar (una por cierre de vela)
 f_ia_alert(id, sym, msg) =>
     string final_msg = msg + " | TS: " + str.tostring(time)
     if barstate.isrealtime
         alert(id + " | " + sym + " | " + final_msg, alert.freq_once_per_bar_close)
-    else
+    else if export_logs and in_log_window
         log.info(id + " | " + final_msg)
 
 // 🆕 Alerta con frecuencia configurable (para PING usa freq_all)
@@ -237,7 +247,7 @@ f_ia_alert_freq(id, sym, msg, freq) =>
     string final_msg = msg + " | TS: " + str.tostring(time)
     if barstate.isrealtime
         alert(id + " | " + sym + " | " + final_msg, freq)
-    else
+    else if export_logs and in_log_window
         log.info(id + " | " + final_msg)
 
 // Compact price formatting to avoid 4096-char alert limit
@@ -792,7 +802,7 @@ if array.size(fvgs) > 0
                     box.delete(fz.bx)
                 array.remove(fvgs, i)
 
-while array.size(fvgs) > 50
+while array.size(fvgs) > 30
     del = array.pop(fvgs)
     if not na(del.bx)
         box.delete(del.bx)
@@ -800,7 +810,9 @@ while array.size(fvgs) > 50
 f_ob_has_god_fvg(float ob_top, float ob_btm, bool ob_is_bull) =>
     bool result = false
     if array.size(fvgs) > 0
-        for j = 0 to array.size(fvgs) - 1
+        // 🛡️ v5.6: Límite de escaneo — solo los primeros 15 FVGs (los más recientes)
+        int max_scan = math.min(array.size(fvgs), 15)
+        for j = 0 to max_scan - 1
             fz = array.get(fvgs, j)
             if fz.is_inv
                 bool eff_bull = not fz.is_bull
@@ -1357,7 +1369,7 @@ if refine
 while array.size(all_obs) > max_active_obs
     removed = array.pop(all_obs)
 
-while array.size(breaker_obs) > 15
+while array.size(breaker_obs) > 8
     array.pop(breaker_obs)
 
 // =========================================================================
@@ -1366,11 +1378,11 @@ while array.size(breaker_obs) > 15
 
 // 🛡️ v5.5: BAR REPLAY GUARD — Reduce drásticamente los objetos en modo replay
 bool is_replay = not barstate.isrealtime and barstate.isconfirmed
-int max_boxes_replay = is_replay ? (timeframe.multiplier <= 15 ? 60 : 30) : 150
+int max_boxes_replay = is_replay ? (timeframe.multiplier <= 15 ? 30 : 10) : 80
 
 // 🛡️ v5.5.1: LIMPIAR ARRAYS MASIVOS en modo replay para evitar error 50MB
 if is_replay
-    int replay_limit = timeframe.multiplier <= 15 ? 50 : timeframe.multiplier <= 60 ? 20 : 10
+    int replay_limit = timeframe.multiplier <= 15 ? 20 : timeframe.multiplier <= 60 ? 6 : 4
     while array.size(all_obs) > replay_limit
         array.pop(all_obs)
     while array.size(fvgs) > replay_limit
@@ -1477,8 +1489,8 @@ if use_sync and barstate.isconfirmed and in_kz
     string ob_json = ""
     int ob_count = 0
     // 🛡️ v5.1.1: Límite agresivo para el payload JSON. TradingView tiene máximo 4096 chars
-    // por alerta. El prefijo ocupa ~100 chars y el resto ([, ]) ~50. Mantenemos ob_json ≤ 3800.
-    int MAX_JSON_CHARS = 3800
+    // por alerta. El prefijo ocupa ~100 chars y el resto ([, ]) ~50. Mantenemos ob_json ≤ 2800.
+    int MAX_JSON_CHARS = 2800
     
     if array.size(all_obs) > 0
         for i = 0 to array.size(all_obs) - 1
