@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2 } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -353,6 +353,44 @@ export default function BacktestingPanel() {
 
   const resultColor = (r?: string) => r === 'WIN' ? 'var(--accent-green)' : r === 'LOSS' ? 'var(--accent-red)' : r === 'BE' ? 'var(--accent-gold)' : 'var(--text-tertiary)';
 
+  const handleDownloadJson = useCallback(() => {
+    if (!result || trades.length === 0) {
+      toast('No hay resultados para descargar', 'error');
+      return;
+    }
+    
+    const downloadData = {
+      metadata: {
+        ticker,
+        exportDate: new Date().toISOString(),
+        timeframe: result.startDate + ' -> ' + result.endDate,
+        sessionFilter,
+        tradeFilter
+      },
+      config: {
+        minBuyPoints,
+        minSellPoints,
+        slBufferPercent,
+        fixedRR,
+        oteEntryPercent,
+        entryTrigger
+      },
+      metrics: {
+        ...metrics
+      },
+      trades: doubleFilteredTrades
+    };
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(downloadData, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `jarvis_bt_${ticker}_${new Date().getTime()}.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    toast('✅ Archivo JSON descargado con éxito', 'success');
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, metrics, doubleFilteredTrades, toast]);
+
   return (
     <div className="animate-fadeIn">
       <div className="panel-header">
@@ -476,6 +514,10 @@ export default function BacktestingPanel() {
                 <button type="button" onClick={handlePushToBot}
                   style={{ flex: 1, padding: '10px', backgroundColor: '#0088ff', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                   <Upload size={14} /> EXPORTAR A JARVIS
+                </button>
+                <button type="button" onClick={handleDownloadJson} disabled={!result || trades.length === 0}
+                  style={{ flex: 1, padding: '10px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontWeight: 700, cursor: (!result || trades.length === 0) ? 'not-allowed' : 'pointer', opacity: (!result || trades.length === 0) ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Download size={14} /> DESCARGAR JSON
                 </button>
                 {uploadedFiles.length > 0 && !isRunning && (
                   <button type="button" onClick={() => { setUploadedFiles([]); setTrades([]); setResult(null); setProgress(0); }}

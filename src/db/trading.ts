@@ -487,6 +487,7 @@ export async function processTradingAlert(alertText: string) {
     // 🕒 El Bypass Temporal (Bar Replay Histórico)
     const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
+    const isBacktest = tsMatch !== null && Math.abs(Date.now() - nowMs) > 300000;
 
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
     const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
@@ -681,7 +682,7 @@ export async function processTradingAlert(alertText: string) {
                                 `🛑 SL (Se mantiene): ${trade.slPrice}\n` +
                                 `⏱️ Duración: ${durationStr}\n\n` +
                                 `💡 Toma parcial ejecutada (50%). El SL original se mantiene.`;
-                            sendTelegramAlert(tp1Msg).catch(() => {});
+                            if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => {});
                             console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL se mantiene`);
                         }
                     }
@@ -731,7 +732,7 @@ export async function processTradingAlert(alertText: string) {
                                 `📊 PnL: +${finalPnlPct.toFixed(2)}%\n` +
                                 `⏱️ Duración total: ${durationMin} min\n\n` +
                                 `🏆 ¡Trade completo! ${consecutiveLosses > 0 ? `Racha protección: ${consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
-                            sendTelegramAlert(tp2Msg).catch(() => {});
+                            if (!isBacktest) sendTelegramAlert(tp2Msg).catch(() => {});
                             console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId}`);
                             continue;
                         }
@@ -804,7 +805,7 @@ export async function processTradingAlert(alertText: string) {
                               `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
                               `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
 
-                        sendTelegramAlert(slMsg).catch(() => {});
+                        if (!isBacktest) sendTelegramAlert(slMsg).catch(() => {});
                         console.log(`[JOURNAL] ${isPartialClose ? '⚠️ SL Post-Parcial' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
                         continue;
                     }
@@ -1242,7 +1243,6 @@ export async function processTradingAlert(alertText: string) {
 
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
                 let sessionThresholds: { buy: number; sell: number } | null = null;
-                const isBacktest = tsMatch !== null;
                 if (isBacktest) {
                     const { getCurrentSessionThresholds } = await import('../services/backtesting.js');
                     sessionThresholds = getCurrentSessionThresholds();
@@ -1402,7 +1402,6 @@ export async function processTradingAlert(alertText: string) {
                 state.lastGatillo.status = 'PROCESANDO...';
                 docRef.set(state).catch(() => {});
 
-                const isBacktest = tsMatch !== null;
                 let kronosAnnotation = '';
                 let kronosVerdict: string = 'SKIP';
                 let swarmAnnotation = '';
