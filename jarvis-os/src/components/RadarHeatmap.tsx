@@ -21,6 +21,7 @@ interface RadarState {
   lastPrice?: number;
   activeImpulseBuy?: ImpulseLeg | null;
   activeImpulseSell?: ImpulseLeg | null;
+  lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
 }
 
 /** Calcula el precio del 50% OTE (Fibonacci) del impulse leg */
@@ -46,7 +47,7 @@ const getIcon = (dir: string) => {
 
 const SkeletonRow = () => (
   <tr>
-    {Array.from({ length: 11 }, (_, i) => (
+    {Array.from({ length: 12 }, (_, i) => (
       <td key={i}><div className="skeleton skeleton-row" /></td>
     ))}
   </tr>
@@ -103,6 +104,7 @@ export default function RadarHeatmap() {
               <th>PUNTOS V</th>
               <th>TERMÓMETRO</th>
               <th style={{ minWidth: '180px' }}>OTE 50%</th>
+              <th style={{ minWidth: '150px' }}>ÚLT. GATILLO</th>
               <th style={{ minWidth: '150px' }}>PRÓX. ZONAS</th>
             </tr>
           </thead>
@@ -185,6 +187,33 @@ export default function RadarHeatmap() {
                     </div>
                   </td>
                   <td>
+                    {asset.lastGatillo ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.7rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ color: asset.lastGatillo.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {asset.lastGatillo.dir === 'BUY' ? '🟢' : '🔴'} {asset.lastGatillo.type}
+                          </span>
+                          <span className="mono" style={{ color: 'var(--text-tertiary)', fontSize: '0.65rem' }}>
+                            {Math.round((Date.now() - asset.lastGatillo.time) / 60000)}m ago
+                          </span>
+                        </div>
+                        <span style={{ 
+                          fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', width: 'fit-content',
+                          backgroundColor: asset.lastGatillo.status === 'ENVIADO' ? 'rgba(0,200,100,0.15)' : 
+                                           asset.lastGatillo.status.includes('BLOCKED') || asset.lastGatillo.status === 'DUPLICADO' ? 'rgba(255,60,60,0.15)' : 
+                                           'rgba(245,127,23,0.15)',
+                          color: asset.lastGatillo.status === 'ENVIADO' ? 'var(--accent-green)' : 
+                                 asset.lastGatillo.status.includes('BLOCKED') || asset.lastGatillo.status === 'DUPLICADO' ? 'var(--accent-red)' : 
+                                 'var(--accent-gold)'
+                        }}>
+                          {asset.lastGatillo.status}
+                        </span>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>
+                    )}
+                  </td>
+                  <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.7rem' }}>
                       {(asset.nextZones && asset.nextZones.length > 0) 
                         ? asset.nextZones.slice(0, 3).map((z: any, zi: number) => (
@@ -216,7 +245,7 @@ export default function RadarHeatmap() {
             })}
             {!loading && states.length === 0 && (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-tertiary)' }}>
+                <td colSpan={11} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-tertiary)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                     <Activity size={24} opacity={0.3} />
                     <span>Esperando datos del Radar...</span>

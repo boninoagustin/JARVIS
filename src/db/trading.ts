@@ -75,6 +75,7 @@ interface RadarState {
     lastHeartbeat?: number;       
     activeImpulseBuy?: ImpulseLeg | null;  
     activeImpulseSell?: ImpulseLeg | null; 
+    lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
 }
 
 const emptyState = (): RadarState => ({
@@ -88,7 +89,8 @@ const emptyState = (): RadarState => ({
     lastApproachAlert: 0,
     lastSniperAlert: 0,
     activeImpulseBuy: null,
-    activeImpulseSell: null
+    activeImpulseSell: null,
+    lastGatillo: undefined
 });
 
 const SETUP_MEMORY_WINDOW_MS = 21600000; // 6 Horas (cubre London → NY completo)
@@ -1368,14 +1370,28 @@ export async function processTradingAlert(alertText: string) {
         // =========================================================================
         if (triggerOte && oteData) {
             console.log(`[SNIPER] 🎯 triggerOte=true para ${ticker} ${oteData.direction}. Puntos: ${oteData.points}. Evaluando killswitches...`);
+            
+            state.lastGatillo = {
+                dir: oteData.direction as 'BUY' | 'SELL',
+                price: oteData.entryPrice,
+                time: nowMs,
+                type: 'OTE',
+                status: 'EVALUANDO...'
+            };
+            docRef.set(state).catch(() => {}); // Update status in UI immediately
+
             if (nowMs < streakKillswitchUntil) {
                 const remainingMin = Math.round((streakKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
+                state.lastGatillo.status = 'BLOCKED_RACHA';
+                docRef.set(state).catch(() => {});
                 return;
             }
             if (nowMs < vixKillswitchUntil) {
                 const remainingMin = Math.round((vixKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
+                state.lastGatillo.status = 'BLOCKED_VIX';
+                docRef.set(state).catch(() => {});
                 return;
             }
 
@@ -1383,6 +1399,9 @@ export async function processTradingAlert(alertText: string) {
             console.log(`[SNIPER] 🔍 Verificando duplicado: ${fingerprint}`);
             if (!isDuplicate(fingerprint, nowMs)) {
                 
+                state.lastGatillo.status = 'PROCESANDO...';
+                docRef.set(state).catch(() => {});
+
                 const isBacktest = tsMatch !== null;
                 let kronosAnnotation = '';
                 let kronosVerdict: string = 'SKIP';
@@ -1503,8 +1522,13 @@ export async function processTradingAlert(alertText: string) {
                         if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
                     }
                 }
+                
+                state.lastGatillo.status = 'ENVIADO';
+                docRef.set(state).catch(() => {});
             } else {
                 console.log(`[SNIPER] ⚠️ DUPLICADO bloqueado: ${fingerprint}`);
+                state.lastGatillo.status = 'DUPLICADO';
+                docRef.set(state).catch(() => {});
             }
         }
 
