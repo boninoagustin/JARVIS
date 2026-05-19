@@ -8,6 +8,35 @@ import {
 
 export type { BacktestTrade, BacktestResult } from './backtestTypes';
 
+export interface DailyStats {
+  currentDayStr: string;
+  pnlR: number;
+  peakPnlR: number;
+  consecutiveLosses: number;
+  tradeCount: number;
+  isKilled: boolean;
+}
+
+function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
+  if (trade.rMultiple !== undefined) {
+    dailyStats.pnlR += trade.rMultiple;
+    if (dailyStats.pnlR > dailyStats.peakPnlR) {
+      dailyStats.peakPnlR = dailyStats.pnlR;
+    }
+    
+    if (trade.result === 'LOSS') {
+      dailyStats.consecutiveLosses++;
+    } else if (trade.result === 'WIN') {
+      dailyStats.consecutiveLosses = 0;
+    }
+
+    if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
+    if (config.dailyProfitTargetR && dailyStats.pnlR >= config.dailyProfitTargetR) dailyStats.isKilled = true;
+    if (config.maxConsecutiveLosses && dailyStats.consecutiveLosses >= config.maxConsecutiveLosses) dailyStats.isKilled = true;
+    if (config.trailingDrawdownR && (dailyStats.peakPnlR - dailyStats.pnlR) >= config.trailingDrawdownR) dailyStats.isKilled = true;
+  }
+}
+
 const SETUP_MEMORY_WINDOW_MS = 21600000;
 const MAX_ZONE_AGE_MS: Record<string, number> = { '3': 1800000, '15': 21600000, '60': 28800000, '240': 86400000 };
 
@@ -134,6 +163,14 @@ export function runBacktest(
   const state = emptyState();
   const trades: BacktestTrade[] = [];
   const activeTrades = new Map<string, BacktestTrade>();
+  const dailyStats: DailyStats = {
+    currentDayStr: '',
+    pnlR: 0,
+    peakPnlR: 0,
+    consecutiveLosses: 0,
+    tradeCount: 0,
+    isKilled: false
+  };
 
   // 1. Parse all entries with timestamps
   const allEntries: LogEntry[] = [];
@@ -155,14 +192,14 @@ export function runBacktest(
   const restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
 
   for (const entry of syncEntries) {
-    processAlert(entry.line, entry.ts, state, config, trades, activeTrades);
+    processAlert(entry.line, entry.ts, state, config, trades, activeTrades, dailyStats);
   }
 
   // 4. Process rest chronologically
   const total = restEntries.length;
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
-    processAlert(restEntries[i].line, restEntries[i].ts, state, config, trades, activeTrades);
+    processAlert(restEntries[i].line, restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
@@ -191,7 +228,8 @@ export function runBacktest(
 function processAlert(
   alertText: string, nowMs: number, state: RadarState,
   config: BacktestConfig, trades: BacktestTrade[],
-  activeTrades: Map<string, BacktestTrade>
+  activeTrades: Map<string, BacktestTrade>,
+  dailyStats: DailyStats
 ) {
   const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
   const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
@@ -205,6 +243,15 @@ function processAlert(
   const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
   const readableTf = parseTF(eventTf);
   const todayStr = new Date(nowMs).toISOString().split('T')[0];
+
+  if (dailyStats.currentDayStr !== todayStr) {
+    dailyStats.currentDayStr = todayStr;
+    dailyStats.pnlR = 0;
+    dailyStats.peakPnlR = 0;
+    dailyStats.consecutiveLosses = 0;
+    dailyStats.tradeCount = 0;
+    dailyStats.isKilled = false;
+  }
 
   let currentDirection: 'BUY' | 'SELL' | null = null;
   if (upperText.includes('BUY') || upperText.includes('BULLISH')) currentDirection = 'BUY';
@@ -255,11 +302,11 @@ function processAlert(
     // Evaluate impulse legs
     const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, config);
     state.activeImpulseBuy = buyRes.updatedLeg;
-    if (buyRes.triggerOte && buyRes.oteData) createTrade(buyRes.oteData, nowMs, trades, activeTrades);
+    if (buyRes.triggerOte && buyRes.oteData) createTrade(buyRes.oteData, nowMs, trades, activeTrades, dailyStats, config);
 
     const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, config);
     state.activeImpulseSell = sellRes.updatedLeg;
-    if (sellRes.triggerOte && sellRes.oteData) createTrade(sellRes.oteData, nowMs, trades, activeTrades);
+    if (sellRes.triggerOte && sellRes.oteData) createTrade(sellRes.oteData, nowMs, trades, activeTrades, dailyStats, config);
 
     // Evaluate active trades TP/SL
     for (const [tradeId, trade] of activeTrades) {
@@ -297,6 +344,7 @@ function processAlert(
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
+          updateDailyStatsFromClose(trade, dailyStats, config);
           continue;
         }
       }
@@ -328,6 +376,7 @@ function processAlert(
         trade.closeTimestamp = nowMs;
         trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
         activeTrades.delete(tradeId);
+        updateDailyStatsFromClose(trade, dailyStats, config);
         continue;
       }
 
@@ -557,7 +606,7 @@ function processAlert(
           entryPrice: currentPrice,
           stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
         };
-        createTrade(oteData, nowMs, trades, activeTrades);
+        createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
         if (config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
       }
 
@@ -572,7 +621,8 @@ function processAlert(
 }
 
 // --- CREATE TRADE ---
-function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>) {
+function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig) {
+  if (dailyStats.isKilled) return;
   const trade: BacktestTrade = {
     id: oteData.tradeId,
     timestamp: nowMs,
@@ -587,4 +637,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   };
   trades.push(trade);
   activeTrades.set(trade.id, trade);
+
+  dailyStats.tradeCount++;
+  if (config.maxTradesPerDay && dailyStats.tradeCount >= config.maxTradesPerDay) {
+    dailyStats.isKilled = true;
+  }
 }

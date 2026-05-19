@@ -41,6 +41,13 @@ export interface BacktestConfig {
   fixedRR: number;
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+  
+  // Killswitches
+  maxDailyLossR?: number;
+  dailyProfitTargetR?: number;
+  maxConsecutiveLosses?: number;
+  maxTradesPerDay?: number;
+  trailingDrawdownR?: number;
 }
 
 export interface BacktestResult {

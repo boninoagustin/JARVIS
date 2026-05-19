@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -43,6 +43,11 @@ export default function BacktestingPanel() {
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
   const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('OTE');
   const [riskUsd, setRiskUsd] = useState(50);
+  const [maxDailyLossR, setMaxDailyLossR] = useState(0);
+  const [dailyProfitTargetR, setDailyProfitTargetR] = useState(0);
+  const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState(0);
+  const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
+  const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -55,12 +60,42 @@ export default function BacktestingPanel() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
+  const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
   const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '3': 3 };
   const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '3': '3M' };
   const TF_COLOR: Record<string, string> = { '240': '#7c4dff', '60': '#0088ff', '15': 'var(--accent-gold)', '3': 'var(--accent-red)' };
+
+  const getSessionForTimestamp = useCallback((ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' => {
+    const d = new Date(ts);
+    const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
+    const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
+    const timeDecimal = arHour + arMin / 60;
+    // Asia: 21:00 - 06:00 AR
+    if (timeDecimal >= 21 || timeDecimal < 6) return 'ASIA';
+    // London: 04:00 - 13:00 AR
+    if (timeDecimal >= 4 && timeDecimal < 13) return 'LONDON';
+    // NY: 10:30 - 17:00 AR
+    if (timeDecimal >= 10.5 && timeDecimal < 17) return 'NY';
+    return 'OFF';
+  }, []);
+
+  const handleSessionSelect = useCallback((s: 'ALL' | 'LONDON' | 'NY' | 'ASIA') => {
+    setSessionFilter(s);
+    if (optimizedSessionResults[s]) {
+      const { config, result: optResult } = optimizedSessionResults[s];
+      setSlBufferPercent(config.slBufferPercent);
+      setFixedRR(config.fixedRR);
+      setOteEntryPercent(config.oteEntryPercent);
+      setEntryTrigger(config.entryTrigger);
+      setMinBuyPoints(config.minBuyPoints);
+      setMinSellPoints(config.minSellPoints);
+      setResult(optResult);
+      setTrades(optResult.trades);
+    }
+  }, [optimizedSessionResults]);
 
   const handlePushToBot = async () => {
     try {
@@ -72,6 +107,11 @@ export default function BacktestingPanel() {
         fixedRR: fixedRR,
         oteEntryPercent: oteEntryPercent,
         entryTrigger: entryTrigger,
+        maxDailyLossR,
+        dailyProfitTargetR,
+        maxConsecutiveLosses,
+        maxTradesPerDay,
+        trailingDrawdownR,
         enabled: true,
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -105,13 +145,21 @@ export default function BacktestingPanel() {
   const handleRun = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
+    setOptimizedSessionResults({});
 
     const logs = new Map<string, string[]>();
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
     // Run in next tick to allow UI update
     setTimeout(() => {
-      const res = runBacktest(logs, { ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger }, (pct, currentTrades) => {
+      const res = runBacktest(logs, { 
+        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger,
+        maxDailyLossR: maxDailyLossR || undefined,
+        dailyProfitTargetR: dailyProfitTargetR || undefined,
+        maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+        maxTradesPerDay: maxTradesPerDay || undefined,
+        trailingDrawdownR: trailingDrawdownR || undefined,
+      }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
       });
@@ -144,6 +192,7 @@ export default function BacktestingPanel() {
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
+    setOptimizedSessionResults({});
 
     const logs = new Map<string, string[]>();
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
@@ -164,9 +213,8 @@ export default function BacktestingPanel() {
       }
     }
 
-    let bestResult: BacktestResult | null = null;
-    let bestPnl = -Infinity;
-    let bestConfig: any = null;
+    const bestPnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
+    const bestData: Record<string, { config: any, result: BacktestResult }> = {};
 
     const processChunk = (startIndex: number) => {
         const chunkSize = 10;
@@ -174,29 +222,43 @@ export default function BacktestingPanel() {
         
         for (let i = startIndex; i < endIndex; i++) {
             const c = combinations[i];
-            const config = { ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger };
+            const config = { 
+                ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
+                maxDailyLossR: maxDailyLossR || undefined,
+                dailyProfitTargetR: dailyProfitTargetR || undefined,
+                maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+                maxTradesPerDay: maxTradesPerDay || undefined,
+                trailingDrawdownR: trailingDrawdownR || undefined,
+            };
             const res = runBacktest(logs, config);
             
-            // Apply session filter if active
-            const sessionTrades = sessionFilter === 'ALL'
-              ? res.trades
-              : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
-            
-            const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-            const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-            
-            if (pnl > bestPnl) {
-                bestPnl = pnl;
-                bestResult = res;
-                bestConfig = config;
-            }
+            const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+            sessionsToEval.forEach(s => {
+                const sessionTrades = s === 'ALL'
+                    ? res.trades
+                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
+                
+                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+                
+                if (pnl > bestPnl[s]) {
+                    bestPnl[s] = pnl;
+                    bestData[s] = { config, result: res };
+                }
+            });
         }
         
         setProgress(Math.floor((endIndex / combinations.length) * 100));
         
         if (endIndex < combinations.length) {
             setTimeout(() => processChunk(endIndex), 20);
-        } else if (bestResult && bestConfig) {
+        } else if (Object.keys(bestData).length > 0) {
+            setOptimizedSessionResults(bestData);
+            
+            const currentData = bestData[sessionFilter] || bestData['ALL'];
+            const bestConfig = currentData.config;
+            const bestResult = currentData.result;
+            
             setResult(bestResult);
             setTrades(bestResult.trades);
             setSlBufferPercent(bestConfig.slBufferPercent);
@@ -223,28 +285,12 @@ export default function BacktestingPanel() {
             });
             setSelectedSession(session.id);
             setIsRunning(false);
-            const sessionLabel = sessionFilter === 'ALL' ? '' : ` (${sessionFilter})`;
-            toast(`✅ Optimización finalizada${sessionLabel}. PnL Máximo: ${bestPnl.toFixed(2)}R`, 'success');
+            toast(`✅ Optimización finalizada para TODAS las sesiones.`, 'success');
         }
     };
     
     setTimeout(() => processChunk(0), 100);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, entryTrigger, sessionFilter, toast]);
-
-  // Session filter helper (Argentina UTC-3)
-  const getSessionForTimestamp = (ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' => {
-    const d = new Date(ts);
-    const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
-    const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
-    const timeDecimal = arHour + arMin / 60;
-    // Asia: 21:00 - 06:00 AR
-    if (timeDecimal >= 21 || timeDecimal < 6) return 'ASIA';
-    // London: 04:00 - 13:00 AR
-    if (timeDecimal >= 4 && timeDecimal < 13) return 'LONDON';
-    // NY: 10:30 - 17:00 AR
-    if (timeDecimal >= 10.5 && timeDecimal < 17) return 'NY';
-    return 'OFF';
-  };
+  }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp]);
 
   const filteredTrades = sessionFilter === 'ALL'
     ? trades
@@ -465,6 +511,42 @@ export default function BacktestingPanel() {
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
             </div>
 
+            {/* KILLSWITCHES */}
+            <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)', marginBottom: '12px' }}>
+              <h4 style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <ShieldAlert size={14} color="var(--accent-red)" /> KILLSWITCHES (0 = APAGADO)
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX DAILY LOSS (R)</label>
+                  <input type="number" min="0" step="0.5" value={maxDailyLossR} onChange={e => setMaxDailyLossR(parseFloat(e.target.value) || 0)} className="mono"
+                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>DAILY TARGET (R)</label>
+                  <input type="number" min="0" step="0.5" value={dailyProfitTargetR} onChange={e => setDailyProfitTargetR(parseFloat(e.target.value) || 0)} className="mono"
+                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX CONS. LOSS</label>
+                  <input type="number" min="0" step="1" value={maxConsecutiveLosses} onChange={e => setMaxConsecutiveLosses(parseInt(e.target.value) || 0)} className="mono"
+                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX TRADES/DAY</label>
+                  <input type="number" min="0" step="1" value={maxTradesPerDay} onChange={e => setMaxTradesPerDay(parseInt(e.target.value) || 0)} className="mono"
+                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>TRAIL DD (R)</label>
+                  <input type="number" min="0" step="0.5" value={trailingDrawdownR} onChange={e => setTrailingDrawdownR(parseFloat(e.target.value) || 0)} className="mono"
+                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+                </div>
+              </div>
+            </div>
+
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
               onClick={() => fileInputRef.current?.click()}
               onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--accent-gold)'; }}
@@ -661,7 +743,7 @@ export default function BacktestingPanel() {
                   const labels: Record<string, string> = { ALL: '🌍 Todas las Sesiones', LONDON: '🇬🇧 Londres (04-13h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-06h)' };
                   const isActive = sessionFilter === s;
                   return (
-                    <button key={s} onClick={() => setSessionFilter(s)}
+                    <button key={s} onClick={() => handleSessionSelect(s as 'ALL' | 'LONDON' | 'NY' | 'ASIA')}
                       style={{
                         padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
                         border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
