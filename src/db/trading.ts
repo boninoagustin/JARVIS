@@ -286,14 +286,23 @@ const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includ
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 async function sendTelegramAlert(message: string) {
+    console.log(`[TELEGRAM] Enviando alerta (${message.length} chars) a ${config.TELEGRAM_ALLOWED_USER_IDS.length} usuario(s): [${config.TELEGRAM_ALLOWED_USER_IDS.join(', ')}]`);
+    if (message.length > 4096) {
+        console.warn(`[TELEGRAM] ⚠️ Mensaje excede 4096 chars (${message.length}). Telegram lo rechazará.`);
+        message = message.substring(0, 4090) + '\n...';
+    }
     for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
         try { 
-            await bot.api.sendMessage(userId, message, { parse_mode: 'HTML' }); 
+            await bot.api.sendMessage(userId, message, { parse_mode: 'HTML' });
+            console.log(`[TELEGRAM] ✅ Mensaje enviado exitosamente a userId=${userId}`);
         } catch (err: any) { 
             console.error(`[TELEGRAM] HTML Parse Error (${userId}):`, err.message);
             // Fallback a texto plano eliminando etiquetas si el HTML falla
             const safeText = message.replace(/<[^>]*>?/gm, '');
-            try { await bot.api.sendMessage(userId, safeText); } 
+            try { 
+                await bot.api.sendMessage(userId, safeText);
+                console.log(`[TELEGRAM] ✅ Fallback (texto plano) enviado a userId=${userId}`);
+            } 
             catch (e: any) { console.error(`[TELEGRAM] Fallback Error (${userId}):`, e.message); } 
         }
     }
@@ -608,11 +617,11 @@ export async function processTradingAlert(alertText: string) {
             if (!isKillswitched) {
                 const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseBuy = buyRes.updatedLeg;
-                if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; }
+                if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
 
                 const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseSell = sellRes.updatedLeg;
-                if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; }
+                if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para ${ticker}`); }
             }
 
             // =========================================================
@@ -1358,6 +1367,7 @@ export async function processTradingAlert(alertText: string) {
         // EJECUCIÓN OTE FUERA DE LA TRANSACCIÓN
         // =========================================================================
         if (triggerOte && oteData) {
+            console.log(`[SNIPER] 🎯 triggerOte=true para ${ticker} ${oteData.direction}. Puntos: ${oteData.points}. Evaluando killswitches...`);
             if (nowMs < streakKillswitchUntil) {
                 const remainingMin = Math.round((streakKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
@@ -1370,6 +1380,7 @@ export async function processTradingAlert(alertText: string) {
             }
 
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
+            console.log(`[SNIPER] 🔍 Verificando duplicado: ${fingerprint}`);
             if (!isDuplicate(fingerprint, nowMs)) {
                 
                 const isBacktest = tsMatch !== null;
@@ -1457,8 +1468,16 @@ export async function processTradingAlert(alertText: string) {
                 msg += kronosAnnotation;
                 msg += swarmAnnotation;
 
+                console.log(`[SNIPER] 📨 Mensaje FRANCOTIRADOR construido para ${ticker} (${msg.length} chars). isBacktest=${isBacktest}`);
                 if (!isBacktest) {
-                    await sendTelegramAlert(msg);
+                    try {
+                        await sendTelegramAlert(msg);
+                        console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR enviada exitosamente a Telegram para ${ticker}`);
+                    } catch (teleErr: any) {
+                        console.error(`[SNIPER] ❌ Error enviando FRANCOTIRADOR a Telegram: ${teleErr.message}`);
+                    }
+                } else {
+                    console.log(`[SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram`);
                 }
 
                 const journalId = await logTrade({
@@ -1484,6 +1503,8 @@ export async function processTradingAlert(alertText: string) {
                         if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
                     }
                 }
+            } else {
+                console.log(`[SNIPER] ⚠️ DUPLICADO bloqueado: ${fingerprint}`);
             }
         }
 
