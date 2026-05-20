@@ -36,6 +36,7 @@ interface SessionHistory {
     maxConsecutiveLosses?: number;
     maxTradesPerDay?: number;
     trailingDrawdownR?: number;
+    enabled?: boolean;
   };
 }
 
@@ -67,6 +68,7 @@ export default function BacktestingPanel() {
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
   const [optimizeSwitches, setOptimizeSwitches] = useState(false);
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
+  const [enabled, setEnabled] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
@@ -102,12 +104,14 @@ export default function BacktestingPanel() {
     const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
     const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
     const timeDecimal = arHour + arMin / 60;
-    // Asia: 21:00 - 06:00 AR
-    if (timeDecimal >= 21 || timeDecimal < 6) return 'ASIA';
-    // London: 04:00 - 13:00 AR
-    if (timeDecimal >= 4 && timeDecimal < 13) return 'LONDON';
+    
+    // Asia: 21:00 - 04:00 AR
+    if (timeDecimal >= 21 || timeDecimal < 4) return 'ASIA';
+    // London: 04:00 - 10:30 AR
+    if (timeDecimal >= 4 && timeDecimal < 10.5) return 'LONDON';
     // NY: 10:30 - 17:00 AR
     if (timeDecimal >= 10.5 && timeDecimal < 17) return 'NY';
+    
     return 'OFF';
   }, []);
 
@@ -126,6 +130,7 @@ export default function BacktestingPanel() {
       setMaxConsecutiveLosses(config.maxConsecutiveLosses || 0);
       setMaxTradesPerDay(config.maxTradesPerDay || 0);
       setTrailingDrawdownR(config.trailingDrawdownR || 0);
+      setEnabled(config.enabled !== false);
       setResult(optResult);
       setTrades(optResult.trades);
     }
@@ -146,10 +151,10 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses,
         maxTradesPerDay,
         trailingDrawdownR,
-        enabled: true,
+        enabled: enabled,
         updatedAt: new Date().toISOString()
       }, { merge: true });
-      toast(`✅ Configurada ${configDoc} en JARVIS`, 'success');
+      toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
     } catch (err: any) {
       toast(`❌ Error guardando: ${err.message}`, 'error');
     }
@@ -369,6 +374,7 @@ export default function BacktestingPanel() {
             setMaxConsecutiveLosses(bestConfig.maxConsecutiveLosses || 0);
             setMaxTradesPerDay(bestConfig.maxTradesPerDay || 0);
             setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
+            setEnabled(bestConfig.enabled !== false);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
@@ -1078,6 +1084,34 @@ export default function BacktestingPanel() {
               </div>
             </div>
 
+            {/* TOGGLE HABILITAR/DESHABILITAR SESION */}
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between',
+              marginBottom: '12px', 
+              padding: '8px 10px', 
+              backgroundColor: enabled ? 'rgba(76, 175, 80, 0.06)' : 'rgba(244, 67, 54, 0.06)', 
+              borderRadius: '4px',
+              border: '1px solid ' + (enabled ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)'),
+              transition: 'all 0.2s ease-in-out'
+            }}>
+              <span style={{ fontSize: '0.62rem', fontWeight: 700, color: enabled ? '#4caf50' : '#f44336' }}>
+                {enabled ? '🟢 OPERACIONES HABILITADAS' : '🔴 OPERACIONES DESHABILITADAS'}
+              </span>
+              <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', gap: '6px' }}>
+                <input 
+                  type="checkbox" 
+                  checked={enabled} 
+                  onChange={e => setEnabled(e.target.checked)} 
+                  style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: enabled ? '#4caf50' : '#f44336' }}
+                />
+                <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', fontWeight: 600, userSelect: 'none' }}>
+                  {sessionFilter === 'ALL' ? 'Operar en todo horario' : `Operar en sesión ${sessionFilter}`}
+                </span>
+              </label>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
               <div>
                 <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN BUY</label>
@@ -1403,7 +1437,7 @@ export default function BacktestingPanel() {
             {trades.length > 0 && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
                 {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
-                  const labels: Record<string, string> = { ALL: '🌍 Todas las Sesiones', LONDON: '🇬🇧 Londres (04-13h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-06h)' };
+                  const labels: Record<string, string> = { ALL: '🌍 Todas las Sesiones', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
                   const isActive = sessionFilter === s;
                   return (
                     <button key={s} onClick={() => handleSessionSelect(s as 'ALL' | 'LONDON' | 'NY' | 'ASIA')}
@@ -1518,6 +1552,7 @@ export default function BacktestingPanel() {
                           setFixedRR(s.config.fixedRR);
                           setOteEntryPercent(s.config.oteEntryPercent);
                           setEntryTrigger(s.config.entryTrigger);
+                          setEnabled(s.config.enabled !== false);
                         }
                       }
                     }}>

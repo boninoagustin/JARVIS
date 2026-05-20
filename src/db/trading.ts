@@ -175,13 +175,20 @@ const assetSessionConfigs = new Map<string, AssetSessionConfig>();
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
 function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
     const now = new Date();
+    
+    // 📅 Verificar si es fin de semana en Argentina (Sábado o Domingo)
+    const dayName = now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', weekday: 'short' });
+    if (dayName === 'Sat' || dayName === 'Sun') {
+        return 'OFF';
+    }
+
     const arStr = now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', minute: 'numeric', hour12: false });
     const [hourStr, minStr] = arStr.split(':');
     const h = parseInt(hourStr);
     const m = parseInt(minStr || '0');
     const t = h + m / 60;
-    if (t >= 21 || t < 6) return 'ASIA';
-    if (t >= 4 && t < 13) return 'LONDON';
+    if (t >= 21 || t < 4) return 'ASIA';
+    if (t >= 4 && t < 10.5) return 'LONDON';
     if (t >= 10.5 && t < 17) return 'NY';
     return 'OFF';
 }
@@ -189,6 +196,12 @@ function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
 function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { sessionEnabled: boolean } {
     const session = getCurrentSession();
+    
+    // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
+    if (session === 'OFF') {
+        return { ...dynamicBotConfig, sessionEnabled: false };
+    }
+    
     const specificKey = `${ticker}_${session}`;
     const globalKey = `${ticker}_ALL`;
     
@@ -779,7 +792,8 @@ export async function processTradingAlert(alertText: string) {
             (state as any).previousPrice = previousPrice;
 
             // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
-            const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil;
+            const config = getConfigForTicker(ticker);
+            const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil || !config.sessionEnabled;
             
             if (!isKillswitched) {
                 const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
@@ -1548,6 +1562,14 @@ export async function processTradingAlert(alertText: string) {
                 status: 'EVALUANDO...'
             };
             docRef.set(state).catch(() => {}); // Update status in UI immediately
+
+            const config = getConfigForTicker(ticker);
+            if (!config.sessionEnabled) {
+                console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
+                state.lastGatillo.status = 'BLOCKED_SESSION';
+                docRef.set(state).catch(() => {});
+                return;
+            }
 
             const isGlobalKilled = await evaluateGlobalKillswitch(nowMs);
             if (isGlobalKilled) {
