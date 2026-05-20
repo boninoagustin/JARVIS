@@ -124,6 +124,28 @@ let consecutiveLosses = 0;
 let streakKillswitchUntil = 0;
 let vixKillswitchUntil = 0;
 let globalKillswitches: Record<string, boolean> = {};
+
+// 🆕 v7.0: Consolidación de Cuenta & Portfolio Global
+interface GlobalPortfolioConfig {
+    maxDailyLossR: number;       // MDL: R máxima pérdida diaria (ej. 3R)
+    dailyProfitTargetR: number;  // DPT: R máximo profit diario (ej. 5R)
+    maxTradesPerDay: number;     // MTD: Máximo de operaciones diarias
+    maxConsecutiveLosses: number;// MCL: Máximo de pérdidas consecutivas diarias
+    trailingDrawdownR: number;   // TDD: Drawdown dinámico máximo diario en R
+    enabled: boolean;
+}
+
+let globalPortfolioConfig: GlobalPortfolioConfig = {
+    maxDailyLossR: 0,
+    dailyProfitTargetR: 0,
+    maxTradesPerDay: 0,
+    maxConsecutiveLosses: 0,
+    trailingDrawdownR: 0,
+    enabled: false
+};
+
+let globalPortfolioKillswitchUntil = 0;
+
 let dynamicBotConfig = {
     sniperCooldownMs: 180000,      // 🔧 v5.4: 3 min (antes 5 min) — se alinea con cierre de vela 3M. Un CHoCH válido
                                    // puede completarse en 1-2 velas de 3M y ya estar listo para el siguiente.
@@ -238,6 +260,19 @@ if (db) {
         // 🆕 v6.0: Listener para configs por activo+sesión
         db.collection('asset_configs').onSnapshot((snap) => {
             snap.forEach(doc => {
+                if (doc.id === 'GLOBAL') {
+                    const data = doc.data() || {};
+                    globalPortfolioConfig = {
+                        maxDailyLossR: Number(data.maxDailyLossR) || 0,
+                        dailyProfitTargetR: Number(data.dailyProfitTargetR) || 0,
+                        maxTradesPerDay: Number(data.maxTradesPerDay) || 0,
+                        maxConsecutiveLosses: Number(data.maxConsecutiveLosses) || 0,
+                        trailingDrawdownR: Number(data.trailingDrawdownR) || 0,
+                        enabled: data.enabled === true
+                    };
+                    console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalPortfolioConfig);
+                    return;
+                }
                 const data = doc.data() as Partial<AssetSessionConfig>;
                 assetSessionConfigs.set(doc.id, {
                     minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
@@ -249,7 +284,8 @@ if (db) {
                     enabled: data.enabled !== false // default enabled
                 });
             });
-            console.log(`[CONFIG] 🧠 ${assetSessionConfigs.size} configs por activo+sesión cargadas:`, [...assetSessionConfigs.keys()].join(', '));
+            const actualAssets = [...assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
+            console.log(`[CONFIG] 🧠 ${actualAssets.length} configs por activo+sesión cargadas:`, actualAssets.join(', '));
         });
     } catch (e) {
         console.error('[TRADING] Error iniciando listeners de configuración', e);
@@ -481,6 +517,134 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     return { updatedLeg: impulseInvalidated ? null : leg };
 }
 
+/**
+ * Evalúa los límites del Killswitch Global de la Cuenta (Consolidación de Cuenta)
+ * consultando los resultados cerrados del día de hoy en 'trade_journal'.
+ * Retorna true si hay un bloqueo activo (cuenta deshabilitada temporalmente para operar hoy).
+ */
+async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
+    if (!globalPortfolioConfig.enabled) {
+        return false;
+    }
+
+    if (nowMs < globalPortfolioKillswitchUntil) {
+        return true;
+    }
+
+    if (!db) return false;
+
+    try {
+        // Calcular la medianoche de hoy en Argentina (UTC-3)
+        // La medianoche en ART es a las 03:00:00 UTC
+        const now = new Date(nowMs);
+        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const argDateStr = formatter.format(now); // YYYY-MM-DD
+        const dateParts = argDateStr.split('-');
+        const year = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]) - 1;
+        const day = parseInt(dateParts[2]);
+
+        const artMidnight = new Date(Date.UTC(year, month, day, 3, 0, 0));
+        const artMidnightMs = artMidnight.getTime();
+
+        // Consultar los trades de hoy
+        const snapshot = await db.collection('trade_journal')
+            .where('timestamp', '>=', artMidnightMs)
+            .get();
+
+        if (snapshot.empty) {
+            return false;
+        }
+
+        // Mapear y ordenar ascendentemente por timestamp para evaluar rachas correctamente
+        const trades = snapshot.docs
+            .map(d => d.data())
+            .filter(t => t.mode !== 'backtesting' && t.result)
+            .sort((a, b) => a.timestamp - b.timestamp);
+
+        let totalTrades = trades.length;
+        let dailyPnLR = 0;
+        let peakPnLR = 0;
+        let consecutiveLosses = 0;
+        let maxConsecutiveLosses = 0;
+
+        for (const t of trades) {
+            let rMultiple = Number(t.rMultiple);
+            if (isNaN(rMultiple) || rMultiple === undefined) {
+                // Fallback si no está el rMultiple explícito
+                if (t.result === 'WIN') {
+                    rMultiple = 1.5;
+                } else if (t.result === 'LOSS') {
+                    rMultiple = -1.0;
+                } else {
+                    rMultiple = 0;
+                }
+            }
+
+            dailyPnLR += rMultiple;
+            if (dailyPnLR > peakPnLR) {
+                peakPnLR = dailyPnLR;
+            }
+
+            // Consideramos una pérdida si rMultiple es negativo (ej. <= -0.5R)
+            if (rMultiple < 0) {
+                consecutiveLosses++;
+                if (consecutiveLosses > maxConsecutiveLosses) {
+                    consecutiveLosses = 0; // Reinicio en racha o mantener racha global
+                }
+            } else if (rMultiple > 0) {
+                // Se reinicia o reduce en racha (ej. TP1 exitosa o TP2 exitoso corta la racha)
+                consecutiveLosses = 0;
+            }
+        }
+
+        const trailingDrawdown = peakPnLR - dailyPnLR;
+
+        // Comprobación de límites
+        let isKilled = false;
+        let killReason = '';
+
+        if (globalPortfolioConfig.maxDailyLossR > 0 && dailyPnLR <= -globalPortfolioConfig.maxDailyLossR) {
+            isKilled = true;
+            killReason = `Max Daily Loss superado (-${globalPortfolioConfig.maxDailyLossR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
+        } else if (globalPortfolioConfig.dailyProfitTargetR > 0 && dailyPnLR >= globalPortfolioConfig.dailyProfitTargetR) {
+            isKilled = true;
+            killReason = `Daily Profit Target alcanzado (+${globalPortfolioConfig.dailyProfitTargetR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
+        } else if (globalPortfolioConfig.maxTradesPerDay > 0 && totalTrades >= globalPortfolioConfig.maxTradesPerDay) {
+            isKilled = true;
+            killReason = `Max Trades per Day superado (${globalPortfolioConfig.maxTradesPerDay} trades | Realizados: ${totalTrades})`;
+        } else if (globalPortfolioConfig.maxConsecutiveLosses > 0 && maxConsecutiveLosses >= globalPortfolioConfig.maxConsecutiveLosses) {
+            isKilled = true;
+            killReason = `Max Consecutive Losses superado (${globalPortfolioConfig.maxConsecutiveLosses} consecutivas | Racha: ${maxConsecutiveLosses})`;
+        } else if (globalPortfolioConfig.trailingDrawdownR > 0 && trailingDrawdown >= globalPortfolioConfig.trailingDrawdownR) {
+            isKilled = true;
+            killReason = `Trailing Drawdown superado (${globalPortfolioConfig.trailingDrawdownR}R | Drawdown: ${trailingDrawdown.toFixed(2)}R)`;
+        }
+
+        if (isKilled) {
+            // El bloqueo dura hasta el final de la sesión de hoy (23:59:59 ART de hoy)
+            const endOfDayMs = artMidnightMs + 24 * 60 * 60 * 1000 - 1000;
+            globalPortfolioKillswitchUntil = endOfDayMs;
+
+            const timeStr = new Date(endOfDayMs).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+            const warningMsg = `🚨 <b>[KILLSWITCH PORTAFOLIO GLOBAL]</b> 🚨\n\n` +
+                `⚠️ <b>Cuenta Bloqueada Temporalmente</b>\n` +
+                `📋 <b>Causa:</b> ${killReason}\n` +
+                `⏳ <b>Duración:</b> Hasta el final del día de hoy (reseteo a medianoche ART - aprox ${timeStr})\n\n` +
+                `💡 <i>Las alertas en vivo Sniper OTE se filtrarán automáticamente y no se enviarán a ejecución para proteger el balance de la cuenta consolidada.</i>`;
+
+            sendTelegramAlert(warningMsg).catch(() => {});
+            console.log(`[KILLSWITCH GLOBAL] ⛔ Cuenta bloqueada. Causa: ${killReason}`);
+            return true;
+        }
+
+        return false;
+    } catch (e: any) {
+        console.error('[KILLSWITCH GLOBAL] Error evaluando el riesgo unificado:', e.message);
+        return false;
+    }
+}
+
 export async function processTradingAlert(alertText: string) {
     if (!db) return;
 
@@ -705,6 +869,8 @@ export async function processTradingAlert(alertText: string) {
                             const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
                             const pnlTp2Pct = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
                             const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * 0.5 + pnlTp2Pct * 0.5) : pnlTp2Pct;
+                            const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+                            const rMultiple = slLossPct > 0 ? parseFloat((finalPnlPct / slLossPct).toFixed(4)) : 0;
                             const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
                             
                             if (trade.journalId) {
@@ -715,6 +881,7 @@ export async function processTradingAlert(alertText: string) {
                                         tp2Timestamp: nowTrade,
                                         result: 'WIN',
                                         pnl: parseFloat(finalPnlPct.toFixed(2)),
+                                        rMultiple,
                                         durationMin,
                                     }).catch(() => {});
                                 }
@@ -755,6 +922,7 @@ export async function processTradingAlert(alertText: string) {
                         const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
                         const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
                         const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - slLossPct * 0.5) : -slLossPct;
+                        const rMultiple = slLossPct > 0 ? parseFloat((finalPnlPct / slLossPct).toFixed(4)) : 0;
                         const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BE' : 'LOSS') : 'LOSS';
                         const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
                         
@@ -766,6 +934,7 @@ export async function processTradingAlert(alertText: string) {
                                     slTimestamp: nowTrade,
                                     result: finalResult,
                                     pnl: parseFloat(finalPnlPct.toFixed(2)),
+                                    rMultiple,
                                     durationMin,
                                 }).catch(() => {});
                             }
@@ -1379,6 +1548,14 @@ export async function processTradingAlert(alertText: string) {
                 status: 'EVALUANDO...'
             };
             docRef.set(state).catch(() => {}); // Update status in UI immediately
+
+            const isGlobalKilled = await evaluateGlobalKillswitch(nowMs);
+            if (isGlobalKilled) {
+                console.log(`[GLOBAL KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por riesgo global consolidado de la cuenta.`);
+                state.lastGatillo.status = 'BLOCKED_GLOBAL';
+                docRef.set(state).catch(() => {});
+                return;
+            }
 
             if (nowMs < streakKillswitchUntil) {
                 const remainingMin = Math.round((streakKillswitchUntil - nowMs) / 60000);

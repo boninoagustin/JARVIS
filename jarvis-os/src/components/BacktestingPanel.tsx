@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -69,6 +69,29 @@ export default function BacktestingPanel() {
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
+
+  // 🗂️ TABS PRINCIPALES (INDIVIDUAL VS PORTAFOLIO GLOBAL)
+  const [activeTab, setActiveTab] = useState<'individual' | 'portfolio'>('individual');
+
+  // 💼 ESTADOS PORTAFOLIO GLOBAL
+  interface PortfolioAssetFile {
+    name: string;
+    ticker: string;
+    trades: any[];
+  }
+  const [portfolioFiles, setPortfolioFiles] = useState<PortfolioAssetFile[]>([]);
+  const [globalMDL, setGlobalMDL] = useState(3.0);
+  const [globalDPT, setGlobalDPT] = useState(5.0);
+  const [globalMCL, setGlobalMCL] = useState(3);
+  const [globalMTD, setGlobalMTD] = useState(4);
+  const [globalTDD, setGlobalTDD] = useState(3.0);
+  const [portfolioResults, setPortfolioResults] = useState<{
+    trades: any[];
+    metrics: any;
+    equityData: any[];
+  } | null>(null);
+  const [isOptimizingPortfolio, setIsOptimizingPortfolio] = useState(false);
+  const [portfolioOptResults, setPortfolioOptResults] = useState<any[]>([]);
 
   const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '3': 3 };
   const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '3': '3M' };
@@ -515,6 +538,312 @@ export default function BacktestingPanel() {
     setTimeout(() => processStage1Chunk(0), 100);
   }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
 
+  // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
+  const runPortfolioSimulation = useCallback((
+    files: PortfolioAssetFile[],
+    config: {
+      mdl: number;
+      dpt: number;
+      mcl: number;
+      mtd: number;
+      tdd: number;
+    }
+  ) => {
+    if (files.length === 0) return null;
+
+    // Unificar todos los trades
+    let allTrades: any[] = [];
+    files.forEach(f => {
+      f.trades.forEach(t => {
+        allTrades.push({
+          ...t,
+          ticker: f.ticker
+        });
+      });
+    });
+
+    // Ordenar cronológicamente por timestamp de apertura
+    allTrades.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Simulación día a día en huso horario de Argentina
+    let simulatedTrades: any[] = [];
+    let currentDayStr = '';
+    
+    // Variables de control de día
+    let dailyPnLR = 0;
+    let dailyTradesCount = 0;
+    let dailyConsecutiveLosses = 0;
+    let dailyPeakPnLR = 0;
+    let isDailyKilled = false;
+    let dailyKillReason = '';
+
+    let totalPnLR = 0;
+
+    allTrades.forEach(t => {
+      // Calcular el día de Argentina correspondiente (ART es UTC-3)
+      const date = new Date(t.timestamp);
+      const dateStr = date.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); // YYYY-MM-DD
+
+      if (dateStr !== currentDayStr) {
+        currentDayStr = dateStr;
+        dailyPnLR = 0;
+        dailyTradesCount = 0;
+        dailyConsecutiveLosses = 0;
+        dailyPeakPnLR = 0;
+        isDailyKilled = false;
+        dailyKillReason = '';
+      }
+
+      const r = Number(t.rMultiple) || 0;
+
+      if (isDailyKilled) {
+        simulatedTrades.push({
+          ...t,
+          blockedByGlobalKillswitch: true,
+          blockReason: dailyKillReason,
+          cumulativePnLR: totalPnLR
+        });
+      } else {
+        // Registrar trade no bloqueado
+        totalPnLR += r;
+        simulatedTrades.push({
+          ...t,
+          blockedByGlobalKillswitch: false,
+          cumulativePnLR: totalPnLR
+        });
+
+        // Actualizar estadísticas del día
+        dailyPnLR += r;
+        dailyTradesCount++;
+        if (r < 0) {
+          dailyConsecutiveLosses++;
+        } else if (r > 0) {
+          dailyConsecutiveLosses = 0;
+        }
+
+        if (dailyPnLR > dailyPeakPnLR) {
+          dailyPeakPnLR = dailyPnLR;
+        }
+
+        const dailyDrawdown = dailyPeakPnLR - dailyPnLR;
+
+        // Comprobar triggers de bloqueo diario consolidado
+        if (config.mdl > 0 && dailyPnLR <= -config.mdl) {
+          isDailyKilled = true;
+          dailyKillReason = `Max Daily Loss superado (-${config.mdl}R)`;
+        } else if (config.dpt > 0 && dailyPnLR >= config.dpt) {
+          isDailyKilled = true;
+          dailyKillReason = `Daily Profit Target alcanzado (+${config.dpt}R)`;
+        } else if (config.mtd > 0 && dailyTradesCount >= config.mtd) {
+          isDailyKilled = true;
+          dailyKillReason = `Max Trades/Día superado (${config.mtd})`;
+        } else if (config.mcl > 0 && dailyConsecutiveLosses >= config.mcl) {
+          isDailyKilled = true;
+          dailyKillReason = `Max Pérdidas Consecutivas superado (${config.mcl})`;
+        } else if (config.tdd > 0 && dailyDrawdown >= config.tdd) {
+          isDailyKilled = true;
+          dailyKillReason = `Trailing Drawdown superado (${config.tdd}R)`;
+        }
+      }
+    });
+
+    // Métricas finales
+    const activeTrades = simulatedTrades.filter(t => !t.blockedByGlobalKillswitch);
+    const totalTradesCount = activeTrades.length;
+    const wins = activeTrades.filter(t => t.result === 'WIN').length;
+    const losses = activeTrades.filter(t => t.result === 'LOSS').length;
+    const be = activeTrades.filter(t => t.result === 'BE').length;
+
+    const wr = totalTradesCount > 0 ? ((wins / totalTradesCount) * 100).toFixed(1) : '0';
+    
+    let grossProfitR = 0;
+    let grossLossR = 0;
+    let maxDD = 0;
+    let peak = 0;
+
+    activeTrades.forEach(t => {
+      const r = Number(t.rMultiple) || 0;
+      if (r > 0) grossProfitR += r;
+      else grossLossR += Math.abs(r);
+
+      peak += r;
+      if (peak < maxDD) maxDD = peak;
+    });
+
+    const profitFactor = grossLossR > 0 ? (grossProfitR / grossLossR).toFixed(2) : (grossProfitR > 0 ? '∞' : '0.00');
+
+    // Curva de capital
+    const equityData = [{ name: 'Start', PnL: 0 }];
+    let cumPnL = 0;
+    activeTrades.forEach((t, idx) => {
+      cumPnL += Number(t.rMultiple) || 0;
+      equityData.push({
+        name: `T${idx + 1}`,
+        PnL: parseFloat(cumPnL.toFixed(2))
+      });
+    });
+
+    return {
+      trades: simulatedTrades,
+      equityData,
+      metrics: {
+        wr,
+        profitFactor,
+        totalPnLR: totalPnLR.toFixed(2),
+        activeTradesCount: totalTradesCount,
+        blockedTradesCount: simulatedTrades.filter(t => t.blockedByGlobalKillswitch).length,
+        wins,
+        losses,
+        be,
+        maxDDR: maxDD.toFixed(2)
+      }
+    };
+  }, []);
+
+  // 🔎 GRID SEARCH: OPTIMIZADOR INTELIGENTE DE KILLSWITCHES GLOBALES
+  const optimizePortfolioKillswitches = useCallback(() => {
+    if (portfolioFiles.length === 0) return;
+    setIsOptimizingPortfolio(true);
+
+    setTimeout(() => {
+      const mdlOptions = [0, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
+      const dptOptions = [0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0];
+      const mtdOptions = [0, 2, 3, 4, 5, 6];
+      
+      let combinations: { mdl: number, dpt: number, mtd: number }[] = [];
+      for (const mdl of mdlOptions) {
+        for (const dpt of dptOptions) {
+          for (const mtd of mtdOptions) {
+            combinations.push({ mdl, dpt, mtd });
+          }
+        }
+      }
+
+      let results: any[] = [];
+
+      combinations.forEach(c => {
+        const sim = runPortfolioSimulation(portfolioFiles, {
+          mdl: c.mdl,
+          dpt: c.dpt,
+          mtd: c.mtd,
+          mcl: 0,
+          tdd: 0
+        });
+
+        if (sim) {
+          results.push({
+            config: c,
+            pnlR: parseFloat(sim.metrics.totalPnLR),
+            wr: parseFloat(sim.metrics.wr),
+            blocked: sim.metrics.blockedTradesCount,
+            active: sim.metrics.activeTradesCount
+          });
+        }
+      });
+
+      // Ordenar por rendimiento PnL R neto consolidado de forma descendente
+      results.sort((a, b) => b.pnlR - a.pnlR);
+
+      setPortfolioOptResults(results.slice(0, 5));
+      setIsOptimizingPortfolio(false);
+      toast('✅ Grid Search optimizado. ¡Elegí la mejor opción abajo!', 'success');
+    }, 100);
+  }, [portfolioFiles, runPortfolioSimulation, toast]);
+
+  // 💾 SUBIR LA CONFIGURACIÓN GLOBAL A JARVIS FIRESTORE
+  const handlePushGlobalToBot = async () => {
+    try {
+      await setDoc(doc(db, 'asset_configs', 'GLOBAL'), {
+        enabled: true,
+        maxDailyLossR: globalMDL,
+        dailyProfitTargetR: globalDPT,
+        maxConsecutiveLosses: globalMCL,
+        maxTradesPerDay: globalMTD,
+        trailingDrawdownR: globalTDD,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      toast(`✅ Configuración Global subida a JARVIS con éxito!`, 'success');
+    } catch (err: any) {
+      toast(`❌ Error subiendo config global: ${err.message}`, 'error');
+    }
+  };
+
+  // 📂 CARGA DE ARCHIVOS JSON DE BACKTESTING INDIVIDUAL
+  const handlePortfolioUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const content = ev.target?.result as string;
+          const data = JSON.parse(content);
+
+          if (!data.trades || !Array.isArray(data.trades)) {
+            toast(`❌ ${file.name}: no es un archivo de backtesting válido de JARVIS`, 'error');
+            return;
+          }
+
+          const detectedTicker = data.metadata?.ticker || 'DESCONOCIDO';
+          const cleanTrades = data.trades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+
+          setPortfolioFiles(prev => {
+            const filtered = prev.filter(f => f.ticker !== detectedTicker);
+            const newFiles = [...filtered, {
+              name: file.name,
+              ticker: detectedTicker,
+              trades: cleanTrades
+            }];
+            
+            setTimeout(() => {
+              const res = runPortfolioSimulation(newFiles, {
+                mdl: globalMDL,
+                dpt: globalDPT,
+                mcl: globalMCL,
+                mtd: globalMTD,
+                tdd: globalTDD
+              });
+              setPortfolioResults(res);
+            }, 50);
+
+            return newFiles;
+          });
+
+          toast(`✅ ${detectedTicker}: ${cleanTrades.length} trades importados`, 'success');
+        } catch (err: any) {
+          toast(`❌ Error leyendo JSON: ${err.message}`, 'error');
+        }
+      };
+      reader.readAsText(file);
+    });
+    e.target.value = '';
+  }, [toast, globalMDL, globalDPT, globalMCL, globalMTD, globalTDD, runPortfolioSimulation]);
+
+  // 🎛️ ACTUALIZACIÓN DINÁMICA DE PARÁMETROS
+  const handleGlobalParamChange = (param: string, val: number) => {
+    let newMdl = globalMDL;
+    let newDpt = globalDPT;
+    let newMcl = globalMCL;
+    let newMtd = globalMTD;
+    let newTdd = globalTDD;
+
+    if (param === 'mdl') { setGlobalMDL(val); newMdl = val; }
+    else if (param === 'dpt') { setGlobalDPT(val); newDpt = val; }
+    else if (param === 'mcl') { setGlobalMCL(val); newMcl = val; }
+    else if (param === 'mtd') { setGlobalMTD(val); newMtd = val; }
+    else if (param === 'tdd') { setGlobalTDD(val); newTdd = val; }
+
+    const res = runPortfolioSimulation(portfolioFiles, {
+      mdl: newMdl,
+      dpt: newDpt,
+      mcl: newMcl,
+      mtd: newMtd,
+      tdd: newTdd
+    });
+    setPortfolioResults(res);
+  };
+
   const filteredTrades = sessionFilter === 'ALL'
     ? trades
     : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
@@ -662,13 +991,68 @@ export default function BacktestingPanel() {
 
   return (
     <div className="animate-fadeIn">
-      <div className="panel-header">
-        <span><Upload size={14} style={{ marginRight: 8 }} /> BACKTESTING STANDALONE v3.0 {isRunning && <span className="live-dot"></span>}</span>
-        <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Motor local — sin servidor requerido</span>
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ display: 'flex', alignItems: 'center', fontWeight: 700 }}>
+            <Upload size={14} style={{ marginRight: 8 }} /> BACKTESTING STANDALONE v3.0 {isRunning && <span className="live-dot"></span>}
+          </span>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Motor local y optimizador multi-activo</span>
+        </div>
+
+        {/* 🎂 SELECTOR DE PESTAÑAS PREMIUM */}
+        <div style={{
+          display: 'flex',
+          background: 'rgba(255, 255, 255, 0.05)',
+          borderRadius: '8px',
+          padding: '2px',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          backdropFilter: 'blur(10px)',
+          gap: '2px'
+        }}>
+          <button
+            onClick={() => setActiveTab('individual')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              background: activeTab === 'individual' ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
+              color: activeTab === 'individual' ? '#fff' : 'var(--text-tertiary)',
+              cursor: 'pointer',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <TrendingUp size={12} color={activeTab === 'individual' ? 'var(--accent-gold)' : 'var(--text-tertiary)'} /> Backtest Individual
+          </button>
+          <button
+            onClick={() => setActiveTab('portfolio')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              borderRadius: '6px',
+              border: 'none',
+              background: activeTab === 'portfolio' ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
+              color: activeTab === 'portfolio' ? '#fff' : 'var(--text-tertiary)',
+              cursor: 'pointer',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <Briefcase size={12} color={activeTab === 'portfolio' ? 'var(--accent-gold)' : 'var(--text-tertiary)'} /> Portafolio Global
+          </button>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '24px' }}>
-        {/* LEFT COLUMN */}
+      {activeTab === 'individual' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '24px' }}>
+          {/* LEFT COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
           {/* UPLOAD */}
@@ -1178,6 +1562,522 @@ export default function BacktestingPanel() {
           </div>
         </div>
       </div>
+      ) : (
+        /* ================= PEPE: PORTAFOLIO GLOBAL TAB ================= */
+        <div className="animate-fadeIn" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '24px' }}>
+          
+          {/* COLUMNA IZQUIERDA: CONTROLES Y CONFIGS */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* CARGADOR MULTI-ACTIVO */}
+            <div className="panel" style={{
+              background: 'rgba(30, 30, 40, 0.65)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '12px',
+              padding: '20px'
+            }}>
+              <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', color: '#fff', fontSize: '0.95rem', fontWeight: 700 }}>
+                <Upload size={18} color="var(--accent-gold)" /> IMPORTAR BACKTESTS (.JSON)
+              </h3>
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginBottom: '16px', lineHeight: '1.4' }}>
+                Subí múltiples archivos JSON de backtests individuales limpios (sin killswitches internos) para evaluar el comportamiento unificado de tu cuenta.
+              </p>
+
+              <div style={{
+                border: '2px dashed rgba(255, 255, 255, 0.15)',
+                borderRadius: '8px',
+                padding: '24px 16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: 'rgba(255, 255, 255, 0.02)',
+                transition: 'all 0.2s ease',
+                position: 'relative'
+              }}
+              onClick={() => {
+                const input = document.getElementById('portfolio-file-upload');
+                if (input) input.click();
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-gold)'}
+              onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)'}
+              >
+                <input
+                  id="portfolio-file-upload"
+                  type="file"
+                  multiple
+                  accept=".json"
+                  onChange={handlePortfolioUpload}
+                  style={{ display: 'none' }}
+                />
+                <Upload size={28} color="var(--text-secondary)" style={{ margin: '0 auto 8px auto', display: 'block' }} />
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>
+                  Seleccionar archivos JSON
+                </span>
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginTop: '4px' }}>
+                  Soporta selección múltiple (EURUSD, GBPUSD, etc.)
+                </span>
+              </div>
+
+              {/* LISTA DE ACTIVOS CARGADOS */}
+              {portfolioFiles.length > 0 && (
+                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-secondary)' }}>ACTIVOS ACTIVOS EN PORTAFOLIO:</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+                    {portfolioFiles.map((file, idx) => (
+                      <div key={idx} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 12px',
+                        background: 'rgba(255, 255, 255, 0.04)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        borderRadius: '6px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: file.ticker === 'BTCUSD' ? '#f7931a' : file.ticker === 'US100' ? '#00c49f' : '#0088ff'
+                          }}></span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{file.ticker}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{file.trades.length} trades</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPortfolioFiles(prev => {
+                                const next = prev.filter(f => f.ticker !== file.ticker);
+                                setTimeout(() => {
+                                  const res = runPortfolioSimulation(next, {
+                                    mdl: globalMDL,
+                                    dpt: globalDPT,
+                                    mcl: globalMCL,
+                                    mtd: globalMTD,
+                                    tdd: globalTDD
+                                  });
+                                  setPortfolioResults(res);
+                                }, 50);
+                                return next;
+                              });
+                            }}
+                            style={{ background: 'none', border: 'none', color: 'var(--accent-red)', cursor: 'pointer', fontSize: '0.75rem' }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* PARÁMETROS DEL KILLSWITCH GLOBAL */}
+            <div className="panel" style={{
+              background: 'rgba(30, 30, 40, 0.65)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '12px',
+              padding: '20px'
+            }}>
+              <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', color: '#fff', fontSize: '0.95rem', fontWeight: 700 }}>
+                <ShieldAlert size={18} color="var(--accent-red)" /> RIESGO CONSOLIDADO (CUENTA)
+              </h3>
+
+              {/* SLIDER MDL */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Max Daily Loss (MDL)</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-red)' }}>{globalMDL > 0 ? `-${globalMDL.toFixed(1)}R` : 'OFF'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="0.5"
+                  value={globalMDL}
+                  onChange={(e) => handleGlobalParamChange('mdl', parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                />
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Bloquea la cuenta al perder este monto R diario.</span>
+              </div>
+
+              {/* SLIDER DPT */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Daily Profit Target (DPT)</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-green)' }}>{globalDPT > 0 ? `+${globalDPT.toFixed(1)}R` : 'OFF'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="15"
+                  step="0.5"
+                  value={globalDPT}
+                  onChange={(e) => handleGlobalParamChange('dpt', parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-green)' }}
+                />
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Asegura ganancias cerrando la sesión al alcanzar esta meta R.</span>
+              </div>
+
+              {/* SLIDER MTD */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Max Trades / Día (MTD)</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{globalMTD > 0 ? `${globalMTD} trades` : 'OFF'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="1"
+                  value={globalMTD}
+                  onChange={(e) => handleGlobalParamChange('mtd', parseInt(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-gold)' }}
+                />
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Número máximo de operaciones consolidadas permitidas por día.</span>
+              </div>
+
+              {/* SLIDER MCL */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Max Consec. Losses (MCL)</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-red)' }}>{globalMCL > 0 ? `${globalMCL} racha` : 'OFF'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="8"
+                  step="1"
+                  value={globalMCL}
+                  onChange={(e) => handleGlobalParamChange('mcl', parseInt(e.target.value))}
+                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                />
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Racha de pérdidas seguidas permitidas globalmente en el día.</span>
+              </div>
+
+              {/* SLIDER TDD */}
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Trailing Drawdown (TDD)</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f7931a' }}>{globalTDD > 0 ? `${globalTDD.toFixed(1)}R` : 'OFF'}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="8"
+                  step="0.5"
+                  value={globalTDD}
+                  onChange={(e) => handleGlobalParamChange('tdd', parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: '#f7931a' }}
+                />
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Pérdida máxima admitida desde el punto más alto del PnL consolidado del día.</span>
+              </div>
+
+              {/* BOTONES ACCION GLOBAL */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={handlePushGlobalToBot}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #0088ff, #7c4dff)',
+                    color: '#fff',
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'opacity 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+                  onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+                >
+                  <Wand2 size={14} /> PERSISTIR GLOBAL EN JARVIS LIVE
+                </button>
+              </div>
+            </div>
+
+            {/* GRID SEARCH POR METODO */}
+            <div className="panel" style={{
+              background: 'rgba(30, 30, 40, 0.65)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '12px',
+              padding: '20px'
+            }}>
+              <h3 style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px', color: '#fff', fontSize: '0.9rem', fontWeight: 700 }}>
+                <Wand2 size={16} color="var(--accent-gold)" /> GRID SEARCH OPTIMIZER
+              </h3>
+              <p style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '14px', lineHeight: '1.4' }}>
+                Calcula automáticamente las combinaciones ideales de MDL, DPT y MTD que maximizan el rendimiento global consolidado.
+              </p>
+
+              <button
+                type="button"
+                onClick={optimizePortfolioKillswitches}
+                disabled={portfolioFiles.length === 0 || isOptimizingPortfolio}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: portfolioFiles.length === 0 ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 170, 0, 0.1)',
+                  color: portfolioFiles.length === 0 ? 'var(--text-tertiary)' : 'var(--accent-gold)',
+                  fontWeight: 700,
+                  fontSize: '0.7rem',
+                  cursor: portfolioFiles.length === 0 ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px'
+                }}
+              >
+                {isOptimizingPortfolio ? 'Calculando combinaciones...' : 'Correr Optimización en Malla'}
+              </button>
+
+              {portfolioOptResults.length > 0 && (
+                <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-secondary)' }}>TOP 5 COMBINACIONES ÓPTIMAS:</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {portfolioOptResults.map((opt, index) => (
+                      <div
+                        key={index}
+                        onClick={() => {
+                          setGlobalMDL(opt.config.mdl);
+                          setGlobalDPT(opt.config.dpt);
+                          setGlobalMTD(opt.config.mtd);
+                          const res = runPortfolioSimulation(portfolioFiles, {
+                            mdl: opt.config.mdl,
+                            dpt: opt.config.dpt,
+                            mcl: globalMCL,
+                            mtd: opt.config.mtd,
+                            tdd: globalTDD
+                          });
+                          setPortfolioResults(res);
+                          toast(`Aplicada configuración Top ${index + 1}`, 'success');
+                        }}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '6px 10px',
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(255, 255, 255, 0.05)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.borderColor = 'rgba(255, 170, 0, 0.3)'}
+                        onMouseLeave={(e) => e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.05)'}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#fff' }}>
+                            MDL: <span style={{ color: 'var(--accent-red)' }}>{opt.config.mdl}</span> | DPT: <span style={{ color: 'var(--accent-green)' }}>{opt.config.dpt}</span> | MTD: <span style={{ color: 'var(--accent-gold)' }}>{opt.config.mtd}</span>
+                          </span>
+                          <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>
+                            Trades: {opt.active} ({opt.blocked} bloqueados)
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-green)' }}>
+                          +{opt.pnlR.toFixed(1)}R
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* COLUMNA DERECHA: DASHBOARD, GRÁFICO Y DETALLES */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* ESTADÍSTICAS DEL PORTAFOLIO */}
+            <div className="panel" style={{
+              background: 'rgba(30, 30, 40, 0.65)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '12px',
+              padding: '20px'
+            }}>
+              <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', color: '#fff', fontSize: '0.95rem', fontWeight: 700 }}>
+                <BarChart2 size={18} color="var(--accent-gold)" /> DASHBOARD DE PORTAFOLIO CONSOLIDADO
+              </h3>
+
+              {!portfolioResults ? (
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
+                  Subí los archivos de backtesting de tus activos para simular la cuenta.
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <span style={{ display: 'block', fontSize: '0.55rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>PnL Neto Consolidado</span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 800, color: parseFloat(portfolioResults.metrics.totalPnLR) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                        {parseFloat(portfolioResults.metrics.totalPnLR) >= 0 ? '+' : ''}{portfolioResults.metrics.totalPnLR}R
+                      </span>
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <span style={{ display: 'block', fontSize: '0.55rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>Win Rate (WR)</span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-gold)' }}>
+                        {portfolioResults.metrics.wr}%
+                      </span>
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <span style={{ display: 'block', fontSize: '0.55rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>Profit Factor (PF)</span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0088ff' }}>
+                        {portfolioResults.metrics.profitFactor}
+                      </span>
+                    </div>
+                    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <span style={{ display: 'block', fontSize: '0.55rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>Bloqueos Globales</span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 800, color: portfolioResults.metrics.blockedTradesCount > 0 ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
+                        {portfolioResults.metrics.blockedTradesCount} <span style={{ fontSize: '0.65rem', fontWeight: 500, color: 'var(--text-tertiary)' }}>trades</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* INFO DE TRADES COMPONENTES */}
+                  <div style={{ display: 'flex', gap: '16px', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '20px', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <span>✅ Operados: <strong>{portfolioResults.metrics.activeTradesCount}</strong></span>
+                    <span>📈 Ganados: <strong>{portfolioResults.metrics.wins}</strong></span>
+                    <span>📉 Perdidos: <strong>{portfolioResults.metrics.losses}</strong></span>
+                    <span>🤝 Breakevens: <strong>{portfolioResults.metrics.be}</strong></span>
+                    <span>📉 Max Drawdown: <strong style={{ color: 'var(--accent-red)' }}>{portfolioResults.metrics.maxDDR}R</strong></span>
+                  </div>
+
+                  {/* CURVA DE EQUIDAD PORTAFOLIO */}
+                  <div style={{ height: '240px', width: '100%', marginBottom: '10px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={portfolioResults.equityData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                        <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '0.6rem' }} />
+                        <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '0.6rem' }} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', fontSize: '0.7rem', borderRadius: '6px' }}
+                          labelStyle={{ fontWeight: 'bold' }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="PnL"
+                          stroke="url(#portfolioEquityGrad)"
+                          strokeWidth={2.5}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                        />
+                        <defs>
+                          <linearGradient id="portfolioEquityGrad" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stopColor="#00c49f" />
+                            <stop offset="50%" stopColor="var(--accent-gold)" />
+                            <stop offset="100%" stopColor="#0088ff" />
+                          </linearGradient>
+                        </defs>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* DETALLE CRONOLÓGICO DE TRADES MULTI-ACTIVO */}
+            {portfolioResults && portfolioResults.trades.length > 0 && (
+              <div className="panel" style={{
+                background: 'rgba(30, 30, 40, 0.65)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '12px',
+                padding: '20px'
+              }}>
+                <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', color: '#fff', fontSize: '0.95rem', fontWeight: 700 }}>
+                  <BookOpen size={18} color="var(--accent-gold)" /> HISTORIAL UNIFICADO Y FILTRADO CONSOLIDADO
+                </h3>
+
+                <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
+                  {portfolioResults.trades.slice().reverse().map((t, idx) => {
+                    const isBlocked = t.blockedByGlobalKillswitch;
+                    const r = Number(t.rMultiple) || 0;
+                    const date = new Date(t.timestamp);
+                    const formattedDate = date.toLocaleString('es-AR', {
+                      timeZone: 'America/Argentina/Buenos_Aires',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    });
+
+                    return (
+                      <div key={idx} style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '10px 14px',
+                        background: isBlocked ? 'rgba(255, 51, 51, 0.02)' : 'rgba(255, 255, 255, 0.02)',
+                        border: isBlocked ? '1px dashed rgba(255, 51, 51, 0.2)' : '1px solid rgba(255, 255, 255, 0.05)',
+                        borderRadius: '8px',
+                        opacity: isBlocked ? 0.40 : 1,
+                        transition: 'opacity 0.2s ease'
+                      }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{
+                              fontSize: '0.75rem',
+                              fontWeight: 800,
+                              color: t.ticker === 'BTCUSD' ? '#f7931a' : t.ticker === 'US100' ? '#00c49f' : '#0088ff'
+                            }}>{t.ticker}</span>
+                            <span style={{
+                              fontSize: '0.6rem',
+                              padding: '1px 5px',
+                              borderRadius: '3px',
+                              background: t.type === 'BUY' ? 'rgba(32,191,107,0.1)' : 'rgba(255,51,51,0.1)',
+                              color: t.type === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
+                              fontWeight: 700
+                            }}>{t.type}</span>
+                            <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{formattedDate} ART</span>
+                          </div>
+                          
+                          {isBlocked ? (
+                            <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 600 }}>
+                              🚫 BLOQUEADO: {t.blockReason}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>
+                              FIB: {t.fibLevel || 'OTE'} | SL: {t.slBufferPercent || '1.0'} | R:R: {t.fixedRR || '2.0'}x
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+                          <span style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 800,
+                            color: isBlocked ? 'var(--text-tertiary)' : (r > 0 ? 'var(--accent-green)' : (r < 0 ? 'var(--accent-red)' : 'var(--text-secondary)'))
+                          }}>
+                            {isBlocked ? '0.00R' : `${r > 0 ? '+' : ''}${r.toFixed(2)}R`}
+                          </span>
+                          {!isBlocked && (
+                            <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>
+                              Equidad: {t.cumulativePnLR.toFixed(2)}R
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
