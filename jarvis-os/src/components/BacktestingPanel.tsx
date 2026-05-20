@@ -323,114 +323,8 @@ export default function BacktestingPanel() {
     const bestPnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
     const bestData: Record<string, { config: any, result: BacktestResult }> = {};
 
-    const processChunk = (startIndex: number) => {
-        const chunkSize = 10;
-        const endIndex = Math.min(startIndex + chunkSize, combinations.length);
-        
-        for (let i = startIndex; i < endIndex; i++) {
-            const c = combinations[i];
-            const config = { 
-                ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
-                maxDailyLossR: optimizeSwitches ? undefined : (maxDailyLossR || undefined),
-                dailyProfitTargetR: optimizeSwitches ? undefined : (dailyProfitTargetR || undefined),
-                maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
-                maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
-                trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
-            };
-            const res = runBacktest(logs, config);
-            
-            const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
-            sessionsToEval.forEach(s => {
-                const sessionTrades = s === 'ALL'
-                    ? res.trades
-                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
-                
-                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-                
-                if (pnl > bestPnl[s]) {
-                    bestPnl[s] = pnl;
-                    bestData[s] = { config, result: res };
-                }
-            });
-        }
-        
-        setProgress(Math.floor((endIndex / combinations.length) * 100));
-        
-        if (endIndex < combinations.length) {
-            setTimeout(() => processChunk(endIndex), 20);
-        } else if (Object.keys(bestData).length > 0) {
-            // PASS 2: If optimizeSwitches is true, optimize killswitches for each session!
-            if (optimizeSwitches) {
-                const ksMaxDailyLoss = [0, 1.0, 2.0, 3.0];
-                const ksDailyProfit = [0, 2.0, 4.0, 6.0];
-                const ksMaxConsLosses = [0, 2, 3, 4];
-                const ksMaxTrades = [0, 2, 3, 5];
-                const ksTrailDD = [0, 2.0, 4.0];
-
-                const ksCombinations: {
-                    maxDailyLossR?: number,
-                    dailyProfitTargetR?: number,
-                    maxConsecutiveLosses?: number,
-                    maxTradesPerDay?: number,
-                    trailingDrawdownR?: number
-                }[] = [];
-
-                for (const mdl of ksMaxDailyLoss) {
-                    for (const dpt of ksDailyProfit) {
-                        for (const mcl of ksMaxConsLosses) {
-                            for (const mt of ksMaxTrades) {
-                                for (const tdd of ksTrailDD) {
-                                    ksCombinations.push({
-                                        maxDailyLossR: mdl || undefined,
-                                        dailyProfitTargetR: dpt || undefined,
-                                        maxConsecutiveLosses: mcl || undefined,
-                                        maxTradesPerDay: mt || undefined,
-                                        trailingDrawdownR: tdd || undefined
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // For each session, optimize killswitches using its best config found in Pass 1
-                const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
-                sessionsToEval.forEach(s => {
-                    const pass1Result = bestData[s];
-                    if (!pass1Result) return;
-
-                    let bestKsPnl = -Infinity;
-                    let bestKsConfig = pass1Result.config;
-                    let bestKsResult = pass1Result.result;
-
-                    // Run the 768 killswitch combinations
-                    for (const ks of ksCombinations) {
-                        const testConfig = {
-                            ...pass1Result.config,
-                            ...ks
-                        };
-                        const res = runBacktest(logs, testConfig);
-
-                        const sessionTrades = s === 'ALL'
-                            ? res.trades
-                            : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
-                        
-                        const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-                        const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-
-                        if (pnl > bestKsPnl) {
-                            bestKsPnl = pnl;
-                            bestKsConfig = testConfig;
-                            bestKsResult = res;
-                        }
-                    }
-
-                    // Save the best killswitch config + result for this session
-                    bestData[s] = { config: bestKsConfig, result: bestKsResult };
-                });
-            }
-
+    const finalizeOptimization = () => {
+        if (Object.keys(bestData).length > 0) {
             setOptimizedSessionResults(bestData);
             
             const currentData = bestData[sessionFilter] || bestData['ALL'];
@@ -470,11 +364,155 @@ export default function BacktestingPanel() {
             });
             setSelectedSession(session.id);
             setIsRunning(false);
-            toast(`✅ Optimización finalizada para TODAS las sesiones (con Killswitches).`, 'success');
+            toast(optimizeSwitches 
+              ? `✅ Optimización finalizada para TODAS las sesiones (con Killswitches optimizados).`
+              : `✅ Optimización finalizada para TODAS las sesiones.`, 
+              'success'
+            );
+        }
+    };
+
+    const startStage2 = () => {
+        const ksMaxDailyLoss = [0, 1.0, 1.5, 2.0, 3.0];
+        const ksDailyProfit = [0, 2.0, 3.0, 4.0, 6.0];
+        const ksMaxConsLosses = [0, 2, 3, 4];
+        const ksMaxTrades = [0, 2, 3, 5];
+        const ksTrailDD = [0, 1.5, 2.5, 4.0];
+
+        const ksCombinations: {
+            maxDailyLossR?: number,
+            dailyProfitTargetR?: number,
+            maxConsecutiveLosses?: number,
+            maxTradesPerDay?: number,
+            trailingDrawdownR?: number
+        }[] = [];
+
+        for (const mdl of ksMaxDailyLoss) {
+            for (const dpt of ksDailyProfit) {
+                for (const mcl of ksMaxConsLosses) {
+                    for (const mt of ksMaxTrades) {
+                        for (const tdd of ksTrailDD) {
+                            ksCombinations.push({
+                                maxDailyLossR: mdl || undefined,
+                                dailyProfitTargetR: dpt || undefined,
+                                maxConsecutiveLosses: mcl || undefined,
+                                maxTradesPerDay: mt || undefined,
+                                trailingDrawdownR: tdd || undefined
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        const stage2Tasks: {
+            session: 'ALL' | 'LONDON' | 'NY' | 'ASIA',
+            ks: typeof ksCombinations[number]
+        }[] = [];
+
+        const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+        sessionsToEval.forEach(s => {
+            if (bestData[s]) {
+                for (const ks of ksCombinations) {
+                    stage2Tasks.push({ session: s, ks });
+                }
+            }
+        });
+
+        const bestStage2Pnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
+        const bestStage2Data: Record<string, { config: any, result: BacktestResult }> = {};
+
+        const processStage2Chunk = (startIndex: number) => {
+            const chunkSize = 50;
+            const endIndex = Math.min(startIndex + chunkSize, stage2Tasks.length);
+
+            for (let i = startIndex; i < endIndex; i++) {
+                const task = stage2Tasks[i];
+                const pass1Result = bestData[task.session];
+                if (!pass1Result) continue;
+
+                const testConfig = {
+                    ...pass1Result.config,
+                    ...task.ks
+                };
+                const res = runBacktest(logs, testConfig);
+
+                const sessionTrades = task.session === 'ALL'
+                    ? res.trades
+                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === task.session);
+                
+                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+
+                if (pnl > bestStage2Pnl[task.session]) {
+                    bestStage2Pnl[task.session] = pnl;
+                    bestStage2Data[task.session] = { config: testConfig, result: res };
+                }
+            }
+
+            const stage2Progress = Math.floor((endIndex / stage2Tasks.length) * 50) + 50;
+            setProgress(stage2Progress);
+
+            if (endIndex < stage2Tasks.length) {
+                setTimeout(() => processStage2Chunk(endIndex), 15);
+            } else {
+                Object.keys(bestStage2Data).forEach(s => {
+                    bestData[s] = bestStage2Data[s];
+                });
+                finalizeOptimization();
+            }
+        };
+
+        setTimeout(() => processStage2Chunk(0), 10);
+    };
+
+    const processStage1Chunk = (startIndex: number) => {
+        const chunkSize = 10;
+        const endIndex = Math.min(startIndex + chunkSize, combinations.length);
+        
+        for (let i = startIndex; i < endIndex; i++) {
+            const c = combinations[i];
+            const config = { 
+                ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
+                maxDailyLossR: optimizeSwitches ? undefined : (maxDailyLossR || undefined),
+                dailyProfitTargetR: optimizeSwitches ? undefined : (dailyProfitTargetR || undefined),
+                maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
+                maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
+                trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
+            };
+            const res = runBacktest(logs, config);
+            
+            const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+            sessionsToEval.forEach(s => {
+                const sessionTrades = s === 'ALL'
+                    ? res.trades
+                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
+                
+                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+                
+                if (pnl > bestPnl[s]) {
+                    bestPnl[s] = pnl;
+                    bestData[s] = { config, result: res };
+                }
+            });
+        }
+        
+        const baseProgress = Math.floor((endIndex / combinations.length) * 100);
+        setProgress(optimizeSwitches ? Math.floor(baseProgress / 2) : baseProgress);
+        
+        if (endIndex < combinations.length) {
+            setTimeout(() => processStage1Chunk(endIndex), 20);
+        } else {
+            if (optimizeSwitches && Object.keys(bestData).length > 0) {
+                startStage2();
+            } else {
+                finalizeOptimization();
+            }
         }
     };
     
-    setTimeout(() => processChunk(0), 100);
+    setTimeout(() => processStage1Chunk(0), 100);
   }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
 
   const filteredTrades = sessionFilter === 'ALL'
