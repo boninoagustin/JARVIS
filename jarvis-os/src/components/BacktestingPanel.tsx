@@ -142,6 +142,102 @@ export default function BacktestingPanel() {
     e.target.value = '';
   }, [toast]);
 
+  const loadDemoData = useCallback(() => {
+    setIsRunning(true);
+    setProgress(10);
+    
+    setTimeout(() => {
+      const lines4H: string[] = [];
+      const lines1H: string[] = [];
+      const lines15M: string[] = [];
+      const lines3M: string[] = [];
+      
+      const now = Date.now();
+      const fiveDaysAgo = now - 5 * 24 * 60 * 60 * 1000;
+      
+      let price = 62500;
+      let timestamp = fiveDaysAgo;
+      const step3M = 3 * 60 * 1000; // 3 minutos
+      
+      // Zonas macro de soporte y resistencia iniciales
+      lines4H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 240 | Trend: BUY | Payload: [{"top":63500,"btm":63200,"dir":"SELL","score":4,"medal":"God"},{"top":61800,"btm":61500,"dir":"BUY","score":4,"medal":"God"}]`);
+      lines1H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 60 | Trend: BUY | Payload: [{"top":62900,"btm":62700,"dir":"SELL","score":3,"medal":"Silver"},{"top":62100,"btm":61900,"dir":"BUY","score":3,"medal":"Silver"}]`);
+      lines15M.push(`SYNC_ZONES | TS: ${timestamp} | TF: 15 | Trend: BUY | Payload: [{"top":62600,"btm":62500,"dir":"SELL","score":2,"medal":"Normal"},{"top":62300,"btm":62200,"dir":"BUY","score":2,"medal":"Normal"}]`);
+
+      let trend: 'BUY' | 'SELL' = 'BUY';
+      
+      // Bucle de simulación para generar logs coherentes de 5 días
+      for (let i = 0; i < 1500; i++) {
+        timestamp += step3M;
+        
+        // Caminata aleatoria con sesgo alcista moderado
+        const change = (Math.random() - 0.47) * 45; 
+        price += change;
+        
+        const high = price + Math.random() * 25;
+        const low = price - Math.random() * 25;
+        
+        // Ping de precio cada 3 minutos
+        lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${price.toFixed(2)} | High: ${high.toFixed(2)} | Low: ${low.toFixed(2)}`);
+        
+        // Cada 6 horas (120 barras), actualizamos zonas y bias
+        if (i % 120 === 0) {
+          trend = Math.random() > 0.4 ? 'BUY' : 'SELL';
+          lines4H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 240 | Trend: ${trend} | Payload: [{"top":${(price + 1100).toFixed(2)},"btm":${(price + 800).toFixed(2)},"dir":"SELL","score":4,"medal":"God"},{"top":${(price - 800).toFixed(2)},"btm":${(price - 1200).toFixed(2)},"dir":"BUY","score":4,"medal":"God"}]`);
+          lines1H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 60 | Trend: ${trend} | Payload: [{"top":${(price + 550).toFixed(2)},"btm":${(price + 350).toFixed(2)},"dir":"SELL","score":3,"medal":"Silver"},{"top":${(price - 350).toFixed(2)},"btm":${(price - 550).toFixed(2)},"dir":"BUY","score":3,"medal":"Silver"}]`);
+        }
+        
+        // Cada 3 horas (60 barras), enviamos sweeps o divergencias en 15M
+        if (i % 60 === 0) {
+          const isBuy = Math.random() > 0.5;
+          lines15M.push(`EVENTO_SWEEP | TS: ${timestamp} | TF: 15 | ${isBuy ? 'BUY' : 'SELL'} | ABSORCION`);
+          lines15M.push(`EVENTO_SMC_DIV | TS: ${timestamp} | TF: 15 | ${isBuy ? 'BUY' : 'SELL'}`);
+        }
+        
+        // Cada 45 barras de 3M, generamos estructura (CHOCH o BOS) que gatillará un trade
+        if (i % 45 === 0) {
+          const dir = Math.random() > 0.35 ? 'BUY' : 'SELL';
+          const origin = dir === 'BUY' ? price - 200 : price + 200;
+          lines3M.push(`EVENTO_CHOCH | TS: ${timestamp} | TF: 3 | Precio: ${price.toFixed(2)} | ORIGIN: ${origin.toFixed(2)} | ${dir}`);
+          
+          // Hacemos que el precio retroceda hacia el OTE en las siguientes barras para asegurar que gatille un trade
+          let pullbackPrice = price;
+          for (let j = 1; j <= 5; j++) {
+            timestamp += step3M;
+            pullbackPrice = dir === 'BUY' ? price - (100 * (j / 5)) : price + (100 * (j / 5));
+            const pbHigh = pullbackPrice + 5;
+            const pbLow = pullbackPrice - 5;
+            lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${pullbackPrice.toFixed(2)} | High: ${pbHigh.toFixed(2)} | Low: ${pbLow.toFixed(2)}`);
+          }
+          
+          // Y luego expandimos fuertemente a favor del trade para que toque el take profit en la gran mayoría
+          let targetPrice = pullbackPrice;
+          const targetReach = dir === 'BUY' ? 320 : -320;
+          for (let j = 1; j <= 7; j++) {
+            timestamp += step3M;
+            targetPrice = pullbackPrice + (targetReach * (j / 7));
+            const tHigh = targetPrice + 5;
+            const tLow = targetPrice - 5;
+            lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${targetPrice.toFixed(2)} | High: ${tHigh.toFixed(2)} | Low: ${tLow.toFixed(2)}`);
+          }
+          price = targetPrice;
+        }
+      }
+      
+      setUploadedFiles([
+        { name: 'demo_4h_premium.csv', tf: '240', lines: lines4H, lineCount: lines4H.length },
+        { name: 'demo_1h_premium.csv', tf: '60', lines: lines1H, lineCount: lines1H.length },
+        { name: 'demo_15m_premium.csv', tf: '15', lines: lines15M, lineCount: lines15M.length },
+        { name: 'demo_3m_premium.csv', tf: '3', lines: lines3M, lineCount: lines3M.length },
+      ]);
+      
+      setTicker('BTCUSD');
+      setIsRunning(false);
+      setProgress(0);
+      toast('⚡ Datos Demo (BTCUSD) cargados con éxito. ¡Listo para simular u optimizar!', 'success');
+    }, 500);
+  }, [toast]);
+
   const handleRun = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
@@ -546,6 +642,40 @@ export default function BacktestingPanel() {
                 </div>
               </div>
             </div>
+
+            <button 
+              type="button" 
+              onClick={loadDemoData} 
+              disabled={isRunning}
+              style={{
+                width: '100%',
+                padding: '12px',
+                marginBottom: '12px',
+                background: 'linear-gradient(135deg, rgba(124,77,255,0.2) 0%, rgba(255,170,0,0.15) 100%)',
+                color: 'var(--text-primary)',
+                border: '1px solid rgba(255,170,0,0.3)',
+                borderRadius: '8px',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.3s ease',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.border = '1px solid var(--accent-gold)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(124,77,255,0.3) 0%, rgba(255,170,0,0.25) 100%)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.border = '1px solid rgba(255,170,0,0.3)';
+                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(124,77,255,0.2) 0%, rgba(255,170,0,0.15) 100%)';
+              }}
+            >
+              <Wand2 size={14} color="var(--accent-gold)" /> ⚡ CARGAR SIMULACIÓN DEMO (UN CLICK)
+            </button>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
               onClick={() => fileInputRef.current?.click()}

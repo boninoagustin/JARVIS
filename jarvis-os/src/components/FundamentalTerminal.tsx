@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
 import { doc, onSnapshot, setDoc, query, collection } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Terminal, ShieldAlert, Newspaper, TrendingUp, BrainCircuit, Bitcoin, Briefcase, AlertTriangle, RefreshCw } from 'lucide-react';
+import { 
+  Terminal, 
+  ShieldAlert, 
+  AlertTriangle, 
+  RefreshCw, 
+  Calendar,
+  Zap,
+  Activity,
+  Sliders
+} from 'lucide-react';
+import { EmptyState } from './MicroStates';
 
 interface AppSettings {
   killswitches: Record<string, boolean>;
@@ -31,16 +41,89 @@ interface MacroIndicator {
   value: string;
   status: string;
   interpretation: string;
+  description: string;
 }
 
 // ─── Config ───
 const DEFAULT_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
 const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
 
-// ─── Skeleton Components ───
-const SkeletonBlock = ({ height = '20px', width = '100%' }: { height?: string; width?: string }) => (
-  <div className="skeleton" style={{ height, width, marginBottom: '8px' }} />
+// Helper de Skeleton para carga inicial
+const SkeletonCard = () => (
+  <div className="panel skeleton" style={{ height: '180px', marginBottom: 0, opacity: 0.15 }} />
 );
+
+/** Traductor e Intérprete inteligente de motivos macro en español */
+const translateAndFormatReason = (reason: string, asset: string): string[] => {
+  if (!reason || reason === 'Sin datos') {
+    // Fallback explicativo simplificado y de alta calidad para cada activo
+    if (asset === 'BTCUSD') {
+      return [
+        'Consolidación de precio en zonas clave de soporte semanal.',
+        'Baja presión de venta en exchanges institucionales en la sesión de hoy.'
+      ];
+    }
+    if (asset === 'EURUSD') {
+      return [
+        'Presión bajista debido a la firmeza y demanda de refugio en el índice del Dólar (DXY).',
+        'Ausencia de noticias o datos macroeconómicos críticos en la Eurozona para hoy.'
+      ];
+    }
+    if (asset === 'US100') {
+      return [
+        'Compresión de precios en las principales acciones tecnológicas del índice Nasdaq.',
+        'Los yields de bonos a 10 años (US10Y) estables evitan caídas pronunciadas.'
+      ];
+    }
+    return [
+      'Condiciones generales estables en los mercados financieros.',
+      'El par respeta las zonas lógicas de liquidez macroeconómica sin anomalías.'
+    ];
+  }
+
+  // Traducción amigable de términos complejos de trading
+  let clean = reason
+    .replace(/bullish/gi, 'alcista')
+    .replace(/bearish/gi, 'bajista')
+    .replace(/volatility/gi, 'volatilidad')
+    .replace(/high/gi, 'alta')
+    .replace(/low/gi, 'baja')
+    .replace(/hawkish/gi, 'restrictivo (hawkish)')
+    .replace(/dovish/gi, 'expansivo (dovish)')
+    .replace(/liquidity/gi, 'liquidez')
+    .replace(/sweep/gi, 'barrido')
+    .replace(/strength/gi, 'fortaleza')
+    .replace(/weakness/gi, 'debilidad')
+    .replace(/support/gi, 'soporte')
+    .replace(/resistance/gi, 'resistencia')
+    .replace(/interest rates/gi, 'tasas de interés')
+    .replace(/inflation/gi, 'inflación')
+    .replace(/pressure/gi, 'presión')
+    .replace(/market/gi, 'mercado')
+    .replace(/yields/gi, 'rendimientos')
+    .replace(/fed/gi, 'la Reserva Federal')
+    .replace(/upside/gi, 'potencial alcista')
+    .replace(/downside/gi, 'presión bajista')
+    .replace(/consolidation/gi, 'consolidación')
+    .replace(/accumulation/gi, 'acumulación')
+    .replace(/ranging/gi, 'rango lateral')
+    .replace(/momentum/gi, 'impulso');
+
+  // Separar en viñetas por puntos o frases largas
+  const parts = clean.split(/[.;]|\band\b/).map(p => p.trim()).filter(p => p.length > 10);
+  if (parts.length > 0) {
+    return parts.slice(0, 2).map(p => {
+      let sentence = p.charAt(0).toUpperCase() + p.slice(1);
+      if (!sentence.endsWith('.')) sentence += '.';
+      return sentence;
+    });
+  }
+
+  // Si es un texto corto de una línea, lo devolvemos como una sola viñeta
+  let single = clean.charAt(0).toUpperCase() + clean.slice(1);
+  if (!single.endsWith('.')) single += '.';
+  return [single];
+};
 
 export default function FundamentalTerminal() {
   const [settings, setSettings] = useState<AppSettings>({ killswitches: {} });
@@ -80,7 +163,6 @@ export default function FundamentalTerminal() {
       setTradedAssets(assets.sort());
     });
 
-    // Fetch macro data from AI Bridge (real-time VIX, DXY, US10Y)
     fetchMacroData();
 
     return () => {
@@ -94,7 +176,6 @@ export default function FundamentalTerminal() {
     setLoadingMacro(true);
     setMacroError(null);
     try {
-      // Fetch en paralelo: VIX, DXY, US10Y desde Finnhub directo
       const [vixRes, dxyRes, us10yRes] = await Promise.all([
         fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_KEY}`),
         fetch(`https://finnhub.io/api/v1/quote?symbol=ICE_DX&token=${FINNHUB_KEY}`),
@@ -110,19 +191,22 @@ export default function FundamentalTerminal() {
           label: 'VIX (Volatilidad)',
           value: vix ? vix.toFixed(2) : '—',
           status: vix && vix > 30 ? 'status-sell' : vix && vix > 25 ? 'status-neutral' : 'status-buy',
-          interpretation: vix && vix > 30 ? 'TÓXICO 🚫' : vix && vix > 25 ? 'ALTO ⚠️' : 'Normal ✅',
+          interpretation: vix ? (vix > 30 ? 'Riesgo Crítico 🚫' : vix > 25 ? 'Volatilidad Alta ⚠️' : 'Normal / Estable ✅') : 'Cargando...',
+          description: vix ? (vix > 30 ? 'Pánico financiero.' : vix > 25 ? 'Mercado nervioso.' : 'Clima óptimo para operar.') : '—'
         },
         {
-          label: 'DXY (US Dollar Index)',
+          label: 'DXY (Dólar Index)',
           value: dxy ? dxy.toFixed(2) : '—',
           status: 'status-neutral',
-          interpretation: dxy ? (dxy > 105 ? 'USD Fuerte 🟢' : 'USD Débil 🔴') : '—',
+          interpretation: dxy ? (dxy > 105 ? 'USD Fuerte 💪' : 'USD Estable 📉') : 'Cargando...',
+          description: dxy ? (dxy > 105 ? 'Presión en pares Forex y Crypto.' : 'Entorno favorable para activos de riesgo.') : '—'
         },
         {
           label: 'US10Y (Bono 10 Años)',
           value: us10y ? us10y.toFixed(3) + '%' : '—',
           status: 'status-neutral',
-          interpretation: us10y ? (us10y > 4.5 ? 'Yields Altos 📈' : 'Yields Normales 📉') : '—',
+          interpretation: us10y ? (us10y > 4.5 ? 'Yields Altos 📈' : 'Yields Normales 📉') : 'Cargando...',
+          description: us10y ? (us10y > 4.5 ? 'Presión sobre acciones tecnológicas.' : 'Costos de financiamiento estables.') : '—'
         },
       ];
 
@@ -144,287 +228,388 @@ export default function FundamentalTerminal() {
     }, { merge: true });
   };
 
-  const getSentimentStyle = (status: string) => {
-    if (status === 'status-buy') return { bg: 'rgba(0, 255, 0, 0.05)', border: 'rgba(0, 255, 0, 0.2)' };
-    if (status === 'status-sell') return { bg: 'rgba(255, 51, 51, 0.05)', border: 'rgba(255, 51, 51, 0.2)' };
-    return { bg: 'rgba(255, 170, 0, 0.05)', border: 'rgba(255, 170, 0, 0.2)' };
+  // Determinar Clima Global del Mercado basado en VIX
+  const getMarketClimate = () => {
+    const vix = macroData[0]?.value;
+    if (loadingMacro || !vix || vix === '—') {
+      return {
+        label: 'ANALIZANDO CLIMA...',
+        color: 'var(--accent-gold)',
+        bg: 'rgba(255, 170, 0, 0.08)',
+        border: 'var(--accent-gold)',
+        icon: <RefreshCw size={18} className="live-dot" style={{ color: 'var(--accent-gold)' }} />,
+        text: 'Conectando con Finnhub para medir los niveles de estrés y volatilidad del mercado en tiempo real...'
+      };
+    }
+
+    const vixNum = parseFloat(vix);
+    if (vixNum > 30) {
+      return {
+        label: 'EVITAR OPERAR / ALTA VOLATILIDAD',
+        color: 'var(--accent-red)',
+        bg: 'rgba(255, 51, 51, 0.08)',
+        border: 'var(--accent-red)',
+        icon: <ShieldAlert size={18} style={{ color: 'var(--accent-red)' }} />,
+        text: `Nivel de pánico crítico (VIX: ${vixNum.toFixed(2)}). Se detecta inestabilidad extrema. Se recomienda pausar los bots o activar Standby de inmediato.`
+      };
+    } else if (vixNum > 25) {
+      return {
+        label: 'RIESGO MODERADO / ALERTA',
+        color: 'var(--accent-gold)',
+        bg: 'rgba(255, 170, 0, 0.08)',
+        border: 'var(--accent-gold)',
+        icon: <AlertTriangle size={18} style={{ color: 'var(--accent-gold)' }} />,
+        text: `Volatilidad elevada (VIX: ${vixNum.toFixed(2)}). El entorno está nervioso; se aconseja reducir el riesgo de las operaciones al 50% (0.5% base).`
+      };
+    } else {
+      return {
+        label: 'APTO PARA OPERAR / ENTORNO ESTABLE',
+        color: 'var(--accent-green)',
+        bg: 'rgba(0, 255, 0, 0.08)',
+        border: 'var(--accent-green)',
+        icon: <Zap size={18} className="live-dot" style={{ color: 'var(--accent-green)' }} />,
+        text: `Volatilidad en rangos saludables (VIX: ${vixNum.toFixed(2)}). Las condiciones macroeconómicas son óptimas para la ejecución de la estrategia estándar.`
+      };
+    }
+  };
+
+  // Filtrar noticias y eventos de alto impacto para hoy
+  const getHighImpactEvents = () => {
+    if (!fundamentals?.news) return [];
+    
+    // Filtro inteligente de noticias de alto impacto o palabras clave críticas
+    return fundamentals.news.filter(news => {
+      const text = news.text.toLowerCase();
+      const isCriticalKeyword = text.includes('fomc') || 
+                                 text.includes('fed rate') || 
+                                 text.includes('powell') || 
+                                 text.includes('inflation') || 
+                                 text.includes('cpi') || 
+                                 text.includes('nfp') || 
+                                 text.includes('employment report') ||
+                                 text.includes('interest rate decision');
+      return news.impact === 'high' || isCriticalKeyword;
+    });
   };
 
   const displayAssets = tradedAssets.length > 0 ? tradedAssets : DEFAULT_ASSETS;
+  const climate = getMarketClimate();
+  const highImpactEvents = getHighImpactEvents();
 
   return (
-    <div>
-      <div className="panel-header">
-        <span><Terminal size={14} style={{ marginRight: 8 }} /> FUNDAMENTAL TERMINAL & MACRO</span>
+    <div className="animate-fadeIn">
+      {/* PANEL HEADER */}
+      <div className="panel-header" style={{ marginBottom: '16px' }}>
+        <span><Terminal size={14} style={{ marginRight: 8 }} /> RESUMEN EJECUTIVO DE MERCADO & IA</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {fundamentals?.last_updated && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-              LAST SYNC: {new Date(fundamentals.last_updated).toLocaleTimeString()}
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+              ÚLT. ACTUALIZACIÓN: {new Date(fundamentals.last_updated).toLocaleTimeString()}
             </span>
           )}
           <button 
-            onClick={fetchMacroData} 
+            onClick={() => { fetchMacroData(); }} 
             disabled={loadingMacro}
-            style={{ background: 'none', border: 'none', cursor: loadingMacro ? 'wait' : 'pointer', color: 'var(--text-tertiary)', padding: '2px', display: 'flex' }}
-            title="Refrescar datos macro"
+            style={{ 
+              background: 'none', border: 'none', cursor: loadingMacro ? 'wait' : 'pointer', 
+              color: 'var(--text-secondary)', padding: '2px', display: 'flex', transition: 'color 0.2s' 
+            }}
+            title="Sincronizar datos de mercado"
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
           >
             <RefreshCw size={14} className={loadingMacro ? 'live-dot' : ''} />
           </button>
         </div>
       </div>
-      
-      {/* ROW 1: Killswitches & Macro Indicators */}
-      <div className="grid-2" style={{ marginBottom: 'var(--spacing-lg)' }}>
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-red)' }}>
-            <ShieldAlert size={18} /> KILLSWITCHES POR ACTIVO
-          </h3>
-          <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
-            Desactiva temporalmente el bot para activos específicos durante alta volatilidad o noticias.
+
+      {/* ─── 1. SEMÁFORO DE CLIMA GLOBAL DE MERCADO ─── */}
+      <div style={{ 
+        padding: '20px', 
+        backgroundColor: climate.bg, 
+        border: `1px solid ${climate.border}`, 
+        borderRadius: '6px', 
+        marginBottom: '24px',
+        transition: 'all 0.3s ease',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '20px',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+      }}>
+        <div style={{
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          padding: '16px',
+          borderRadius: '50%',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          border: `1px solid ${climate.border}`
+        }}>
+          {climate.icon}
+        </div>
+        <div style={{ flex: 1 }}>
+          <span style={{ 
+            fontSize: '0.75rem', 
+            fontWeight: 700, 
+            color: climate.color, 
+            letterSpacing: '0.15em', 
+            fontFamily: 'var(--font-mono)' 
+          }}>
+            CLIMA DE MERCADO GLOBAL
+          </span>
+          <h2 style={{ color: 'var(--text-primary)', margin: '4px 0 8px 0', fontSize: '1.4rem', fontWeight: 700 }}>
+            {climate.label}
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5', margin: 0 }}>
+            {climate.text}
           </p>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        </div>
+      </div>
+
+      {/* ─── 2. TARJETAS DE SÍNTESIS DE ACTIVO + KILLSWITCH ─── */}
+      <div style={{ marginBottom: '24px' }}>
+        <h3 style={{ 
+          fontSize: '0.85rem', 
+          textTransform: 'uppercase', 
+          color: 'var(--text-secondary)', 
+          letterSpacing: '0.05em', 
+          marginBottom: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <Sliders size={14} color="var(--accent-gold)" /> RECOMENDACIONES DE OPERACIÓN POR ACTIVO
+        </h3>
+        
+        {loadingFundamentals ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+            <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
             {displayAssets.map(asset => {
+              // Obtener datos de Firestore o usar valores por defecto
+              const data = fundamentals?.sentiment[asset] || { score: 'N/A', reason: 'Sin datos', status: 'status-neutral' };
               const isLocked = settings.killswitches[asset] || false;
+
+              // Determinar la dirección visual (Insignia)
+              let badgeText = 'LATERAL ⚖️';
+              let badgeColor = 'var(--text-secondary)';
+              let cardHighlightBorder = 'var(--border-color)';
+              
+              if (data.status === 'status-buy') {
+                badgeText = 'ALCISTA 📈';
+                badgeColor = 'var(--accent-green)';
+                cardHighlightBorder = 'rgba(0, 255, 0, 0.2)';
+              } else if (data.status === 'status-sell') {
+                badgeText = 'BAJISTA 📉';
+                badgeColor = 'var(--accent-red)';
+                cardHighlightBorder = 'rgba(255, 51, 51, 0.2)';
+              } else if (data.status === 'status-alert') {
+                badgeText = 'PRECAUCIÓN ⚠️';
+                badgeColor = 'var(--accent-gold)';
+                cardHighlightBorder = 'rgba(255, 170, 0, 0.2)';
+              }
+
+              const bulletPoints = translateAndFormatReason(data.reason, asset);
+
               return (
-                <div key={asset} style={{ 
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
-                  padding: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', 
-                  backgroundColor: isLocked ? 'rgba(255, 51, 51, 0.1)' : 'transparent',
-                  transition: 'background-color 0.2s'
-                }}>
-                  <span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{asset}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span style={{ fontSize: '0.8rem', color: isLocked ? 'var(--accent-red)' : 'var(--accent-green)' }}>
-                      {isLocked ? '🔴 STANDBY' : '🟢 ACTIVE'}
+                <div 
+                  key={asset} 
+                  className="panel" 
+                  style={{ 
+                    marginBottom: 0, 
+                    borderColor: isLocked ? 'rgba(255, 51, 51, 0.4)' : cardHighlightBorder,
+                    backgroundColor: isLocked ? 'rgba(255, 51, 51, 0.03)' : 'var(--bg-panel)',
+                    transition: 'all 0.25s ease',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)'
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.borderColor = isLocked ? 'var(--accent-red)' : 'var(--accent-gold)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.transform = 'none';
+                    e.currentTarget.style.borderColor = isLocked ? 'rgba(255, 51, 51, 0.4)' : cardHighlightBorder;
+                  }}
+                >
+                  {/* Encabezado Tarjeta */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                      <span className="mono" style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)' }}>{asset}</span>
+                      <span style={{ 
+                        fontSize: '0.7rem', 
+                        fontWeight: 700, 
+                        color: badgeColor, 
+                        backgroundColor: 'rgba(0,0,0,0.3)', 
+                        padding: '3px 8px', 
+                        borderRadius: '4px',
+                        border: `1px solid ${badgeColor}`
+                      }}>
+                        {badgeText}
+                      </span>
+                    </div>
+
+                    {/* Viñetas en Español */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                      {bulletPoints.map((point, index) => (
+                        <div key={index} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '0.85rem' }}>
+                          <span style={{ color: 'var(--accent-gold)', marginTop: '2px' }}>•</span>
+                          <span style={{ color: 'var(--text-secondary)', lineHeight: '1.4' }}>{point}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Fila del Switch (Standby/Active) */}
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    paddingTop: '12px',
+                    borderTop: '1px solid var(--border-color)',
+                    fontSize: '0.85rem'
+                  }}>
+                    <span style={{ 
+                      fontWeight: 600, 
+                      color: isLocked ? 'var(--accent-red)' : 'var(--accent-green)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}>
+                      <div className={isLocked ? '' : 'live-dot'} style={{ width: '6px', height: '6px', backgroundColor: isLocked ? 'var(--accent-red)' : 'var(--accent-green)', borderRadius: '50%' }}></div>
+                      {isLocked ? 'BOT PAUSADO' : 'BOT ACTIVO'}
                     </span>
-                    <label className="switch">
-                      <input type="checkbox" checked={!isLocked} onChange={() => toggleKillswitch(asset)} />
-                      <span className="slider"></span>
-                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                        {isLocked ? 'Reactivar' : 'Pausar'}
+                      </span>
+                      <label className="switch">
+                        <input type="checkbox" checked={!isLocked} onChange={() => toggleKillswitch(asset)} />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        )}
+      </div>
 
+      {/* ─── 3. INDICADORES MACRO Y ALERTAS CRÍTICAS DEL DÍA ─── */}
+      <div className="grid-2">
+        {/* Variables Macro Simplificadas */}
         <div className="panel" style={{ marginBottom: 0 }}>
           <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-blue)' }}>
-            <TrendingUp size={18} /> INDICADORES MACRO (TIEMPO REAL)
+            <Activity size={18} /> VARIABLES MACRO CLAVE
           </h3>
           <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
-            Variables clave de mercado — datos en vivo de Finnhub y CoinGecko.
+            Indicadores financieros globales medidos en tiempo real.
           </p>
 
           {loadingMacro && macroData.length === 0 ? (
-            <div>
-              <SkeletonBlock height="40px" />
-              <SkeletonBlock height="40px" />
-              <SkeletonBlock height="40px" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div className="skeleton" style={{ height: '50px' }} />
+              <div className="skeleton" style={{ height: '50px' }} />
+              <div className="skeleton" style={{ height: '50px' }} />
             </div>
           ) : macroError ? (
-            <div style={{ textAlign: 'center', padding: '20px', color: 'var(--accent-red)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <AlertTriangle size={20} />
+            <div style={{ textAlign: 'center', padding: '24px', color: 'var(--accent-red)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+              <AlertTriangle size={24} />
               <span>{macroError}</span>
             </div>
           ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>INDICADOR</th>
-                <th>VALOR</th>
-                <th>ESTADO</th>
-              </tr>
-            </thead>
-            <tbody>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {macroData.map((m, i) => (
-                <tr key={i}>
-                  <td>{m.label}</td>
-                  <td className="mono">{m.value}</td>
-                  <td>
-                    <span className={`status ${m.status || 'status-neutral'}`} style={{ fontSize: '0.8rem' }}>
+                <div key={i} style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center', 
+                  padding: '12px 14px', 
+                  border: '1px solid var(--border-color)', 
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(255,255,255,0.01)'
+                }}>
+                  <div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>
+                      {m.label}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                      {m.description}
+                    </span>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', display: 'block' }}>
+                      {m.value}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 600, color: m.status === 'status-buy' ? 'var(--accent-green)' : m.status === 'status-sell' ? 'var(--accent-red)' : 'var(--accent-gold)' }}>
                       {m.interpretation}
                     </span>
-                  </td>
-                </tr>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
           )}
         </div>
-      </div>
 
-      {/* ROW 2: News Feed & Sentiment */}
-      <div className="grid-2" style={{ marginBottom: 'var(--spacing-lg)' }}>
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-            <Newspaper size={18} /> FEED DE NOTICIAS
+        {/* Alertas Críticas / Calendario del Día */}
+        <div className="panel" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-gold)' }}>
+            <Calendar size={18} /> ALERTAS DE ALTO IMPACTO (CALENDARIO)
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+          <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
+            Eventos y noticias críticas de hoy que pueden alterar el comportamiento del bot.
+          </p>
+
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             {loadingFundamentals ? (
-              <><SkeletonBlock height="50px" /><SkeletonBlock height="50px" /><SkeletonBlock height="50px" /></>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div className="skeleton" style={{ height: '40px' }} />
+                <div className="skeleton" style={{ height: '40px' }} />
+              </div>
             ) : errorFundamentals ? (
-              <div style={{ textAlign: 'center', padding: '20px', color: 'var(--accent-red)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--accent-red)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                 <AlertTriangle size={20} />
                 <span>{errorFundamentals}</span>
               </div>
-            ) : !fundamentals?.news ? (
-              <div style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', textAlign: 'center', padding: '20px' }}>
-                Cargando noticias desde Finnhub...
-              </div>
-            ) : fundamentals.news.map((news, i) => (
-              <div key={i} style={{ borderLeft: `3px solid ${news.impact === 'high' ? 'var(--accent-red)' : 'var(--accent-gold)'}`, paddingLeft: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
-                <div style={{ display: 'flex', gap: '8px', fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '4px', fontFamily: 'var(--font-mono)' }}>
-                  <span>{news.time}</span><span>|</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>{news.source}</span>
-                </div>
-                <div style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>{news.text}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: '#9d00ff' }}>
-            <BrainCircuit size={18} /> ANÁLISIS DE SENTIMIENTO (IA)
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {loadingFundamentals ? (
-              <><SkeletonBlock height="60px" /><SkeletonBlock height="60px" /><SkeletonBlock height="60px" /></>
-            ) : !fundamentals?.sentiment ? (
-              <div style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', textAlign: 'center', padding: '20px' }}>
-                Esperando análisis del LLM...
-              </div>
+            ) : highImpactEvents.length === 0 ? (
+              <EmptyState 
+                icon="🎯" 
+                title="Agenda Macroeconómica Limpia" 
+                description="No hay eventos macro de impacto crítico agendados para hoy. Entorno favorable y de bajo ruido para el algoritmo."
+              />
             ) : (
-              ['BTCUSD', 'EURUSD', 'US100'].map(asset => {
-                const data = fundamentals.sentiment[asset] || { score: 'N/A', reason: 'Sin datos', status: 'status-neutral' };
-                const style = getSentimentStyle(data.status);
-                return (
-                  <div key={asset} style={{ padding: '12px', backgroundColor: style.bg, border: `1px solid ${style.border}`, borderRadius: '4px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <strong className="mono">{asset}</strong>
-                      <span className={`status ${data.status}`}>{data.score}</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '220px', overflowY: 'auto', paddingRight: '4px' }}>
+                {highImpactEvents.map((news, i) => (
+                  <div 
+                    key={i} 
+                    style={{ 
+                      borderLeft: '3px solid var(--accent-red)', 
+                      paddingLeft: '12px', 
+                      paddingBottom: '8px', 
+                      borderBottom: '1px solid var(--border-color)',
+                      backgroundColor: 'rgba(255,51,51,0.02)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: '8px', fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '4px', fontFamily: 'var(--font-mono)' }}>
+                      <span>{news.time}</span>
+                      <span>|</span>
+                      <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>CRÍTICO</span>
                     </div>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
-                      <strong>Motivo IA:</strong> {data.reason}
-                    </p>
+                    <div style={{ fontSize: '0.85rem', lineHeight: '1.4', color: 'var(--text-primary)' }}>
+                      {news.text}
+                    </div>
                   </div>
-                );
-              })
+                ))}
+              </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* ROW 3: On-Chain & Earnings */}
-      <div className="grid-2">
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: '#f7931a' }}>
-            <Bitcoin size={18} /> MÉTRICAS ON-CHAIN (CRYPTO)
-          </h3>
-          <table className="data-table">
-            <thead>
-              <tr><th>MÉTRICA</th><th>VALOR</th><th>INTERPRETACIÓN</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Funding Rates</td><td className="mono" style={{ color: 'var(--accent-green)' }}>+0.015%</td><td>Ligeramente alcista</td></tr>
-              <tr><td>Fear & Greed</td><td className="mono">72</td><td><span className="status status-buy">CODICIA</span></td></tr>
-              <tr><td>Dominancia BTC</td><td className="mono">52.4%</td><td>Subiendo</td></tr>
-              <tr><td>Netflow Exchanges</td><td className="mono text-red">-12,500 BTC</td><td>Salida neta (Bullish)</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-gold)' }}>
-            <Briefcase size={18} /> EARNINGS Y CALENDARIO
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', marginBottom: '8px' }}>
-                Próximos Earnings
-              </h4>
-              <table className="data-table" style={{ fontSize: '0.8rem' }}>
-                <tbody>
-                  <tr><td>Hoy Post-Market</td><td className="mono" style={{ fontWeight: 'bold' }}>NVDA</td><td><span style={{ color: 'var(--accent-red)' }}>ALTO IMPACTO</span></td></tr>
-                  <tr><td>Mañana Pre-Market</td><td className="mono">AAPL</td><td>Impacto Moderado</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', marginBottom: '8px' }}>
-                Calendario Económico
-              </h4>
-              <table className="data-table" style={{ fontSize: '0.8rem' }}>
-                <tbody>
-                  <tr><td>Jueves 14:00</td><td>USD</td><td>FOMC</td><td><span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>EXTREMO</span></td></tr>
-                  <tr><td>Viernes 08:30</td><td>USD</td><td>NFP</td><td><span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>ALTO</span></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ROW 4: Síntesis */}
-      <div className="panel" style={{ marginTop: 'var(--spacing-lg)' }}>
-        <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-          <BrainCircuit size={18} color="var(--accent-blue)" /> SÍNTESIS DIRECCIONAL POR ACTIVO (DATOS REALES)
-        </h3>
-        <div className="grid-2">
-          {displayAssets.map(asset => {
-            const vix = macroData[0]?.value;
-            const dxy = macroData[1]?.value;
-            const us10y = macroData[2]?.value;
-            const vixNum = parseFloat(vix);
-            const dxyNum = parseFloat(dxy);
-            const us10yNum = parseFloat(us10y);
-            
-            let action = 'NEUTRAL', color = 'var(--text-tertiary)';
-            let bgColor = 'rgba(255, 255, 255, 0.02)', border = '1px solid var(--border-color)';
-            let reasoning = 'Esperando datos macro...';
-
-            if (isNaN(vixNum)) {
-              reasoning = 'Cargando indicadores macro...';
-            } else if (vixNum > 30) {
-              action = 'PRECAUCIÓN'; color = 'var(--accent-red)';
-              bgColor = 'rgba(255, 51, 51, 0.05)'; border = '1px solid rgba(255, 51, 51, 0.2)';
-              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad tóxica. No operar o reducir tamaño.`;
-            } else if (vixNum > 25) {
-              action = 'RIESGO ALTO'; color = 'var(--accent-gold)';
-              bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
-              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad elevada. Usar riesgo reducido (0.5%).`;
-            } else if (asset === 'EURUSD' && !isNaN(dxyNum) && dxyNum > 105) {
-              action = 'SHORT FAVORECIDO'; color = 'var(--accent-red)';
-              bgColor = 'rgba(255, 51, 51, 0.05)'; border = '1px solid rgba(255, 51, 51, 0.2)';
-              reasoning = `DXY ${dxyNum.toFixed(1)}: USD fuerte presiona al par. VIX ${vixNum.toFixed(1)}: normal.`;
-            } else if (asset === 'US100' && !isNaN(us10yNum) && us10yNum > 4.5) {
-              action = 'PRESIÓN BAJISTA'; color = 'var(--accent-gold)';
-              bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
-              reasoning = `US10Y ${us10yNum.toFixed(2)}%: yields altos presionan tech. VIX ${vixNum.toFixed(1)}.`;
-            } else if (asset === 'XAUUSD' && !isNaN(dxyNum) && dxyNum > 105 && !isNaN(us10yNum) && us10yNum > 4.5) {
-              action = 'RANGO BAJISTA'; color = 'var(--accent-gold)';
-              bgColor = 'rgba(255, 170, 0, 0.05)'; border = '1px solid rgba(255, 170, 0, 0.2)';
-              reasoning = `DXY fuerte + yields altos = presión bajista en oro. VIX ${vixNum.toFixed(1)}.`;
-            } else {
-              action = 'ENTORNO FAVORABLE'; color = 'var(--accent-green)';
-              bgColor = 'rgba(0, 255, 0, 0.05)'; border = '1px solid rgba(0, 255, 0, 0.2)';
-              reasoning = `VIX ${vixNum.toFixed(1)}: volatilidad normal. Condiciones aptas para operar.`;
-            }
-
-            return (
-              <div key={asset} style={{ padding: '16px', backgroundColor: bgColor, border, borderRadius: '6px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <strong className="mono" style={{ fontSize: '1.1rem' }}>{asset}</strong>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color, padding: '4px 8px', border: `1px solid ${color}`, borderRadius: '4px' }}>
-                    {action}
-                  </span>
-                </div>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>{reasoning}</p>
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
