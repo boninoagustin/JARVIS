@@ -31,6 +31,11 @@ interface SessionHistory {
     fixedRR: number;
     oteEntryPercent: number;
     entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+    maxDailyLossR?: number;
+    dailyProfitTargetR?: number;
+    maxConsecutiveLosses?: number;
+    maxTradesPerDay?: number;
+    trailingDrawdownR?: number;
   };
 }
 
@@ -60,6 +65,7 @@ export default function BacktestingPanel() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
+  const [optimizeSwitches, setOptimizeSwitches] = useState(false);
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
@@ -92,6 +98,11 @@ export default function BacktestingPanel() {
       setEntryTrigger(config.entryTrigger);
       setMinBuyPoints(config.minBuyPoints);
       setMinSellPoints(config.minSellPoints);
+      setMaxDailyLossR(config.maxDailyLossR || 0);
+      setDailyProfitTargetR(config.dailyProfitTargetR || 0);
+      setMaxConsecutiveLosses(config.maxConsecutiveLosses || 0);
+      setMaxTradesPerDay(config.maxTradesPerDay || 0);
+      setTrailingDrawdownR(config.trailingDrawdownR || 0);
       setResult(optResult);
       setTrades(optResult.trades);
     }
@@ -320,11 +331,11 @@ export default function BacktestingPanel() {
             const c = combinations[i];
             const config = { 
                 ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
-                maxDailyLossR: maxDailyLossR || undefined,
-                dailyProfitTargetR: dailyProfitTargetR || undefined,
-                maxConsecutiveLosses: maxConsecutiveLosses || undefined,
-                maxTradesPerDay: maxTradesPerDay || undefined,
-                trailingDrawdownR: trailingDrawdownR || undefined,
+                maxDailyLossR: optimizeSwitches ? undefined : (maxDailyLossR || undefined),
+                dailyProfitTargetR: optimizeSwitches ? undefined : (dailyProfitTargetR || undefined),
+                maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
+                maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
+                trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
             };
             const res = runBacktest(logs, config);
             
@@ -349,6 +360,77 @@ export default function BacktestingPanel() {
         if (endIndex < combinations.length) {
             setTimeout(() => processChunk(endIndex), 20);
         } else if (Object.keys(bestData).length > 0) {
+            // PASS 2: If optimizeSwitches is true, optimize killswitches for each session!
+            if (optimizeSwitches) {
+                const ksMaxDailyLoss = [0, 1.0, 2.0, 3.0];
+                const ksDailyProfit = [0, 2.0, 4.0, 6.0];
+                const ksMaxConsLosses = [0, 2, 3, 4];
+                const ksMaxTrades = [0, 2, 3, 5];
+                const ksTrailDD = [0, 2.0, 4.0];
+
+                const ksCombinations: {
+                    maxDailyLossR?: number,
+                    dailyProfitTargetR?: number,
+                    maxConsecutiveLosses?: number,
+                    maxTradesPerDay?: number,
+                    trailingDrawdownR?: number
+                }[] = [];
+
+                for (const mdl of ksMaxDailyLoss) {
+                    for (const dpt of ksDailyProfit) {
+                        for (const mcl of ksMaxConsLosses) {
+                            for (const mt of ksMaxTrades) {
+                                for (const tdd of ksTrailDD) {
+                                    ksCombinations.push({
+                                        maxDailyLossR: mdl || undefined,
+                                        dailyProfitTargetR: dpt || undefined,
+                                        maxConsecutiveLosses: mcl || undefined,
+                                        maxTradesPerDay: mt || undefined,
+                                        trailingDrawdownR: tdd || undefined
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // For each session, optimize killswitches using its best config found in Pass 1
+                const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+                sessionsToEval.forEach(s => {
+                    const pass1Result = bestData[s];
+                    if (!pass1Result) return;
+
+                    let bestKsPnl = -Infinity;
+                    let bestKsConfig = pass1Result.config;
+                    let bestKsResult = pass1Result.result;
+
+                    // Run the 768 killswitch combinations
+                    for (const ks of ksCombinations) {
+                        const testConfig = {
+                            ...pass1Result.config,
+                            ...ks
+                        };
+                        const res = runBacktest(logs, testConfig);
+
+                        const sessionTrades = s === 'ALL'
+                            ? res.trades
+                            : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
+                        
+                        const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+                        const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+
+                        if (pnl > bestKsPnl) {
+                            bestKsPnl = pnl;
+                            bestKsConfig = testConfig;
+                            bestKsResult = res;
+                        }
+                    }
+
+                    // Save the best killswitch config + result for this session
+                    bestData[s] = { config: bestKsConfig, result: bestKsResult };
+                });
+            }
+
             setOptimizedSessionResults(bestData);
             
             const currentData = bestData[sessionFilter] || bestData['ALL'];
@@ -363,6 +445,13 @@ export default function BacktestingPanel() {
             setEntryTrigger(bestConfig.entryTrigger);
             setMinBuyPoints(bestConfig.minBuyPoints);
             setMinSellPoints(bestConfig.minSellPoints);
+
+            // Also set killswitch state in the UI so the user sees the optimized values!
+            setMaxDailyLossR(bestConfig.maxDailyLossR || 0);
+            setDailyProfitTargetR(bestConfig.dailyProfitTargetR || 0);
+            setMaxConsecutiveLosses(bestConfig.maxConsecutiveLosses || 0);
+            setMaxTradesPerDay(bestConfig.maxTradesPerDay || 0);
+            setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
@@ -381,12 +470,12 @@ export default function BacktestingPanel() {
             });
             setSelectedSession(session.id);
             setIsRunning(false);
-            toast(`✅ Optimización finalizada para TODAS las sesiones.`, 'success');
+            toast(`✅ Optimización finalizada para TODAS las sesiones (con Killswitches).`, 'success');
         }
     };
     
     setTimeout(() => processChunk(0), 100);
-  }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp]);
+  }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
 
   const filteredTrades = sessionFilter === 'ALL'
     ? trades
@@ -612,6 +701,28 @@ export default function BacktestingPanel() {
               <h4 style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <ShieldAlert size={14} color="var(--accent-red)" /> KILLSWITCHES (0 = APAGADO)
               </h4>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '8px', 
+                marginBottom: '10px', 
+                padding: '6px 8px', 
+                backgroundColor: optimizeSwitches ? 'rgba(212, 175, 55, 0.08)' : 'rgba(255,255,255,0.02)', 
+                borderRadius: '4px',
+                border: '1px dashed ' + (optimizeSwitches ? 'rgba(212, 175, 55, 0.3)' : 'var(--border-color)'),
+                transition: 'all 0.2s ease-in-out'
+              }}>
+                <input 
+                  type="checkbox" 
+                  id="opt-switches" 
+                  checked={optimizeSwitches} 
+                  onChange={e => setOptimizeSwitches(e.target.checked)} 
+                  style={{ cursor: 'pointer', width: '14px', height: '14px', accentColor: 'var(--accent-gold)' }}
+                />
+                <label htmlFor="opt-switches" style={{ fontSize: '0.62rem', color: optimizeSwitches ? 'var(--accent-gold)' : 'var(--text-secondary)', fontWeight: 600, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ⚡ OPTIMIZAR KILLSWITCHES (PASO 2)
+                </label>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
                 <div>
                   <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX DAILY LOSS (R)</label>
