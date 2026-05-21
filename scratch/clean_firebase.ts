@@ -54,14 +54,10 @@ async function deleteConversations() {
 
 async function run() {
     try {
-        await deleteConversations();
+        // Limpiamos únicamente el estado dinámico del radar
         await deleteCollection('radar_states');
-        await deleteCollection('trade_journal');
-        // Reset app_settings but keep the docs structure if needed?
-        // Let's just delete them, the app will recreate with defaults.
-        await deleteCollection('app_settings');
         
-        console.log('[CLEANUP] ✅ Firebase is clean and ready for a fresh start.');
+        console.log('[CLEANUP] ✅ Radar states cleared. Configurations, assets, and killswitches were preserved.');
         process.exit(0);
     } catch (err: any) {
         console.error('[CLEANUP] ❌ Error:', err.message);
@@ -70,3 +66,4 @@ async function run() {
 }
 
 run();
+

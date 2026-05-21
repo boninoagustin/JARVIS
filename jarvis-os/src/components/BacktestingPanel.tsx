@@ -66,6 +66,8 @@ export default function BacktestingPanel() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
+  const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
+  const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
   const [optimizeSwitches, setOptimizeSwitches] = useState(false);
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
@@ -863,13 +865,53 @@ export default function BacktestingPanel() {
         return true;
     });
 
+  const tripleFilteredTrades = doubleFilteredTrades.filter(t => t.points >= scoreFilterMin && t.points <= scoreFilterMax);
+
+  // Analíticas por rango de score basadas en doubleFilteredTrades (antes de filtrar la lista actual por score)
+  const scoreRangesData = (() => {
+    const ranges = [
+      { min: 5, max: 9, label: 'Bajo (5-9 pts)', color: 'var(--accent-red)' },
+      { min: 10, max: 14, label: 'Medio (10-14 pts)', color: 'var(--accent-gold)' },
+      { min: 15, max: 19, label: 'Alto (15-19 pts)', color: '#0088ff' },
+      { min: 20, max: 50, label: 'Premium (20+ pts)', color: 'var(--accent-green)' }
+    ];
+
+    return ranges.map(range => {
+      const rangeTrades = doubleFilteredTrades.filter(t => t.points >= range.min && t.points <= range.max);
+      const closed = rangeTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+      const wins = closed.filter(t => t.result === 'WIN').length;
+      const pnlTotalR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+      const pnlTotalUsd = pnlTotalR * riskUsd;
+      
+      const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
+      
+      let grossProfitUsd = 0, grossLossUsd = 0;
+      closed.forEach(t => {
+        const profitUsd = (t.rMultiple || 0) * riskUsd;
+        if (profitUsd > 0) grossProfitUsd += profitUsd;
+        else grossLossUsd += Math.abs(profitUsd);
+      });
+      const profitFactor = grossLossUsd > 0 ? (grossProfitUsd / grossLossUsd).toFixed(2) : (grossProfitUsd > 0 ? '∞' : '0.00');
+
+      return {
+        ...range,
+        tradesCount: rangeTrades.length,
+        closedCount: closed.length,
+        winRate: wr,
+        pnlR: pnlTotalR.toFixed(1),
+        pnlUsd: pnlTotalUsd.toFixed(2),
+        profitFactor
+      };
+    });
+  })();
+
   // Metrics
   const metrics = (() => {
-    const closed = doubleFilteredTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+    const closed = tripleFilteredTrades.filter(t => t.result && t.result !== 'TIMEOUT');
     const wins = closed.filter(t => t.result === 'WIN').length;
     const losses = closed.filter(t => t.result === 'LOSS').length;
     const be = closed.filter(t => t.result === 'BE').length;
-    const open = doubleFilteredTrades.filter(t => !t.result).length;
+    const open = tripleFilteredTrades.filter(t => !t.result).length;
     
     const pnlTotalUsd = closed.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
     const pnlTotalR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
@@ -935,7 +977,7 @@ export default function BacktestingPanel() {
         wins, losses, be, open, wr, 
         pnlUsd: pnlTotalUsd.toFixed(2), 
         pnlR: pnlTotalR.toFixed(2),
-        count: closed.length, total: doubleFilteredTrades.length, 
+        count: closed.length, total: tripleFilteredTrades.length, 
         maxDDUsd: maxDD.toFixed(2), closed,
         profitFactor, expectancyR, maxConsLosses, avgDuration: formatDuration(avgDurationMin),
         tp1OnlyCount, tp2Count, slCount, beCount
@@ -969,7 +1011,9 @@ export default function BacktestingPanel() {
         exportDate: new Date().toISOString(),
         timeframe: result.startDate + ' -> ' + result.endDate,
         sessionFilter,
-        tradeFilter
+        tradeFilter,
+        scoreFilterMin,
+        scoreFilterMax
       },
       config: {
         minBuyPoints,
@@ -982,7 +1026,7 @@ export default function BacktestingPanel() {
       metrics: {
         ...metrics
       },
-      trades: doubleFilteredTrades
+      trades: tripleFilteredTrades
     };
 
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(downloadData, null, 2));
@@ -993,7 +1037,7 @@ export default function BacktestingPanel() {
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast('✅ Archivo JSON descargado con éxito', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, metrics, doubleFilteredTrades, toast]);
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, metrics, tripleFilteredTrades, scoreFilterMin, scoreFilterMax, toast]);
 
   return (
     <div className="animate-fadeIn">
@@ -1414,6 +1458,40 @@ export default function BacktestingPanel() {
                 </ResponsiveContainer>
               </div>
             )}
+
+            {/* SCORE RANGE BREAKDOWN */}
+            {doubleFilteredTrades.length > 0 && (
+              <div style={{ marginTop: '24px', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                <h4 style={{ marginBottom: '12px', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <TrendingUp size={14} color="var(--accent-gold)" /> DESGLOSE DE CONFLUENCIA POR SCORE
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {scoreRangesData.map(range => {
+                    const isPositive = parseFloat(range.pnlR) >= 0;
+                    return (
+                      <div key={range.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', borderLeft: `3px solid ${range.color}` }}>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>{range.label}</span>
+                          <span style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>{range.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{range.winRate}%</span></span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: parseFloat(range.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(range.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{range.profitFactor}</div>
+                          </div>
+                          <div style={{ textAlign: 'right', minWidth: '60px' }}>
+                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              {isPositive ? '+' : ''}{range.pnlR}R
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             
           </div>
         </div>
@@ -1429,7 +1507,7 @@ export default function BacktestingPanel() {
               </span>
               {trades.length > 0 && (
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                  {doubleFilteredTrades.length}{tradeFilter !== 'ALL' || sessionFilter !== 'ALL' ? `/${trades.length}` : ''} total
+                  {tripleFilteredTrades.length}{tradeFilter !== 'ALL' || sessionFilter !== 'ALL' || scoreFilterMin > 5 || scoreFilterMax < 30 ? `/${trades.length}` : ''} total
                 </span>
               )}
             </h3>
@@ -1475,6 +1553,92 @@ export default function BacktestingPanel() {
                 })}
               </div>
             )}
+            {/* Score Filter */}
+            {trades.length > 0 && (
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '12px', 
+                marginBottom: '16px', 
+                padding: '10px 14px', 
+                backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                borderRadius: '6px',
+                border: '1px solid var(--border-color)',
+                flexWrap: 'wrap'
+              }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  🎯 SCORE FILTRADO:
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '150px' }}>
+                  <input 
+                    type="range" 
+                    min="5" 
+                    max="30" 
+                    value={scoreFilterMin} 
+                    onChange={e => {
+                      const val = Number(e.target.value);
+                      setScoreFilterMin(val);
+                      if (val > scoreFilterMax) setScoreFilterMax(val);
+                    }}
+                    style={{ flex: 1, accentColor: 'var(--accent-gold)', height: '4px', cursor: 'pointer' }} 
+                  />
+                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '60px', textAlign: 'right' }}>
+                    Min: {scoreFilterMin}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '150px' }}>
+                  <input 
+                    type="range" 
+                    min="5" 
+                    max="30" 
+                    value={scoreFilterMax} 
+                    onChange={e => {
+                      const val = Number(e.target.value);
+                      setScoreFilterMax(val);
+                      if (val < scoreFilterMin) setScoreFilterMin(val);
+                    }}
+                    style={{ flex: 1, accentColor: '#0088ff', height: '4px', cursor: 'pointer' }} 
+                  />
+                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0088ff', minWidth: '60px', textAlign: 'right' }}>
+                    Max: {scoreFilterMax}
+                  </span>
+                </div>
+                
+                {/* Pre-sets */}
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {[
+                    { label: 'Todos (5+)', min: 5, max: 30 },
+                    { label: '≥10 pts', min: 10, max: 30 },
+                    { label: '≥15 pts', min: 15, max: 30 },
+                    { label: '≥20 pts', min: 20, max: 30 }
+                  ].map(preset => {
+                    const isActive = scoreFilterMin === preset.min && scoreFilterMax === preset.max;
+                    return (
+                      <button 
+                        key={preset.label}
+                        onClick={() => {
+                          setScoreFilterMin(preset.min);
+                          setScoreFilterMax(preset.max);
+                        }}
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.65rem',
+                          borderRadius: '4px',
+                          border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
+                          backgroundColor: isActive ? 'rgba(255,170,0,0.1)' : 'transparent',
+                          color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
+                          fontWeight: isActive ? 700 : 400,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {trades.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
@@ -1488,7 +1652,7 @@ export default function BacktestingPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {doubleFilteredTrades.map(t => {
+                    {tripleFilteredTrades.map(t => {
                       const dec = getDecimals(ticker);
                       return (
                       <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>

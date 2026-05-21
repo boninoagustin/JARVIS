@@ -75,6 +75,8 @@ interface RadarState {
     lastHeartbeat?: number;       
     activeImpulseBuy?: ImpulseLeg | null;  
     activeImpulseSell?: ImpulseLeg | null; 
+    activeMacroImpulseBuy?: ImpulseLeg | null;  
+    activeMacroImpulseSell?: ImpulseLeg | null; 
     lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
 }
 
@@ -90,6 +92,8 @@ const emptyState = (): RadarState => ({
     lastSniperAlert: 0,
     activeImpulseBuy: null,
     activeImpulseSell: null,
+    activeMacroImpulseBuy: null,
+    activeMacroImpulseSell: null,
     lastGatillo: undefined
 });
 
@@ -387,6 +391,53 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
     
     // 5. Default / Crypto (Treat as Percentage)
     return originPrice * (bufferConfig / 100);
+}
+
+function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number): ImpulseLeg | null {
+    if (!leg) return null;
+
+    // 🧹 Expiración: legs macro duran hasta 24 horas en RAM
+    const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;
+    if (leg.createdAt && (nowMs - leg.createdAt) > MAX_MACRO_LEG_AGE_MS) {
+        console.log(`[FIBO-MACRO] 🧹 Leg MACRO ${leg.dir} expirado por antigüedad.`);
+        return null;
+    }
+
+    let macroInvalidated = false;
+    
+    // Invalida si el precio rompe el origen
+    if (leg.dir === 'BUY' && lowPrice < leg.origin) macroInvalidated = true;
+    else if (leg.dir === 'SELL' && highPrice > leg.origin) macroInvalidated = true;
+
+    if (macroInvalidated) {
+        console.log(`[FIBO-MACRO] 🚫 Leg MACRO ${leg.dir} invalidado por ruptura de origen.`);
+        return null;
+    }
+
+    // Estirar extremo flexible
+    if (leg.dir === 'BUY' && highPrice > leg.extreme) {
+        leg.extreme = highPrice;
+    } else if (leg.dir === 'SELL' && lowPrice < leg.extreme) {
+        leg.extreme = lowPrice;
+    }
+
+    return leg;
+}
+
+function isInsideMacroOteZone(leg: ImpulseLeg | null | undefined, price: number): boolean {
+    if (!leg) return false;
+    const range = Math.abs(leg.extreme - leg.origin);
+    if (range === 0) return false;
+    
+    if (leg.dir === 'BUY') {
+        const oteBtm = leg.extreme - (range * 0.79);
+        const oteTop = leg.extreme - (range * 0.50); // Límite de descuento superior (50%)
+        return price >= oteBtm && price <= oteTop;
+    } else {
+        const oteBtm = leg.extreme + (range * 0.50);
+        const oteTop = leg.extreme + (range * 0.79);
+        return price >= oteBtm && price <= oteTop;
+    }
 }
 
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
@@ -796,6 +847,14 @@ export async function processTradingAlert(alertText: string) {
             const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil || !config.sessionEnabled;
             
             if (!isKillswitched) {
+                // 🗺️ Estirar patas Macro si están activas
+                if (state.activeMacroImpulseBuy) {
+                    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs);
+                }
+                if (state.activeMacroImpulseSell) {
+                    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
+                }
+
                 const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
@@ -1152,6 +1211,27 @@ export async function processTradingAlert(alertText: string) {
                             else state.activeImpulseSell = newLeg;
                         }
                     }
+                } else if (eventTf === '15' || eventTf === '60' || eventTf === '240') {
+                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
+                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
+                    const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice;
+
+                    if (originMatch && actualPrice) {
+                        const newOrigin = parseFloat(originMatch[1]);
+                        const isBuy = currentDirection === 'BUY';
+                        
+                        const newLeg: ImpulseLeg = {
+                            dir: currentDirection as 'BUY' | 'SELL',
+                            origin: newOrigin,
+                            extreme: actualPrice,
+                            createdAt: nowMs,
+                            oteScored: false
+                        };
+                        
+                        if (isBuy) state.activeMacroImpulseBuy = newLeg;
+                        else state.activeMacroImpulseSell = newLeg;
+                        console.log(`[FIBO-MACRO] 🗺️ Creado nuevo ImpulseLeg MACRO (${eventTf}M) ${currentDirection} en ${ticker}: origin=${newOrigin}, extreme=${actualPrice}`);
+                    }
                 }
                 // CHoCH da 3 puntos (fuerte), BOS da 1 punto (continuación)
                 addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1; 
@@ -1371,7 +1451,16 @@ export async function processTradingAlert(alertText: string) {
                 else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') { vwapBonus = 2; activeScore.events.push('VWAP_Premium'); }
 
                 // Sumamos todo el puntaje bruto inicial
-                let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus; 
+                let macroOteBonus = 0;
+                const activeMacroLeg = currentDirection === 'BUY' ? state.activeMacroImpulseBuy : state.activeMacroImpulseSell;
+                if (activeMacroLeg && isInsideMacroOteZone(activeMacroLeg, chExtreme ?? state.lastPrice ?? 0)) {
+                    macroOteBonus = 6; // +6 Puntos de confluencia por OTE macro activa
+                }
+
+                let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus + macroOteBonus;
+                if (macroOteBonus > 0) {
+                    activeScore.events.push('Macro_OTE_Confluence');
+                }
                 let orphanPenalty = 0;
 
                 // 🛡️ 3. BONO ESPACIAL + PENALIZACIONES
@@ -1409,6 +1498,9 @@ export async function processTradingAlert(alertText: string) {
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection} (${triggerType})\n\n`; 
                 confluenceReport += `⚖️ <b>Bono de Alineación Macro:</b> +${baseBiasPoints} Pts\n`;
+                if (macroOteBonus > 0 && activeMacroLeg) {
+                    confluenceReport += `🎯 <b>Confluencia OTE Fractal:</b> +${macroOteBonus} Pts (Precio en OTE Macro [Origin: ${activeMacroLeg.origin.toFixed(5)} | Extreme: ${activeMacroLeg.extreme.toFixed(5)}])\n`;
+                }
                 if (hasSpatialBacking) {
                     const tfLabel = spatialMaxWeight >= 2.0 ? '4H' : spatialMaxWeight >= 1.5 ? '1H' : '15M';
                     confluenceReport += `🗺️ <b>Respaldo Espacial:</b> +${spatialBonus} pts (zona ${tfLabel}, peso ×${spatialMaxWeight})\n`;
