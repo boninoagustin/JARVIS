@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase, Zap } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -37,6 +37,11 @@ interface SessionHistory {
     maxTradesPerDay?: number;
     trailingDrawdownR?: number;
     enabled?: boolean;
+    sessions?: Record<string, {
+      choch: { enabled: boolean; minScore: number };
+      bos: { enabled: boolean; minScore: number };
+      ote: { enabled: boolean; minScore: number };
+    }>;
   };
 }
 
@@ -48,6 +53,60 @@ export default function BacktestingPanel() {
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
   const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('OTE');
+  const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
+    choch: { enabled: boolean; minScore: number };
+    bos: { enabled: boolean; minScore: number };
+    ote: { enabled: boolean; minScore: number };
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem('bt_session_triggers');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      ALL: {
+        choch: { enabled: true, minScore: 5 },
+        bos: { enabled: true, minScore: 10 },
+        ote: { enabled: true, minScore: 8 }
+      },
+      LONDON: {
+        choch: { enabled: true, minScore: 5 },
+        bos: { enabled: true, minScore: 10 },
+        ote: { enabled: true, minScore: 8 }
+      },
+      NY: {
+        choch: { enabled: true, minScore: 5 },
+        bos: { enabled: true, minScore: 10 },
+        ote: { enabled: true, minScore: 8 }
+      },
+      ASIA: {
+        choch: { enabled: true, minScore: 5 },
+        bos: { enabled: true, minScore: 10 },
+        ote: { enabled: true, minScore: 8 }
+      }
+    };
+  });
+
+  const updateSessionTrigger = (
+    session: string,
+    triggerType: 'choch' | 'bos' | 'ote',
+    field: 'enabled' | 'minScore',
+    value: any
+  ) => {
+    setSessionTriggers(prev => {
+      const next = {
+        ...prev,
+        [session]: {
+          ...prev[session],
+          [triggerType]: {
+            ...prev[session][triggerType],
+            [field]: value
+          }
+        }
+      };
+      localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+      return next;
+    });
+  };
   const [riskUsd, setRiskUsd] = useState(50);
   const [maxDailyLossR, setMaxDailyLossR] = useState(0);
   const [dailyProfitTargetR, setDailyProfitTargetR] = useState(0);
@@ -154,6 +213,7 @@ export default function BacktestingPanel() {
         maxTradesPerDay,
         trailingDrawdownR,
         enabled: enabled,
+        sessions: sessionTriggers,
         updatedAt: new Date().toISOString()
       }, { merge: true });
       toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
@@ -296,6 +356,7 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
+        sessions: sessionTriggers,
       }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
@@ -314,7 +375,10 @@ export default function BacktestingPanel() {
         id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
         tradeData: res.trades,
-        config: { minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger }
+        config: { 
+          minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger,
+          sessions: sessionTriggers,
+        }
       };
       setSessions(prev => {
         const next = [session, ...prev].slice(0, 20);
@@ -324,7 +388,7 @@ export default function BacktestingPanel() {
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
 
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -382,11 +446,14 @@ export default function BacktestingPanel() {
             const wins = closed.filter(t => t.result === 'WIN').length;
             const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
             const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0).toFixed(2);
-            const session: SessionHistory = {
+             const session: SessionHistory = {
               id: `BT_OPT_${Date.now()}`, ticker, date: bestResult.startDate + ' → ' + bestResult.endDate,
               trades: bestResult.trades.length, winRate: wr, pnl, status: 'completed',
               tradeData: bestResult.trades,
-              config: bestConfig
+              config: {
+                ...bestConfig,
+                sessions: sessionTriggers,
+              }
             };
             setSessions(prev => {
               const next = [session, ...prev].slice(0, 20);
@@ -1021,7 +1088,8 @@ export default function BacktestingPanel() {
         slBufferPercent,
         fixedRR,
         oteEntryPercent,
-        entryTrigger
+        entryTrigger,
+        sessions: sessionTriggers
       },
       metrics: {
         ...metrics
@@ -1037,7 +1105,7 @@ export default function BacktestingPanel() {
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast('✅ Archivo JSON descargado con éxito', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, metrics, tripleFilteredTrades, scoreFilterMin, scoreFilterMax, toast]);
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, metrics, tripleFilteredTrades, scoreFilterMin, scoreFilterMax, toast]);
 
   return (
     <div className="animate-fadeIn">
@@ -1364,6 +1432,147 @@ export default function BacktestingPanel() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* SESSIONS & TRIGGERS CONFIGURATION */}
+          <div className="panel" style={{ background: 'linear-gradient(180deg, var(--bg-surface) 0%, rgba(20,20,25,0.95) 100%)', border: '1px solid var(--border-color)', boxShadow: '0 8px 32px rgba(0,0,0,0.4)', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: '-10%', right: '-10%', width: '120px', height: '120px', background: 'radial-gradient(circle, rgba(124,77,255,0.15) 0%, rgba(0,0,0,0) 70%)', pointerEvents: 'none' }} />
+            
+            <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.9rem', letterSpacing: '0.5px' }}>
+              <Zap size={18} color="var(--accent-gold)" /> GATILLOS Y FILTROS POR SESIÓN
+            </h3>
+
+            <div style={{ display: 'flex', gap: '4px', padding: '2px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', marginBottom: '16px' }}>
+              {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+                const isActive = sessionFilter === s;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => handleSessionSelect(s)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 4px',
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      borderRadius: '4px',
+                      border: 'none',
+                      backgroundColor: isActive ? 'var(--accent-gold)' : 'transparent',
+                      color: isActive ? 'black' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease-in-out'
+                    }}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* CHOCH Trigger */}
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.choch.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'choch', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>💥 CHOCH (Ruptura)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(124,77,255,0.1)', color: '#7c4dff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.choch.enabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="30"
+                      step="1"
+                      value={sessionTriggers[sessionFilter]?.choch.minScore ?? 5}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'choch', 'minScore', parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: 'var(--accent-gold)' }}
+                    />
+                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '24px', textAlign: 'right' }}>
+                      +{sessionTriggers[sessionFilter]?.choch.minScore}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* BOS Trigger */}
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.bos.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'bos', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#0088ff', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 BOS (Continuación)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,136,255,0.1)', color: '#0088ff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.bos.enabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="30"
+                      step="1"
+                      value={sessionTriggers[sessionFilter]?.bos.minScore ?? 10}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'bos', 'minScore', parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: '#0088ff' }}
+                    />
+                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0088ff', minWidth: '24px', textAlign: 'right' }}>
+                      +{sessionTriggers[sessionFilter]?.bos.minScore}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* OTE Trigger */}
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.ote.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'ote', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--accent-red)', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>🎯 OTE (Fibonacci)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(255,51,51,0.1)', color: 'var(--accent-red)', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.ote.enabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="30"
+                      step="1"
+                      value={sessionTriggers[sessionFilter]?.ote.minScore ?? 8}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'ote', 'minScore', parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: 'var(--accent-red)' }}
+                    />
+                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-red)', minWidth: '24px', textAlign: 'right' }}>
+                      +{sessionTriggers[sessionFilter]?.ote.minScore}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginTop: '12px', lineHeight: '1.4' }}>
+              💡 Configura qué gatillos están activos y su puntaje mínimo para la sesión <strong>{sessionFilter}</strong>.
+            </div>
           </div>
 
           {/* METRICS */}
@@ -1709,7 +1918,7 @@ export default function BacktestingPanel() {
                       else { 
                         setSelectedSession(s.id); 
                         if (s.tradeData) setTrades(s.tradeData); 
-                        if (s.config) {
+                         if (s.config) {
                           setMinBuyPoints(s.config.minBuyPoints);
                           setMinSellPoints(s.config.minSellPoints);
                           setSlBufferPercent(s.config.slBufferPercent);
@@ -1717,6 +1926,11 @@ export default function BacktestingPanel() {
                           setOteEntryPercent(s.config.oteEntryPercent);
                           setEntryTrigger(s.config.entryTrigger);
                           setEnabled(s.config.enabled !== false);
+                          // @ts-ignore
+                          if (s.config.sessions) {
+                            // @ts-ignore
+                            setSessionTriggers(s.config.sessions);
+                          }
                         }
                       }
                     }}>

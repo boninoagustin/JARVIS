@@ -69,6 +69,20 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
   return originPrice * (bufferConfig / 100);
 }
 
+// --- GET SESSION FOR TIMESTAMP ---
+export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
+  const d = new Date(ts);
+  const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
+  const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
+  const timeDecimal = arHour + arMin / 60;
+  
+  if (timeDecimal >= 21 || timeDecimal < 4) return 'ASIA';
+  if (timeDecimal >= 4 && timeDecimal < 10.5) return 'LONDON';
+  if (timeDecimal >= 10.5 && timeDecimal < 17) return 'NY';
+  
+  return 'OFF';
+}
+
 // --- EVALUATE IMPULSE (ported from backend) ---
 function evaluateImpulse(
   leg: ImpulseLeg | null | undefined, currentPrice: number,
@@ -105,9 +119,26 @@ function evaluateImpulse(
     const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
 
     if (isEntryHit && !leg.oteScored) {
-      const MIN_OTE_POINTS = 8;
-      if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
-        return { updatedLeg: leg };
+      // --- OTE TRIGGER CONFIGURATION ---
+      const session = getSessionForTimestamp(nowMs);
+      const sessionConfig = config.sessions?.[session];
+      
+      const oteEnabled = sessionConfig ? sessionConfig.ote.enabled : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+      const oteMinScore = sessionConfig ? sessionConfig.ote.minScore : 8;
+
+      const totalPoints = (leg.chochPoints || 0) + 4;
+
+      if (sessionConfig) {
+        if (!oteEnabled || totalPoints < oteMinScore) {
+          return { updatedLeg: leg };
+        }
+      } else {
+        const MIN_OTE_POINTS = 8;
+        if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
+          return { updatedLeg: leg };
+        if (!oteEnabled)
+          return { updatedLeg: leg };
+      }
 
       const riskDist = r2 * 0.21;
       const rewardDist = r2 * 0.50;
@@ -126,13 +157,11 @@ function evaluateImpulse(
         const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent || 0);
         const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBufferAmt : leg.origin + slBufferAmt;
         
-        const shouldTriggerOte = config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH';
-        
         return {
-          updatedLeg: leg, triggerOte: shouldTriggerOte,
+          updatedLeg: leg, triggerOte: oteEnabled,
           oteData: {
             tradeId, direction: leg.dir,
-            entryPrice: entryLevel, // Use precise entry level
+            entryPrice: entryLevel,
             stopLoss: adjustedSL.toFixed(decimals),
             tp1: leg.extreme.toFixed(decimals),
             tp2: (() => {
@@ -142,7 +171,7 @@ function evaluateImpulse(
                 : entryLevel - (riskDist * (config.fixedRR || 2.0));
               return fixedTP2.toFixed(decimals);
             })(),
-            points: (leg.chochPoints || 0) + 4,
+            points: totalPoints,
             events: [...(leg.chochEvents || []), eventName],
             bestZone: leg.bestZone || null,
             marketBias: { ...state.marketBias },
@@ -572,7 +601,24 @@ function processAlert(
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
 
     // Validate leg
-    const minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
+    const session = getSessionForTimestamp(nowMs);
+    const sessionConfig = config.sessions?.[session];
+    
+    let triggerEnabled = false;
+    let minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
+    
+    if (sessionConfig) {
+      if (prefix === 'EVENTO_CHOCH') {
+        triggerEnabled = sessionConfig.choch.enabled;
+        minPtsRequired = sessionConfig.choch.minScore;
+      } else if (prefix === 'EVENTO_BOS') {
+        triggerEnabled = sessionConfig.bos.enabled;
+        minPtsRequired = sessionConfig.bos.minScore;
+      }
+    } else {
+      triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH');
+    }
+
     if (totalPoints >= Math.max(minPtsRequired - 3, 5) && activeLeg) {
       const hasZoneConf = activeScore.events.some(e =>
         e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
@@ -584,7 +630,7 @@ function processAlert(
       activeLeg.chochEvents = [...activeScore.events];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
-      if (efectiveValidation && (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH')) {
+      if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
         const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent);
         const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
@@ -607,7 +653,9 @@ function processAlert(
           stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
         };
         createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
-        if (config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
+        
+        if (!sessionConfig && config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
+        else if (sessionConfig && !sessionConfig.ote.enabled) activeLeg.oteScored = true;
       }
 
       if (totalPoints >= minPtsRequired) {

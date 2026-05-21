@@ -35,12 +35,28 @@ export interface BacktestTrade {
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number;
 }
 
+export interface TriggerConfig {
+  enabled: boolean;
+  minScore: number;
+}
+
+export interface SessionConfig {
+  choch: TriggerConfig;
+  bos: TriggerConfig;
+  ote: TriggerConfig;
+}
+
 export interface BacktestConfig {
-  ticker: string; minBuyPoints: number; minSellPoints: number;
+  ticker: string;
+  minBuyPoints: number;
+  minSellPoints: number;
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+  
+  // Session-specific triggers and scores
+  sessions?: Record<string, SessionConfig>;
   
   // Killswitches
   maxDailyLossR?: number;
