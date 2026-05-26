@@ -38,6 +38,8 @@ interface TradeLog {
   tp1Timestamp?: number;
   tp2Timestamp?: number;
   slTimestamp?: number;
+  events?: string[];
+  isChochEntry?: boolean;
 }
 
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
@@ -58,6 +60,31 @@ const resultButtonStyle = (color: string, isActive: boolean) => ({
   color: isActive ? 'var(--bg-base)' : color,
   opacity: isActive ? 1 : 0.7,
 });
+
+const getEntryTypeBadge = (t: TradeLog) => {
+  const events = t.events || [];
+  const hasBos = events.some(e => e.includes('BOS🔨'));
+  const hasChoch = events.some(e => e.includes('CHoCH🚀'));
+  const hasOte = events.includes('🎯_OTE_Retracement_3M');
+
+  if (t.isChochEntry) {
+    if (hasBos) {
+      return { label: 'BOS Directo', color: '#7c4dff', bg: 'rgba(124,77,255,0.1)' };
+    }
+    return { label: 'CHoCH Directo', color: '#ffaa00', bg: 'rgba(255,170,0,0.1)' };
+  }
+  
+  if (hasOte) {
+    if (hasChoch) return { label: 'OTE (CHoCH)', color: '#00ffcc', bg: 'rgba(0,255,204,0.1)' };
+    if (hasBos) return { label: 'OTE (BOS)', color: '#00ccff', bg: 'rgba(0,204,255,0.1)' };
+    return { label: 'OTE', color: '#00ffcc', bg: 'rgba(0,255,204,0.1)' };
+  }
+  
+  if (hasChoch) return { label: 'CHoCH', color: '#ff7700', bg: 'rgba(255,119,0,0.1)' };
+  if (hasBos) return { label: 'BOS', color: '#7c4dff', bg: 'rgba(124,77,255,0.1)' };
+  
+  return { label: 'SMC', color: 'var(--text-secondary)', bg: 'rgba(100,100,100,0.1)' };
+};
 
 export default function AnalyticsJournal() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
@@ -559,6 +586,7 @@ export default function AnalyticsJournal() {
                 <th>FECHA</th>
                 <th>ACTIVO</th>
                 <th>DIRECCIÓN</th>
+                <th>GATILLO / TIPO</th>
                 <th>CALIDAD / PUNTOS</th>
                 <th>NIVELES</th>
                 <th>RESULTADO</th>
@@ -571,6 +599,25 @@ export default function AnalyticsJournal() {
                   <td style={{ fontWeight: 700 }}>{t.ticker}</td>
                   <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
                     {t.direction}
+                  </td>
+                  <td>
+                    {(() => {
+                      const badge = getEntryTypeBadge(t);
+                      return (
+                        <span style={{ 
+                          padding: '2px 8px', 
+                          backgroundColor: badge.bg, 
+                          color: badge.color, 
+                          border: `1px solid ${badge.color}33`,
+                          borderRadius: '4px', 
+                          fontWeight: 700,
+                          fontSize: '0.75rem',
+                          fontFamily: 'var(--font-mono)'
+                        }}>
+                          {badge.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td>
                     <span style={{ padding: '2px 6px', backgroundColor: 'rgba(255,170,0,0.1)', color: 'var(--accent-gold)', borderRadius: '4px', marginRight: '8px', fontWeight: 600 }}>
@@ -664,7 +711,7 @@ export default function AnalyticsJournal() {
               ))}
               {trades.length === 0 && (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-tertiary)' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-tertiary)' }}>
                     No se registran alertas de trading en el diario actualmente. Las alertas en vivo de SMC aparecerán aquí de forma automática.
                   </td>
                 </tr>

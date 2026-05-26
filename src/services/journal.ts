@@ -44,6 +44,7 @@ export interface TradeRecord {
     tp1Timestamp?: number;      // Cuándo se alcanzó TP1
     tp2Timestamp?: number;      // Cuándo se alcanzó TP2
     slTimestamp?: number;       // Cuándo se alcanzó SL
+    isChochEntry?: boolean;     // Se marca true si la entrada fue directa por CHoCH (sin esperar retroceso OTE)
 }
 
 export interface PerformanceMetrics {

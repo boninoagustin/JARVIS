@@ -57,38 +57,57 @@ export default function BacktestingPanel() {
     choch: { enabled: boolean; minScore: number };
     bos: { enabled: boolean; minScore: number };
     ote: { enabled: boolean; minScore: number };
+    oteChoch: { enabled: boolean; minScore: number };
+    oteBos: { enabled: boolean; minScore: number };
   }>>(() => {
     try {
       const saved = localStorage.getItem('bt_session_triggers');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        for (const s of ['ALL', 'LONDON', 'NY', 'ASIA']) {
+          if (parsed[s]) {
+            if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8 };
+            if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8 };
+          }
+        }
+        return parsed;
+      }
     } catch {}
     return {
       ALL: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8 },
+        oteChoch: { enabled: true, minScore: 8 },
+        oteBos: { enabled: true, minScore: 8 }
       },
       LONDON: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8 },
+        oteChoch: { enabled: true, minScore: 8 },
+        oteBos: { enabled: true, minScore: 8 }
       },
       NY: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8 },
+        oteChoch: { enabled: true, minScore: 8 },
+        oteBos: { enabled: true, minScore: 8 }
       },
       ASIA: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8 },
+        oteChoch: { enabled: true, minScore: 8 },
+        oteBos: { enabled: true, minScore: 8 }
       }
     };
   });
 
   const updateSessionTrigger = (
     session: string,
-    triggerType: 'choch' | 'bos' | 'ote',
+    triggerType: 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos',
     field: 'enabled' | 'minScore',
     value: any
   ) => {
@@ -1546,7 +1565,7 @@ export default function BacktestingPanel() {
                       onChange={e => updateSessionTrigger(sessionFilter, 'ote', 'enabled', e.target.checked)}
                       style={{ cursor: 'pointer', accentColor: 'var(--accent-red)', width: '14px', height: '14px' }}
                     />
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>🎯 OTE (Fibonacci)</span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>🎯 OTE (General)</span>
                   </label>
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(255,51,51,0.1)', color: 'var(--accent-red)', fontWeight: 600 }}>Gatillo</span>
                 </div>
@@ -1564,6 +1583,72 @@ export default function BacktestingPanel() {
                     />
                     <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-red)', minWidth: '24px', textAlign: 'right' }}>
                       +{sessionTriggers[sessionFilter]?.ote.minScore}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* OTE CHoCH Trigger */}
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.oteChoch?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#d500f9', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>💥 OTE (Basado en CHOCH)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(213,0,249,0.1)', color: '#d500f9', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.oteChoch?.enabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="30"
+                      step="1"
+                      value={sessionTriggers[sessionFilter]?.oteChoch?.minScore ?? 8}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'minScore', parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: '#d500f9' }}
+                    />
+                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#d500f9', minWidth: '24px', textAlign: 'right' }}>
+                      +{sessionTriggers[sessionFilter]?.oteChoch?.minScore}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* OTE BOS Trigger */}
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.oteBos?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#00e5ff', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE (Basado en BOS)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.oteBos?.enabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="30"
+                      step="1"
+                      value={sessionTriggers[sessionFilter]?.oteBos?.minScore ?? 8}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'minScore', parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: '#00e5ff' }}
+                    />
+                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                      +{sessionTriggers[sessionFilter]?.oteBos?.minScore}
                     </span>
                   </div>
                 )}

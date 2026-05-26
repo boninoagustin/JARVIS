@@ -171,6 +171,13 @@ interface AssetSessionConfig {
     oteEntryPercent: number;
     entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
     enabled: boolean; // permite deshabilitar un activo/sesión
+    sessions?: Record<string, {
+      choch: { enabled: boolean; minScore: number };
+      bos: { enabled: boolean; minScore: number };
+      ote: { enabled: boolean; minScore: number };
+      oteChoch?: { enabled: boolean; minScore: number };
+      oteBos?: { enabled: boolean; minScore: number };
+    }>;
 }
 
 // Map: "BTCUSD_LONDON" -> config
@@ -198,7 +205,16 @@ function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
 }
 
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
-function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { sessionEnabled: boolean } {
+function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { 
+    sessionEnabled: boolean;
+    sessions?: Record<string, {
+      choch: { enabled: boolean; minScore: number };
+      bos: { enabled: boolean; minScore: number };
+      ote: { enabled: boolean; minScore: number };
+      oteChoch?: { enabled: boolean; minScore: number };
+      oteBos?: { enabled: boolean; minScore: number };
+    }>;
+} {
     const session = getCurrentSession();
     
     // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
@@ -221,7 +237,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { session
             fixedRR: specific.fixedRR,
             oteEntryPercent: specific.oteEntryPercent,
             entryTrigger: specific.entryTrigger,
-            sessionEnabled: specific.enabled
+            sessionEnabled: specific.enabled,
+            sessions: specific.sessions
         };
     }
     
@@ -237,7 +254,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { session
             fixedRR: global.fixedRR,
             oteEntryPercent: global.oteEntryPercent,
             entryTrigger: global.entryTrigger,
-            sessionEnabled: global.enabled
+            sessionEnabled: global.enabled,
+            sessions: global.sessions
         };
     }
     
@@ -298,7 +316,8 @@ if (db) {
                     fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
                     entryTrigger: (data.entryTrigger as any) || dynamicBotConfig.entryTrigger,
-                    enabled: data.enabled !== false // default enabled
+                    enabled: data.enabled !== false, // default enabled
+                    sessions: data.sessions
                 });
             });
             const actualAssets = [...assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
@@ -503,12 +522,50 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
         
         if (isEntryHit && !leg.oteScored) {
-            // 🔧 Filtro de calidad: si el leg no fue validado Y tiene pocos puntos, no entrar
-            const MIN_OTE_POINTS = 8;
-            if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
-                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
-                return { updatedLeg: leg };
+            const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
+            const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
+
+            const currentSession = getCurrentSession();
+            const sessionConfig = config.sessions?.[currentSession];
+
+            let oteEnabled = false;
+            let oteMinScore = 8;
+
+            if (sessionConfig) {
+                if (isChoch) {
+                    oteEnabled = sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false;
+                    oteMinScore = sessionConfig.oteChoch?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+                } else if (isBos) {
+                    oteEnabled = sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false;
+                    oteMinScore = sessionConfig.oteBos?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+                } else {
+                    oteEnabled = sessionConfig.ote?.enabled ?? false;
+                    oteMinScore = sessionConfig.ote?.minScore ?? 8;
+                }
+            } else {
+                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+                oteMinScore = 8;
             }
+
+            const totalPoints = (leg.chochPoints || 0) + 4;
+
+            if (sessionConfig) {
+                if (!oteEnabled || totalPoints < oteMinScore) {
+                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
+                    return { updatedLeg: leg };
+                }
+            } else {
+                const MIN_OTE_POINTS = 8;
+                if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
+                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
+                    return { updatedLeg: leg };
+                }
+                if (!oteEnabled || totalPoints < oteMinScore) {
+                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
+                    return { updatedLeg: leg };
+                }
+            }
+
             // 🛡️ Filtro R:R teórico del OTE (50%-79% de retroceso del impulso)
             // El R:R se calcula sobre los niveles ESTRUCTURALES del OTE, no sobre el precio
             // actual de la vela (que puede estar desviado del OTE exacto).
@@ -546,6 +603,16 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
                 console.log(`[FIBO] 🎯 RETROCESO 50% CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
 
+                const bias240 = state.marketBias["240"] || 'NEUTRAL';
+                const bias60 = state.marketBias["60"] || 'NEUTRAL';
+                const bias15 = state.marketBias["15"] || 'NEUTRAL';
+                const getIconStr = (bias: string) => bias === 'BUY' ? '🟢' : bias === 'SELL' ? '🔴' : '⚪';
+                const fallbackReport = `🗺️ <b>Contexto Macro:</b>\n` +
+                    `${getIconStr(bias240)} 4H: ${bias240}\n` +
+                    `${getIconStr(bias60)} 1H: ${bias60}\n` +
+                    `${getIconStr(bias15)} 15M: ${bias15}\n\n` +
+                    `🎯 <b>Confluencia de Entrada:</b> Retroceso OTE 3M en nivel del 50% Fibo (Puntaje base: ${leg.chochPoints || 0} pts + OTE: +4 pts).`;
+
                 const oteData = {
                     tradeId, 
                     direction: leg.dir,
@@ -554,9 +621,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     entryPrice: currentPrice,
                     points: (leg.chochPoints || 0) + 4, 
                     events: [...(leg.chochEvents || []), eventName],
-                    confluenceReport: leg.chochReport || '',
+                    confluenceReport: leg.chochReport || fallbackReport,
                     bestZone: leg.bestZone || null,
-                    marketBias: { ...state.marketBias }
+                    marketBias: { ...state.marketBias },
+                    isChochEntry: false
                 };
 
                 const newTrade: ActiveTrade = {
@@ -654,7 +722,7 @@ async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
             if (rMultiple < 0) {
                 consecutiveLosses++;
                 if (consecutiveLosses > maxConsecutiveLosses) {
-                    consecutiveLosses = 0; // Reinicio en racha o mantener racha global
+                    maxConsecutiveLosses = consecutiveLosses;
                 }
             } else if (rMultiple > 0) {
                 // Se reinicia o reduce en racha (ej. TP1 exitosa o TP2 exitoso corta la racha)
@@ -1515,7 +1583,6 @@ export async function processTradingAlert(alertText: string) {
                     confluenceReport += `⚠️ <b>Penalización CHoCH sin zonas macro:</b> -${orphanPenalty} Pts (las zonas HTF aún no sincronizaron o expiraron)\n`;
                 }
                 if (!hasSpatialBacking && !hasSequentialBacking && orphanPenalty === 0) confluenceReport += `ℹ️ <b>Sin respaldo de zonas:</b> se permite por bono macro suficiente\n`;
-
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
                 let sessionThresholds: { buy: number; sell: number } | null = null;
                 if (isBacktest) {
@@ -1523,17 +1590,30 @@ export async function processTradingAlert(alertText: string) {
                     sessionThresholds = getCurrentSessionThresholds();
                 }
 
-                // 🔧 v5.5: Mínimo de puntos dinámico por tipo de activo
-                // Crypto (BTC/ETH): 4 pts (24/7, más oportunidades pero más ruido)
-                // Forex/Índices: 5 pts (sesiones definidas, zonas más estables)
                 if (!config.sessionEnabled) {
                     console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión`);
                     return;
                 }
 
+                const currentSession = getCurrentSession();
+                const sessionConfig = config.sessions?.[currentSession];
+
+                let triggerEnabled = false;
                 let minPtsRequired = currentDirection === 'BUY' 
                     ? (sessionThresholds?.buy || config.minPointsForBuy) 
                     : (sessionThresholds?.sell || config.minPointsForSell);
+
+                if (sessionConfig) {
+                    if (triggerType === 'CHoCH🚀') {
+                        triggerEnabled = sessionConfig.choch?.enabled ?? false;
+                        minPtsRequired = sessionConfig.choch?.minScore ?? 8;
+                    } else if (triggerType === 'BOS🔨') {
+                        triggerEnabled = sessionConfig.bos?.enabled ?? false;
+                        minPtsRequired = sessionConfig.bos?.minScore ?? 8;
+                    }
+                } else {
+                    triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH');
+                }
                 
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
                 if (isCrypto) minPtsRequired = Math.max(minPtsRequired - 1, 3); // Crypto: 1 punto menos
@@ -1577,7 +1657,7 @@ export async function processTradingAlert(alertText: string) {
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
 
-                        if (efectiveValidation && (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH')) {
+                        if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
                             const decimals = getDecimals(ticker);
                             const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent);
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
@@ -1599,13 +1679,16 @@ export async function processTradingAlert(alertText: string) {
                                 dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
                                 stopLoss, tp1, tp2, entryPrice: currentPrice,
                                 points: totalPoints, events: [...activeScore.events, `${triggerType}_3M`],
+                                confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true
                             };
                             triggerOte = true;
-                            if (config.entryTrigger === 'CHOCH') {
-                                activeLeg.oteScored = true;
-                            }
+                            
+                            const oteSessionEnabled = sessionConfig 
+                              ? (triggerType === 'CHoCH🚀' ? (sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false))
+                              : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+                            if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
                         }
                     }
                     
@@ -1757,8 +1840,23 @@ export async function processTradingAlert(alertText: string) {
                     }
                 }
 
-                let msg = `${isBacktest ? "🧪 <b>BACKTESTING</b> | " : "🔥 "}<b>ALERTA FRANCOTIRADOR OTE | ${ticker} | ${oteData.dirText}</b>\n\n`;
-                msg += oteData.confluenceReport;
+                const isChoch = oteData.events?.some((e: string) => e.includes('CHoCH🚀'));
+                const isBos = oteData.events?.some((e: string) => e.includes('BOS🔨'));
+                const breakType = isChoch ? 'CHoCH' : isBos ? 'BOS' : 'SMC';
+                const entryTypeLabel = oteData.isChochEntry 
+                    ? (isBos ? 'BOS Directo' : 'CHoCH Directo') 
+                    : `OTE (basado en ${breakType})`;
+
+                let headerLabel = 'OTE';
+                if (oteData.isChochEntry) {
+                    headerLabel = isBos ? 'BOS DIRECTO' : 'CHOCH DIRECTO';
+                } else {
+                    headerLabel = `OTE (${breakType})`;
+                }
+
+                let msg = `${isBacktest ? "🧪 <b>BACKTESTING</b> | " : "🔥 "}<b>ALERTA FRANCOTIRADOR ${headerLabel} | ${ticker} | ${oteData.dirText}</b>\n\n`;
+                msg += (oteData.confluenceReport || '').trim() + '\n\n';
+                msg += `🎯 <b>Tipo de Entrada:</b> ${entryTypeLabel}\n`;
                 msg += `🎯 <b>Puntaje Total:</b> ${oteData.points} Puntos\n`;
                 msg += `🧱 <b>Confluencias:</b> ${oteData.events?.join(', ')}\n\n`;
 
@@ -1767,7 +1865,10 @@ export async function processTradingAlert(alertText: string) {
                     ? `Operar con riesgo estándar (${config.baseRiskPercentage}%).`
                     : `Setup de puntaje medio. Riesgo reducido (${config.baseRiskPercentage / 2}%).`;
 
-                msg += `🧠 <b>Jarvis:</b> Llegada a zona OTE confirmada. ${avisoRiesgo}\n\n`;
+                const jarvisNote = oteData.isChochEntry
+                    ? `Gatillo de entrada directa por ${isBos ? 'BOS' : 'CHoCH'} confirmado. ${avisoRiesgo}`
+                    : `Llegada a zona OTE confirmada. ${avisoRiesgo}`;
+                msg += `🧠 <b>Jarvis:</b> ${jarvisNote}\n\n`;
                 msg += `📐 <b>Niveles de Ejecución (GATILLO):</b>\n`;
                 msg += `🎯 Precio de Entrada: OTE Actual\n`;
                 msg += `🛑 Stop Loss Sugerido: ${oteData.stopLoss}\n`;
@@ -1802,6 +1903,7 @@ export async function processTradingAlert(alertText: string) {
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
+                    isChochEntry: oteData.isChochEntry,
                 }).catch(() => 'ERR');
                 
                 if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
@@ -1931,12 +2033,13 @@ export function startWatchdog() {
         
         for (const [id, trade] of activeTrades) {
             const age = now - trade.timestamp;
-            const lastSeen = tickerLastSeen.get(trade.ticker) || 0;
+            // 🛡️ Si no hay registros de pings para este ticker, usamos la hora de creación del trade
+            // para evitar que se interprete como inactivo desde 1970 (inactividad = now)
+            const lastSeen = tickerLastSeen.get(trade.ticker) || trade.timestamp;
             const inactivity = now - lastSeen;
             
-            // 🛡️ v5.5: Si tickerLastSeen está vacío para este ticker (post-reinicio), NO cerrar el trade
-            // El trade puede estar activo legítimamente y los PINGs no han llegado aún
-            if (lastSeen === 0 && tickerLastSeen.size === 0) {
+            // Si tickerLastSeen está completamente vacío (post-reinicio), no cerrar el trade
+            if (tickerLastSeen.size === 0) {
                 continue; // No cerrar trades hasta que llegue el primer PING real
             }
             

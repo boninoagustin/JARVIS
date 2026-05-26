@@ -123,8 +123,27 @@ function evaluateImpulse(
       const session = getSessionForTimestamp(nowMs);
       const sessionConfig = config.sessions?.[session];
       
-      const oteEnabled = sessionConfig ? sessionConfig.ote.enabled : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
-      const oteMinScore = sessionConfig ? sessionConfig.ote.minScore : 8;
+      const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
+      const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
+
+      let oteEnabled = false;
+      let oteMinScore = 8;
+
+      if (sessionConfig) {
+        if (isChoch) {
+          oteEnabled = sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false;
+          oteMinScore = sessionConfig.oteChoch?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+        } else if (isBos) {
+          oteEnabled = sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false;
+          oteMinScore = sessionConfig.oteBos?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+        } else {
+          oteEnabled = sessionConfig.ote?.enabled ?? false;
+          oteMinScore = sessionConfig.ote?.minScore ?? 8;
+        }
+      } else {
+        oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+        oteMinScore = 8;
+      }
 
       const totalPoints = (leg.chochPoints || 0) + 4;
 
@@ -136,7 +155,7 @@ function evaluateImpulse(
         const MIN_OTE_POINTS = 8;
         if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
           return { updatedLeg: leg };
-        if (!oteEnabled)
+        if (!oteEnabled || totalPoints < oteMinScore)
           return { updatedLeg: leg };
       }
 
@@ -627,7 +646,7 @@ function processAlert(
       const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= 12);
       activeLeg.isValidated = efectiveValidation;
       activeLeg.chochPoints = totalPoints;
-      activeLeg.chochEvents = [...activeScore.events];
+      activeLeg.chochEvents = [...activeScore.events, prefix];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
@@ -654,8 +673,10 @@ function processAlert(
         };
         createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
         
-        if (!sessionConfig && config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
-        else if (sessionConfig && !sessionConfig.ote.enabled) activeLeg.oteScored = true;
+        const oteSessionEnabled = sessionConfig 
+          ? (prefix === 'EVENTO_CHOCH' ? (sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false))
+          : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+        if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
       }
 
       if (totalPoints >= minPtsRequired) {

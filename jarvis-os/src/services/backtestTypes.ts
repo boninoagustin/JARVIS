@@ -44,6 +44,8 @@ export interface SessionConfig {
   choch: TriggerConfig;
   bos: TriggerConfig;
   ote: TriggerConfig;
+  oteChoch?: TriggerConfig;
+  oteBos?: TriggerConfig;
 }
 
 export interface BacktestConfig {
