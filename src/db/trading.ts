@@ -1743,6 +1743,9 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
                 state.lastGatillo.status = 'BLOCKED_SESSION';
                 docRef.set(state).catch(() => {});
+                // Limpiar si se pre-creó en evaluateImpulse (para OTE)
+                activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -1751,6 +1754,9 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[GLOBAL KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por riesgo global consolidado de la cuenta.`);
                 state.lastGatillo.status = 'BLOCKED_GLOBAL';
                 docRef.set(state).catch(() => {});
+                // Limpiar si se pre-creó en evaluateImpulse (para OTE)
+                activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -1759,6 +1765,9 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_RACHA';
                 docRef.set(state).catch(() => {});
+                // Limpiar si se pre-creó en evaluateImpulse (para OTE)
+                activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
             if (nowMs < vixKillswitchUntil) {
@@ -1766,6 +1775,9 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_VIX';
                 docRef.set(state).catch(() => {});
+                // Limpiar si se pre-creó en evaluateImpulse (para OTE)
+                activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -1906,13 +1918,30 @@ export async function processTradingAlert(alertText: string) {
                     isChochEntry: oteData.isChochEntry,
                 }).catch(() => 'ERR');
                 
+                // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)
+                let activeTrade = activeTrades.get(oteData.tradeId);
+                if (!activeTrade) {
+                    activeTrade = {
+                        tradeId: oteData.tradeId,
+                        ticker,
+                        direction: oteData.direction as 'BUY' | 'SELL',
+                        entryPrice: oteData.entryPrice,
+                        tp1Price: parseFloat(oteData.tp1),
+                        tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : oteData.entryPrice * 1.5,
+                        slPrice: parseFloat(oteData.stopLoss),
+                        tp1Hit: false,
+                        tp2Hit: false,
+                        timestamp: nowMs
+                    };
+                    activeTrades.set(oteData.tradeId, activeTrade);
+                    if (db) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => {});
+                    console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
+                }
+
                 if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
-                    const activeTrade = activeTrades.get(oteData.tradeId);
-                    if (activeTrade) {
-                        activeTrade.journalId = journalId;
-                        // 💾 Actualizar el journalId en Firebase
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
-                    }
+                    activeTrade.journalId = journalId;
+                    // 💾 Actualizar el journalId en Firebase
+                    if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
                 }
                 
                 state.lastGatillo.status = 'ENVIADO';
@@ -1921,6 +1950,10 @@ export async function processTradingAlert(alertText: string) {
                 console.log(`[SNIPER] ⚠️ DUPLICADO bloqueado: ${fingerprint}`);
                 state.lastGatillo.status = 'DUPLICADO';
                 docRef.set(state).catch(() => {});
+                
+                // Limpiar si se pre-creó en evaluateImpulse (para OTE)
+                activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
             }
         }
 
