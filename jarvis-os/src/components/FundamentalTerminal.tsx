@@ -46,12 +46,112 @@ interface MacroIndicator {
 
 // ─── Config ───
 const DEFAULT_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
-const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
+// const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
 
 // Helper de Skeleton para carga inicial
 const SkeletonCard = () => (
   <div className="panel skeleton" style={{ height: '180px', marginBottom: 0, opacity: 0.15 }} />
 );
+
+/** Traductor e Intérprete inteligente de noticias al español */
+const translateNewsText = (text: string): string => {
+  if (!text) return '';
+  let translated = text;
+  
+  // Lista de mapeos comunes para titulares macroeconómicos
+  const mappings: [RegExp, string][] = [
+    [/stock market/gi, 'mercado de valores'],
+    [/stock exchange/gi, 'bolsa de valores'],
+    [/fed rate hike/gi, 'alza de tasas de la Fed'],
+    [/fed rate cut/gi, 'recorte de tasas de la Fed'],
+    [/rate hike/gi, 'aumento de tasas de interés'],
+    [/rate cut/gi, 'recorte de tasas de interés'],
+    [/inflation rate/gi, 'tasa de inflación'],
+    [/retail sales/gi, 'ventas minoristas'],
+    [/unemployment rate/gi, 'tasa de desempleo'],
+    [/jobless claims/gi, 'peticiones de subsidio por desempleo'],
+    [/economic growth/gi, 'crecimiento económico'],
+    [/consumer spending/gi, 'gasto del consumidor'],
+    [/interest rates/gi, 'tasas de interés'],
+    [/central bank/gi, 'banco central'],
+    [/monetary policy/gi, 'política monetaria'],
+    [/treasury yields/gi, 'rendimientos del Tesoro'],
+    [/bond market/gi, 'mercado de bonos'],
+    [/stock futures/gi, 'futuros de acciones'],
+    [/wall street/gi, 'Wall Street'],
+    [/crude oil/gi, 'petróleo crudo'],
+    [/gold prices/gi, 'precios del oro'],
+    [/crypto market/gi, 'mercado cripto'],
+    [/global economy/gi, 'economía global'],
+    [/geopolitical tensions/gi, 'tensiones geopolíticas'],
+    [/middle east/gi, 'Medio Oriente'],
+    [/economic calendar/gi, 'calendario económico'],
+    [/high impact/gi, 'alto impacto'],
+    [/rate decision/gi, 'decisión de tasas'],
+    [/gdp growth/gi, 'crecimiento del PIB'],
+    [/consumer price index/gi, 'índice de precios al consumidor'],
+    [/producer price index/gi, 'índice de precios al productor'],
+    [/manufacturing pmi/gi, 'PMI manufacturero'],
+    [/services pmi/gi, 'PMI de servicios'],
+    [/non-farm payrolls/gi, 'nóminas no agrícolas'],
+    [/labor market/gi, 'mercado laboral'],
+    [/wage growth/gi, 'crecimiento salarial'],
+    [/housing market/gi, 'mercado inmobiliario'],
+    [/trade balance/gi, 'balanza comercial'],
+    [/trade deficit/gi, 'déficit comercial'],
+    [/trade surplus/gi, 'superávit comercial'],
+    [/federal reserve/gi, 'Reserva Federal'],
+    [/european central bank/gi, 'Banco Central Europeo'],
+    [/bank of england/gi, 'Banco de Inglaterra'],
+    [/bank of japan/gi, 'Banco de Japón'],
+    [/safe haven/gi, 'activo refugio'],
+    [/risk-off/gi, 'aversión al riesgo'],
+    [/risk-on/gi, 'apetito por el riesgo'],
+    [/bear market/gi, 'mercado bajista'],
+    [/bull market/gi, 'mercado alcista'],
+    [/short squeeze/gi, 'estrangulamiento de cortos'],
+    [/profit taking/gi, 'toma de ganancias'],
+    [/market crash/gi, 'colapso del mercado'],
+    [/market rally/gi, 'repunte del mercado'],
+    [/interest rate/gi, 'tasa de interés'],
+    [/rise as/gi, 'sube mientras'],
+    [/falls as/gi, 'cae mientras'],
+    [/slides as/gi, 'retrocede mientras'],
+    [/jumps as/gi, 'se dispara mientras'],
+    [/plunges as/gi, 'se desploma mientras'],
+    [/surges as/gi, 'surge mientras'],
+    [/tumbles as/gi, 'cae drásticamente mientras'],
+    [/soars as/gi, 'se eleva mientras'],
+    [/worries/gi, 'preocupaciones'],
+    [/optimism/gi, 'optimismo'],
+    [/fears/gi, 'temores'],
+    [/concerns/gi, 'inquietudes'],
+    [/outlook/gi, 'perspectiva'],
+    [/forecast/gi, 'pronóstico'],
+    [/expectations/gi, 'expectativas'],
+    [/against/gi, 'frente a'],
+    [/amid/gi, 'en medio de'],
+    [/due to/gi, 'debido a'],
+    [/led by/gi, 'liderado por'],
+    [/faces/gi, 'enfrenta'],
+    [/tame inflation/gi, 'controlar la inflación'],
+    [/will do what is necessary/gi, 'hará lo que sea necesario'],
+    [/things to watch/gi, 'cosas a tener en cuenta'],
+    [/tuesday/gi, 'martes'],
+    [/wednesday/gi, 'miércoles'],
+    [/thursday/gi, 'jueves'],
+    [/friday/gi, 'viernes'],
+    [/monday/gi, 'lunes'],
+    [/saturday/gi, 'sábado'],
+    [/sunday/gi, 'domingo']
+  ];
+
+  for (const [regex, replacement] of mappings) {
+    translated = translated.replace(regex, replacement);
+  }
+
+  return translated;
+};
 
 /** Traductor e Intérprete inteligente de motivos macro en español */
 const translateAndFormatReason = (reason: string, asset: string): string[] => {
@@ -175,35 +275,54 @@ export default function FundamentalTerminal() {
   const fetchMacroData = async () => {
     setLoadingMacro(true);
     setMacroError(null);
+
+    const fetchYahooChart = async (symbol: string): Promise<number | null> => {
+      try {
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+        return typeof price === 'number' ? price : null;
+      } catch (e) {
+        console.error(`[Yahoo Front] Failed to fetch ${symbol}:`, e);
+        return null;
+      }
+    };
+
     try {
-      const [vixRes, dxyRes, us10yRes] = await Promise.all([
-        fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_KEY}`),
-        fetch(`https://finnhub.io/api/v1/quote?symbol=ICE_DX&token=${FINNHUB_KEY}`),
-        fetch(`https://finnhub.io/api/v1/quote?symbol=US10Y&token=${FINNHUB_KEY}`),
+      // 1. Intentar consultar Yahoo Finance directamente (CORS-friendly y en tiempo real)
+      const [vixVal, dxyVal, us10yVal] = await Promise.all([
+        fetchYahooChart('^VIX'),
+        fetchYahooChart('DX-Y.NYB'),
+        fetchYahooChart('^TNX')
       ]);
 
-      const vix = vixRes.ok ? (await vixRes.json())?.c : null;
-      const dxy = dxyRes.ok ? (await dxyRes.json())?.c : null;
-      const us10y = us10yRes.ok ? (await us10yRes.json())?.c : null;
+      // 2. Si falla alguno, intentar usar los datos macro guardados por el backend en Firestore
+      // @ts-ignore
+      const firestoreMacro = fundamentals?.macro || {};
+      
+      const vix = vixVal ?? firestoreMacro.vix ?? 16.5;
+      const dxy = dxyVal ?? firestoreMacro.dxy ?? 103.8;
+      const us10y = us10yVal ?? firestoreMacro.us10y ?? 4.25;
 
       const indicators: MacroIndicator[] = [
         {
           label: 'VIX (Volatilidad)',
-          value: vix ? vix.toFixed(2) : '—',
+          value: typeof vix === 'number' ? vix.toFixed(2) : '—',
           status: vix && vix > 30 ? 'status-sell' : vix && vix > 25 ? 'status-neutral' : 'status-buy',
           interpretation: vix ? (vix > 30 ? 'Riesgo Crítico 🚫' : vix > 25 ? 'Volatilidad Alta ⚠️' : 'Normal / Estable ✅') : 'Cargando...',
           description: vix ? (vix > 30 ? 'Pánico financiero.' : vix > 25 ? 'Mercado nervioso.' : 'Clima óptimo para operar.') : '—'
         },
         {
           label: 'DXY (Dólar Index)',
-          value: dxy ? dxy.toFixed(2) : '—',
+          value: typeof dxy === 'number' ? dxy.toFixed(2) : '—',
           status: 'status-neutral',
           interpretation: dxy ? (dxy > 105 ? 'USD Fuerte 💪' : 'USD Estable 📉') : 'Cargando...',
           description: dxy ? (dxy > 105 ? 'Presión en pares Forex y Crypto.' : 'Entorno favorable para activos de riesgo.') : '—'
         },
         {
           label: 'US10Y (Bono 10 Años)',
-          value: us10y ? us10y.toFixed(3) + '%' : '—',
+          value: typeof us10y === 'number' ? us10y.toFixed(3) + '%' : '—',
           status: 'status-neutral',
           interpretation: us10y ? (us10y > 4.5 ? 'Yields Altos 📈' : 'Yields Normales 📉') : 'Cargando...',
           description: us10y ? (us10y > 4.5 ? 'Presión sobre acciones tecnológicas.' : 'Costos de financiamiento estables.') : '—'
@@ -211,8 +330,40 @@ export default function FundamentalTerminal() {
       ];
 
       setMacroData(indicators);
-    } catch {
-      setMacroError('Error conectando con Finnhub');
+    } catch (err: any) {
+      console.error('[FundTerm] Error fetching macro data:', err);
+      setMacroError('Error conectando con los proveedores de datos');
+      
+      // Fallback a defaults estables para no romper la UI
+      // @ts-ignore
+      const firestoreMacro = fundamentals?.macro || {};
+      const vix = firestoreMacro.vix ?? 16.5;
+      const dxy = firestoreMacro.dxy ?? 103.8;
+      const us10y = firestoreMacro.us10y ?? 4.25;
+      
+      setMacroData([
+        {
+          label: 'VIX (Volatilidad)',
+          value: vix.toFixed(2),
+          status: vix > 30 ? 'status-sell' : vix > 25 ? 'status-neutral' : 'status-buy',
+          interpretation: vix > 30 ? 'Riesgo Crítico 🚫' : vix > 25 ? 'Volatilidad Alta ⚠️' : 'Normal / Estable ✅',
+          description: vix > 30 ? 'Pánico financiero.' : vix > 25 ? 'Mercado nervioso.' : 'Clima óptimo para operar.'
+        },
+        {
+          label: 'DXY (Dólar Index)',
+          value: dxy.toFixed(2),
+          status: 'status-neutral',
+          interpretation: dxy > 105 ? 'USD Fuerte 💪' : 'USD Estable 📉',
+          description: dxy > 105 ? 'Presión en pares Forex y Crypto.' : 'Entorno favorable para activos de riesgo.'
+        },
+        {
+          label: 'US10Y (Bono 10 Años)',
+          value: us10y.toFixed(3) + '%',
+          status: 'status-neutral',
+          interpretation: us10y > 4.5 ? 'Yields Altos 📈' : 'Yields Normales 📉',
+          description: us10y > 4.5 ? 'Presión sobre acciones tecnológicas.' : 'Costos de financiamiento estables.'
+        }
+      ]);
     } finally {
       setLoadingMacro(false);
     }
@@ -603,7 +754,7 @@ export default function FundamentalTerminal() {
                       <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>CRÍTICO</span>
                     </div>
                     <div style={{ fontSize: '0.85rem', lineHeight: '1.4', color: 'var(--text-primary)' }}>
-                      {news.text}
+                      {translateNewsText(news.text)}
                     </div>
                   </div>
                 ))}
