@@ -143,10 +143,10 @@ export default function BacktestingPanel() {
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
-  const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE'>('ALL');
+  const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
   const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
   const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
-  const [optimizeSwitches, setOptimizeSwitches] = useState(false);
+  const optimizeSwitches = false;
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -260,102 +260,6 @@ export default function BacktestingPanel() {
       reader.readAsText(file);
     });
     e.target.value = '';
-  }, [toast]);
-
-  const loadDemoData = useCallback(() => {
-    setIsRunning(true);
-    setProgress(10);
-    
-    setTimeout(() => {
-      const lines4H: string[] = [];
-      const lines1H: string[] = [];
-      const lines15M: string[] = [];
-      const lines3M: string[] = [];
-      
-      const now = Date.now();
-      const fiveDaysAgo = now - 5 * 24 * 60 * 60 * 1000;
-      
-      let price = 62500;
-      let timestamp = fiveDaysAgo;
-      const step3M = 3 * 60 * 1000; // 3 minutos
-      
-      // Zonas macro de soporte y resistencia iniciales
-      lines4H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 240 | Trend: BUY | Payload: [{"top":63500,"btm":63200,"dir":"SELL","score":4,"medal":"God"},{"top":61800,"btm":61500,"dir":"BUY","score":4,"medal":"God"}]`);
-      lines1H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 60 | Trend: BUY | Payload: [{"top":62900,"btm":62700,"dir":"SELL","score":3,"medal":"Silver"},{"top":62100,"btm":61900,"dir":"BUY","score":3,"medal":"Silver"}]`);
-      lines15M.push(`SYNC_ZONES | TS: ${timestamp} | TF: 15 | Trend: BUY | Payload: [{"top":62600,"btm":62500,"dir":"SELL","score":2,"medal":"Normal"},{"top":62300,"btm":62200,"dir":"BUY","score":2,"medal":"Normal"}]`);
-
-      let trend: 'BUY' | 'SELL' = 'BUY';
-      
-      // Bucle de simulación para generar logs coherentes de 5 días
-      for (let i = 0; i < 1500; i++) {
-        timestamp += step3M;
-        
-        // Caminata aleatoria con sesgo alcista moderado
-        const change = (Math.random() - 0.47) * 45; 
-        price += change;
-        
-        const high = price + Math.random() * 25;
-        const low = price - Math.random() * 25;
-        
-        // Ping de precio cada 3 minutos
-        lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${price.toFixed(2)} | High: ${high.toFixed(2)} | Low: ${low.toFixed(2)}`);
-        
-        // Cada 6 horas (120 barras), actualizamos zonas y bias
-        if (i % 120 === 0) {
-          trend = Math.random() > 0.4 ? 'BUY' : 'SELL';
-          lines4H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 240 | Trend: ${trend} | Payload: [{"top":${(price + 1100).toFixed(2)},"btm":${(price + 800).toFixed(2)},"dir":"SELL","score":4,"medal":"God"},{"top":${(price - 800).toFixed(2)},"btm":${(price - 1200).toFixed(2)},"dir":"BUY","score":4,"medal":"God"}]`);
-          lines1H.push(`SYNC_ZONES | TS: ${timestamp} | TF: 60 | Trend: ${trend} | Payload: [{"top":${(price + 550).toFixed(2)},"btm":${(price + 350).toFixed(2)},"dir":"SELL","score":3,"medal":"Silver"},{"top":${(price - 350).toFixed(2)},"btm":${(price - 550).toFixed(2)},"dir":"BUY","score":3,"medal":"Silver"}]`);
-        }
-        
-        // Cada 3 horas (60 barras), enviamos sweeps o divergencias en 15M
-        if (i % 60 === 0) {
-          const isBuy = Math.random() > 0.5;
-          lines15M.push(`EVENTO_SWEEP | TS: ${timestamp} | TF: 15 | ${isBuy ? 'BUY' : 'SELL'} | ABSORCION`);
-          lines15M.push(`EVENTO_SMC_DIV | TS: ${timestamp} | TF: 15 | ${isBuy ? 'BUY' : 'SELL'}`);
-        }
-        
-        // Cada 45 barras de 3M, generamos estructura (CHOCH o BOS) que gatillará un trade
-        if (i % 45 === 0) {
-          const dir = Math.random() > 0.35 ? 'BUY' : 'SELL';
-          const origin = dir === 'BUY' ? price - 200 : price + 200;
-          lines3M.push(`EVENTO_CHOCH | TS: ${timestamp} | TF: 3 | Precio: ${price.toFixed(2)} | ORIGIN: ${origin.toFixed(2)} | ${dir}`);
-          
-          // Hacemos que el precio retroceda hacia el OTE en las siguientes barras para asegurar que gatille un trade
-          let pullbackPrice = price;
-          for (let j = 1; j <= 5; j++) {
-            timestamp += step3M;
-            pullbackPrice = dir === 'BUY' ? price - (100 * (j / 5)) : price + (100 * (j / 5));
-            const pbHigh = pullbackPrice + 5;
-            const pbLow = pullbackPrice - 5;
-            lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${pullbackPrice.toFixed(2)} | High: ${pbHigh.toFixed(2)} | Low: ${pbLow.toFixed(2)}`);
-          }
-          
-          // Y luego expandimos fuertemente a favor del trade para que toque el take profit en la gran mayoría
-          let targetPrice = pullbackPrice;
-          const targetReach = dir === 'BUY' ? 320 : -320;
-          for (let j = 1; j <= 7; j++) {
-            timestamp += step3M;
-            targetPrice = pullbackPrice + (targetReach * (j / 7));
-            const tHigh = targetPrice + 5;
-            const tLow = targetPrice - 5;
-            lines3M.push(`PING_PRICE | TS: ${timestamp} | TF: 3 | Precio: ${targetPrice.toFixed(2)} | High: ${tHigh.toFixed(2)} | Low: ${tLow.toFixed(2)}`);
-          }
-          price = targetPrice;
-        }
-      }
-      
-      setUploadedFiles([
-        { name: 'demo_4h_premium.csv', tf: '240', lines: lines4H, lineCount: lines4H.length },
-        { name: 'demo_1h_premium.csv', tf: '60', lines: lines1H, lineCount: lines1H.length },
-        { name: 'demo_15m_premium.csv', tf: '15', lines: lines15M, lineCount: lines15M.length },
-        { name: 'demo_3m_premium.csv', tf: '3', lines: lines3M, lineCount: lines3M.length },
-      ]);
-      
-      setTicker('BTCUSD');
-      setIsRunning(false);
-      setProgress(0);
-      toast('⚡ Datos Demo (BTCUSD) cargados con éxito. ¡Listo para simular u optimizar!', 'success');
-    }, 500);
   }, [toast]);
 
   const handleRun = useCallback(() => {
@@ -945,9 +849,12 @@ export default function BacktestingPanel() {
   const doubleFilteredTrades = tradeFilter === 'ALL'
     ? filteredTrades
     : filteredTrades.filter(t => {
-        if (tradeFilter === 'BOS') return t.events?.some(e => e.includes('EVENTO_BOS'));
-        if (tradeFilter === 'CHOCH') return t.events?.some(e => e.includes('EVENTO_CHOCH'));
-        if (tradeFilter === 'OTE') return t.events?.some(e => e.includes('OTE_Retracement'));
+        const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
+        if (tradeFilter === 'BOS') return t.events?.some(e => e.includes('EVENTO_BOS')) && !hasOte;
+        if (tradeFilter === 'CHOCH') return t.events?.some(e => e.includes('EVENTO_CHOCH')) && !hasOte;
+        if (tradeFilter === 'OTE') return hasOte;
+        if (tradeFilter === 'OTE_CHOCH') return hasOte && t.events?.some(e => e.includes('EVENTO_CHOCH'));
+        if (tradeFilter === 'OTE_BOS') return hasOte && t.events?.some(e => e.includes('EVENTO_BOS'));
         return true;
     });
 
@@ -1215,34 +1122,6 @@ export default function BacktestingPanel() {
               </div>
             </div>
 
-            {/* TOGGLE HABILITAR/DESHABILITAR SESION */}
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'space-between',
-              marginBottom: '12px', 
-              padding: '8px 10px', 
-              backgroundColor: enabled ? 'rgba(76, 175, 80, 0.06)' : 'rgba(244, 67, 54, 0.06)', 
-              borderRadius: '4px',
-              border: '1px solid ' + (enabled ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)'),
-              transition: 'all 0.2s ease-in-out'
-            }}>
-              <span style={{ fontSize: '0.62rem', fontWeight: 700, color: enabled ? '#4caf50' : '#f44336' }}>
-                {enabled ? '🟢 OPERACIONES HABILITADAS' : '🔴 OPERACIONES DESHABILITADAS'}
-              </span>
-              <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', gap: '6px' }}>
-                <input 
-                  type="checkbox" 
-                  checked={enabled} 
-                  onChange={e => setEnabled(e.target.checked)} 
-                  style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: enabled ? '#4caf50' : '#f44336' }}
-                />
-                <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', fontWeight: 600, userSelect: 'none' }}>
-                  {sessionFilter === 'ALL' ? 'Operar en todo horario' : `Operar en sesión ${sessionFilter}`}
-                </span>
-              </label>
-            </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
               <div>
                 <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MIN BUY</label>
@@ -1283,97 +1162,7 @@ export default function BacktestingPanel() {
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
             </div>
 
-            {/* KILLSWITCHES */}
-            <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)', marginBottom: '12px' }}>
-              <h4 style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <ShieldAlert size={14} color="var(--accent-red)" /> KILLSWITCHES (0 = APAGADO)
-              </h4>
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '8px', 
-                marginBottom: '10px', 
-                padding: '6px 8px', 
-                backgroundColor: optimizeSwitches ? 'rgba(212, 175, 55, 0.08)' : 'rgba(255,255,255,0.02)', 
-                borderRadius: '4px',
-                border: '1px dashed ' + (optimizeSwitches ? 'rgba(212, 175, 55, 0.3)' : 'var(--border-color)'),
-                transition: 'all 0.2s ease-in-out'
-              }}>
-                <input 
-                  type="checkbox" 
-                  id="opt-switches" 
-                  checked={optimizeSwitches} 
-                  onChange={e => setOptimizeSwitches(e.target.checked)} 
-                  style={{ cursor: 'pointer', width: '14px', height: '14px', accentColor: 'var(--accent-gold)' }}
-                />
-                <label htmlFor="opt-switches" style={{ fontSize: '0.62rem', color: optimizeSwitches ? 'var(--accent-gold)' : 'var(--text-secondary)', fontWeight: 600, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  ⚡ OPTIMIZAR KILLSWITCHES (PASO 2)
-                </label>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-                <div>
-                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX DAILY LOSS (R)</label>
-                  <input type="number" min="0" step="0.5" value={maxDailyLossR} onChange={e => setMaxDailyLossR(parseFloat(e.target.value) || 0)} className="mono"
-                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>DAILY TARGET (R)</label>
-                  <input type="number" min="0" step="0.5" value={dailyProfitTargetR} onChange={e => setDailyProfitTargetR(parseFloat(e.target.value) || 0)} className="mono"
-                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-                <div>
-                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX CONS. LOSS</label>
-                  <input type="number" min="0" step="1" value={maxConsecutiveLosses} onChange={e => setMaxConsecutiveLosses(parseInt(e.target.value) || 0)} className="mono"
-                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>MAX TRADES/DAY</label>
-                  <input type="number" min="0" step="1" value={maxTradesPerDay} onChange={e => setMaxTradesPerDay(parseInt(e.target.value) || 0)} className="mono"
-                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>TRAIL DD (R)</label>
-                  <input type="number" min="0" step="0.5" value={trailingDrawdownR} onChange={e => setTrailingDrawdownR(parseFloat(e.target.value) || 0)} className="mono"
-                    style={{ width: '100%', padding: '6px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-                </div>
-              </div>
-            </div>
 
-            <button 
-              type="button" 
-              onClick={loadDemoData} 
-              disabled={isRunning}
-              style={{
-                width: '100%',
-                padding: '12px',
-                marginBottom: '12px',
-                background: 'linear-gradient(135deg, rgba(124,77,255,0.2) 0%, rgba(255,170,0,0.15) 100%)',
-                color: 'var(--text-primary)',
-                border: '1px solid rgba(255,170,0,0.3)',
-                borderRadius: '8px',
-                fontWeight: 700,
-                fontSize: '0.75rem',
-                cursor: isRunning ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'all 0.3s ease',
-                boxShadow: '0 4px 15px rgba(0,0,0,0.2)'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.border = '1px solid var(--accent-gold)';
-                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(124,77,255,0.3) 0%, rgba(255,170,0,0.25) 100%)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.border = '1px solid rgba(255,170,0,0.3)';
-                e.currentTarget.style.background = 'linear-gradient(135deg, rgba(124,77,255,0.2) 0%, rgba(255,170,0,0.15) 100%)';
-              }}
-            >
-              <Wand2 size={14} color="var(--accent-gold)" /> ⚡ CARGAR SIMULACIÓN DEMO (UN CLICK)
-            </button>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
               onClick={() => fileInputRef.current?.click()}
@@ -1555,38 +1344,6 @@ export default function BacktestingPanel() {
                 )}
               </div>
 
-              {/* OTE Trigger */}
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
-                    <input
-                      type="checkbox"
-                      checked={sessionTriggers[sessionFilter]?.ote.enabled ?? false}
-                      onChange={e => updateSessionTrigger(sessionFilter, 'ote', 'enabled', e.target.checked)}
-                      style={{ cursor: 'pointer', accentColor: 'var(--accent-red)', width: '14px', height: '14px' }}
-                    />
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>🎯 OTE (General)</span>
-                  </label>
-                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(255,51,51,0.1)', color: 'var(--accent-red)', fontWeight: 600 }}>Gatillo</span>
-                </div>
-                {sessionTriggers[sessionFilter]?.ote.enabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="30"
-                      step="1"
-                      value={sessionTriggers[sessionFilter]?.ote.minScore ?? 8}
-                      onChange={e => updateSessionTrigger(sessionFilter, 'ote', 'minScore', parseInt(e.target.value))}
-                      style={{ flex: 1, accentColor: 'var(--accent-red)' }}
-                    />
-                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-red)', minWidth: '24px', textAlign: 'right' }}>
-                      +{sessionTriggers[sessionFilter]?.ote.minScore}
-                    </span>
-                  </div>
-                )}
-              </div>
 
               {/* OTE CHoCH Trigger */}
               <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
@@ -1829,8 +1586,15 @@ export default function BacktestingPanel() {
             {/* Trade Filter */}
             {trades.length > 0 && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                {(['ALL', 'CHOCH', 'BOS', 'OTE'] as const).map(f => {
-                  const labels: Record<string, string> = { ALL: '⚡ Todos los Gatillos', CHOCH: '🚀 Solo CHoCH', BOS: '🔨 Solo BOS', OTE: '📉 Solo OTE (Fibo)' };
+                {(['ALL', 'CHOCH', 'BOS', 'OTE', 'OTE_CHOCH', 'OTE_BOS'] as const).map(f => {
+                  const labels: Record<string, string> = { 
+                    ALL: '⚡ Todos los Gatillos', 
+                    CHOCH: '🚀 Solo CHoCH', 
+                    BOS: '🔨 Solo BOS', 
+                    OTE: '📉 OTE (Todos)',
+                    OTE_CHOCH: '📉 OTE de CHoCH',
+                    OTE_BOS: '📉 OTE de BOS'
+                  };
                   const isActive = tradeFilter === f;
                   return (
                     <button key={f} onClick={() => setTradeFilter(f)}

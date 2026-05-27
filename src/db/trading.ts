@@ -594,9 +594,13 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
                 const riskDist = Math.abs(currentPrice - adjustedSL);
+                // Aseguramos que TP2 sea siempre más ambicioso que TP1 para setups OTE
+                const oteTP2Limit = leg.dir === 'BUY'
+                    ? leg.extreme + (range * 0.27)
+                    : leg.extreme - (range * 0.27);
                 const fixedTP2 = leg.dir === 'BUY'
-                    ? currentPrice + (riskDist * config.fixedRR)
-                    : currentPrice - (riskDist * config.fixedRR);
+                    ? Math.max(oteTP2Limit, currentPrice + (riskDist * config.fixedRR))
+                    : Math.min(oteTP2Limit, currentPrice - (riskDist * config.fixedRR));
                 const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
