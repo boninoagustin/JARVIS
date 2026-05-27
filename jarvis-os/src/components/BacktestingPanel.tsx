@@ -45,6 +45,23 @@ interface SessionHistory {
   };
 }
 
+const getOverriddenSessions = (sessions: Record<string, any> | undefined, level: number) => {
+  if (!sessions) return undefined;
+  const updated = JSON.parse(JSON.stringify(sessions)); // deep clone to prevent mutation
+  Object.keys(updated).forEach(s => {
+    if (updated[s]) {
+      if (!updated[s].ote) updated[s].ote = { enabled: false, minScore: 5 };
+      if (!updated[s].oteChoch) updated[s].oteChoch = { enabled: false, minScore: 5 };
+      if (!updated[s].oteBos) updated[s].oteBos = { enabled: false, minScore: 5 };
+      
+      updated[s].ote.entryPercent = level;
+      updated[s].oteChoch.entryPercent = level;
+      updated[s].oteBos.entryPercent = level;
+    }
+  });
+  return updated;
+};
+
 export default function BacktestingPanel() {
   const [ticker, setTicker] = useState('BTCUSD');
   const [minBuyPoints, setMinBuyPoints] = useState(5);
@@ -140,6 +157,9 @@ export default function BacktestingPanel() {
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [trades, setTrades] = useState<BacktestTrade[]>([]);
+  const [trades50, setTrades50] = useState<BacktestTrade[]>([]);
+  const [trades62, setTrades62] = useState<BacktestTrade[]>([]);
+  const [trades79, setTrades79] = useState<BacktestTrade[]>([]);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [sessions, setSessions] = useState<SessionHistory[]>(() => {
     try { return JSON.parse(localStorage.getItem('bt_sessions') || '[]'); } catch { return []; }
@@ -280,20 +300,38 @@ export default function BacktestingPanel() {
 
     // Run in next tick to allow UI update
     setTimeout(() => {
-      const res = runBacktest(logs, { 
-        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
+      const baseParams = {
+        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
         maxDailyLossR: maxDailyLossR || undefined,
         dailyProfitTargetR: dailyProfitTargetR || undefined,
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
+      };
+
+      const res = runBacktest(logs, { 
+        ...baseParams,
+        oteEntryPercent: finalOte,
         sessions: finalSessions,
       }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
       });
+
+      // Run background simulations for OTE level comparisons and fast filtering
+      const sessions50 = getOverriddenSessions(finalSessions, 50);
+      const sessions62 = getOverriddenSessions(finalSessions, 62);
+      const sessions79 = getOverriddenSessions(finalSessions, 79);
+
+      const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
+      const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
+      const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
+
       setResult(res);
       setTrades(res.trades);
+      setTrades50(res50.trades);
+      setTrades62(res62.trades);
+      setTrades79(res79.trades);
       setProgress(100);
       setIsRunning(false);
 
@@ -427,6 +465,32 @@ export default function BacktestingPanel() {
               localStorage.setItem('bt_sessions', JSON.stringify(next));
               return next;
             });
+            const baseParams = {
+              ticker,
+              minBuyPoints: bestConfig.minBuyPoints,
+              minSellPoints: bestConfig.minSellPoints,
+              slBufferPercent: bestConfig.slBufferPercent,
+              fixedRR: bestConfig.fixedRR,
+              entryTrigger: bestConfig.entryTrigger,
+              maxDailyLossR: bestConfig.maxDailyLossR || undefined,
+              dailyProfitTargetR: bestConfig.dailyProfitTargetR || undefined,
+              maxConsecutiveLosses: bestConfig.maxConsecutiveLosses || undefined,
+              maxTradesPerDay: bestConfig.maxTradesPerDay || undefined,
+              trailingDrawdownR: bestConfig.trailingDrawdownR || undefined,
+            };
+
+            const sessions50 = getOverriddenSessions(sessionTriggers, 50);
+            const sessions62 = getOverriddenSessions(sessionTriggers, 62);
+            const sessions79 = getOverriddenSessions(sessionTriggers, 79);
+
+            const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
+            const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
+            const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
+
+            setTrades50(res50.trades);
+            setTrades62(res62.trades);
+            setTrades79(res79.trades);
+
             setSelectedSession(session.id);
             setIsRunning(false);
             toast(optimizeSwitches 
@@ -886,9 +950,16 @@ export default function BacktestingPanel() {
     setPortfolioResults(res);
   };
 
+  const oteSourceTrades = (() => {
+    if (oteFilter === 50 && trades50.length > 0) return trades50;
+    if (oteFilter === 62 && trades62.length > 0) return trades62;
+    if (oteFilter === 79 && trades79.length > 0) return trades79;
+    return trades;
+  })();
+
   const filteredTrades = sessionFilter === 'ALL'
-    ? trades
-    : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+    ? oteSourceTrades
+    : oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
   const doubleFilteredTrades = tradeFilter === 'ALL'
     ? filteredTrades
@@ -947,11 +1018,17 @@ export default function BacktestingPanel() {
   })();
 
   const oteBreakdownData = (() => {
-    const levels = [50, 62, 79];
-    const oteTradesOnly = trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement')));
+    const levels = [50, 62, 79] as const;
     
     return levels.map(level => {
-      const levelTrades = oteTradesOnly.filter(t => t.oteEntryUsed === level);
+      const source = level === 50 ? trades50 : level === 62 ? trades62 : trades79;
+      const finalSource = source.length > 0 ? source : trades;
+      
+      const sessionFiltered = sessionFilter === 'ALL'
+        ? finalSource
+        : finalSource.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+        
+      const levelTrades = sessionFiltered.filter(t => t.events?.some(e => e.includes('OTE_Retracement')));
       const closed = levelTrades.filter(t => t.result && t.result !== 'TIMEOUT');
       const wins = closed.filter(t => t.result === 'WIN').length;
       const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
@@ -2049,6 +2126,39 @@ export default function BacktestingPanel() {
                           if (s.config.sessions) {
                             // @ts-ignore
                             setSessionTriggers(s.config.sessions);
+                          }
+
+                          if (uploadedFiles.length > 0) {
+                            const logs = new Map<string, string[]>();
+                            uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+                            
+                            const baseParams = {
+                              ticker: s.ticker,
+                              minBuyPoints: s.config.minBuyPoints,
+                              minSellPoints: s.config.minSellPoints,
+                              slBufferPercent: s.config.slBufferPercent,
+                              fixedRR: s.config.fixedRR,
+                              entryTrigger: s.config.entryTrigger,
+                              maxDailyLossR: s.config.maxDailyLossR || undefined,
+                              dailyProfitTargetR: s.config.dailyProfitTargetR || undefined,
+                              maxConsecutiveLosses: s.config.maxConsecutiveLosses || undefined,
+                              maxTradesPerDay: s.config.maxTradesPerDay || undefined,
+                              trailingDrawdownR: s.config.trailingDrawdownR || undefined,
+                            };
+                            
+                            // @ts-ignore
+                            const finalSessions = s.config.sessions || sessionTriggers;
+                            const sessions50 = getOverriddenSessions(finalSessions, 50);
+                            const sessions62 = getOverriddenSessions(finalSessions, 62);
+                            const sessions79 = getOverriddenSessions(finalSessions, 79);
+                            
+                            const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
+                            const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
+                            const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
+                            
+                            setTrades50(res50.trades);
+                            setTrades62(res62.trades);
+                            setTrades79(res79.trades);
                           }
                         }
                       }
