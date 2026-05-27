@@ -174,9 +174,9 @@ interface AssetSessionConfig {
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
-      ote: { enabled: boolean; minScore: number };
-      oteChoch?: { enabled: boolean; minScore: number };
-      oteBos?: { enabled: boolean; minScore: number };
+      ote: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
     }>;
 }
 
@@ -210,9 +210,9 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
-      ote: { enabled: boolean; minScore: number };
-      oteChoch?: { enabled: boolean; minScore: number };
-      oteBos?: { enabled: boolean; minScore: number };
+      ote: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
     }>;
 } {
     const session = getCurrentSession();
@@ -510,7 +510,23 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         }
 
         const config = getConfigForTicker(ticker);
-        const fibRatio = config.oteEntryPercent / 100;
+        const currentSession = getCurrentSession();
+        const sessionConfig = config.sessions?.[currentSession];
+        const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
+        const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
+
+        let activeOteEntryPercent = config.oteEntryPercent || 50;
+        if (sessionConfig) {
+            if (isChoch) {
+                activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+            } else if (isBos) {
+                activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+            } else {
+                activeOteEntryPercent = sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+            }
+        }
+
+        const fibRatio = activeOteEntryPercent / 100;
         const entryLevel = leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio);
 
         // 🔓 OTE entry: el leg fue creado por un CHoCH que ya pasó todos los filtros de puntaje.
@@ -522,11 +538,6 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
         
         if (isEntryHit && !leg.oteScored) {
-            const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
-            const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
-
-            const currentSession = getCurrentSession();
-            const sessionConfig = config.sessions?.[currentSession];
 
             let oteEnabled = false;
             let oteMinScore = 8;

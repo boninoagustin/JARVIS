@@ -56,9 +56,9 @@ export default function BacktestingPanel() {
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
     choch: { enabled: boolean; minScore: number };
     bos: { enabled: boolean; minScore: number };
-    ote: { enabled: boolean; minScore: number };
-    oteChoch: { enabled: boolean; minScore: number };
-    oteBos: { enabled: boolean; minScore: number };
+    ote: { enabled: boolean; minScore: number; entryPercent?: number };
+    oteChoch: { enabled: boolean; minScore: number; entryPercent?: number };
+    oteBos: { enabled: boolean; minScore: number; entryPercent?: number };
   }>>(() => {
     try {
       const saved = localStorage.getItem('bt_session_triggers');
@@ -66,8 +66,12 @@ export default function BacktestingPanel() {
         const parsed = JSON.parse(saved);
         for (const s of ['ALL', 'LONDON', 'NY', 'ASIA']) {
           if (parsed[s]) {
-            if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8 };
-            if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8 };
+            if (!parsed[s].ote) parsed[s].ote = { enabled: true, minScore: 8, entryPercent: 62 };
+            if (parsed[s].ote.entryPercent === undefined) parsed[s].ote.entryPercent = 62;
+            if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8, entryPercent: 62 };
+            if (parsed[s].oteChoch.entryPercent === undefined) parsed[s].oteChoch.entryPercent = 62;
+            if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8, entryPercent: 62 };
+            if (parsed[s].oteBos.entryPercent === undefined) parsed[s].oteBos.entryPercent = 62;
           }
         }
         return parsed;
@@ -77,30 +81,30 @@ export default function BacktestingPanel() {
       ALL: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 },
-        oteChoch: { enabled: true, minScore: 8 },
-        oteBos: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
       },
       LONDON: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 },
-        oteChoch: { enabled: true, minScore: 8 },
-        oteBos: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
       },
       NY: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 },
-        oteChoch: { enabled: true, minScore: 8 },
-        oteBos: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
       },
       ASIA: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8 },
-        oteChoch: { enabled: true, minScore: 8 },
-        oteBos: { enabled: true, minScore: 8 }
+        ote: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
       }
     };
   });
@@ -108,7 +112,7 @@ export default function BacktestingPanel() {
   const updateSessionTrigger = (
     session: string,
     triggerType: 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos',
-    field: 'enabled' | 'minScore',
+    field: 'enabled' | 'minScore' | 'entryPercent',
     value: any
   ) => {
     setSessionTriggers(prev => {
@@ -1347,21 +1351,38 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(213,0,249,0.1)', color: '#d500f9', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.oteChoch?.enabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="30"
-                      step="1"
-                      value={sessionTriggers[sessionFilter]?.oteChoch?.minScore ?? 8}
-                      onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'minScore', parseInt(e.target.value))}
-                      style={{ flex: 1, accentColor: '#d500f9' }}
-                    />
-                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#d500f9', minWidth: '24px', textAlign: 'right' }}>
-                      +{sessionTriggers[sessionFilter]?.oteChoch?.minScore}
-                    </span>
-                  </div>
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteChoch?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'minScore', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#d500f9' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#d500f9', minWidth: '24px', textAlign: 'right' }}>
+                        +{sessionTriggers[sessionFilter]?.oteChoch?.minScore}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Entry Fib:</span>
+                      <input
+                        type="range"
+                        min="10"
+                        max="90"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? 62}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'entryPercent', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#d500f9' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#d500f9', minWidth: '24px', textAlign: 'right' }}>
+                        {(sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? 62)}%
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -1380,21 +1401,38 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.oteBos?.enabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="30"
-                      step="1"
-                      value={sessionTriggers[sessionFilter]?.oteBos?.minScore ?? 8}
-                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'minScore', parseInt(e.target.value))}
-                      style={{ flex: 1, accentColor: '#00e5ff' }}
-                    />
-                    <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
-                      +{sessionTriggers[sessionFilter]?.oteBos?.minScore}
-                    </span>
-                  </div>
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteBos?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'minScore', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#00e5ff' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                        +{sessionTriggers[sessionFilter]?.oteBos?.minScore}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Entry Fib:</span>
+                      <input
+                        type="range"
+                        min="10"
+                        max="90"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#00e5ff' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                        {(sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62)}%
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
             </div>

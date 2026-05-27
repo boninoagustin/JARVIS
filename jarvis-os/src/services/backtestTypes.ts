@@ -38,6 +38,7 @@ export interface BacktestTrade {
 export interface TriggerConfig {
   enabled: boolean;
   minScore: number;
+  entryPercent?: number;
 }
 
 export interface SessionConfig {

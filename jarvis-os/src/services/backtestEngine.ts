@@ -113,19 +113,30 @@ function evaluateImpulse(
 
   if (!impulseInvalidated) {
     const r2 = Math.abs(leg.extreme - leg.origin);
-    const fibRatio = (config.oteEntryPercent || 50) / 100;
+    
+    // --- RESOLUCIÓN DINÁMICA DE OTE ENTRY PERCENT POR SESIÓN Y GATILLO ---
+    const session = getSessionForTimestamp(nowMs);
+    const sessionConfig = config.sessions?.[session];
+    const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
+    const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
+
+    let activeOteEntryPercent = config.oteEntryPercent || 50;
+    if (sessionConfig) {
+      if (isChoch) {
+        activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+      } else if (isBos) {
+        activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+      } else {
+        activeOteEntryPercent = sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+      }
+    }
+
+    const fibRatio = activeOteEntryPercent / 100;
     const entryLevel = leg.dir === 'BUY' ? leg.extreme - (r2 * fibRatio) : leg.extreme + (r2 * fibRatio);
 
     const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
 
     if (isEntryHit && !leg.oteScored) {
-      // --- OTE TRIGGER CONFIGURATION ---
-      const session = getSessionForTimestamp(nowMs);
-      const sessionConfig = config.sessions?.[session];
-      
-      const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
-      const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
-
       let oteEnabled = false;
       let oteMinScore = 8;
 
