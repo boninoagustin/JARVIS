@@ -40,7 +40,7 @@ async function clearAll() {
     }
 
     try {
-        const collections = ['trade_journal', 'radar_states', 'market_states', 'screenshot_requests', 'trading_incoming'];
+        const collections = ['active_trades', 'trade_journal', 'radar_states', 'market_states', 'screenshot_requests', 'trading_incoming'];
         for (const col of collections) {
             await deleteCollection(col);
         }
