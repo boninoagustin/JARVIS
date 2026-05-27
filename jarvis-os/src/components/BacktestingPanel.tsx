@@ -150,6 +150,7 @@ export default function BacktestingPanel() {
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
   const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
   const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
+  const [oteFilter, setOteFilter] = useState<'ALL' | 50 | 62 | 79>('ALL');
   const optimizeSwitches = false;
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
@@ -266,7 +267,7 @@ export default function BacktestingPanel() {
     e.target.value = '';
   }, [toast]);
 
-  const handleRun = useCallback(() => {
+  const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
@@ -274,16 +275,19 @@ export default function BacktestingPanel() {
     const logs = new Map<string, string[]>();
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
+    const finalOte = overrideOte !== undefined ? overrideOte : oteEntryPercent;
+    const finalSessions = overrideSessions !== undefined ? overrideSessions : sessionTriggers;
+
     // Run in next tick to allow UI update
     setTimeout(() => {
       const res = runBacktest(logs, { 
-        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger,
+        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
         maxDailyLossR: maxDailyLossR || undefined,
         dailyProfitTargetR: dailyProfitTargetR || undefined,
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
-        sessions: sessionTriggers,
+        sessions: finalSessions,
       }, (pct, currentTrades) => {
         setProgress(pct);
         setTrades([...currentTrades]);
@@ -303,8 +307,8 @@ export default function BacktestingPanel() {
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
         tradeData: res.trades,
         config: { 
-          minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger,
-          sessions: sessionTriggers,
+          minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
+          sessions: finalSessions,
         }
       };
       setSessions(prev => {
@@ -316,6 +320,42 @@ export default function BacktestingPanel() {
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
+
+  const handleDashboardOteSelect = useCallback((level: number) => {
+    // 1. Update oteEntryPercent state
+    setOteEntryPercent(level);
+    
+    // 2. Prepare the updated session triggers object
+    const updatedSessions = { ...sessionTriggers };
+    if (sessionFilter === 'ALL') {
+      Object.keys(updatedSessions).forEach(s => {
+        if (updatedSessions[s]) {
+          updatedSessions[s] = {
+            ...updatedSessions[s],
+            ote: { ...updatedSessions[s].ote, entryPercent: level },
+            oteChoch: { ...updatedSessions[s].oteChoch, entryPercent: level },
+            oteBos: { ...updatedSessions[s].oteBos, entryPercent: level },
+          };
+        }
+      });
+    } else {
+      if (updatedSessions[sessionFilter]) {
+        updatedSessions[sessionFilter] = {
+          ...updatedSessions[sessionFilter],
+          ote: { ...updatedSessions[sessionFilter].ote, entryPercent: level },
+          oteChoch: { ...updatedSessions[sessionFilter].oteChoch, entryPercent: level },
+          oteBos: { ...updatedSessions[sessionFilter].oteBos, entryPercent: level },
+        };
+      }
+    }
+    
+    // 3. Update sessionTriggers state
+    setSessionTriggers(updatedSessions);
+    localStorage.setItem('bt_session_triggers', JSON.stringify(updatedSessions));
+    
+    // 4. Execute the backtest with the overrides
+    handleRun(level, updatedSessions);
+  }, [sessionFilter, sessionTriggers, handleRun]);
 
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -862,7 +902,11 @@ export default function BacktestingPanel() {
         return true;
     });
 
-  const tripleFilteredTrades = doubleFilteredTrades.filter(t => t.points >= scoreFilterMin && t.points <= scoreFilterMax);
+  const tripleFilteredTrades = doubleFilteredTrades.filter(t => {
+    const scoreMatch = t.points >= scoreFilterMin && t.points <= scoreFilterMax;
+    const oteMatch = oteFilter === 'ALL' || t.oteEntryUsed === oteFilter;
+    return scoreMatch && oteMatch;
+  });
 
   // Analíticas por rango de score basadas en doubleFilteredTrades (antes de filtrar la lista actual por score)
   const scoreRangesData = (() => {
@@ -898,6 +942,40 @@ export default function BacktestingPanel() {
         pnlR: pnlTotalR.toFixed(1),
         pnlUsd: pnlTotalUsd.toFixed(2),
         profitFactor
+      };
+    });
+  })();
+
+  const oteBreakdownData = (() => {
+    const levels = [50, 62, 79];
+    const oteTradesOnly = trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement')));
+    
+    return levels.map(level => {
+      const levelTrades = oteTradesOnly.filter(t => t.oteEntryUsed === level);
+      const closed = levelTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+      const wins = closed.filter(t => t.result === 'WIN').length;
+      const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
+      
+      let grossProfit = 0;
+      let grossLoss = 0;
+      closed.forEach(t => {
+        const p = t.rMultiple || 0;
+        if (p > 0) grossProfit += p;
+        else if (p < 0) grossLoss += Math.abs(p);
+      });
+      const pf = grossLoss === 0 
+        ? (grossProfit > 0 ? '∞' : '1.00') 
+        : (grossProfit / grossLoss).toFixed(2);
+        
+      const pnlR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0).toFixed(1);
+      
+      return {
+        level,
+        tradesCount: levelTrades.length,
+        winRate: wr,
+        profitFactor: pf,
+        pnlR,
+        color: level === 50 ? 'var(--accent-gold)' : level === 62 ? '#d500f9' : '#00e5ff'
       };
     });
   })();
@@ -1140,11 +1218,34 @@ export default function BacktestingPanel() {
               <span className="mono" style={{ fontSize: '0.75rem', color: '#0088ff', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{fixedRR}x</span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', whiteSpace: 'nowrap', fontWeight: 600 }}>📉 OTE ENTRY</label>
-              <input type="range" min="10" max="90" step="1" value={oteEntryPercent} onChange={e => setOteEntryPercent(parseFloat(e.target.value))}
-                style={{ flex: 1 }} />
-              <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-gold)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{oteEntryPercent}%</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', fontWeight: 700 }}>📉 OTE ENTRY GLOBAL</label>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {[50, 62, 79].map(level => {
+                  const isActive = oteEntryPercent === level;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() => setOteEntryPercent(level)}
+                      style={{
+                        flex: 1,
+                        padding: '4px 0',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        borderRadius: '4px',
+                        border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
+                        backgroundColor: isActive ? 'rgba(255,170,0,0.15)' : 'var(--bg-secondary)',
+                        color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {level}%
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
@@ -1189,7 +1290,7 @@ export default function BacktestingPanel() {
             )}
 
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="button" onClick={handleRun} disabled={uploadedFiles.length === 0 || isRunning}
+              <button type="button" onClick={() => handleRun()} disabled={uploadedFiles.length === 0 || isRunning}
                 style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Play size={14} /> SIMULAR
               </button>
@@ -1367,20 +1468,35 @@ export default function BacktestingPanel() {
                         +{sessionTriggers[sessionFilter]?.oteChoch?.minScore}
                       </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Entry Fib:</span>
-                      <input
-                        type="range"
-                        min="10"
-                        max="90"
-                        step="1"
-                        value={sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? 62}
-                        onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch', 'entryPercent', parseInt(e.target.value))}
-                        style={{ flex: 1, accentColor: '#d500f9' }}
-                      />
-                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#d500f9', minWidth: '24px', textAlign: 'right' }}>
-                        {(sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? 62)}%
-                      </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {[50, 62, 79].map(level => {
+                          const currentVal = sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? 62;
+                          const isActive = currentVal === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteChoch', 'entryPercent', level)}
+                              style={{
+                                flex: 1,
+                                padding: '4px 0',
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                borderRadius: '4px',
+                                border: isActive ? '1px solid #d500f9' : '1px solid var(--border-color)',
+                                backgroundColor: isActive ? 'rgba(213,0,249,0.15)' : 'var(--bg-secondary)',
+                                color: isActive ? '#d500f9' : 'var(--text-secondary)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              {level}%
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </>
                 )}
@@ -1417,20 +1533,35 @@ export default function BacktestingPanel() {
                         +{sessionTriggers[sessionFilter]?.oteBos?.minScore}
                       </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Entry Fib:</span>
-                      <input
-                        type="range"
-                        min="10"
-                        max="90"
-                        step="1"
-                        value={sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62}
-                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', parseInt(e.target.value))}
-                        style={{ flex: 1, accentColor: '#00e5ff' }}
-                      />
-                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
-                        {(sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62)}%
-                      </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {[50, 62, 79].map(level => {
+                          const currentVal = sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62;
+                          const isActive = currentVal === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', level)}
+                              style={{
+                                flex: 1,
+                                padding: '4px 0',
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                borderRadius: '4px',
+                                border: isActive ? '1px solid #00e5ff' : '1px solid var(--border-color)',
+                                backgroundColor: isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-secondary)',
+                                color: isActive ? '#00e5ff' : 'var(--text-secondary)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              {level}%
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </>
                 )}
@@ -1559,6 +1690,75 @@ export default function BacktestingPanel() {
                             <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
                             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                               {isPositive ? '+' : ''}{range.pnlR}R
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* OTE ENTRY BREAKDOWN */}
+            {trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement'))).length > 0 && (
+              <div style={{ marginTop: '20px', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                <h4 style={{ marginBottom: '12px', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <TrendingUp size={14} color="var(--accent-gold)" /> DESGLOSE DE RENDIMIENTO POR OTE
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {oteBreakdownData.map(data => {
+                    const isPositive = parseFloat(data.pnlR) >= 0;
+                    const currentOteEntry = sessionFilter === 'ALL'
+                      ? oteEntryPercent
+                      : (sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? oteEntryPercent);
+                    const isCurrentlyActive = currentOteEntry === data.level;
+
+                    return (
+                      <div 
+                        key={data.level} 
+                        onClick={() => handleDashboardOteSelect(data.level)}
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between', 
+                          padding: '10px 12px', 
+                          backgroundColor: isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)', 
+                          borderRadius: '4px', 
+                          border: isCurrentlyActive ? '1px solid rgba(255,170,0,0.3)' : '1px solid transparent',
+                          borderLeft: `4px solid ${data.color}`,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease-in-out',
+                        }}
+                        title="Haz clic para aplicar este OTE y re-correr backtest automáticamente"
+                        onMouseEnter={e => {
+                          e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.08)' : 'rgba(255,255,255,0.05)';
+                          e.currentTarget.style.transform = 'translateX(2px)';
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)';
+                          e.currentTarget.style.transform = 'translateX(0)';
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            Retorno OTE {data.level}% {isCurrentlyActive && <span style={{ fontSize: '0.55rem', padding: '1px 4px', backgroundColor: 'rgba(255,170,0,0.2)', color: 'var(--accent-gold)', borderRadius: '3px', fontWeight: 700 }}>ACTIVO</span>}
+                          </span>
+                          <span style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>
+                            {data.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{data.winRate}%</span>
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: parseFloat(data.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(data.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
+                              {data.profitFactor}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right', minWidth: '60px' }}>
+                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              {isPositive ? '+' : ''}{data.pnlR}R
                             </div>
                           </div>
                         </div>
@@ -1722,6 +1922,51 @@ export default function BacktestingPanel() {
                 </div>
               </div>
             )}
+
+            {/* OTE Filter */}
+            {trades.length > 0 && (
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '12px', 
+                marginBottom: '16px', 
+                padding: '10px 14px', 
+                backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                borderRadius: '6px',
+                border: '1px solid var(--border-color)',
+                flexWrap: 'wrap'
+              }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  🎯 OTE ENTRY FILTRADO:
+                </span>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {(['ALL', 50, 62, 79] as const).map(level => {
+                    const label = level === 'ALL' ? '⚡ Todos' : `${level}%`;
+                    const isActive = oteFilter === level;
+                    return (
+                      <button 
+                        key={level} 
+                        onClick={() => setOteFilter(level)}
+                        style={{
+                          padding: '4px 12px',
+                          fontSize: '0.65rem',
+                          borderRadius: '4px',
+                          border: isActive ? '1px solid #d500f9' : '1px solid var(--border-color)',
+                          backgroundColor: isActive ? 'rgba(213,0,249,0.1)' : 'transparent',
+                          color: isActive ? '#d500f9' : 'var(--text-secondary)',
+                          fontWeight: isActive ? 700 : 400,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {trades.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>

@@ -33,6 +33,7 @@ export interface BacktestTrade {
   resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT'; pnlTp2?: number;
   tp1Hit?: boolean; closeTimestamp?: number; durationMin?: number;
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number;
+  oteEntryUsed?: number;
 }
 
 export interface TriggerConfig {

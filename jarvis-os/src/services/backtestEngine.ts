@@ -205,6 +205,7 @@ function evaluateImpulse(
             events: [...(leg.chochEvents || []), eventName],
             bestZone: leg.bestZone || null,
             marketBias: { ...state.marketBias },
+            oteEntryUsed: activeOteEntryPercent,
           }
         };
       }
@@ -714,6 +715,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     points: oteData.points,
     events: oteData.events || [],
     grade: oteData.points >= 8 ? 'A+' : 'B',
+    oteEntryUsed: oteData.oteEntryUsed,
   };
   trades.push(trade);
   activeTrades.set(trade.id, trade);
