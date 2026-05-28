@@ -76,6 +76,8 @@ export default function BacktestingPanel() {
     ote: { enabled: boolean; minScore: number; entryPercent?: number };
     oteChoch: { enabled: boolean; minScore: number; entryPercent?: number };
     oteBos: { enabled: boolean; minScore: number; entryPercent?: number };
+    slBufferPercent?: number;
+    fixedRR?: number;
   }>>(() => {
     try {
       const saved = localStorage.getItem('bt_session_triggers');
@@ -89,6 +91,8 @@ export default function BacktestingPanel() {
             if (parsed[s].oteChoch.entryPercent === undefined) parsed[s].oteChoch.entryPercent = 62;
             if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8, entryPercent: 62 };
             if (parsed[s].oteBos.entryPercent === undefined) parsed[s].oteBos.entryPercent = 62;
+            if (parsed[s].slBufferPercent === undefined) parsed[s].slBufferPercent = 0.1;
+            if (parsed[s].fixedRR === undefined) parsed[s].fixedRR = 2.0;
           }
         }
         return parsed;
@@ -100,48 +104,62 @@ export default function BacktestingPanel() {
         bos: { enabled: true, minScore: 10 },
         ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
-        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
+        slBufferPercent: 0.1,
+        fixedRR: 2.0
       },
       LONDON: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
         ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
-        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
+        slBufferPercent: 0.1,
+        fixedRR: 2.0
       },
       NY: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
         ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
-        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
+        slBufferPercent: 0.1,
+        fixedRR: 2.0
       },
       ASIA: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
         ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
-        oteBos: { enabled: true, minScore: 8, entryPercent: 62 }
+        oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
+        slBufferPercent: 0.1,
+        fixedRR: 2.0
       }
     };
   });
 
   const updateSessionTrigger = (
     session: string,
-    triggerType: 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos',
-    field: 'enabled' | 'minScore' | 'entryPercent',
+    triggerType: 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos' | 'slBufferPercent' | 'fixedRR',
+    field: 'enabled' | 'minScore' | 'entryPercent' | '',
     value: any
   ) => {
     setSessionTriggers(prev => {
+      let updatedSession = { ...prev[session] };
+      if (triggerType === 'slBufferPercent' || triggerType === 'fixedRR') {
+        updatedSession[triggerType] = value;
+      } else {
+        const type = triggerType as 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos';
+        const f = field as 'enabled' | 'minScore' | 'entryPercent';
+        updatedSession[type] = {
+          ...updatedSession[type],
+          [f]: value
+        };
+      }
+
       const next = {
         ...prev,
-        [session]: {
-          ...prev[session],
-          [triggerType]: {
-            ...prev[session][triggerType],
-            [field]: value
-          }
-        }
+        [session]: updatedSession
       };
       localStorage.setItem('bt_session_triggers', JSON.stringify(next));
       return next;
@@ -170,7 +188,7 @@ export default function BacktestingPanel() {
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
   const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
   const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
-  const [oteFilter, setOteFilter] = useState<'ALL' | 50 | 62 | 79>('ALL');
+  const [oteFilter, setOteFilter] = useState<50 | 62 | 79>(50);
   const optimizeSwitches = false;
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
@@ -227,6 +245,7 @@ export default function BacktestingPanel() {
       setSlBufferPercent(config.slBufferPercent);
       setFixedRR(config.fixedRR);
       setOteEntryPercent(config.oteEntryPercent);
+      setOteFilter(config.oteEntryPercent as 50 | 62 | 79);
       setEntryTrigger(config.entryTrigger);
       setMinBuyPoints(config.minBuyPoints);
       setMinSellPoints(config.minSellPoints);
@@ -332,6 +351,7 @@ export default function BacktestingPanel() {
       setTrades50(res50.trades);
       setTrades62(res62.trades);
       setTrades79(res79.trades);
+      setOteFilter(finalOte as 50 | 62 | 79);
       setProgress(100);
       setIsRunning(false);
 
@@ -435,6 +455,7 @@ export default function BacktestingPanel() {
             setSlBufferPercent(bestConfig.slBufferPercent);
             setFixedRR(bestConfig.fixedRR);
             setOteEntryPercent(bestConfig.oteEntryPercent);
+            setOteFilter(bestConfig.oteEntryPercent as 50 | 62 | 79);
             setEntryTrigger(bestConfig.entryTrigger);
             setMinBuyPoints(bestConfig.minBuyPoints);
             setMinSellPoints(bestConfig.minSellPoints);
@@ -643,6 +664,180 @@ export default function BacktestingPanel() {
     
     setTimeout(() => processStage1Chunk(0), 100);
   }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
+
+  // ✨ AUTO-OPTIMIZADOR INTELIGENTE POR SESIÓN INDEPENDIENTE
+  const handleOptimizeSession = useCallback((targetSession: 'LONDON' | 'NY' | 'ASIA' | 'ALL') => {
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    setIsRunning(true);
+    setProgress(0);
+    setTrades([]);
+    setResult(null);
+
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+
+    // Opciones del espacio de búsqueda para SL Buffer y R:R
+    const slOptions = [0, 0.05, 0.1, 0.15, 0.2];
+    const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
+    
+    // Perfiles inteligentes de gatillos
+    const triggerProfiles = [
+      // 1. Choch puros
+      { choch: { enabled: true, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: true, minScore: 8 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: true, minScore: 12 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      
+      // 2. Bos puros
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 5 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 15 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      
+      // 3. OTE Choch puros con diferentes OTEs
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 5, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: false, minScore: 8 } },
+      
+      // 4. OTE Bos puros
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 5, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } },
+
+      // 5. OTE mixto
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } },
+      
+      // 6. Híbridos agresivos y conservadores
+      { choch: { enabled: true, minScore: 5 }, bos: { enabled: true, minScore: 10 }, ote: { enabled: true, minScore: 8, entryPercent: 62 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
+      { choch: { enabled: true, minScore: 8 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: true, minScore: 8, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } }
+    ];
+
+    const sessionsList = targetSession === 'ALL' ? ['LONDON', 'NY', 'ASIA'] as const : [targetSession] as const;
+
+    let currentSessionTriggers = JSON.parse(JSON.stringify(sessionTriggers));
+
+    const optimizeSessionTask = (sessionIndex: number) => {
+      if (sessionIndex >= sessionsList.length) {
+        setSessionTriggers(currentSessionTriggers);
+        localStorage.setItem('bt_session_triggers', JSON.stringify(currentSessionTriggers));
+
+        // Corremos un backtest final con los parámetros nuevos optimizados
+        setTimeout(() => {
+          const baseParams = {
+            ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
+            maxDailyLossR: maxDailyLossR || undefined,
+            dailyProfitTargetR: dailyProfitTargetR || undefined,
+            maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+            maxTradesPerDay: maxTradesPerDay || undefined,
+            trailingDrawdownR: trailingDrawdownR || undefined,
+          };
+          const finalRes = runBacktest(logs, {
+            ...baseParams,
+            oteEntryPercent,
+            sessions: currentSessionTriggers
+          });
+          setResult(finalRes);
+          setTrades(finalRes.trades);
+
+          // También actualizamos las simulaciones rápidas por ote
+          const sessions50 = getOverriddenSessions(currentSessionTriggers, 50);
+          const sessions62 = getOverriddenSessions(currentSessionTriggers, 62);
+          const sessions79 = getOverriddenSessions(currentSessionTriggers, 79);
+
+          const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
+          const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
+          const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
+
+          setTrades50(res50.trades);
+          setTrades62(res62.trades);
+          setTrades79(res79.trades);
+
+          setProgress(100);
+          setIsRunning(false);
+          toast(`✅ Optimización finalizada para ${targetSession === 'ALL' ? 'todas las sesiones individuales' : targetSession}.`, 'success');
+        }, 100);
+        return;
+      }
+
+      const s = sessionsList[sessionIndex];
+      let bestPnl = -Infinity;
+      let bestConfig: typeof triggerProfiles[number] & { slBufferPercent: number, fixedRR: number } = {
+        ...triggerProfiles[0],
+        slBufferPercent: 0.1,
+        fixedRR: 2.0
+      };
+
+      const combinations: { sl: number, rr: number, profile: typeof triggerProfiles[number] }[] = [];
+      for (const sl of slOptions) {
+        for (const rr of rrOptions) {
+          for (const profile of triggerProfiles) {
+            combinations.push({ sl, rr, profile });
+          }
+        }
+      }
+
+      const processChunk = (chunkStartIndex: number) => {
+        const chunkSize = 50;
+        const chunkEndIndex = Math.min(chunkStartIndex + chunkSize, combinations.length);
+
+        for (let i = chunkStartIndex; i < chunkEndIndex; i++) {
+          const comb = combinations[i];
+          
+          const tempSessions = JSON.parse(JSON.stringify(currentSessionTriggers));
+          tempSessions[s] = {
+            ...comb.profile,
+            slBufferPercent: comb.sl,
+            fixedRR: comb.rr
+          };
+
+          const testParams = {
+            ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
+            maxDailyLossR: maxDailyLossR || undefined,
+            dailyProfitTargetR: dailyProfitTargetR || undefined,
+            maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+            maxTradesPerDay: maxTradesPerDay || undefined,
+            trailingDrawdownR: trailingDrawdownR || undefined,
+            oteEntryPercent,
+            sessions: tempSessions
+          };
+
+          const testRes = runBacktest(logs, testParams);
+
+          const sessionTrades = testRes.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
+          const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+          const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+
+          if (pnl > bestPnl) {
+            bestPnl = pnl;
+            bestConfig = {
+              ...comb.profile,
+              slBufferPercent: comb.sl,
+              fixedRR: comb.rr
+            };
+          }
+        }
+
+        const sessionProgress = (chunkEndIndex / combinations.length);
+        const overallProgress = Math.floor(((sessionIndex + sessionProgress) / sessionsList.length) * 100);
+        setProgress(overallProgress);
+
+        if (chunkEndIndex < combinations.length) {
+          setTimeout(() => processChunk(chunkEndIndex), 10);
+        } else {
+          currentSessionTriggers[s] = {
+            ...currentSessionTriggers[s],
+            ...bestConfig
+          };
+          setTimeout(() => optimizeSessionTask(sessionIndex + 1), 50);
+        }
+      };
+
+      setTimeout(() => processChunk(0), 10);
+    };
+
+    setTimeout(() => optimizeSessionTask(0), 100);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, getSessionForTimestamp]);
 
   // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
   const runPortfolioSimulation = useCallback((
@@ -975,7 +1170,7 @@ export default function BacktestingPanel() {
 
   const tripleFilteredTrades = doubleFilteredTrades.filter(t => {
     const scoreMatch = t.points >= scoreFilterMin && t.points <= scoreFilterMax;
-    const oteMatch = oteFilter === 'ALL' || t.oteEntryUsed === oteFilter;
+    const oteMatch = t.oteEntryUsed === undefined || t.oteEntryUsed === oteFilter;
     return scoreMatch && oteMatch;
   });
 
@@ -1499,7 +1694,7 @@ export default function BacktestingPanel() {
               <Zap size={18} color="var(--accent-gold)" /> GATILLOS Y FILTROS POR SESIÓN
             </h3>
 
-            <div style={{ display: 'flex', gap: '4px', padding: '2px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', gap: '4px', padding: '2px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', marginBottom: '12px' }}>
               {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
                 const isActive = sessionFilter === s;
                 return (
@@ -1525,6 +1720,45 @@ export default function BacktestingPanel() {
                 );
               })}
             </div>
+
+            <button
+              type="button"
+              onClick={() => handleOptimizeSession(sessionFilter)}
+              disabled={isRunning}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 800,
+                borderRadius: '6px',
+                border: 'none',
+                background: 'linear-gradient(90deg, #7c4dff 0%, #00e5ff 100%)',
+                color: 'white',
+                cursor: 'pointer',
+                marginBottom: '16px',
+                boxShadow: '0 4px 15px rgba(124, 77, 255, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                transition: 'all 0.3s ease',
+                opacity: isRunning ? 0.6 : 1
+              }}
+              onMouseEnter={e => {
+                if (!isRunning) {
+                  (e.currentTarget as any).style.transform = 'translateY(-1px)';
+                  (e.currentTarget as any).style.boxShadow = '0 6px 20px rgba(124, 77, 255, 0.5)';
+                }
+              }}
+              onMouseLeave={e => {
+                if (!isRunning) {
+                  (e.currentTarget as any).style.transform = 'translateY(0)';
+                  (e.currentTarget as any).style.boxShadow = '0 4px 15px rgba(124, 77, 255, 0.3)';
+                }
+              }}
+            >
+              <Zap size={14} /> ✨ AUTO-OPTIMIZAR {sessionFilter === 'ALL' ? 'CADA SESIÓN' : `SESIÓN ${sessionFilter}`}
+            </button>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* CHOCH Trigger */}
@@ -1722,6 +1956,35 @@ export default function BacktestingPanel() {
                     </div>
                   </>
                 )}
+              </div>
+            </div>
+
+            {/* Gestión de Riesgo por Sesión */}
+            <div style={{ marginTop: '14px', padding: '12px', backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent-gold)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                🛡️ RIESGO Y TP PERSONALIZADO ({sessionFilter})
+              </div>
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '6px 8px', backgroundColor: 'rgba(255,51,51,0.03)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.08)' }}>
+                <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600 }}>SL BUF ({sessionFilter})</label>
+                <input type="range" min="0" max="0.5" step="0.01" 
+                  value={sessionTriggers[sessionFilter]?.slBufferPercent ?? 0.1} 
+                  onChange={e => updateSessionTrigger(sessionFilter, 'slBufferPercent', '', parseFloat(e.target.value))}
+                  style={{ flex: 1 }} />
+                <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent-red)', fontWeight: 700, minWidth: '36px', textAlign: 'right' }}>
+                  {sessionTriggers[sessionFilter]?.slBufferPercent ?? 0.1}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', backgroundColor: 'rgba(0,136,255,0.03)', borderRadius: '4px', border: '1px solid rgba(0,136,255,0.08)' }}>
+                <label style={{ fontSize: '0.6rem', color: '#0088ff', whiteSpace: 'nowrap', fontWeight: 600 }}>TP2 R:R ({sessionFilter})</label>
+                <input type="range" min="1" max="5" step="0.1" 
+                  value={sessionTriggers[sessionFilter]?.fixedRR ?? 2.0} 
+                  onChange={e => updateSessionTrigger(sessionFilter, 'fixedRR', '', parseFloat(e.target.value))}
+                  style={{ flex: 1 }} />
+                <span className="mono" style={{ fontSize: '0.7rem', color: '#0088ff', fontWeight: 700, minWidth: '36px', textAlign: 'right' }}>
+                  {sessionTriggers[sessionFilter]?.fixedRR ?? 2.0}x
+                </span>
               </div>
             </div>
             
@@ -2097,8 +2360,8 @@ export default function BacktestingPanel() {
                   🎯 OTE ENTRY FILTRADO:
                 </span>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {(['ALL', 50, 62, 79] as const).map(level => {
-                    const label = level === 'ALL' ? '⚡ Todos' : `${level}%`;
+                  {([50, 62, 79] as const).map(level => {
+                    const label = `${level}%`;
                     const isActive = oteFilter === level;
                     return (
                       <button 
@@ -2108,9 +2371,9 @@ export default function BacktestingPanel() {
                           padding: '4px 12px',
                           fontSize: '0.65rem',
                           borderRadius: '4px',
-                          border: isActive ? '1px solid #d500f9' : '1px solid var(--border-color)',
+                          border: isActive ? '1px solid var(--accent-magenta)' : '1px solid var(--border-color)',
                           backgroundColor: isActive ? 'rgba(213,0,249,0.1)' : 'transparent',
-                          color: isActive ? '#d500f9' : 'var(--text-secondary)',
+                          color: isActive ? 'var(--accent-magenta)' : 'var(--text-secondary)',
                           fontWeight: isActive ? 700 : 400,
                           cursor: 'pointer',
                           transition: 'all 0.2s'

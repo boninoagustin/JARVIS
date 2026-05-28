@@ -184,7 +184,10 @@ function evaluateImpulse(
 
         const decimals = getDecimals(ticker);
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent || 0);
+        const activeSlBufferPercent = sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? 0;
+        const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
+
+        const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, activeSlBufferPercent);
         const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBufferAmt : leg.origin + slBufferAmt;
         
         return {
@@ -197,8 +200,8 @@ function evaluateImpulse(
             tp2: (() => {
               const riskDist = Math.abs(entryLevel - adjustedSL);
               const fixedTP2 = leg.dir === 'BUY'
-                ? entryLevel + (riskDist * (config.fixedRR || 2.0))
-                : entryLevel - (riskDist * (config.fixedRR || 2.0));
+                ? entryLevel + (riskDist * activeFixedRR)
+                : entryLevel - (riskDist * activeFixedRR);
               return fixedTP2.toFixed(decimals);
             })(),
             points: totalPoints,
@@ -663,7 +666,10 @@ function processAlert(
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
-        const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent);
+        const activeSlBufferPercent = sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? 0;
+        const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
+
+        const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, activeSlBufferPercent);
         const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
         const stopLoss = adjustedSL.toFixed(decimals);
         const currentPrice = state.lastPrice || (currentDirection === 'BUY' ? activeLeg.extreme : activeLeg.extreme);
@@ -673,8 +679,8 @@ function processAlert(
           : currentPrice - riskDist;
         const tp1 = fixedTP1.toFixed(decimals);
         const fixedTP2 = currentDirection === 'BUY'
-          ? currentPrice + (riskDist * (config.fixedRR || 2.0))
-          : currentPrice - (riskDist * (config.fixedRR || 2.0));
+          ? currentPrice + (riskDist * activeFixedRR)
+          : currentPrice - (riskDist * activeFixedRR);
         const tp2 = fixedTP2.toFixed(decimals);
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
         

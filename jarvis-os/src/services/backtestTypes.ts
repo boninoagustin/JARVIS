@@ -48,6 +48,8 @@ export interface SessionConfig {
   ote: TriggerConfig;
   oteChoch?: TriggerConfig;
   oteBos?: TriggerConfig;
+  slBufferPercent?: number;
+  fixedRR?: number;
 }
 
 export interface BacktestConfig {
