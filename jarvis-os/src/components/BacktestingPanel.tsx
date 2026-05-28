@@ -1157,6 +1157,88 @@ export default function BacktestingPanel() {
       return;
     }
     
+    // Calcular las métricas globales para la exportación completa (sin aplicar los filtros visuales)
+    const closedGlobal = trades.filter(t => t.result && t.result !== 'TIMEOUT');
+    const winsGlobal = closedGlobal.filter(t => t.result === 'WIN').length;
+    const lossesGlobal = closedGlobal.filter(t => t.result === 'LOSS').length;
+    const beGlobal = closedGlobal.filter(t => t.result === 'BE').length;
+    const openGlobal = trades.filter(t => !t.result).length;
+    
+    const pnlTotalUsdGlobal = closedGlobal.reduce((acc, t) => acc + (t.rMultiple || 0) * riskUsd, 0);
+    const pnlTotalRGlobal = closedGlobal.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+    const wrGlobal = closedGlobal.length > 0 ? ((winsGlobal / closedGlobal.length) * 100).toFixed(1) : '—';
+    
+    let maxDDGlobal = 0, peakGlobal = 0;
+    let grossProfitUsdGlobal = 0, grossLossUsdGlobal = 0;
+    let maxConsLossesGlobal = 0, currentLossStreakGlobal = 0;
+    let totalDurationGlobal = 0, tradesWithDurationGlobal = 0;
+    let tp1OnlyCountGlobal = 0, tp2CountGlobal = 0, slCountGlobal = 0, beCountGlobal = 0;
+
+    closedGlobal.forEach(t => {
+      const r = t.rMultiple || 0;
+      const profitUsd = r * riskUsd;
+      
+      peakGlobal += profitUsd;
+      if (peakGlobal < maxDDGlobal) maxDDGlobal = peakGlobal;
+
+      if (profitUsd > 0) grossProfitUsdGlobal += profitUsd;
+      else grossLossUsdGlobal += Math.abs(profitUsd);
+
+      if (t.result === 'LOSS') {
+        currentLossStreakGlobal++;
+        if (currentLossStreakGlobal > maxConsLossesGlobal) maxConsLossesGlobal = currentLossStreakGlobal;
+      } else if (t.result === 'WIN') {
+        currentLossStreakGlobal = 0;
+      }
+
+      if (t.durationMin) {
+        totalDurationGlobal += t.durationMin;
+        tradesWithDurationGlobal++;
+      }
+
+      if (t.result === 'WIN') {
+          if (t.resultTp2 === 'WIN') tp2CountGlobal++;
+          else tp1OnlyCountGlobal++;
+      } else if (t.result === 'LOSS') {
+          slCountGlobal++;
+      } else if (t.result === 'BE') {
+          beCountGlobal++;
+      }
+    });
+
+    const profitFactorGlobal = grossLossUsdGlobal > 0 ? (grossProfitUsdGlobal / grossLossUsdGlobal).toFixed(2) : (grossProfitUsdGlobal > 0 ? '∞' : '0.00');
+    const expectancyRGlobal = closedGlobal.length > 0 ? (pnlTotalRGlobal / closedGlobal.length).toFixed(2) : '0.00';
+    const avgDurationMinGlobal = tradesWithDurationGlobal > 0 ? Math.round(totalDurationGlobal / tradesWithDurationGlobal) : 0;
+    
+    const formatDuration = (mins: number) => {
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    };
+
+    const globalMetrics = {
+      wins: winsGlobal,
+      losses: lossesGlobal,
+      be: beGlobal,
+      open: openGlobal,
+      wr: wrGlobal,
+      pnlUsd: pnlTotalUsdGlobal.toFixed(2),
+      pnlR: pnlTotalRGlobal.toFixed(2),
+      count: closedGlobal.length,
+      total: trades.length,
+      maxDDUsd: maxDDGlobal.toFixed(2),
+      closed: closedGlobal,
+      profitFactor: profitFactorGlobal,
+      expectancyR: expectancyRGlobal,
+      maxConsLosses: maxConsLossesGlobal,
+      avgDuration: formatDuration(avgDurationMinGlobal),
+      tp1OnlyCount: tp1OnlyCountGlobal,
+      tp2Count: tp2CountGlobal,
+      slCount: slCountGlobal,
+      beCount: beCountGlobal
+    };
+
     const downloadData = {
       metadata: {
         ticker,
@@ -1176,10 +1258,8 @@ export default function BacktestingPanel() {
         entryTrigger,
         sessions: sessionTriggers
       },
-      metrics: {
-        ...metrics
-      },
-      trades: tripleFilteredTrades
+      metrics: globalMetrics,
+      trades: trades
     };
 
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(downloadData, null, 2));
@@ -1189,8 +1269,8 @@ export default function BacktestingPanel() {
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
-    toast('✅ Archivo JSON descargado con éxito', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, metrics, tripleFilteredTrades, scoreFilterMin, scoreFilterMax, toast]);
+    toast('✅ Archivo JSON descargado con éxito (historial completo de trades)', 'success');
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, scoreFilterMin, scoreFilterMax, riskUsd, toast]);
 
   return (
     <div className="animate-fadeIn">
