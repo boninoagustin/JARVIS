@@ -680,40 +680,87 @@ export default function BacktestingPanel() {
     const slOptions = [0, 0.05, 0.1, 0.15, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
     
-    // Perfiles inteligentes de gatillos (Escala Premium de Alta Puntuación para Entradas Sniper)
-    const triggerProfiles = [
-      // 1. Choch puros (Reversiones directas de alta puntuación)
-      { choch: { enabled: true, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: true, minScore: 16 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: true, minScore: 20 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      
-      // 2. Bos puros (Continuaciones directas de alta puntuación)
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 16 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 20 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
-      
-      // 3. OTE Choch puros (Entradas en retrocesos óptimos basadas en CHOCH)
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 62 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: false, minScore: 12 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: false, minScore: 12 } },
-      
-      // 4. OTE Bos puros (Entradas en retrocesos óptimos basadas en BOS)
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 16, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } },
+    // Generar perfiles dinámicos inteligentes punto por punto de score según el gatillo seleccionado en la interfaz
+    const triggerProfiles: any[] = [];
 
-      // 5. OTE mixto (Combina OTE CHOCH y OTE BOS de nivel Sniper)
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 62 }, oteBos: { enabled: true, minScore: 16, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
-      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } },
-      
-      // 6. Híbridos globales (Todos los gatillos encendidos para mayor flexibilidad de alto puntaje)
-      { choch: { enabled: true, minScore: 12 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: true, minScore: 12, entryPercent: 62 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
-      { choch: { enabled: true, minScore: 16 }, bos: { enabled: true, minScore: 16 }, ote: { enabled: true, minScore: 16, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
-      { choch: { enabled: true, minScore: 20 }, bos: { enabled: true, minScore: 20 }, ote: { enabled: true, minScore: 20, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } }
-    ];
+    if (tradeFilter === 'ALL') {
+      // Si el filtro es ALL, evaluamos perfiles globales combinados con scores de 10 a 24 (en pasos de 2)
+      // para no multiplicar exponencialmente las combinaciones pero cubrir todo el espectro de consistencia.
+      const scores = [10, 12, 14, 16, 18, 20, 22, 24];
+      for (const sc of scores) {
+        triggerProfiles.push({
+          choch: { enabled: true, minScore: sc },
+          bos: { enabled: true, minScore: sc },
+          ote: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
+          oteChoch: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
+          oteBos: { enabled: true, minScore: sc, entryPercent: oteEntryPercent }
+        });
+      }
+    } else if (tradeFilter === 'CHOCH') {
+      // Punto por punto exacto de 8 a 25 para CHOCH directo
+      for (let sc = 8; sc <= 25; sc++) {
+        triggerProfiles.push({
+          choch: { enabled: true, minScore: sc },
+          bos: { enabled: false, minScore: 12 },
+          ote: { enabled: false, minScore: 12 },
+          oteChoch: { enabled: false, minScore: 12 },
+          oteBos: { enabled: false, minScore: 12 }
+        });
+      }
+    } else if (tradeFilter === 'BOS') {
+      // Punto por punto exacto de 8 a 25 para BOS directo
+      for (let sc = 8; sc <= 25; sc++) {
+        triggerProfiles.push({
+          choch: { enabled: false, minScore: 12 },
+          bos: { enabled: true, minScore: sc },
+          ote: { enabled: false, minScore: 12 },
+          oteChoch: { enabled: false, minScore: 12 },
+          oteBos: { enabled: false, minScore: 12 }
+        });
+      }
+    } else if (tradeFilter === 'OTE') {
+      // Punto por punto exacto de 8 a 25 para OTE general, evaluando niveles del 62% y 79%
+      const oteLevels = [62, 79];
+      for (const lvl of oteLevels) {
+        for (let sc = 8; sc <= 25; sc++) {
+          triggerProfiles.push({
+            choch: { enabled: false, minScore: 12 },
+            bos: { enabled: false, minScore: 12 },
+            ote: { enabled: true, minScore: sc, entryPercent: lvl },
+            oteChoch: { enabled: false, minScore: 12 },
+            oteBos: { enabled: false, minScore: 12 }
+          });
+        }
+      }
+    } else if (tradeFilter === 'OTE_CHOCH') {
+      // Punto por punto exacto de 8 a 25 para OTE basado en CHOCH, evaluando niveles del 62% y 79%
+      const oteLevels = [62, 79];
+      for (const lvl of oteLevels) {
+        for (let sc = 8; sc <= 25; sc++) {
+          triggerProfiles.push({
+            choch: { enabled: false, minScore: 12 },
+            bos: { enabled: false, minScore: 12 },
+            ote: { enabled: false, minScore: 12 },
+            oteChoch: { enabled: true, minScore: sc, entryPercent: lvl },
+            oteBos: { enabled: false, minScore: 12 }
+          });
+        }
+      }
+    } else if (tradeFilter === 'OTE_BOS') {
+      // Punto por punto exacto de 8 a 25 para OTE basado en BOS, evaluando niveles del 62% y 79%
+      const oteLevels = [62, 79];
+      for (const lvl of oteLevels) {
+        for (let sc = 8; sc <= 25; sc++) {
+          triggerProfiles.push({
+            choch: { enabled: false, minScore: 12 },
+            bos: { enabled: false, minScore: 12 },
+            ote: { enabled: false, minScore: 12 },
+            oteChoch: { enabled: false, minScore: 12 },
+            oteBos: { enabled: true, minScore: sc, entryPercent: lvl }
+          });
+        }
+      }
+    }
 
     const sessionsList = targetSession === 'ALL' ? ['LONDON', 'NY', 'ASIA'] as const : [targetSession] as const;
 
@@ -862,7 +909,7 @@ export default function BacktestingPanel() {
     };
 
     setTimeout(() => optimizeSessionTask(0), 100);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, getSessionForTimestamp]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, getSessionForTimestamp, tradeFilter]);
 
   // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
   const runPortfolioSimulation = useCallback((
