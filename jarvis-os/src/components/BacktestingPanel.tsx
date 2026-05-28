@@ -761,7 +761,7 @@ export default function BacktestingPanel() {
       }
 
       const s = sessionsList[sessionIndex];
-      let bestPnl = -Infinity;
+      let bestScore = -Infinity;
       let bestConfig: typeof triggerProfiles[number] & { slBufferPercent: number, fixedRR: number } = {
         ...triggerProfiles[0],
         slBufferPercent: 0.1,
@@ -806,10 +806,33 @@ export default function BacktestingPanel() {
 
           const sessionTrades = testRes.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
           const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
+          
+          // Cálculo de PnL Neto en unidades de R
           const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+          
+          // Cálculo del Profit Factor local de la sesión
+          let grossProfit = 0;
+          let grossLoss = 0;
+          closed.forEach(t => {
+            const p = t.rMultiple || 0;
+            if (p > 0) grossProfit += p;
+            else if (p < 0) grossLoss += Math.abs(p);
+          });
+          const pf = grossLoss === 0 ? (grossProfit > 0 ? 2.5 : 1.0) : (grossProfit / grossLoss);
+          
+          // 1. Penalizador de Muestra Pequeña (Evita overfitting y trades de suerte con poca muestra)
+          const tradeCountFactor = closed.length < 3 ? 0.2 : (closed.length < 6 ? 0.6 : 1.0);
+          
+          // 2. Factor de Profit Factor saludable (topado en 2.5 para evitar sobreajuste absurdo)
+          const cappedPF = Math.min(pf, 2.5);
+          
+          // 3. Puntuación final multivariable (Score de Robustez)
+          const robustScore = pnl >= 0 
+            ? pnl * cappedPF * tradeCountFactor 
+            : pnl / (Math.max(0.1, cappedPF) * Math.max(0.1, tradeCountFactor));
 
-          if (pnl > bestPnl) {
-            bestPnl = pnl;
+          if (robustScore > bestScore) {
+            bestScore = robustScore;
             bestConfig = {
               ...comb.profile,
               slBufferPercent: comb.sl,
