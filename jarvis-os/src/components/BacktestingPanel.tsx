@@ -1145,10 +1145,14 @@ export default function BacktestingPanel() {
     setPortfolioResults(res);
   };
 
+  const isOteFilterActive = ['OTE', 'OTE_CHOCH', 'OTE_BOS'].includes(tradeFilter);
+
   const oteSourceTrades = (() => {
-    if (oteFilter === 50 && trades50.length > 0) return trades50;
-    if (oteFilter === 62 && trades62.length > 0) return trades62;
-    if (oteFilter === 79 && trades79.length > 0) return trades79;
+    if (isOteFilterActive) {
+      if (oteFilter === 50 && trades50.length > 0) return trades50;
+      if (oteFilter === 62 && trades62.length > 0) return trades62;
+      if (oteFilter === 79 && trades79.length > 0) return trades79;
+    }
     return trades;
   })();
 
@@ -1170,7 +1174,7 @@ export default function BacktestingPanel() {
 
   const tripleFilteredTrades = doubleFilteredTrades.filter(t => {
     const scoreMatch = t.points >= scoreFilterMin && t.points <= scoreFilterMax;
-    const oteMatch = t.oteEntryUsed === undefined || t.oteEntryUsed === oteFilter;
+    const oteMatch = !isOteFilterActive || t.oteEntryUsed === undefined || t.oteEntryUsed === oteFilter;
     return scoreMatch && oteMatch;
   });
 
@@ -2344,48 +2348,55 @@ export default function BacktestingPanel() {
             )}
 
             {/* OTE Filter */}
-            {trades.length > 0 && (
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '12px', 
-                marginBottom: '16px', 
-                padding: '10px 14px', 
-                backgroundColor: 'rgba(255, 255, 255, 0.02)', 
-                borderRadius: '6px',
-                border: '1px solid var(--border-color)',
-                flexWrap: 'wrap'
-              }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  🎯 OTE ENTRY FILTRADO:
-                </span>
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  {([50, 62, 79] as const).map(level => {
-                    const label = `${level}%`;
-                    const isActive = oteFilter === level;
-                    return (
-                      <button 
-                        key={level} 
-                        onClick={() => setOteFilter(level)}
-                        style={{
-                          padding: '4px 12px',
-                          fontSize: '0.65rem',
-                          borderRadius: '4px',
-                          border: isActive ? '1px solid var(--accent-magenta)' : '1px solid var(--border-color)',
-                          backgroundColor: isActive ? 'rgba(213,0,249,0.1)' : 'transparent',
-                          color: isActive ? 'var(--accent-magenta)' : 'var(--text-secondary)',
-                          fontWeight: isActive ? 700 : 400,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
+            {trades.length > 0 && (() => {
+              const isOteFilterActive = ['OTE', 'OTE_CHOCH', 'OTE_BOS'].includes(tradeFilter);
+              return (
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '12px', 
+                  marginBottom: '16px', 
+                  padding: '10px 14px', 
+                  backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-color)',
+                  flexWrap: 'wrap',
+                  opacity: isOteFilterActive ? 1 : 0.45,
+                  pointerEvents: isOteFilterActive ? 'auto' : 'none',
+                  transition: 'opacity 0.2s'
+                }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    🎯 OTE ENTRY FILTRADO {!isOteFilterActive && <span style={{ color: 'var(--accent-gold)', fontWeight: 400, marginLeft: '4px' }}>(Inactivo - Solo para gatillos OTE)</span>}:
+                  </span>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {([50, 62, 79] as const).map(level => {
+                      const label = `${level}%`;
+                      const isActive = isOteFilterActive && oteFilter === level;
+                      return (
+                        <button 
+                          key={level} 
+                          disabled={!isOteFilterActive}
+                          onClick={() => setOteFilter(level)}
+                          style={{
+                            padding: '4px 12px',
+                            fontSize: '0.65rem',
+                            borderRadius: '4px',
+                            border: isActive ? '1px solid var(--accent-magenta)' : '1px solid var(--border-color)',
+                            backgroundColor: isActive ? 'rgba(213,0,249,0.1)' : 'transparent',
+                            color: isActive ? 'var(--accent-magenta)' : 'var(--text-secondary)',
+                            fontWeight: isActive ? 700 : 400,
+                            cursor: isOteFilterActive ? 'pointer' : 'not-allowed',
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {trades.length === 0 ? (
