@@ -809,7 +809,18 @@ export async function processTradingAlert(alertText: string) {
     const ticker = parts[1].replace(/"/g, '');
     const upperText = alertText.toUpperCase();
 
-    if (globalKillswitches[ticker]) return;
+    // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
+    if (globalKillswitches['GLOBAL_SYSTEM']) {
+        if (ticker === 'BTCUSD' && !globalKillswitches['BTCUSD']) {
+            console.log(`[RADAR] 🤖 Master Killswitch activo, pero permitiendo BTCUSD de forma excepcional.`);
+        } else {
+            console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada debido a que el BOT GLOBAL está APAGADO.`);
+            return;
+        }
+    } else if (globalKillswitches[ticker]) {
+        console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada por killswitch individual activo.`);
+        return;
+    }
 
     // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
     // Dos PINGs del mismo ticker se procesan secuencialmente, no en paralelo

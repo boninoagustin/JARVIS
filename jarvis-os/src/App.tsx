@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { Activity, Terminal, PieChart, Settings, Play } from 'lucide-react';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
 import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
 import BacktestingPanel from './components/BacktestingPanel';
-import { ToastProvider } from './components/Toast';
+import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
 function Sidebar() {
@@ -46,6 +48,127 @@ function Sidebar() {
   );
 }
 
+function Header({ time }: { time: Date }) {
+  const { toast } = useToast();
+  const [killswitches, setKillswitches] = useState<Record<string, boolean>>({});
+  const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'app_settings', 'global'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setKillswitches(data?.killswitches || {});
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const isBotActive = !killswitches['GLOBAL_SYSTEM'];
+
+  const handleTurnOn = async () => {
+    try {
+      await setDoc(doc(db, 'app_settings', 'global'), {
+        killswitches: {
+          ...killswitches,
+          GLOBAL_SYSTEM: false
+        }
+      }, { merge: true });
+      toast('🤖 Sistema Jarvis Reactivado con éxito.', 'success');
+    } catch (e: any) {
+      toast('Error al encender el bot', 'error');
+    }
+  };
+
+  const handlePauseAll = async () => {
+    try {
+      await setDoc(doc(db, 'app_settings', 'global'), {
+        killswitches: {
+          ...killswitches,
+          GLOBAL_SYSTEM: true,
+          BTCUSD: true
+        }
+      }, { merge: true });
+      toast('🛑 Jarvis Bot y BTCUSD apagados completamente.', 'warning');
+    } catch (e: any) {
+      toast('Error al pausar el bot', 'error');
+    }
+    setShowModal(false);
+  };
+
+  const handlePauseAllExceptBtc = async () => {
+    try {
+      await setDoc(doc(db, 'app_settings', 'global'), {
+        killswitches: {
+          ...killswitches,
+          GLOBAL_SYSTEM: true,
+          BTCUSD: false
+        }
+      }, { merge: true });
+      toast('🛑 Jarvis Bot en pausa. BTCUSD continúa operando.', 'info');
+    } catch (e: any) {
+      toast('Error al pausar el bot', 'error');
+    }
+    setShowModal(false);
+  };
+
+  return (
+    <>
+      <header className="header">
+        <div>
+          <h2 style={{ letterSpacing: '0.1em', textTransform: 'uppercase' }}>Terminal de Operaciones</h2>
+        </div>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <button
+            onClick={() => isBotActive ? setShowModal(true) : handleTurnOn()}
+            className={`master-bot-btn ${isBotActive ? 'active' : 'inactive'}`}
+            title={isBotActive ? "Apagar el Bot Maestro" : "Encender el Bot Maestro"}
+          >
+            <span className="btn-icon">🤖</span>
+            <span className="btn-text">{isBotActive ? 'BOT ONLINE' : 'BOT OFFLINE'}</span>
+            <span className="btn-pulse-dot"></span>
+          </button>
+
+          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--accent-gold)' }}>
+            {time.toLocaleTimeString('en-GB')} UTC-3
+          </div>
+        </div>
+      </header>
+
+      {/* Modal de Confirmación Premium */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal-content-premium" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header-premium">
+              <span className="modal-title-icon">⚠️</span>
+              <h3>APAGAR JARVIS SYSTEM</h3>
+            </div>
+            
+            <div className="modal-body-premium">
+              <p>¿Estás seguro de que deseas pausar por completo el bot de operaciones?</p>
+              <p className="highlight-text">
+                Dado que <strong>BTCUSD</strong> opera 24/7 de forma continua, puedes seleccionar si deseas desactivar también este activo o si deseas mantenerlo operativo de forma independiente.
+              </p>
+            </div>
+            
+            <div className="modal-footer-premium">
+              <button className="btn-danger" onClick={handlePauseAll}>
+                🛑 Apagar Todo (Incluyendo BTCUSD)
+              </button>
+              <button className="btn-warning-premium" onClick={handlePauseAllExceptBtc}>
+                ⚡ Apagar Todo excepto BTCUSD
+              </button>
+              <button className="btn-cancel" onClick={() => setShowModal(false)}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function App() {
   const [time, setTime] = useState(new Date());
 
@@ -60,14 +183,7 @@ function App() {
       <div className="app-container">
         <Sidebar />
         <main className="main-content">
-          <header className="header">
-            <div>
-              <h2 style={{ letterSpacing: '0.1em', textTransform: 'uppercase' }}>Terminal de Operaciones</h2>
-            </div>
-            <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--accent-gold)' }}>
-              {time.toLocaleTimeString('en-GB')} UTC-3
-            </div>
-          </header>
+          <Header time={time} />
           
           <Routes>
             <Route path="/" element={<Navigate to="/radar" replace />} />
