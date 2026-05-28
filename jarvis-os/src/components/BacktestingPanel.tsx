@@ -1725,44 +1725,63 @@ export default function BacktestingPanel() {
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={() => handleOptimizeSession(sessionFilter)}
-              disabled={isRunning}
-              style={{
-                width: '100%',
-                padding: '8px',
-                fontSize: '0.75rem',
-                fontWeight: 800,
+            {sessionFilter !== 'ALL' ? (
+              <button
+                type="button"
+                onClick={() => handleOptimizeSession(sessionFilter)}
+                disabled={isRunning}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  fontSize: '0.75rem',
+                  fontWeight: 800,
+                  borderRadius: '6px',
+                  border: 'none',
+                  background: 'linear-gradient(90deg, #7c4dff 0%, #00e5ff 100%)',
+                  color: 'white',
+                  cursor: 'pointer',
+                  marginBottom: '16px',
+                  boxShadow: '0 4px 15px rgba(124, 77, 255, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'all 0.3s ease',
+                  opacity: isRunning ? 0.6 : 1
+                }}
+                onMouseEnter={e => {
+                  if (!isRunning) {
+                    (e.currentTarget as any).style.transform = 'translateY(-1px)';
+                    (e.currentTarget as any).style.boxShadow = '0 6px 20px rgba(124, 77, 255, 0.5)';
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isRunning) {
+                    (e.currentTarget as any).style.transform = 'translateY(0)';
+                    (e.currentTarget as any).style.boxShadow = '0 4px 15px rgba(124, 77, 255, 0.3)';
+                  }
+                }}
+              >
+                <Zap size={14} /> ✨ AUTO-OPTIMIZAR SESIÓN {sessionFilter}
+              </button>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: '10px 12px',
+                fontSize: '0.7rem',
+                color: 'var(--accent-gold)',
+                backgroundColor: 'rgba(255, 215, 0, 0.04)',
+                border: '1px dashed rgba(255, 215, 0, 0.2)',
                 borderRadius: '6px',
-                border: 'none',
-                background: 'linear-gradient(90deg, #7c4dff 0%, #00e5ff 100%)',
-                color: 'white',
-                cursor: 'pointer',
                 marginBottom: '16px',
-                boxShadow: '0 4px 15px rgba(124, 77, 255, 0.3)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
-                transition: 'all 0.3s ease',
-                opacity: isRunning ? 0.6 : 1
-              }}
-              onMouseEnter={e => {
-                if (!isRunning) {
-                  (e.currentTarget as any).style.transform = 'translateY(-1px)';
-                  (e.currentTarget as any).style.boxShadow = '0 6px 20px rgba(124, 77, 255, 0.5)';
-                }
-              }}
-              onMouseLeave={e => {
-                if (!isRunning) {
-                  (e.currentTarget as any).style.transform = 'translateY(0)';
-                  (e.currentTarget as any).style.boxShadow = '0 4px 15px rgba(124, 77, 255, 0.3)';
-                }
-              }}
-            >
-              <Zap size={14} /> ✨ AUTO-OPTIMIZAR {sessionFilter === 'ALL' ? 'CADA SESIÓN' : `SESIÓN ${sessionFilter}`}
-            </button>
+                gap: '6px'
+              }}>
+                <span>💡 Seleccioná una sesión (London, NY, Asia) para optimizar su configuración individual.</span>
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* CHOCH Trigger */}
