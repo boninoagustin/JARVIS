@@ -680,37 +680,39 @@ export default function BacktestingPanel() {
     const slOptions = [0, 0.05, 0.1, 0.15, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
     
-    // Perfiles inteligentes de gatillos
+    // Perfiles inteligentes de gatillos (Escala Premium de Alta Puntuación para Entradas Sniper)
     const triggerProfiles = [
-      // 1. Choch puros
-      { choch: { enabled: true, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: true, minScore: 8 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: true, minScore: 12 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      // 1. Choch puros (Reversiones directas de alta puntuación)
+      { choch: { enabled: true, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: true, minScore: 16 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: true, minScore: 20 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
       
-      // 2. Bos puros
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 5 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: true, minScore: 15 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: false, minScore: 8 } },
+      // 2. Bos puros (Continuaciones directas de alta puntuación)
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 16 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: true, minScore: 20 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: false, minScore: 12 } },
       
-      // 3. OTE Choch puros con diferentes OTEs
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 5, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: false, minScore: 8 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: false, minScore: 8 } },
+      // 3. OTE Choch puros (Entradas en retrocesos óptimos basadas en CHOCH)
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 62 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: false, minScore: 12 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: false, minScore: 12 } },
       
-      // 4. OTE Bos puros
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 5, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: false, minScore: 8 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } },
+      // 4. OTE Bos puros (Entradas en retrocesos óptimos basadas en BOS)
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 16, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: false, minScore: 12 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } },
 
-      // 5. OTE mixto
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
-      { choch: { enabled: false, minScore: 5 }, bos: { enabled: false, minScore: 10 }, ote: { enabled: false, minScore: 8 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } },
+      // 5. OTE mixto (Combina OTE CHOCH y OTE BOS de nivel Sniper)
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 62 }, oteBos: { enabled: true, minScore: 16, entryPercent: 62 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
+      { choch: { enabled: false, minScore: 12 }, bos: { enabled: false, minScore: 12 }, ote: { enabled: false, minScore: 12 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } },
       
-      // 6. Híbridos agresivos y conservadores
-      { choch: { enabled: true, minScore: 5 }, bos: { enabled: true, minScore: 10 }, ote: { enabled: true, minScore: 8, entryPercent: 62 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 62 }, oteBos: { enabled: true, minScore: 8, entryPercent: 62 } },
-      { choch: { enabled: true, minScore: 8 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: true, minScore: 8, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 8, entryPercent: 79 }, oteBos: { enabled: true, minScore: 8, entryPercent: 79 } }
+      // 6. Híbridos globales (Todos los gatillos encendidos para mayor flexibilidad de alto puntaje)
+      { choch: { enabled: true, minScore: 12 }, bos: { enabled: true, minScore: 12 }, ote: { enabled: true, minScore: 12, entryPercent: 62 }, oteChoch: { enabled: true, minScore: 12, entryPercent: 62 }, oteBos: { enabled: true, minScore: 12, entryPercent: 62 } },
+      { choch: { enabled: true, minScore: 16 }, bos: { enabled: true, minScore: 16 }, ote: { enabled: true, minScore: 16, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 16, entryPercent: 79 }, oteBos: { enabled: true, minScore: 16, entryPercent: 79 } },
+      { choch: { enabled: true, minScore: 20 }, bos: { enabled: true, minScore: 20 }, ote: { enabled: true, minScore: 20, entryPercent: 79 }, oteChoch: { enabled: true, minScore: 20, entryPercent: 79 }, oteBos: { enabled: true, minScore: 20, entryPercent: 79 } }
     ];
 
     const sessionsList = targetSession === 'ALL' ? ['LONDON', 'NY', 'ASIA'] as const : [targetSession] as const;
