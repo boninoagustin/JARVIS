@@ -719,8 +719,8 @@ export default function BacktestingPanel() {
         });
       }
     } else if (tradeFilter === 'OTE') {
-      // Punto por punto exacto de 8 a 25 para OTE general, evaluando niveles del 62% y 79%
-      const oteLevels = [62, 79];
+      // Punto por punto exacto de 8 a 25 para OTE general, evaluando niveles del 50%, 62% y 79%
+      const oteLevels = [50, 62, 79];
       for (const lvl of oteLevels) {
         for (let sc = 8; sc <= 25; sc++) {
           triggerProfiles.push({
@@ -733,8 +733,8 @@ export default function BacktestingPanel() {
         }
       }
     } else if (tradeFilter === 'OTE_CHOCH') {
-      // Punto por punto exacto de 8 a 25 para OTE basado en CHOCH, evaluando niveles del 62% y 79%
-      const oteLevels = [62, 79];
+      // Punto por punto exacto de 8 a 25 para OTE basado en CHOCH, evaluando niveles del 50%, 62% y 79%
+      const oteLevels = [50, 62, 79];
       for (const lvl of oteLevels) {
         for (let sc = 8; sc <= 25; sc++) {
           triggerProfiles.push({
@@ -747,8 +747,8 @@ export default function BacktestingPanel() {
         }
       }
     } else if (tradeFilter === 'OTE_BOS') {
-      // Punto por punto exacto de 8 a 25 para OTE basado en BOS, evaluando niveles del 62% y 79%
-      const oteLevels = [62, 79];
+      // Punto por punto exacto de 8 a 25 para OTE basado en BOS, evaluando niveles del 50%, 62% y 79%
+      const oteLevels = [50, 62, 79];
       for (const lvl of oteLevels) {
         for (let sc = 8; sc <= 25; sc++) {
           triggerProfiles.push({
