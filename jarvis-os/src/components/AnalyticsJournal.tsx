@@ -47,11 +47,11 @@ const COLORS = ['#00ff00', '#ff3333', '#888888'];
 
 const getTradeRR = (t: TradeLog): number => {
   if (t.result === 'LOSS') {
-    return t.rMultiple !== undefined && t.rMultiple < 0 ? t.rMultiple : -1;
+    return t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple < 0 ? t.rMultiple : -1;
   }
   if (t.result === 'BREAKEVEN') return 0;
   if (t.result === 'WIN') {
-    if (t.rMultiple !== undefined && t.rMultiple > 0) {
+    if (t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple > 0) {
       return t.rMultiple;
     }
     if (t.entryPrice && t.slPrice) {
@@ -75,6 +75,31 @@ const getTradeRR = (t: TradeLog): number => {
     return 2; // Default fallback R:R
   }
   return 0;
+};
+
+const getSuggestedR = (t: TradeLog): number => {
+  if (t.rMultiple !== undefined && t.rMultiple !== null) {
+    return Math.abs(t.rMultiple);
+  }
+  if (t.entryPrice && t.slPrice) {
+    const risk = Math.abs(t.entryPrice - t.slPrice);
+    if (risk > 0) {
+      let targetPrice = t.tp1Price;
+      if (t.tp2Hit && t.tp2Price) {
+        targetPrice = t.tp2Price;
+      } else if (t.tp1Price) {
+        targetPrice = t.tp1Price;
+      } else if (t.tp2Price) {
+        targetPrice = t.tp2Price;
+      }
+      
+      if (targetPrice) {
+        const reward = Math.abs(targetPrice - t.entryPrice);
+        return Number((reward / risk).toFixed(2));
+      }
+    }
+  }
+  return 2; // Default fallback R:R
 };
 
 const resultButtonStyle = (color: string, isActive: boolean) => ({
@@ -122,6 +147,9 @@ const getEntryTypeBadge = (t: TradeLog) => {
 export default function AnalyticsJournal() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [selectedTradeForModal, setSelectedTradeForModal] = useState<TradeLog | null>(null);
+  const [modalResult, setModalResult] = useState<'WIN' | 'LOSS' | 'BREAKEVEN' | 'SKIP' | ''>('');
+  const [modalRMultiple, setModalRMultiple] = useState<string>('');
   const { toast } = useToast();
 
   useEffect(() => {
@@ -143,6 +171,52 @@ export default function AnalyticsJournal() {
     } catch (e) {
       console.error('Error updating trade result:', e);
       toast('Error al registrar resultado', 'error');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const handleSaveModalResult = async () => {
+    if (!selectedTradeForModal) return;
+    
+    let finalR: number | null = null;
+    if (modalResult === 'WIN') {
+      const parsed = parseFloat(modalRMultiple);
+      if (isNaN(parsed) || parsed <= 0) {
+        toast('Por favor ingrese un múltiplo R válido mayor a 0', 'error');
+        return;
+      }
+      finalR = parsed;
+    } else if (modalResult === 'LOSS') {
+      const parsed = parseFloat(modalRMultiple);
+      if (isNaN(parsed) || parsed <= 0) {
+        toast('Por favor ingrese un múltiplo R válido de pérdida (mayor a 0)', 'error');
+        return;
+      }
+      // Store as negative number in DB
+      finalR = -parsed;
+    } else if (modalResult === 'BREAKEVEN') {
+      finalR = 0;
+    }
+
+    setUpdating(selectedTradeForModal.id);
+    try {
+      const tradeRef = doc(db, 'trade_journal', selectedTradeForModal.id);
+      
+      const updateData: any = { 
+        result: modalResult,
+        rMultiple: finalR
+      };
+
+      await updateDoc(tradeRef, updateData);
+      
+      const labels: Record<string, string> = { WIN: 'WIN ✅', LOSS: 'LOSS ❌', BREAKEVEN: 'BE ➖', SKIP: 'No operado 🚫' };
+      toast(`Trade #${selectedTradeForModal.id} actualizado → ${labels[modalResult as string]} (${finalR !== null ? finalR + ' R' : 'N/A'})`, modalResult === 'WIN' ? 'success' : modalResult === 'LOSS' ? 'error' : 'info');
+      
+      setSelectedTradeForModal(null);
+    } catch (e) {
+      console.error('Error updating trade result:', e);
+      toast('Error al actualizar el resultado', 'error');
     } finally {
       setUpdating(null);
     }
@@ -683,7 +757,17 @@ export default function AnalyticsJournal() {
                           {t.result === 'WIN' ? `✅ WIN (+${getTradeRR(t)} R)` : t.result === 'LOSS' ? `❌ LOSS (${getTradeRR(t)} R)` : t.result === 'SKIP' ? '🚫 NO OPERADO' : `➖ BE (${getTradeRR(t).toFixed(1)} R)`}
                         </span>
                         <button
-                          onClick={() => handleSetResult(t.id, t.result === 'WIN' ? 'WIN' : t.result === 'LOSS' ? 'LOSS' : 'BREAKEVEN')}
+                          onClick={() => {
+                            setSelectedTradeForModal(t);
+                            setModalResult(t.result as any);
+                            if (t.result === 'WIN') {
+                              setModalRMultiple(t.rMultiple !== undefined && t.rMultiple !== null ? t.rMultiple.toString() : getSuggestedR(t).toString());
+                            } else if (t.result === 'LOSS') {
+                              setModalRMultiple(t.rMultiple !== undefined && t.rMultiple !== null ? Math.abs(t.rMultiple).toString() : '1');
+                            } else {
+                              setModalRMultiple('');
+                            }
+                          }}
                           style={{ 
                             background: 'none', border: 'none', cursor: 'pointer', 
                             color: 'var(--text-tertiary)', fontSize: '0.7rem', padding: '2px 4px',
@@ -699,7 +783,11 @@ export default function AnalyticsJournal() {
                     ) : (
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <button 
-                          onClick={() => handleSetResult(t.id, 'WIN')}
+                          onClick={() => {
+                            setSelectedTradeForModal(t);
+                            setModalResult('WIN');
+                            setModalRMultiple(getSuggestedR(t).toString());
+                          }}
                           disabled={updating === t.id}
                           style={resultButtonStyle('#00ff00', false) as React.CSSProperties}
                           onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#00ff00'; e.currentTarget.style.color = 'var(--bg-base)'; }}
@@ -708,7 +796,11 @@ export default function AnalyticsJournal() {
                           <CheckCircle size={12} /> WIN
                         </button>
                         <button 
-                          onClick={() => handleSetResult(t.id, 'LOSS')}
+                          onClick={() => {
+                            setSelectedTradeForModal(t);
+                            setModalResult('LOSS');
+                            setModalRMultiple('1');
+                          }}
                           disabled={updating === t.id}
                           style={resultButtonStyle('#ff3333', false) as React.CSSProperties}
                           onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#ff3333'; e.currentTarget.style.color = 'var(--bg-base)'; }}
@@ -749,6 +841,174 @@ export default function AnalyticsJournal() {
             </tbody>
           </table>
       </div>
+
+      {/* Modal de Asignación y Edición de R-Multiple */}
+      {selectedTradeForModal && (
+        <div className="modal-overlay" onClick={() => setSelectedTradeForModal(null)}>
+          <div className="modal-content-premium" onClick={(e) => e.stopPropagation()} style={{ borderColor: 'var(--border-color)', maxWidth: '400px' }}>
+            <div className="modal-header-premium" style={{ justifyContent: 'space-between', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="modal-title-icon" style={{ color: 'var(--accent-gold)' }}>✏️</span>
+                <h3 style={{ margin: 0 }}>REGISTRAR RESULTADO</h3>
+              </div>
+              <button 
+                onClick={() => setSelectedTradeForModal(null)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="modal-body-premium" style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '4px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Ticker:</span>
+                  <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{selectedTradeForModal.ticker}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Dirección:</span>
+                  <span className={selectedTradeForModal.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
+                    {selectedTradeForModal.direction}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Niveles:</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                    🛑 SL: {selectedTradeForModal.slPrice} | 🎯 TP1: {selectedTradeForModal.tp1Price}
+                  </span>
+                </div>
+              </div>
+
+              {/* Selector de resultado */}
+              <label style={{ display: 'block', fontWeight: 700, fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-secondary)' }}>
+                RESULTADO DEL TRADE
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '20px' }}>
+                {(['WIN', 'LOSS', 'BREAKEVEN', 'SKIP'] as const).map((res) => {
+                  const isActive = modalResult === res;
+                  const labelMap = { WIN: 'WIN ✅', LOSS: 'LOSS ❌', BREAKEVEN: 'BE ➖', SKIP: 'SKIP 🚫' };
+                  const colorMap = { WIN: '#00ff00', LOSS: '#ff3333', BREAKEVEN: '#888888', SKIP: '#555555' };
+                  return (
+                    <button
+                      key={res}
+                      type="button"
+                      onClick={() => {
+                        setModalResult(res);
+                        if (res === 'WIN') {
+                          setModalRMultiple(getSuggestedR(selectedTradeForModal).toString());
+                        } else if (res === 'LOSS') {
+                          setModalRMultiple('1');
+                        } else {
+                          setModalRMultiple('');
+                        }
+                      }}
+                      style={{
+                        padding: '10px 4px',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        border: `1px solid ${isActive ? colorMap[res] : 'var(--border-color)'}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        backgroundColor: isActive ? `${colorMap[res]}1a` : 'transparent',
+                        color: isActive ? colorMap[res] : 'var(--text-secondary)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {labelMap[res]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* R-Multiple input field (only for WIN or LOSS) */}
+              {(modalResult === 'WIN' || modalResult === 'LOSS') && (
+                <div className="animate-fadeIn">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <label style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {modalResult === 'WIN' ? 'MÚLTIPLO R OBTENIDO' : 'MÚLTIPLO R PERDIDO'}
+                    </label>
+                    {modalResult === 'WIN' && (
+                      <button
+                        type="button"
+                        onClick={() => setModalRMultiple(getSuggestedR(selectedTradeForModal).toString())}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--accent-gold)',
+                          fontSize: '0.7rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        Usar calculado ({getSuggestedR(selectedTradeForModal)} R)
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={modalRMultiple}
+                      onChange={(e) => setModalRMultiple(e.target.value)}
+                      placeholder={modalResult === 'WIN' ? 'Ej: 2.5' : 'Ej: 1'}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        backgroundColor: 'var(--bg-base)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '4px',
+                        color: 'var(--text-primary)',
+                        outline: 'none',
+                        fontWeight: 600,
+                        fontSize: '0.85rem',
+                        fontFamily: 'var(--font-mono)'
+                      }}
+                    />
+                    <span style={{ position: 'absolute', right: '12px', fontSize: '0.85rem', color: 'var(--text-tertiary)', fontWeight: 700 }}>
+                      R
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginTop: '6px' }}>
+                    {modalResult === 'WIN' 
+                      ? 'Especifica cuántas veces el riesgo inicial ganaste.' 
+                      : 'Especifica cuántas veces el riesgo inicial perdiste (se guardará como negativo en la base de datos).'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer-premium" style={{ flexDirection: 'row', gap: '12px' }}>
+              <button 
+                className="btn-cancel" 
+                onClick={() => setSelectedTradeForModal(null)}
+                style={{ flex: 1, padding: '10px', margin: 0 }}
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={handleSaveModalResult}
+                disabled={updating !== null || !modalResult}
+                style={{ 
+                  flex: 1, 
+                  padding: '10px', 
+                  backgroundColor: !modalResult ? 'var(--bg-panel-hover)' : modalResult === 'WIN' ? 'rgba(0, 255, 0, 0.2)' : modalResult === 'LOSS' ? 'rgba(255, 51, 51, 0.2)' : 'var(--accent-gold)', 
+                  color: !modalResult ? 'var(--text-secondary)' : '#ffffff',
+                  border: `1px solid ${!modalResult ? 'var(--border-color)' : modalResult === 'WIN' ? 'var(--accent-green)' : modalResult === 'LOSS' ? 'var(--accent-red)' : 'var(--accent-gold)'}`,
+                  borderRadius: '4px', 
+                  cursor: (!modalResult || updating !== null) ? 'not-allowed' : 'pointer',
+                  fontWeight: 700, 
+                  fontSize: '0.85rem',
+                  margin: 0
+                }}
+              >
+                {updating !== null ? 'Guardando...' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
