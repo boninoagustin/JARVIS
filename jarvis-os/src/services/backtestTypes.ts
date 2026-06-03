@@ -27,6 +27,7 @@ export interface RadarState {
 export interface BacktestTrade {
   id: string; timestamp: number; direction: 'BUY' | 'SELL';
   entryPrice: number; tp1Price: number; tp2Price: number; slPrice: number;
+  originalSlPrice?: number;
   points: number; events: string[]; grade: string;
   result?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT'; pnl?: number;
   resultTp1?: 'WIN' | 'LOSS' | 'TIMEOUT'; pnlTp1?: number;

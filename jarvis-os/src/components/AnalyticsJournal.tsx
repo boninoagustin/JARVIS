@@ -49,7 +49,9 @@ const getTradeRR = (t: TradeLog): number => {
   if (t.result === 'LOSS') {
     return t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple < 0 ? t.rMultiple : -1;
   }
-  if (t.result === 'BREAKEVEN') return 0;
+  if (t.result === 'BREAKEVEN') {
+    return t.rMultiple !== undefined && t.rMultiple !== null ? t.rMultiple : 0;
+  }
   if (t.result === 'WIN') {
     if (t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple > 0) {
       return t.rMultiple;

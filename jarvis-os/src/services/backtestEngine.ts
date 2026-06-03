@@ -6,7 +6,7 @@ import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
 } from './backtestTypes';
 
-export type { BacktestTrade, BacktestResult } from './backtestTypes';
+export type { BacktestTrade, BacktestResult, BacktestConfig } from './backtestTypes';
 
 export interface DailyStats {
   currentDayStr: string;
@@ -381,11 +381,11 @@ function processAlert(
         const tp1Hit = trade.direction === 'BUY' ? highPrice >= trade.tp1Price : lowPrice <= trade.tp1Price;
         if (tp1Hit) {
           trade.tp1Hit = true;
-          // trade.slPrice = trade.entryPrice; // SL remains unchanged
+          const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+          trade.slPrice = trade.entryPrice; // Move SL to entry price (BE)
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-          const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultipleTp1 = (trade.pnlTp1 / slLossPct) * 0.5;
+          trade.rMultipleTp1 = slLossPct > 0 ? (trade.pnlTp1 / slLossPct) * 0.5 : 0.5;
         }
       }
 
@@ -401,9 +401,10 @@ function processAlert(
           
           trade.pnl = finalPnl;
           trade.pnlTp2 = finalPnl;
-          const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultiple = finalPnl / slLossPct;
-          trade.rMultipleTp2 = (pnlTp2 / slLossPct) * 0.5;
+          const originalSl = trade.originalSlPrice ?? trade.slPrice;
+          const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+          trade.rMultiple = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
+          trade.rMultipleTp2 = initialSlLossPct > 0 ? (pnlTp2 / initialSlLossPct) * 0.5 : 0.75;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -416,24 +417,27 @@ function processAlert(
       const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
       if (slHit) {
         const isPartialClose = trade.tp1Hit;
-        const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+        const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
         const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
-        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - slLossPct * 0.5) : -slLossPct;
+        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
         const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BE' : 'LOSS') : 'LOSS';
 
         trade.result = finalResult;
         trade.pnl = finalPnlPct;
         trade.resultTp2 = finalResult;
         trade.pnlTp2 = finalPnlPct;
-        trade.rMultiple = finalPnlPct / slLossPct;
+        
+        const originalSl = trade.originalSlPrice ?? trade.slPrice;
+        const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+        trade.rMultiple = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
         
         if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
-          trade.pnlTp1 = -slLossPct;
+          trade.pnlTp1 = -initialSlLossPct;
           trade.rMultipleTp1 = undefined; // Don't show confusing -50 in TP1
           trade.rMultipleTp2 = undefined; // Don't show confusing -50 in TP2
         } else {
-          trade.rMultipleTp2 = (-slLossPct / slLossPct) * 0.5;
+          trade.rMultipleTp2 = 0.0;
         }
 
         trade.closeTimestamp = nowMs;
@@ -718,6 +722,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     tp1Price: parseFloat(oteData.tp1),
     tp2Price: parseFloat(oteData.tp2) || 0,
     slPrice: parseFloat(oteData.stopLoss),
+    originalSlPrice: parseFloat(oteData.stopLoss),
     points: oteData.points,
     events: oteData.events || [],
     grade: oteData.points >= 8 ? 'A+' : 'B',

@@ -38,6 +38,7 @@ export interface TradeRecord {
     tp1Price?: number;
     tp2Price?: number;
     slPrice?: number;
+    originalSlPrice?: number;   // 🆕 Precio del Stop Loss original antes de ser movido a Breakeven
     tp1Hit?: boolean;           // Se marca true cuando el precio toca TP1
     tp2Hit?: boolean;           // Se marca true cuando el precio toca TP2
     slHit?: boolean;            // Se marca true cuando el precio toca SL
