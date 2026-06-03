@@ -40,9 +40,42 @@ interface TradeLog {
   slTimestamp?: number;
   events?: string[];
   isChochEntry?: boolean;
+  rMultiple?: number;
 }
 
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
+
+const getTradeRR = (t: TradeLog): number => {
+  if (t.result === 'LOSS') {
+    return t.rMultiple !== undefined && t.rMultiple < 0 ? t.rMultiple : -1;
+  }
+  if (t.result === 'BREAKEVEN') return 0;
+  if (t.result === 'WIN') {
+    if (t.rMultiple !== undefined && t.rMultiple > 0) {
+      return t.rMultiple;
+    }
+    if (t.entryPrice && t.slPrice) {
+      const risk = Math.abs(t.entryPrice - t.slPrice);
+      if (risk > 0) {
+        let targetPrice = t.tp1Price;
+        if (t.tp2Hit && t.tp2Price) {
+          targetPrice = t.tp2Price;
+        } else if (t.tp1Price) {
+          targetPrice = t.tp1Price;
+        } else if (t.tp2Price) {
+          targetPrice = t.tp2Price;
+        }
+        
+        if (targetPrice) {
+          const reward = Math.abs(targetPrice - t.entryPrice);
+          return Number((reward / risk).toFixed(2));
+        }
+      }
+    }
+    return 2; // Default fallback R:R
+  }
+  return 0;
+};
 
 const resultButtonStyle = (color: string, isActive: boolean) => ({
   display: 'inline-flex',
@@ -173,14 +206,10 @@ export default function AnalyticsJournal() {
     const data = [{ index: 0, balance: 0, date: 'Inicio' }];
 
     sortedTrades.forEach((t, i) => {
-      if (t.result === 'WIN') {
-        currentR += 2; // R:R Promedio Asumido 2:1
-      } else if (t.result === 'LOSS') {
-        currentR -= 1;
-      }
+      currentR += getTradeRR(t);
       data.push({
         index: i + 1,
-        balance: Number(currentR.toFixed(1)),
+        balance: Number(currentR.toFixed(2)),
         date: new Date(t.timestamp).toLocaleDateString()
       });
     });
@@ -201,9 +230,14 @@ export default function AnalyticsJournal() {
 
     const chronological = [...closed].sort((a, b) => a.timestamp - b.timestamp);
 
+    let grossProfit = 0;
+    let grossLoss = 0;
+
     chronological.forEach(t => {
+      const rr = getTradeRR(t);
       if (t.result === 'WIN') {
         totalWins++;
+        grossProfit += rr;
         currentConsecutiveWins++;
         currentConsecutiveLosses = 0;
         if (currentConsecutiveWins > maxConsecutiveWins) {
@@ -211,6 +245,7 @@ export default function AnalyticsJournal() {
         }
       } else if (t.result === 'LOSS') {
         totalLosses++;
+        grossLoss += Math.abs(rr);
         currentConsecutiveLosses++;
         currentConsecutiveWins = 0;
         if (currentConsecutiveLosses > maxConsecutiveLosses) {
@@ -222,14 +257,10 @@ export default function AnalyticsJournal() {
       }
     });
 
-    const grossProfit = totalWins * 2;
-    const grossLoss = totalLosses * 1;
     const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? '∞' : '0.00';
     
-    const totalCount = totalWins + totalLosses;
-    const winRateFrac = totalCount > 0 ? totalWins / totalCount : 0;
-    const lossRateFrac = totalCount > 0 ? totalLosses / totalCount : 0;
-    const mathExpectancy = ((winRateFrac * 2) - (lossRateFrac * 1)).toFixed(2);
+    const totalNetR = chronological.reduce((sum, t) => sum + getTradeRR(t), 0);
+    const mathExpectancy = closed.length > 0 ? (totalNetR / closed.length).toFixed(2) : '0.00';
 
     return {
       profitFactor,
@@ -298,10 +329,9 @@ export default function AnalyticsJournal() {
   const getAccumulatedR = () => {
     let currentR = 0;
     trades.forEach(t => {
-      if (t.result === 'WIN') currentR += 2;
-      else if (t.result === 'LOSS') currentR -= 1;
+      currentR += getTradeRR(t);
     });
-    return Number(currentR.toFixed(1));
+    return Number(currentR.toFixed(2));
   };
   const totalR = getAccumulatedR();
   const currentDrawdown = equityData.length > 0 ? Math.max(...equityData.map(d => d.balance)) - equityData[equityData.length - 1].balance : 0;
@@ -456,13 +486,13 @@ export default function AnalyticsJournal() {
               <TrendingUp size={18} /> CURVA DE CRECIMIENTO ACUMULADO (R-MULTIPLES)
             </h3>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Simulación de retorno neto en múltiplos de riesgo (asumiendo R:R 2:1 fijo en wins)
+              Retorno neto en múltiplos de riesgo (calculado con niveles reales de entrada, SL y TP de cada alerta)
             </span>
           </div>
           <div style={{ textAlign: 'right' }}>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Drawdown Reciente:</span>
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent-red)', marginLeft: '6px' }}>
-              {currentDrawdown.toFixed(1)} R
+              {currentDrawdown.toFixed(2)} R
             </span>
           </div>
         </div>
@@ -650,7 +680,7 @@ export default function AnalyticsJournal() {
                     {t.result ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span className={t.result === 'WIN' ? 'text-green' : t.result === 'LOSS' ? 'text-red' : 'text-muted'} style={{ fontWeight: 700 }}>
-                          {t.result === 'WIN' ? '✅ WIN' : t.result === 'LOSS' ? '❌ LOSS' : t.result === 'SKIP' ? '🚫 NO OPERADO' : '➖ BREAKEVEN'}
+                          {t.result === 'WIN' ? `✅ WIN (+${getTradeRR(t)} R)` : t.result === 'LOSS' ? `❌ LOSS (${getTradeRR(t)} R)` : t.result === 'SKIP' ? '🚫 NO OPERADO' : `➖ BE (${getTradeRR(t).toFixed(1)} R)`}
                         </span>
                         <button
                           onClick={() => handleSetResult(t.id, t.result === 'WIN' ? 'WIN' : t.result === 'LOSS' ? 'LOSS' : 'BREAKEVEN')}
