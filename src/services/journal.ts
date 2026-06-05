@@ -154,7 +154,9 @@ export async function getPerformance(days: number = 30): Promise<PerformanceMetr
 
         if (snapshot.empty) return empty;
 
-        const trades = snapshot.docs.map(d => d.data() as TradeRecord);
+        const trades = snapshot.docs
+            .map(d => d.data() as TradeRecord)
+            .filter(t => t.mode !== 'backtesting'); // Excluir backtesting de métricas reales
         const withResult = trades.filter(t => t.result);
 
         const wins = withResult.filter(t => t.result === 'WIN').length;
@@ -277,7 +279,7 @@ export async function getPendingTrades(): Promise<TradeRecord[]> {
 
 /**
  * Send a comprehensive end-of-day summary with stats and pending trades.
- * Called by the scheduler at 22:00 Argentina time.
+ * Unified daily review — called from trading.ts watchdog at 18:00 ART.
  */
 export async function sendDailyReview(): Promise<void> {
     if (!db) return;
@@ -288,7 +290,9 @@ export async function sendDailyReview(): Promise<void> {
             .where('date', '==', today)
             .get();
 
-        const allToday = snapshot.docs.map(d => d.data() as TradeRecord);
+        const allToday = snapshot.docs
+            .map(d => d.data() as TradeRecord)
+            .filter(t => t.mode !== 'backtesting'); // Excluir backtesting del resumen diario
         const withResult = allToday.filter(t => t.result);
         const pending = allToday.filter(t => !t.result);
 
@@ -336,8 +340,35 @@ export async function sendDailyReview(): Promise<void> {
                 msg += `⭐ *Mejor par:* ${bestPair[0]} (WR ${pairWR}%, PnL ${bestPair[1].pnl >= 0 ? '+' : ''}${bestPair[1].pnl.toFixed(1)}%)\n`;
             }
 
+            // 🏅 Performance por calidad de setup (A+ vs B)
+            const byGrade: Record<string, { wins: number; losses: number }> = {};
+            for (const t of withResult) {
+                if (!byGrade[t.grade]) byGrade[t.grade] = { wins: 0, losses: 0 };
+                if (t.result === 'WIN') byGrade[t.grade].wins++;
+                else if (t.result === 'LOSS') byGrade[t.grade].losses++;
+            }
+            const gradeEntries = Object.entries(byGrade)
+                .filter(([, s]) => (s.wins + s.losses) > 0)
+                .sort(([a], [b]) => b.localeCompare(a));
+            if (gradeEntries.length > 0) {
+                msg += `\n🏅 *Por Calidad:*\n`;
+                for (const [grade, stats] of gradeEntries) {
+                    const total = stats.wins + stats.losses;
+                    const wr = total > 0 ? ((stats.wins / total) * 100).toFixed(0) : '—';
+                    msg += `  ${grade}: ${stats.wins}W/${stats.losses}L (${wr}%)\n`;
+                }
+            }
+
+            // 🤖 Recomendación automática
+            const closedWR = closed > 0 ? (wins / closed) * 100 : 0;
+            if (closedWR < 35 && closed >= 3) {
+                msg += `\n⚠️ *RECOMENDACIÓN:* Win rate bajo (${closedWR.toFixed(0)}%). Considerá subir minPts +2 o activar solo macro alineados.`;
+            } else if (closedWR >= 65 && closed >= 5) {
+                msg += `\n🔥 *DÍA SÓLIDO.* El sistema está funcionando bien. Mantené la configuración actual.`;
+            }
+
             if (pending.length > 0) {
-                msg += `\n⏳ *${pending.length} trade(s) pendiente(s):*\n`;
+                msg += `\n\n⏳ *${pending.length} trade(s) pendiente(s):*\n`;
                 for (const t of pending) {
                     const dirIcon = t.direction === 'BUY' ? '🟢' : '🔴';
                     const levels = t.tp1Price 

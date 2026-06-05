@@ -1,7 +1,7 @@
 import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
-import { logTrade, recordResult, getPerformance } from '../services/journal.js';
+import { logTrade, recordResult, getPerformance, sendDailyReview } from '../services/journal.js';
 
 // --- INTERFACES DEL RADAR JSON ---
 interface RadarZone {
@@ -1138,8 +1138,9 @@ export async function processTradingAlert(alertText: string) {
                             }
                         }
 
-                        // Lógica de racha perdedora (ignorar si se tomaron parciales o si es Breakeven)
-                        if (!isPartialClose) {
+                        // Lógica de racha perdedora (solo contar PÉRDIDAS reales, no breakevens ni parciales)
+                        const isBreakevenResult = trade.tp1Hit && !trade.tp2Hit;
+                        if (!isPartialClose && !isBreakevenResult) {
                             consecutiveLosses++;
                             if (consecutiveLosses >= 5) streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
                         }
@@ -1292,7 +1293,7 @@ export async function processTradingAlert(alertText: string) {
                             const LEG_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos
                             if (activeLeg.createdAt && (nowMs - activeLeg.createdAt) < LEG_COOLDOWN_MS) {
                                 shouldCreateNew = false;
-                                console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 5 min)`);
+                                console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round((nowMs - activeLeg.createdAt) / 1000)}s (cooldown 3 min)`);
                             }
                         }
 
@@ -1369,12 +1370,14 @@ export async function processTradingAlert(alertText: string) {
                     return true;
                 });
                 if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
-                // 🔧 FIX: Limpiar también las zonas rotas del mapa de zonas en RAM
+                // 🔧 FIX: Limpiar las zonas CONTRARIAS rotas del mapa de zonas en RAM
+                // ZONE_BROKEN dir=BUY → presión alcista rompió zonas SELL (soportes/supply)
+                // ZONE_BROKEN dir=SELL → presión bajista rompió zonas BUY (demanda/demand)
                 state.zones = state.zones.filter(z => {
                     if (z.tf !== eventTf) return true;
-                    if (currentDirection === 'BUY' && z.dir === 'SELL') return true; // zona SELL rota por presión BUY
-                    if (currentDirection === 'SELL' && z.dir === 'BUY') return true; // zona BUY rota por presión SELL
-                    return false; // misma dirección = zona rota, eliminarla
+                    if (currentDirection === 'BUY' && z.dir === 'BUY') return true;   // Mantener zonas BUY (no afectadas)
+                    if (currentDirection === 'SELL' && z.dir === 'SELL') return true;  // Mantener zonas SELL (no afectadas)
+                    return false; // zona contraria = la que fue rota por la presión, eliminarla
                 });
                 return;
             }
@@ -1421,11 +1424,8 @@ export async function processTradingAlert(alertText: string) {
             else if (prefix === 'EVENTO_SMC_DIV') {
                 if (!activeScore.events.includes(`DIV_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`DIV_${readableTf}`); }
             }
-            else if (prefix === 'EVENTO_BOS') {
-                // BOS sin CHoCH — solo actualiza bias, puntos bajos (no crea impulse leg)
-                state.marketBias[eventTf] = currentDirection;
-                addedPoints = 1; 
-            }
+            // NOTA: EVENTO_BOS ya se procesa en el bloque principal (líneas 1271-1360)
+            // El bias y los puntos se asignan allí. Este bloque era redundante.
             else if (prefix === 'HEARTBEAT') {
                 // Watchdog: solo actualiza lastHeartbeat, no suma puntos
                 state.lastHeartbeat = nowMs;
@@ -1451,14 +1451,7 @@ export async function processTradingAlert(alertText: string) {
                     oppositeScore.points = Math.max(0, oppositeScore.points - 2);
                 }
             }
-            else if (prefix === 'ZONE_TOUCHED') {
-                const zoneMedal = alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i)?.[1] || 'OB';
-                const zoneScore = parseInt(alertText.match(/Score:\s*([0-9]+)/i)?.[1] || '2');
-                if (!activeScore.events.includes(`🎯_ZoneTouched_${zoneMedal}_${readableTf}`)) {
-                    addedPoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
-                    activeScore.events.push(`🎯_ZoneTouched_${zoneMedal}_${readableTf}`);
-                }
-            }
+            // FIX: Handler ZONE_TOUCHED duplicado eliminado (ya se procesa en línea 1437)
 
             if (addedPoints > 0) {
                 activeScore.points += addedPoints;
@@ -1584,6 +1577,7 @@ export async function processTradingAlert(alertText: string) {
                     activeScore.events.push('Macro_OTE_Confluence');
                 }
                 let orphanPenalty = 0;
+                let rawPenalty = 0;
 
                 // 🛡️ 3. BONO ESPACIAL + PENALIZACIONES
                 // El bono espacial reemplaza la penalización cuando hay respaldo por mapa
@@ -1596,7 +1590,7 @@ export async function processTradingAlert(alertText: string) {
                     // Forex/Índices: -3 pts (sesiones definidas, zonas más estables)
                     // PERO: si el puntaje bruto sin penalizar ya es ≥12, la penalización se ANULA.
                     const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
-                    const rawPenalty = !hasHTFBacking ? (isCrypto ? 1 : 3) : 0;
+                    rawPenalty = !hasHTFBacking ? (isCrypto ? 1 : 3) : 0;
                     const wouldBeAfterPenalty = totalPoints - rawPenalty;
                     if (rawPenalty > 0 && totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
                         // ⚡ BYPASS: puntaje alto vence la penalización
@@ -1630,9 +1624,10 @@ export async function processTradingAlert(alertText: string) {
                     if (caseB_PathTouchedZone && !caseA_OriginInZone) confluenceReport += `   🛤️ Caso B: Vela CHoCH tocó zona en su camino\n`;
                 }
                 if (caseC_TrapZone > 0) confluenceReport += `⚠️ <b>Alerta Trampa:</b> ${caseC_TrapZone} zona(s) contraria(s) detectada(s) (-${trapPenalty} pts)\n`;
-                if (orphanPenalty > 0 && totalPoints >= 12) {
+                // 🔧 FIX: Usar rawPenalty para detectar bypass (orphanPenalty ya es 0 si fue anulado)
+                if (rawPenalty > 0 && orphanPenalty === 0) {
                     // High-score bypass: la penalización se anuló por puntaje alto
-                    confluenceReport += `⚡ <b>BYPASS PUNTAJE ALTO:</b> Penalización de -${orphanPenalty} pts ANULADA (${totalPoints + orphanPenalty} pts brutos ≥ 12). Entrada validada sin zonas macro.\n`;
+                    confluenceReport += `⚡ <b>BYPASS PUNTAJE ALTO:</b> Penalización de -${rawPenalty} pts ANULADA (${totalPoints} pts brutos ≥ 12). Entrada validada sin zonas macro.\n`;
                 } else if (orphanPenalty > 0) {
                     confluenceReport += `⚠️ <b>Penalización CHoCH sin zonas macro:</b> -${orphanPenalty} Pts (las zonas HTF aún no sincronizaron o expiraron)\n`;
                 }
@@ -1883,7 +1878,7 @@ export async function processTradingAlert(alertText: string) {
                                     consecutiveLosses,
                                     winRate: 0
                                 }),
-                                signal: AbortSignal.timeout(15000)
+                                signal: AbortSignal.timeout(8000) // ⚡ Reducido de 15s a 8s para scalping
                             });
                             if (swarmRes.ok) {
                                 const swarm = await swarmRes.json() as any;
@@ -2028,7 +2023,8 @@ export function startWatchdog() {
     const checkVix = async () => {
         try {
             const fetch = (await import('node-fetch')).default;
-            const FINNHUB_API_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
+            const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
+            if (!FINNHUB_API_KEY) { console.warn('[NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.'); return; }
             const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
             const data: any = await res.json();
             if (data.c && data.c > 30) {
@@ -2044,10 +2040,10 @@ export function startWatchdog() {
     setInterval(checkVix, 15 * 60 * 1000);
     checkVix();
 
-    // 🆕 v5.4: RESUMEN DIARIO a las 18:00 ART (después del cierre de NY)
+    // 📊 v5.6: Resumen diario UNIFICADO — delega a journal.ts (sendDailyReview)
+    // Mantiene solo la lógica de scheduling (18:00 ART, once-per-day guard)
     const scheduleDailySummary = () => {
         const now = new Date();
-        // Convertir a hora Argentina (ART = UTC-3)
         const artNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
         const artHour = artNow.getHours();
         const artMin = artNow.getMinutes();
@@ -2055,63 +2051,17 @@ export function startWatchdog() {
         // Disparar entre 18:00 y 18:05 ART
         if (artHour === 18 && artMin >= 0 && artMin < 5) {
             const today = artNow.toISOString().split('T')[0];
-            // Evitar duplicados: solo una vez por día
             const lastSummaryDate = (globalThis as any).__lastSummaryDate;
             if (lastSummaryDate === today) return;
             (globalThis as any).__lastSummaryDate = today;
             
-            getPerformance(1).then(async (metrics) => {
-                if (metrics.totalTrades === 0) return; // Sin trades hoy, no molestar
-                
-                const emoji = metrics.winRate >= 60 ? '🟢' : metrics.winRate >= 40 ? '🟡' : '🔴';
-                let summary = `${emoji} <b>📊 RESUMEN DIARIO | ${today}</b>\n\n`;
-                summary += `📈 <b>Señales Hoy:</b> ${metrics.totalTrades}\n`;
-                summary += `✅ Wins: ${metrics.wins} | ❌ Losses: ${metrics.losses} | 🛡️ BE: ${metrics.breakeven}\n`;
-                summary += `🎯 Win Rate: <b>${metrics.winRate}%</b>\n`;
-                
-                if (metrics.pending > 0) {
-                    summary += `⏳ Pendientes: ${metrics.pending} (aún en curso)\n`;
-                }
-                
-                // Performance por ticker
-                const tickerEntries = Object.entries(metrics.byTicker)
-                    .filter(([, s]) => (s.wins + s.losses) > 0)
-                    .sort(([, a], [, b]) => b.winRate - a.winRate);
-                
-                if (tickerEntries.length > 0) {
-                    summary += `\n<b>📋 Por Activo:</b>\n`;
-                    for (const [ticker, stats] of tickerEntries) {
-                        const icon = stats.winRate >= 60 ? '🟢' : stats.winRate >= 40 ? '🟡' : '🔴';
-                        summary += `${icon} ${ticker}: ${stats.wins}W/${stats.losses}L (${stats.winRate}%)\n`;
-                    }
-                }
-                
-                // Performance por calidad de setup
-                const gradeEntries = Object.entries(metrics.byGrade)
-                    .filter(([, s]) => (s.wins + s.losses) > 0)
-                    .sort(([a], [b]) => b.localeCompare(a));
-                
-                if (gradeEntries.length > 0) {
-                    summary += `\n<b>🏅 Por Calidad:</b>\n`;
-                    for (const [grade, stats] of gradeEntries) {
-                        summary += `  ${grade}: ${stats.wins}W/${stats.losses}L (${stats.winRate}%)\n`;
-                    }
-                }
-                
-                // Recomendación automática
-                if (metrics.winRate < 35 && metrics.totalTrades >= 3) {
-                    summary += `\n⚠️ <b>RECOMENDACIÓN:</b> Win rate bajo (${metrics.winRate}%). Considerá subir minPts +2 o activar solo macro alineados.`;
-                } else if (metrics.winRate >= 65 && metrics.totalTrades >= 5) {
-                    summary += `\n🔥 <b>DÍA SÓLIDO.</b> El sistema está funcionando bien. Mantené la configuración actual.`;
-                }
-                
-                await sendTelegramAlert(summary);
-                console.log(`[DAILY] 📊 Resumen enviado: ${metrics.totalTrades} trades, ${metrics.winRate}% WR`);
-            }).catch(e => console.error('[DAILY] Error generando resumen:', e));
+            sendDailyReview()
+                .then(() => console.log(`[DAILY] 📊 Resumen diario enviado via journal.ts`))
+                .catch(e => console.error('[DAILY] Error generando resumen:', e));
         }
     };
-    setInterval(scheduleDailySummary, 5 * 60 * 1000); // Chequear cada 5 min
-    scheduleDailySummary(); // Ejecutar al iniciar por si justo son las 18 
+    setInterval(scheduleDailySummary, 5 * 60 * 1000);
+    scheduleDailySummary();
 
     setInterval(() => {
         const now = Date.now();

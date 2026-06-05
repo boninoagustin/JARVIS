@@ -25,26 +25,30 @@ async function cleanupOldData() {
             .get();
 
         const batch = db.batch();
+        let batchCount = 0;
+        const MAX_BATCH_SIZE = 490; // Firestore limit is 500, leave margin
         for (const doc of requestsSnap.docs) {
+            if (batchCount >= MAX_BATCH_SIZE) break;
             const data = doc.data();
             if (data.status === 'sent' || data.status === 'failed' || data.status === 'telegram_error' || data.status === 'vercel_error') {
                 batch.delete(doc.ref);
                 deletedRequests++;
+                batchCount++;
             }
         }
         if (deletedRequests > 0) {
             await batch.commit();
         }
 
-        // 2. Limpiar market_states antiguos
-        const statesSnap = await db.collection('market_states').get();
+        // 2. Limpiar market_states antiguos (query filtrada en vez de full-table-scan)
+        const statesSnap = await db.collection('market_states')
+            .where('timestamp', '<', cutoff)
+            .limit(490)
+            .get();
         const stateBatch = db.batch();
         for (const doc of statesSnap.docs) {
-            const data = doc.data();
-            if (data.timestamp && data.timestamp < cutoff) {
-                stateBatch.delete(doc.ref);
-                deletedStates++;
-            }
+            stateBatch.delete(doc.ref);
+            deletedStates++;
         }
         if (deletedStates > 0) {
             await stateBatch.commit();

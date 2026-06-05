@@ -2,7 +2,7 @@ import nodeFetch from 'node-fetch';
 import { db } from '../db/memory.js';
 import { generateResponse } from '../llm/client.js';
 
-const FINNHUB_API_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
 
 async function fetchYahooPrice(symbol: string): Promise<number | null> {
     try {

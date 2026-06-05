@@ -12,7 +12,7 @@ let workerInterval: NodeJS.Timeout | null = null;
  * Procesa un único pedido de screenshot pendiente
  */
 async function processPendingRequest(): Promise<void> {
-    if (!db) return;
+    if (!db || !VERCEL_SEND_URL) return;
 
     const snapshot = await db.collection('screenshot_requests')
         .where('status', '==', 'pending')

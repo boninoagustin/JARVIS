@@ -5,7 +5,7 @@
  * for real-time macro indicators displayed in the Fundamental Terminal.
  */
 
-const FINNHUB_KEY = 'd7pt291r01qosaaprsr0d7pt291r01qosaaprsrg';
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || '';
 
 export interface MacroIndicator {
   label: string;

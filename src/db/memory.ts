@@ -79,10 +79,16 @@ export const memory = {
   clearHistory: async (userId: number) => {
     if (!db) return;
     try {
-        const batch = db.batch();
-        const snapshot = await db.collection('conversations').doc(userId.toString()).collection('messages').get();
-        snapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
+        const MAX_BATCH = 490;
+        const collRef = db.collection('conversations').doc(userId.toString()).collection('messages');
+        let snapshot = await collRef.limit(MAX_BATCH).get();
+        while (!snapshot.empty) {
+            const batch = db.batch();
+            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            if (snapshot.docs.length < MAX_BATCH) break;
+            snapshot = await collRef.limit(MAX_BATCH).get();
+        }
     } catch (err: any) {
         console.error('[DATABASE] Error clearing history from Firebase:', err.message);
     }

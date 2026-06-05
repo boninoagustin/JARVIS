@@ -199,18 +199,26 @@ export async function clearFacts(userId: number): Promise<void> {
     if (!db) return;
 
     try {
-        const snapshot = await db.collection('conversations')
+        const MAX_BATCH = 490;
+        const collRef = db.collection('conversations')
             .doc(userId.toString())
-            .collection(FACTS_COLLECTION)
-            .get();
+            .collection(FACTS_COLLECTION);
 
-        if (snapshot.empty) return;
+        let snapshot = await collRef.limit(MAX_BATCH).get();
+        let totalDeleted = 0;
 
-        const batch = db.batch();
-        snapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-        
-        console.log(`[SMART_MEMORY] Cleared all facts for user ${userId}.`);
+        while (!snapshot.empty) {
+            const batch = db.batch();
+            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            totalDeleted += snapshot.docs.length;
+            if (snapshot.docs.length < MAX_BATCH) break;
+            snapshot = await collRef.limit(MAX_BATCH).get();
+        }
+
+        if (totalDeleted > 0) {
+            console.log(`[SMART_MEMORY] Cleared ${totalDeleted} facts for user ${userId}.`);
+        }
     } catch (error: any) {
         console.error('[SMART_MEMORY] Error clearing facts:', error.message);
     }
