@@ -357,7 +357,7 @@ const parseTF = (tf: string) => {
 };
 
 // 🆕 Helpers Dinámicos
-const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
+const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 async function sendTelegramAlert(message: string) {
@@ -1940,16 +1940,6 @@ export async function processTradingAlert(alertText: string) {
                 msg += swarmAnnotation;
 
                 console.log(`[SNIPER] 📨 Mensaje FRANCOTIRADOR construido para ${ticker} (${msg.length} chars). isBacktest=${isBacktest}`);
-                if (!isBacktest) {
-                    try {
-                        await sendTelegramAlert(msg);
-                        console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR enviada exitosamente a Telegram para ${ticker}`);
-                    } catch (teleErr: any) {
-                        console.error(`[SNIPER] ❌ Error enviando FRANCOTIRADOR a Telegram: ${teleErr.message}`);
-                    }
-                } else {
-                    console.log(`[SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram`);
-                }
 
                 const journalId = await logTrade({
                     ticker, direction: oteData.direction as 'BUY' | 'SELL',
@@ -1991,6 +1981,49 @@ export async function processTradingAlert(alertText: string) {
                     activeTrade.journalId = journalId;
                     // 💾 Actualizar el journalId en Firebase
                     if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
+                }
+
+                // 🤖 cTrader: Send trade with confirmation buttons (semi-automatic mode)
+                if (!isBacktest) {
+                    try {
+                        const { config: globalConfig } = await import('../config.js');
+                        const { sendTradeConfirmation } = await import('../services/ctrader_confirmation.js');
+                        const ctraderConfigured = !!(globalConfig.CTRADER_CLIENT_ID && globalConfig.CTRADER_ACCESS_TOKEN);
+                        
+                        if (ctraderConfigured) {
+                            // Send alert WITH cTrader execution buttons
+                            await sendTradeConfirmation({
+                                tradeId: oteData.tradeId,
+                                ticker,
+                                direction: oteData.direction as 'BUY' | 'SELL',
+                                dirText: oteData.dirText,
+                                entryPrice: oteData.entryPrice,
+                                slPrice: parseFloat(oteData.stopLoss),
+                                tp1Price: parseFloat(oteData.tp1),
+                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                points: oteData.points,
+                                grade: oteData.points >= 8 ? 'A+' : 'B',
+                                events: oteData.events || [],
+                                confluenceReport: oteData.confluenceReport || '',
+                                kronosVerdict: kronosVerdict,
+                                swarmConsensus: swarmConsensus,
+                                alertMessage: msg,
+                                journalId: typeof journalId === 'string' ? journalId : undefined,
+                                isChochEntry: oteData.isChochEntry,
+                            });
+                            console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR + botones cTrader enviada para ${ticker}`);
+                        } else {
+                            // cTrader not configured — send normal alert (original behavior)
+                            await sendTelegramAlert(msg);
+                            console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR enviada (sin cTrader) para ${ticker}`);
+                        }
+                    } catch (teleErr: any) {
+                        // Fallback to normal alert if confirmation system fails
+                        console.error(`[SNIPER] ⚠️ Error en sistema de confirmación, enviando alerta normal:`, teleErr.message);
+                        try { await sendTelegramAlert(msg); } catch {}
+                    }
+                } else {
+                    console.log(`[SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram`);
                 }
                 
                 state.lastGatillo.status = 'ENVIADO';

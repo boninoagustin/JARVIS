@@ -20,6 +20,14 @@ export const config = {
   GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
   FIRESTORE_PROJECT_ID: process.env.FIRESTORE_PROJECT_ID || 'jarvis-ef6b0',
+  // cTrader Open API
+  CTRADER_CLIENT_ID: process.env.CTRADER_CLIENT_ID || '',
+  CTRADER_CLIENT_SECRET: process.env.CTRADER_CLIENT_SECRET || '',
+  CTRADER_ACCESS_TOKEN: process.env.CTRADER_ACCESS_TOKEN || '',
+  CTRADER_ACCOUNT_ID: process.env.CTRADER_ACCOUNT_ID || '',
+  CTRADER_DEMO: (process.env.CTRADER_DEMO || 'true').toLowerCase() === 'true',
+  CTRADER_RISK_PERCENT: parseFloat(process.env.CTRADER_RISK_PERCENT || '1'),
+  CTRADER_MAX_POSITIONS: parseInt(process.env.CTRADER_MAX_POSITIONS || '3', 10),
 };
 
 // Security Validations

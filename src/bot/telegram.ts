@@ -61,6 +61,27 @@ bot.on('message:text', async (ctx) => {
     await handleIncomingText(ctx, userId, userText);
 });
 
+// 🤖 cTrader: Handle inline button callbacks for trade confirmation
+bot.on('callback_query:data', async (ctx) => {
+    const callbackData = ctx.callbackQuery.data;
+    const userId = ctx.from!.id;
+    const chatId = ctx.callbackQuery.message?.chat.id;
+    const messageId = ctx.callbackQuery.message?.message_id;
+    
+    // Answer the callback immediately to remove loading spinner
+    await ctx.answerCallbackQuery();
+    
+    // Route cTrader callbacks
+    if (callbackData.startsWith('ctrader_') && chatId && messageId) {
+        try {
+            const { handleTradeCallback } = await import('../services/ctrader_confirmation.js');
+            await handleTradeCallback(callbackData, chatId, messageId, userId);
+        } catch (err: any) {
+            console.error('[CALLBACK] Error handling cTrader callback:', err.message);
+        }
+    }
+});
+
 async function handleIncomingMedia(ctx: Context) {
     const userId = ctx.from!.id;
     const caption = ctx.message?.caption || '';

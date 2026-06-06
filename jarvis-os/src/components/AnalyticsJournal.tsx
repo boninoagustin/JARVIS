@@ -53,17 +53,22 @@ const getTradeRR = (t: TradeLog): number => {
     return t.rMultiple !== undefined && t.rMultiple !== null ? t.rMultiple : 0;
   }
   if (t.result === 'WIN') {
+    // 1. Usar rMultiple explícito si existe (manual o auto-calculado)
     if (t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple > 0) {
       return t.rMultiple;
     }
+    // 2. Calcular R:R desde precios reales de la alerta
     if (t.entryPrice && t.slPrice) {
       const risk = Math.abs(t.entryPrice - t.slPrice);
       if (risk > 0) {
-        let targetPrice = t.tp1Price;
+        // Determinar qué TP se alcanzó realmente
+        let targetPrice: number | undefined;
         if (t.tp2Hit && t.tp2Price) {
           targetPrice = t.tp2Price;
-        } else if (t.tp1Price) {
+        } else if (t.tp1Hit && t.tp1Price) {
           targetPrice = t.tp1Price;
+        } else if (t.tp1Price) {
+          targetPrice = t.tp1Price; // Fallback a TP1 si no hay hit registrado
         } else if (t.tp2Price) {
           targetPrice = t.tp2Price;
         }
@@ -74,7 +79,8 @@ const getTradeRR = (t: TradeLog): number => {
         }
       }
     }
-    return 2; // Default fallback R:R
+    // 3. Sin datos de precio → asumir 1R conservador (no inflar con ficticio)
+    return 1;
   }
   return 0;
 };
@@ -101,7 +107,7 @@ const getSuggestedR = (t: TradeLog): number => {
       }
     }
   }
-  return 2; // Default fallback R:R
+  return 1; // Conservador: sin datos suficientes para calcular
 };
 
 const resultButtonStyle = (color: string, isActive: boolean) => ({
@@ -404,9 +410,11 @@ export default function AnalyticsJournal() {
   
   const getAccumulatedR = () => {
     let currentR = 0;
-    trades.forEach(t => {
-      currentR += getTradeRR(t);
-    });
+    trades
+      .filter(t => t.result && t.result !== 'SKIP')
+      .forEach(t => {
+        currentR += getTradeRR(t);
+      });
     return Number(currentR.toFixed(2));
   };
   const totalR = getAccumulatedR();

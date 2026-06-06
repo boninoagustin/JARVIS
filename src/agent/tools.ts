@@ -53,6 +53,62 @@ export const tools: Record<string, ToolSchema> = {
       return formatPerformance(metrics);
     }
   },
+  ctrader_status: {
+    name: 'ctrader_status',
+    description: 'Muestra el estado de la cuenta de cTrader: balance, equity, posiciones abiertas, y si está conectado.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    handler: async () => {
+      const { getAccountInfo, getCTraderStatus } = await import('../services/ctrader.js');
+      const status = getCTraderStatus();
+      
+      if (!status.configured) {
+        return '⚠️ cTrader no está configurado. Faltan credenciales en .env (CTRADER_CLIENT_ID, CTRADER_ACCESS_TOKEN).';
+      }
+      
+      const info = await getAccountInfo();
+      if (!info) {
+        return `🔌 cTrader: ${status.connected ? 'Conectado' : 'Desconectado'} | Modo: ${status.demo ? '🧪 DEMO' : '🔴 LIVE'}\n⚠️ No se pudo obtener info de la cuenta.`;
+      }
+      
+      return `🏦 *ESTADO cTRADER*\n\n` +
+        `🔌 Conexión: ${status.connected ? '✅ Conectado' : '❌ Desconectado'}\n` +
+        `📊 Modo: ${status.demo ? '🧪 DEMO' : '🔴 LIVE'}\n` +
+        `💰 Balance: $${info.balance.toFixed(2)}\n` +
+        `📈 Equity: $${info.equity.toFixed(2)}\n` +
+        `💵 Moneda: ${info.currency}\n` +
+        `📋 Posiciones abiertas: ${info.openPositions}`;
+    }
+  },
+  ctrader_close_all: {
+    name: 'ctrader_close_all',
+    description: 'KILLSWITCH: Cierra TODAS las posiciones abiertas en cTrader inmediatamente. Usar solo en emergencias.',
+    parameters: {
+      type: 'object',
+      properties: {
+        confirm: { type: 'boolean', description: 'Debe ser true para confirmar el cierre de todas las posiciones' }
+      },
+      required: ['confirm']
+    },
+    handler: async (args: { confirm: boolean }) => {
+      if (!args.confirm) {
+        return '⚠️ Debes confirmar con confirm=true para cerrar todas las posiciones.';
+      }
+      
+      const { closeAllPositions } = await import('../services/ctrader.js');
+      const result = await closeAllPositions();
+      
+      if (result.closed === 0 && result.failed === 0) {
+        return '✅ No hay posiciones abiertas para cerrar.';
+      }
+      
+      return `🚨 *KILLSWITCH EJECUTADO*\n\n` +
+        `✅ Cerradas: ${result.closed}\n` +
+        `❌ Fallidas: ${result.failed}`;
+    }
+  },
 };
 
 export const getToolsForLLM = async () => {
