@@ -24,6 +24,8 @@ export interface AssetConfig {
   enabled: boolean;
   maxSellsPerDay: number;
   sellScorePenalty: number;
+  maxBuysPerDay: number;
+  buyScorePenalty: number;
   maxTradesPerDay?: number;
   maxConsecutiveLosses?: number;
   maxDailyLossR?: number;
@@ -74,6 +76,8 @@ export const DEFAULT_ASSET_CONFIG: AssetConfig = {
   enabled: true,
   maxSellsPerDay: 0,
   sellScorePenalty: 0,
+  maxBuysPerDay: 0,
+  buyScorePenalty: 0,
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {

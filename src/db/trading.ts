@@ -174,6 +174,8 @@ interface AssetSessionConfig {
     enabled: boolean; // permite deshabilitar un activo/sesión
     maxSellsPerDay: number;      // 🆕 v7.1: Máx. operaciones SELL diarias por activo (0 = ilimitado)
     sellScorePenalty: number;    // 🆕 v7.1: Penalización extra de puntos para señales SELL (0 = sin penalización)
+    maxBuysPerDay: number;       // 🆕 v7.2: Máx. operaciones BUY diarias por activo
+    buyScorePenalty: number;     // 🆕 v7.2: Penalización extra de puntos para señales BUY
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
@@ -212,6 +214,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     sessionEnabled: boolean;
     maxSellsPerDay: number;
     sellScorePenalty: number;
+    maxBuysPerDay: number;
+    buyScorePenalty: number;
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
@@ -224,52 +228,34 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     
     // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
     if (session === 'OFF') {
-        return { ...dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0 };
+        return { ...dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
     }
     
-    const specificKey = `${ticker}_${session}`;
-    const globalKey = `${ticker}_ALL`;
+    // El nuevo AdminPanel guarda la configuración directamente bajo el ID del ticker (ej. NAS100)
+    // y maneja las sesiones dentro del campo `sessions`.
+    const config = assetSessionConfigs.get(ticker) || assetSessionConfigs.get(`${ticker}_${session}`) || assetSessionConfigs.get(`${ticker}_ALL`);
     
-    // 1. Config específica de activo+sesión
-    const specific = assetSessionConfigs.get(specificKey);
-    if (specific) {
-        console.log(`[CONFIG] 📋 Usando config: ${specificKey}`);
+    if (config) {
+        console.log(`[CONFIG] 📋 Usando config de: ${ticker}`);
         return {
             ...dynamicBotConfig,
-            minPointsForBuy: specific.minPointsForBuy,
-            minPointsForSell: specific.minPointsForSell,
-            slBufferPercent: specific.slBufferPercent,
-            fixedRR: specific.fixedRR,
-            oteEntryPercent: specific.oteEntryPercent,
-            entryTrigger: specific.entryTrigger,
-            sessionEnabled: specific.enabled,
-            maxSellsPerDay: specific.maxSellsPerDay,
-            sellScorePenalty: specific.sellScorePenalty,
-            sessions: specific.sessions
+            minPointsForBuy: config.minPointsForBuy,
+            minPointsForSell: config.minPointsForSell,
+            slBufferPercent: config.slBufferPercent,
+            fixedRR: config.fixedRR,
+            oteEntryPercent: config.oteEntryPercent,
+            entryTrigger: config.entryTrigger,
+            sessionEnabled: config.enabled,
+            maxSellsPerDay: config.maxSellsPerDay,
+            sellScorePenalty: config.sellScorePenalty,
+            maxBuysPerDay: config.maxBuysPerDay,
+            buyScorePenalty: config.buyScorePenalty,
+            sessions: config.sessions
         };
     }
     
-    // 2. Config global del activo
-    const global = assetSessionConfigs.get(globalKey);
-    if (global) {
-        console.log(`[CONFIG] 📋 Usando config global: ${globalKey}`);
-        return {
-            ...dynamicBotConfig,
-            minPointsForBuy: global.minPointsForBuy,
-            minPointsForSell: global.minPointsForSell,
-            slBufferPercent: global.slBufferPercent,
-            fixedRR: global.fixedRR,
-            oteEntryPercent: global.oteEntryPercent,
-            entryTrigger: global.entryTrigger,
-            sessionEnabled: global.enabled,
-            maxSellsPerDay: global.maxSellsPerDay,
-            sellScorePenalty: global.sellScorePenalty,
-            sessions: global.sessions
-        };
-    }
-    
-    // 3. Fallback a config global
-    return { ...dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0 };
+    // Fallback
+    return { ...dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
 }
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -326,8 +312,10 @@ if (db) {
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
                     entryTrigger: (data.entryTrigger as any) || dynamicBotConfig.entryTrigger,
                     enabled: data.enabled !== false, // default enabled
-                    maxSellsPerDay: Number(data.maxSellsPerDay) || 0,       // 🆕 v7.1
-                    sellScorePenalty: Number(data.sellScorePenalty) || 0,     // 🆕 v7.1
+                    maxSellsPerDay: Number(data.maxSellsPerDay) || 0,
+                    sellScorePenalty: Number(data.sellScorePenalty) || 0,
+                    maxBuysPerDay: Number(data.maxBuysPerDay) || 0,
+                    buyScorePenalty: Number(data.buyScorePenalty) || 0,
                     sessions: data.sessions
                 });
             });
@@ -821,7 +809,6 @@ async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<
         const day = parseInt(dateParts[2]);
         const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
 
-        // Normalizar nombres de ticker para la búsqueda (NAS100/US100 ambos se registran como NAS100)
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) {
             tickerVariants.push('NAS100', 'US100');
@@ -832,14 +819,45 @@ async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<
             .where('direction', '==', 'SELL')
             .get();
 
-        const count = snapshot.docs.filter(d => {
+        return snapshot.docs.filter(d => {
             const data = d.data();
             return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
         }).length;
-
-        return count;
     } catch (e: any) {
-        console.error(`[SELL LIMIT] Error contando SELLs diarios de ${ticker}:`, e.message);
+        return 0;
+    }
+}
+
+/**
+ * 🆕 v7.2: Cuenta los trades BUY ejecutados hoy para un ticker específico.
+ */
+async function countDailyBuysForTicker(ticker: string, nowMs: number): Promise<number> {
+    if (!db) return 0;
+    try {
+        const now = new Date(nowMs);
+        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const argDateStr = formatter.format(now);
+        const dateParts = argDateStr.split('-');
+        const year = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]) - 1;
+        const day = parseInt(dateParts[2]);
+        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
+
+        const tickerVariants = [ticker];
+        if (ticker.includes('NAS') || ticker.includes('US100')) {
+            tickerVariants.push('NAS100', 'US100');
+        }
+
+        const snapshot = await db.collection('trade_journal')
+            .where('timestamp', '>=', artMidnightMs)
+            .where('direction', '==', 'BUY')
+            .get();
+
+        return snapshot.docs.filter(d => {
+            const data = d.data();
+            return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
+        }).length;
+    } catch (e: any) {
         return 0;
     }
 }
@@ -1922,6 +1940,48 @@ export async function processTradingAlert(alertText: string) {
                         return;
                     }
                     console.log(`[SELL FILTER] ✅ ${ticker} SELL pasa filtro de puntaje: ${originalPoints} - ${sellConfig.sellScorePenalty} = ${adjustedPoints} pts (mín: ${minRequired}).`);
+                }
+            }
+
+            // 🆕 v7.2: FILTRO DE OPERACIONES BUY (Anti-Long Bias)
+            if (oteData.direction === 'BUY' && !isBacktest) {
+                const buyConfig = getConfigForTicker(ticker);
+
+                // 📊 Verificar límite diario de BUYs
+                if (buyConfig.maxBuysPerDay > 0) {
+                    const dailyBuys = await countDailyBuysForTicker(ticker, nowMs);
+                    if (dailyBuys >= buyConfig.maxBuysPerDay) {
+                        console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
+                        state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+
+                        sendTelegramAlert(
+                            `⚠️ <b>[BUY LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
+                            `📊 Ya se ejecutaron <b>${dailyBuys}/${buyConfig.maxBuysPerDay}</b> operaciones BUY hoy en este activo.\n` +
+                            `💡 <i>Configurá maxBuysPerDay en asset_configs para ajustar el límite.</i>`
+                        ).catch(() => {});
+                        return;
+                    }
+                    console.log(`[BUY LIMIT] ✅ ${ticker} BUY permitido: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs usados hoy.`);
+                }
+
+                // 📏 Penalización de puntaje para BUYs
+                if (buyConfig.buyScorePenalty > 0) {
+                    const originalPoints = oteData.points;
+                    const adjustedPoints = originalPoints - buyConfig.buyScorePenalty;
+                    const minRequired = buyConfig.minPointsForBuy || 5;
+
+                    if (adjustedPoints < minRequired) {
+                        console.log(`[BUY FILTER] ⛔ Setup ${ticker} BUY FILTRADO por puntaje insuficiente: ${originalPoints} pts - ${buyConfig.buyScorePenalty} penalización = ${adjustedPoints} pts (mínimo: ${minRequired}).`);
+                        state.lastGatillo!.status = 'BLOCKED_BUY_SCORE';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        return;
+                    }
+                    console.log(`[BUY FILTER] ✅ ${ticker} BUY pasa filtro de puntaje: ${originalPoints} - ${buyConfig.buyScorePenalty} = ${adjustedPoints} pts (mín: ${minRequired}).`);
                 }
             }
 

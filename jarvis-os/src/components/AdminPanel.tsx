@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Settings, Save, Shield, TrendingDown } from 'lucide-react';
+import { Settings, Save, Shield, TrendingDown, TrendingUp } from 'lucide-react';
 import { useToast } from './Toast';
 import { type AssetConfig, type SessionConfig, type SessionKey, TICKERS, SESSIONS, DEFAULT_ASSET_CONFIG } from './admin/types';
 import SessionCard from './admin/SessionCard';
@@ -155,7 +155,10 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          {/* FILTROS ANTI-SHORT (NUEVO) */}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+          {/* FILTROS ANTI-SHORT */}
           <div style={{ ...cardClass, borderColor: '#ff333340', backgroundColor: '#ff333305' }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ff3333', marginBottom: '16px', fontSize: '0.9rem' }}>
               <TrendingDown size={16} /> Filtros Anti-Short Bias (SELL)
@@ -170,6 +173,25 @@ export default function AdminPanel() {
                 <label style={{ fontSize: '0.75rem', color: '#888' }}>Penalidad Score SELL</label>
                 <input type="number" value={assetConfig.sellScorePenalty} onChange={e => handleChange('sellScorePenalty', parseInt(e.target.value) || 0)} style={inputClass} />
                 <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>Resta puntos a setups SELL</div>
+              </div>
+            </div>
+          </div>
+
+          {/* FILTROS ANTI-LONG (NUEVO) */}
+          <div style={{ ...cardClass, borderColor: '#00e67640', backgroundColor: '#00e67605' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#00e676', marginBottom: '16px', fontSize: '0.9rem' }}>
+              <TrendingUp size={16} /> Filtros Anti-Long Bias (BUY)
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Max BUYs/Día</label>
+                <input type="number" value={assetConfig.maxBuysPerDay} onChange={e => handleChange('maxBuysPerDay', parseInt(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = Ilimitado</div>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Penalidad Score BUY</label>
+                <input type="number" value={assetConfig.buyScorePenalty} onChange={e => handleChange('buyScorePenalty', parseInt(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>Resta puntos a setups BUY</div>
               </div>
             </div>
           </div>
