@@ -3,7 +3,7 @@ import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2,
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
-import { getDecimals } from '../services/backtestTypes';
+
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
@@ -2676,9 +2676,7 @@ export default function BacktestingPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {tripleFilteredTrades.map(t => {
-                      const dec = getDecimals(ticker);
-                      return (
+                    {tripleFilteredTrades.map(t => (
                       <tr key={t.id} style={{ cursor: 'pointer', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }} onClick={() => setShowLog(!showLog)}>
                         <td className="mono" style={{ padding: '6px 10px', fontSize: '0.65rem' }}>{new Date(t.timestamp).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                         <td style={{ padding: '6px 10px', color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700, fontSize: '0.7rem' }}>{t.direction}</td>
@@ -2696,7 +2694,7 @@ export default function BacktestingPanel() {
                           {t.durationMin ? `${t.durationMin}m` : '—'}
                         </td>
                       </tr>
-                    )})}
+                    ))}
                   </tbody>
                 </table>
               )}
