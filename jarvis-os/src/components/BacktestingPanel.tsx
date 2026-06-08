@@ -262,7 +262,7 @@ export default function BacktestingPanel() {
 
   const handlePushToBot = async () => {
     try {
-      const configDoc = `${ticker}_${sessionFilter}`;
+      const configDoc = ticker; // v7.2 Unified master document
       await setDoc(doc(db, 'asset_configs', configDoc), {
         minPointsForBuy: minBuyPoints,
         minPointsForSell: minSellPoints,
