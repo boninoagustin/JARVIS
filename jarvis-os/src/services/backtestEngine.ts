@@ -15,6 +15,8 @@ export interface DailyStats {
   consecutiveLosses: number;
   tradeCount: number;
   isKilled: boolean;
+  sellCount: number;
+  buyCount: number;
 }
 
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
@@ -232,7 +234,9 @@ export function runBacktest(
     peakPnlR: 0,
     consecutiveLosses: 0,
     tradeCount: 0,
-    isKilled: false
+    isKilled: false,
+    sellCount: 0,
+    buyCount: 0
   };
 
   // 1. Parse all entries with timestamps
@@ -314,6 +318,8 @@ function processAlert(
     dailyStats.consecutiveLosses = 0;
     dailyStats.tradeCount = 0;
     dailyStats.isKilled = false;
+    dailyStats.sellCount = 0;
+    dailyStats.buyCount = 0;
   }
 
   let currentDirection: 'BUY' | 'SELL' | null = null;
@@ -596,6 +602,15 @@ function processAlert(
 
     let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus;
 
+    // Apply Anti-Bias Penalties
+    if (currentDirection === 'SELL') {
+      if (config.maxSellsPerDay !== undefined && dailyStats.sellCount >= config.maxSellsPerDay) return;
+      if (config.sellScorePenalty) totalPoints -= config.sellScorePenalty;
+    } else if (currentDirection === 'BUY') {
+      if (config.maxBuysPerDay !== undefined && dailyStats.buyCount >= config.maxBuysPerDay) return;
+      if (config.buyScorePenalty) totalPoints -= config.buyScorePenalty;
+    }
+
     // Spatial backing
     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
     const chOrigin = activeLeg ? activeLeg.origin : null;
@@ -732,6 +747,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   activeTrades.set(trade.id, trade);
 
   dailyStats.tradeCount++;
+  if (oteData.direction === 'SELL') dailyStats.sellCount++;
+  if (oteData.direction === 'BUY') dailyStats.buyCount++;
+
   if (config.maxTradesPerDay && dailyStats.tradeCount >= config.maxTradesPerDay) {
     dailyStats.isKilled = true;
   }

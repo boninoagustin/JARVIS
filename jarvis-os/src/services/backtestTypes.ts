@@ -71,6 +71,12 @@ export interface BacktestConfig {
   maxConsecutiveLosses?: number;
   maxTradesPerDay?: number;
   trailingDrawdownR?: number;
+
+  // Anti-Bias Filters
+  maxSellsPerDay?: number;
+  sellScorePenalty?: number;
+  maxBuysPerDay?: number;
+  buyScorePenalty?: number;
 }
 
 export interface BacktestResult {
