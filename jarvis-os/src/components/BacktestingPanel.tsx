@@ -201,6 +201,32 @@ export default function BacktestingPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
+  // 🚀 WORKER PARA BACKTESTING (Desbloquea la UI en operaciones pesadas)
+  const workerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    workerRef.current = new Worker(new URL('../services/backtest.worker.ts', import.meta.url), { type: 'module' });
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
+
+  const runWorkerTask = useCallback((type: string, payload: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if (!workerRef.current) return reject('Worker no inicializado');
+      const id = Date.now() + Math.random();
+      const handler = (e: MessageEvent) => {
+        if (e.data.id === id) {
+          workerRef.current?.removeEventListener('message', handler);
+          if (e.data.type === 'DONE') resolve(e.data.result);
+          else reject(e.data.error);
+        }
+      };
+      workerRef.current.addEventListener('message', handler);
+      workerRef.current.postMessage({ type, id, payload });
+    });
+  }, []);
+
   // 🗂️ TABS PRINCIPALES (INDIVIDUAL VS PORTAFOLIO GLOBAL)
   const [activeTab, setActiveTab] = useState<'individual' | 'portfolio'>('individual');
 
@@ -331,8 +357,7 @@ export default function BacktestingPanel() {
     const finalOte = overrideOte !== undefined ? overrideOte : oteEntryPercent;
     const finalSessions = overrideSessions !== undefined ? overrideSessions : sessionTriggers;
 
-    // Run in next tick to allow UI update
-    setTimeout(() => {
+    setTimeout(async () => {
       const baseParams = {
         ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
         maxDailyLossR: maxDailyLossR || undefined,
@@ -346,32 +371,41 @@ export default function BacktestingPanel() {
         buyScorePenalty: buyScorePenalty || undefined,
       };
 
-      const res = runBacktest(logs, { 
-        ...baseParams,
-        oteEntryPercent: finalOte,
-        sessions: finalSessions,
-      }, (pct, currentTrades) => {
-        setProgress(pct);
-        setTrades([...currentTrades]);
-      });
+      try {
+        const payload = {
+            logsArray: Array.from(logs.entries()),
+            config: { ...baseParams, oteEntryPercent: finalOte, sessions: finalSessions }
+        };
+        
+        const res = await runWorkerTask('RUN_BACKTEST', payload);
+        
+        setProgress(50);
+        setTrades(res.trades);
 
-      // Run background simulations for OTE level comparisons and fast filtering
-      const sessions50 = getOverriddenSessions(finalSessions, 50);
-      const sessions62 = getOverriddenSessions(finalSessions, 62);
-      const sessions79 = getOverriddenSessions(finalSessions, 79);
+        // Run background simulations for OTE level comparisons and fast filtering
+        const sessions50 = getOverriddenSessions(finalSessions, 50);
+        const sessions62 = getOverriddenSessions(finalSessions, 62);
+        const sessions79 = getOverriddenSessions(finalSessions, 79);
 
-      const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
-      const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
-      const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
+        const batchRes = await runWorkerTask('RUN_BATCH', {
+            logsArray: payload.logsArray,
+            configs: [
+               { ...baseParams, oteEntryPercent: 50, sessions: sessions50 },
+               { ...baseParams, oteEntryPercent: 62, sessions: sessions62 },
+               { ...baseParams, oteEntryPercent: 79, sessions: sessions79 }
+            ]
+        });
 
-      setResult(res);
-      setTrades(res.trades);
-      setTrades50(res50.trades);
-      setTrades62(res62.trades);
-      setTrades79(res79.trades);
-      setOteFilter(finalOte as 50 | 62 | 79);
-      setProgress(100);
-      setIsRunning(false);
+        const [res50, res62, res79] = batchRes;
+
+        setResult(res);
+        setTrades(res.trades);
+        setTrades50(res50.trades);
+        setTrades62(res62.trades);
+        setTrades79(res79.trades);
+        setOteFilter(finalOte as 50 | 62 | 79);
+        setProgress(100);
+        setIsRunning(false);
 
       // Save to history
       const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -394,18 +428,34 @@ export default function BacktestingPanel() {
       });
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
+      
+      } catch (err: any) {
+        toast(`❌ Error en Worker: ${err}`, 'error');
+        setIsRunning(false);
+      }
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, sessionTriggers, toast]);
 
   // AUTO-SIMULATE cuando cambian los filtros Bias (para UX fluida sin tener que re-simular)
   const isFirstRender = useRef(true);
+  const lastBiasValues = useRef({ maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty });
+  const isOptimizingRef = useRef(false);
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
-    // Si ya tenemos archivos cargados y un resultado previo, actualizamos en caliente (debounce de 300ms)
-    if (uploadedFiles.length > 0 && result && !isRunning) {
+    // Solo disparar si realmente cambiaron los filtros Bias (no por otros re-renders)
+    const prev = lastBiasValues.current;
+    const biasChanged = prev.maxSellsPerDay !== maxSellsPerDay ||
+      prev.sellScorePenalty !== sellScorePenalty ||
+      prev.maxBuysPerDay !== maxBuysPerDay ||
+      prev.buyScorePenalty !== buyScorePenalty;
+    lastBiasValues.current = { maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty };
+    if (!biasChanged) return;
+    // No auto-simular si estamos optimizando o no hay datos
+    if (isOptimizingRef.current || isRunning) return;
+    if (uploadedFiles.length > 0 && result) {
       const timer = setTimeout(() => {
         handleRun();
       }, 300);
@@ -451,6 +501,7 @@ export default function BacktestingPanel() {
 
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    isOptimizingRef.current = true;
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
 
@@ -552,6 +603,7 @@ export default function BacktestingPanel() {
 
             setSelectedSession(session.id);
             setIsRunning(false);
+            isOptimizingRef.current = false;
             toast(optimizeSwitches 
               ? `✅ Optimización finalizada para TODAS las sesiones (con Killswitches optimizados).`
               : `✅ Optimización finalizada para TODAS las sesiones.`, 
@@ -610,31 +662,50 @@ export default function BacktestingPanel() {
         const bestStage2Pnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
         const bestStage2Data: Record<string, { config: any, result: BacktestResult }> = {};
 
-        const processStage2Chunk = (startIndex: number) => {
-            const chunkSize = 50;
+        const processStage2Chunk = async (startIndex: number) => {
+            const chunkSize = 100;
             const endIndex = Math.min(startIndex + chunkSize, stage2Tasks.length);
 
+            const validTasks = [];
+            const chunkConfigs = [];
             for (let i = startIndex; i < endIndex; i++) {
                 const task = stage2Tasks[i];
                 const pass1Result = bestData[task.session];
                 if (!pass1Result) continue;
 
-                const testConfig = {
+                validTasks.push(task);
+                chunkConfigs.push({
                     ...pass1Result.config,
                     ...task.ks
-                };
-                const res = runBacktest(logs, testConfig);
+                });
+            }
 
-                const sessionTrades = task.session === 'ALL'
-                    ? res.trades
-                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === task.session);
-                
-                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
+            if (chunkConfigs.length > 0) {
+                try {
+                    const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
 
-                if (pnl > bestStage2Pnl[task.session]) {
-                    bestStage2Pnl[task.session] = pnl;
-                    bestStage2Data[task.session] = { config: testConfig, result: res };
+                    for (let j = 0; j < chunkResults.length; j++) {
+                        const task = validTasks[j];
+                        const testConfig = chunkConfigs[j];
+                        const res = chunkResults[j];
+
+                        const sessionTrades = task.session === 'ALL'
+                            ? res.trades
+                            : res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === task.session);
+                        
+                        const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+                        const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
+
+                        if (pnl > bestStage2Pnl[task.session]) {
+                            bestStage2Pnl[task.session] = pnl;
+                            bestStage2Data[task.session] = { config: testConfig, result: res };
+                        }
+                    }
+                } catch(err) {
+                    toast(`❌ Error en Worker (Stage 2): ${err}`, 'error');
+                    setIsRunning(false);
+                    isOptimizingRef.current = false;
+                    return;
                 }
             }
 
@@ -642,7 +713,7 @@ export default function BacktestingPanel() {
             setProgress(stage2Progress);
 
             if (endIndex < stage2Tasks.length) {
-                setTimeout(() => processStage2Chunk(endIndex), 15);
+                processStage2Chunk(endIndex);
             } else {
                 Object.keys(bestStage2Data).forEach(s => {
                     bestData[s] = bestStage2Data[s];
@@ -651,61 +722,75 @@ export default function BacktestingPanel() {
             }
         };
 
-        setTimeout(() => processStage2Chunk(0), 10);
+        processStage2Chunk(0);
     };
 
-    const processStage1Chunk = (startIndex: number) => {
-        const chunkSize = 10;
+    const processStage1Chunk = async (startIndex: number) => {
+        const chunkSize = 100;
         const endIndex = Math.min(startIndex + chunkSize, combinations.length);
         
+        const chunkConfigs = [];
         for (let i = startIndex; i < endIndex; i++) {
             const c = combinations[i];
-            const config = { 
+            chunkConfigs.push({ 
                 ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
                 maxDailyLossR: optimizeSwitches ? undefined : (maxDailyLossR || undefined),
                 dailyProfitTargetR: optimizeSwitches ? undefined : (dailyProfitTargetR || undefined),
                 maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
                 maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
                 trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
-            };
-            const res = runBacktest(logs, config);
-            
-            const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
-            sessionsToEval.forEach(s => {
-                const sessionTrades = s === 'ALL'
-                    ? res.trades
-                    : res.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
-                
-                const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-                const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-                
-                if (pnl > bestPnl[s]) {
-                    bestPnl[s] = pnl;
-                    bestData[s] = { config, result: res };
-                }
             });
         }
         
-        const baseProgress = Math.floor((endIndex / combinations.length) * 100);
-        setProgress(optimizeSwitches ? Math.floor(baseProgress / 2) : baseProgress);
-        
-        if (endIndex < combinations.length) {
-            setTimeout(() => processStage1Chunk(endIndex), 20);
-        } else {
-            if (optimizeSwitches && Object.keys(bestData).length > 0) {
-                startStage2();
-            } else {
-                finalizeOptimization();
+        try {
+            const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
+            
+            for (let i = 0; i < chunkResults.length; i++) {
+                const config = chunkConfigs[i];
+                const res = chunkResults[i];
+                
+                const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+                sessionsToEval.forEach(s => {
+                    const sessionTrades = s === 'ALL'
+                        ? res.trades
+                        : res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
+                    
+                    const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+                    const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
+                    
+                    if (pnl > bestPnl[s]) {
+                        bestPnl[s] = pnl;
+                        bestData[s] = { config, result: res };
+                    }
+                });
             }
+            
+            const baseProgress = Math.floor((endIndex / combinations.length) * 100);
+            setProgress(optimizeSwitches ? Math.floor(baseProgress / 2) : baseProgress);
+            
+            if (endIndex < combinations.length) {
+                processStage1Chunk(endIndex);
+            } else {
+                if (optimizeSwitches && Object.keys(bestData).length > 0) {
+                    startStage2();
+                } else {
+                    finalizeOptimization();
+                }
+            }
+        } catch (err) {
+            toast(`❌ Error en Worker (Stage 1): ${err}`, 'error');
+            setIsRunning(false);
+            isOptimizingRef.current = false;
         }
     };
     
-    setTimeout(() => processStage1Chunk(0), 100);
+    processStage1Chunk(0);
   }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
 
   // ✨ AUTO-OPTIMIZADOR INTELIGENTE POR SESIÓN INDEPENDIENTE
   const handleOptimizeSession = useCallback((targetSession: 'LONDON' | 'NY' | 'ASIA' | 'ALL') => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    isOptimizingRef.current = true;
     setIsRunning(true);
     setProgress(0);
     setTrades([]);
@@ -842,6 +927,7 @@ export default function BacktestingPanel() {
 
           setProgress(100);
           setIsRunning(false);
+          isOptimizingRef.current = false;
           toast(`✅ Optimización finalizada para ${targetSession === 'ALL' ? 'todas las sesiones individuales' : targetSession}.`, 'success');
         }, 100);
         return;
@@ -864,10 +950,11 @@ export default function BacktestingPanel() {
         }
       }
 
-      const processChunk = (chunkStartIndex: number) => {
-        const chunkSize = 50;
+      const processChunk = async (chunkStartIndex: number) => {
+        const chunkSize = 100;
         const chunkEndIndex = Math.min(chunkStartIndex + chunkSize, combinations.length);
 
+        const chunkConfigs = [];
         for (let i = chunkStartIndex; i < chunkEndIndex; i++) {
           const comb = combinations[i];
           
@@ -878,7 +965,7 @@ export default function BacktestingPanel() {
             fixedRR: comb.rr
           };
 
-          const testParams = {
+          chunkConfigs.push({
             ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
             maxDailyLossR: maxDailyLossR || undefined,
             dailyProfitTargetR: dailyProfitTargetR || undefined,
@@ -887,63 +974,74 @@ export default function BacktestingPanel() {
             trailingDrawdownR: trailingDrawdownR || undefined,
             oteEntryPercent,
             sessions: tempSessions
-          };
-
-          const testRes = runBacktest(logs, testParams);
-
-          const sessionTrades = testRes.trades.filter(t => getSessionForTimestamp(t.timestamp) === s);
-          const closed = sessionTrades.filter(t => t.result && t.result !== 'TIMEOUT');
-          
-          // Cálculo de PnL Neto en unidades de R
-          const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-          
-          // Cálculo del Profit Factor local de la sesión
-          let grossProfit = 0;
-          let grossLoss = 0;
-          closed.forEach(t => {
-            const p = t.rMultiple || 0;
-            if (p > 0) grossProfit += p;
-            else if (p < 0) grossLoss += Math.abs(p);
           });
-          const pf = grossLoss === 0 ? (grossProfit > 0 ? 2.5 : 1.0) : (grossProfit / grossLoss);
-          
-          // 1. Penalizador de Muestra Pequeña (Evita overfitting y trades de suerte con poca muestra)
-          const tradeCountFactor = closed.length < 3 ? 0.2 : (closed.length < 6 ? 0.6 : 1.0);
-          
-          // 2. Factor de Profit Factor saludable (topado en 2.5 para evitar sobreajuste absurdo)
-          const cappedPF = Math.min(pf, 2.5);
-          
-          // 3. Puntuación final multivariable (Score de Robustez)
-          const robustScore = pnl >= 0 
-            ? pnl * cappedPF * tradeCountFactor 
-            : pnl / (Math.max(0.1, cappedPF) * Math.max(0.1, tradeCountFactor));
-
-          if (robustScore > bestScore) {
-            bestScore = robustScore;
-            bestConfig = {
-              ...comb.profile,
-              slBufferPercent: comb.sl,
-              fixedRR: comb.rr
-            };
-          }
         }
 
-        const sessionProgress = (chunkEndIndex / combinations.length);
-        const overallProgress = Math.floor(((sessionIndex + sessionProgress) / sessionsList.length) * 100);
-        setProgress(overallProgress);
+        try {
+            const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
 
-        if (chunkEndIndex < combinations.length) {
-          setTimeout(() => processChunk(chunkEndIndex), 10);
-        } else {
-          currentSessionTriggers[s] = {
-            ...currentSessionTriggers[s],
-            ...bestConfig
-          };
-          setTimeout(() => optimizeSessionTask(sessionIndex + 1), 50);
+            for (let i = 0; i < chunkResults.length; i++) {
+                const comb = combinations[chunkStartIndex + i];
+                const testRes = chunkResults[i];
+
+                const sessionTrades = testRes.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
+                const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+                
+                // Cálculo de PnL Neto en unidades de R
+                const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
+                
+                // Cálculo del Profit Factor local de la sesión
+                let grossProfit = 0;
+                let grossLoss = 0;
+                closed.forEach((t: any) => {
+                    const p = t.rMultiple || 0;
+                    if (p > 0) grossProfit += p;
+                    else if (p < 0) grossLoss += Math.abs(p);
+                });
+                const pf = grossLoss === 0 ? (grossProfit > 0 ? 2.5 : 1.0) : (grossProfit / grossLoss);
+                
+                // 1. Penalizador de Muestra Pequeña (Evita overfitting y trades de suerte con poca muestra)
+                const tradeCountFactor = closed.length < 3 ? 0.2 : (closed.length < 6 ? 0.6 : 1.0);
+                
+                // 2. Factor de Profit Factor saludable (topado en 2.5 para evitar sobreajuste absurdo)
+                const cappedPF = Math.min(pf, 2.5);
+                
+                // 3. Puntuación final multivariable (Score de Robustez)
+                const robustScore = pnl >= 0 
+                    ? pnl * cappedPF * tradeCountFactor 
+                    : pnl / (Math.max(0.1, cappedPF) * Math.max(0.1, tradeCountFactor));
+
+                if (robustScore > bestScore) {
+                    bestScore = robustScore;
+                    bestConfig = {
+                    ...comb.profile,
+                    slBufferPercent: comb.sl,
+                    fixedRR: comb.rr
+                    };
+                }
+            }
+
+            const sessionProgress = (chunkEndIndex / combinations.length);
+            const overallProgress = Math.floor(((sessionIndex + sessionProgress) / sessionsList.length) * 100);
+            setProgress(overallProgress);
+
+            if (chunkEndIndex < combinations.length) {
+                processChunk(chunkEndIndex);
+            } else {
+                currentSessionTriggers[s] = {
+                    ...currentSessionTriggers[s],
+                    ...bestConfig
+                };
+                setTimeout(() => optimizeSessionTask(sessionIndex + 1), 50);
+            }
+        } catch(err) {
+            toast(`❌ Error en Worker (Session): ${err}`, 'error');
+            setIsRunning(false);
+            isOptimizingRef.current = false;
         }
       };
 
-      setTimeout(() => processChunk(0), 10);
+      processChunk(0);
     };
 
     setTimeout(() => optimizeSessionTask(0), 100);
@@ -1028,7 +1126,8 @@ export default function BacktestingPanel() {
         dailyTradesCount++;
         if (r < 0) {
           dailyConsecutiveLosses++;
-        } else if (r > 0) {
+        } else {
+          // Both Win (> 0) and BE (=== 0) reset the consecutive loss streak
           dailyConsecutiveLosses = 0;
         }
 
@@ -1071,21 +1170,24 @@ export default function BacktestingPanel() {
     let grossLossR = 0;
     let maxDD = 0;
     let peak = 0;
+    let cumPnL = 0;
 
     activeTrades.forEach(t => {
       const r = Number(t.rMultiple) || 0;
       if (r > 0) grossProfitR += r;
       else grossLossR += Math.abs(r);
 
-      peak += r;
-      if (peak < maxDD) maxDD = peak;
+      cumPnL += r;
+      if (cumPnL > peak) peak = cumPnL;
+      const dd = peak - cumPnL;
+      if (dd > maxDD) maxDD = dd;
     });
 
     const profitFactor = grossLossR > 0 ? (grossProfitR / grossLossR).toFixed(2) : (grossProfitR > 0 ? '∞' : '0.00');
 
     // Curva de capital
     const equityData = [{ name: 'Start', PnL: 0 }];
-    let cumPnL = 0;
+    cumPnL = 0;
     activeTrades.forEach((t, idx) => {
       cumPnL += Number(t.rMultiple) || 0;
       equityData.push({
@@ -1137,8 +1239,8 @@ export default function BacktestingPanel() {
           mdl: c.mdl,
           dpt: c.dpt,
           mtd: c.mtd,
-          mcl: 0,
-          tdd: 0
+          mcl: globalMCL,
+          tdd: globalTDD
         });
 
         if (sim) {
@@ -1159,7 +1261,7 @@ export default function BacktestingPanel() {
       setIsOptimizingPortfolio(false);
       toast('✅ Grid Search optimizado. ¡Elegí la mejor opción abajo!', 'success');
     }, 100);
-  }, [portfolioFiles, runPortfolioSimulation, toast]);
+  }, [portfolioFiles, runPortfolioSimulation, toast, globalMCL, globalTDD]);
 
   // 💾 SUBIR LA CONFIGURACIÓN GLOBAL A JARVIS FIRESTORE
   const handlePushGlobalToBot = async () => {
@@ -1379,7 +1481,7 @@ export default function BacktestingPanel() {
     
     const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
     
-    let maxDD = 0, peak = 0;
+    let maxDD = 0, peak = 0, cumPnlTrack = 0;
     let grossProfitUsd = 0, grossLossUsd = 0;
     let maxConsLosses = 0, currentLossStreak = 0;
     let totalDuration = 0, tradesWithDuration = 0;
@@ -1390,9 +1492,11 @@ export default function BacktestingPanel() {
       const r = t.rMultiple || 0;
       const profitUsd = r * riskUsd;
       
-      // Drawdown (Usd based)
-      peak += profitUsd;
-      if (peak < maxDD) maxDD = peak;
+      // Drawdown (Usd based) - track real peak
+      cumPnlTrack += profitUsd;
+      if (cumPnlTrack > peak) peak = cumPnlTrack;
+      const dd = peak - cumPnlTrack;
+      if (dd > maxDD) maxDD = dd;
 
       // Profit Factor
       if (profitUsd > 0) grossProfitUsd += profitUsd;
@@ -3188,10 +3292,10 @@ export default function BacktestingPanel() {
                               fontSize: '0.6rem',
                               padding: '1px 5px',
                               borderRadius: '3px',
-                              background: t.type === 'BUY' ? 'rgba(32,191,107,0.1)' : 'rgba(255,51,51,0.1)',
-                              color: t.type === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
+                              background: t.direction === 'BUY' ? 'rgba(32,191,107,0.1)' : 'rgba(255,51,51,0.1)',
+                              color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
                               fontWeight: 700
-                            }}>{t.type}</span>
+                            }}>{t.direction}</span>
                             <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>{formattedDate} ART</span>
                           </div>
                           
