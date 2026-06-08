@@ -2459,7 +2459,7 @@ export default function BacktestingPanel() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
           {/* TRADES TABLE */}
-          <div className="panel" style={{ flex: 1 }}>
+          <div className="panel" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <TrendingUp size={18} color="var(--accent-gold)" /> TRADES DETECTADOS {isRunning && <span className="live-dot"></span>}
@@ -2525,17 +2525,17 @@ export default function BacktestingPanel() {
                 display: 'flex', 
                 alignItems: 'center', 
                 gap: '12px', 
-                marginBottom: '16px', 
-                padding: '10px 14px', 
+                marginBottom: '12px', 
+                padding: '8px 12px', 
                 backgroundColor: 'rgba(255, 255, 255, 0.02)', 
                 borderRadius: '6px',
                 border: '1px solid var(--border-color)',
                 flexWrap: 'wrap'
               }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  🎯 SCORE FILTRADO:
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                  🎯 SCORE:
                 </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '150px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '130px' }}>
                   <input 
                     type="range" 
                     min="5" 
@@ -2548,11 +2548,11 @@ export default function BacktestingPanel() {
                     }}
                     style={{ flex: 1, accentColor: 'var(--accent-gold)', height: '4px', cursor: 'pointer' }} 
                   />
-                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '60px', textAlign: 'right' }}>
+                  <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '45px', textAlign: 'right' }}>
                     Min: {scoreFilterMin}
                   </span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '150px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '130px' }}>
                   <input 
                     type="range" 
                     min="5" 
@@ -2565,13 +2565,13 @@ export default function BacktestingPanel() {
                     }}
                     style={{ flex: 1, accentColor: '#0088ff', height: '4px', cursor: 'pointer' }} 
                   />
-                  <span style={{ fontSize: '0.7rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0088ff', minWidth: '60px', textAlign: 'right' }}>
+                  <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0088ff', minWidth: '45px', textAlign: 'right' }}>
                     Max: {scoreFilterMax}
                   </span>
                 </div>
                 
                 {/* Pre-sets */}
-                <div style={{ display: 'flex', gap: '4px' }}>
+                <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto', flexWrap: 'wrap' }}>
                   {[
                     { label: 'Todos (5+)', min: 5, max: 30 },
                     { label: '≥10 pts', min: 10, max: 30 },
@@ -2614,8 +2614,8 @@ export default function BacktestingPanel() {
                   display: 'flex', 
                   alignItems: 'center', 
                   gap: '12px', 
-                  marginBottom: '16px', 
-                  padding: '10px 14px', 
+                  marginBottom: '12px', 
+                  padding: '8px 12px', 
                   backgroundColor: 'rgba(255, 255, 255, 0.02)', 
                   borderRadius: '6px',
                   border: '1px solid var(--border-color)',
@@ -2624,8 +2624,8 @@ export default function BacktestingPanel() {
                   pointerEvents: isOteFilterActive ? 'auto' : 'none',
                   transition: 'opacity 0.2s'
                 }}>
-                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    🎯 OTE ENTRY FILTRADO {!isOteFilterActive && <span style={{ color: 'var(--accent-gold)', fontWeight: 400, marginLeft: '4px' }}>(Inactivo - Solo para gatillos OTE)</span>}:
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    🎯 OTE ENTRY {!isOteFilterActive && <span style={{ color: 'var(--accent-gold)', fontWeight: 400, marginLeft: '4px' }}>(Inactivo)</span>}:
                   </span>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     {([50, 62, 79] as const).map(level => {
@@ -2657,7 +2657,7 @@ export default function BacktestingPanel() {
               );
             })()}
 
-            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: '200px' }}>
               {trades.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
                   {isRunning ? 'Procesando logs...' : 'Subí logs y hacé click en REPRODUCIR'}
@@ -2665,7 +2665,7 @@ export default function BacktestingPanel() {
               ) : (
                 <table className="data-table" style={{ width: 'max-content', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
                   <thead>
-                    <tr style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)' }}>
+                    <tr style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)', position: 'sticky', top: 0, zIndex: 1 }}>
                       <th style={{ padding: '6px 16px 6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>FECHA</th>
                       <th style={{ padding: '6px 16px 6px 10px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>DIR</th>
                       <th style={{ padding: '6px 16px 6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>SETUP</th>
