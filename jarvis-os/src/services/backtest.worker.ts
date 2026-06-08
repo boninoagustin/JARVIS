@@ -1,4 +1,4 @@
-import { runBacktest, runPortfolioSimulation } from './backtestEngine';
+import { runBacktest } from './backtestEngine';
 
 self.onmessage = (e: MessageEvent) => {
   const { type, id, payload } = e.data;

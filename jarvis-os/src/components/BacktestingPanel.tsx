@@ -408,10 +408,10 @@ export default function BacktestingPanel() {
         setIsRunning(false);
 
       // Save to history
-      const closed = res.trades.filter(t => t.result && t.result !== 'TIMEOUT');
-      const wins = closed.filter(t => t.result === 'WIN').length;
+      const closed = res.trades.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
+      const wins = closed.filter((t: BacktestTrade) => t.result === 'WIN').length;
       const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
-      const pnl = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0).toFixed(2);
+      const pnl = closed.reduce((acc: number, t: BacktestTrade) => acc + (t.rMultiple || 0), 0).toFixed(2);
       const session: SessionHistory = {
         id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
         trades: res.trades.length, winRate: wr, pnl, status: 'completed',
