@@ -2663,31 +2663,31 @@ export default function BacktestingPanel() {
                   {isRunning ? 'Procesando logs...' : 'Subí logs y hacé click en REPRODUCIR'}
                 </div>
               ) : (
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap', tableLayout: 'fixed' }}>
+                <table className="data-table" style={{ width: 'max-content', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
                   <thead>
                     <tr style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)' }}>
-                      <th style={{ width: '16%', padding: '6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>FECHA</th>
-                      <th style={{ width: '10%', padding: '6px 10px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>DIR</th>
-                      <th style={{ width: '18%', padding: '6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>SETUP</th>
-                      <th style={{ width: '14%', padding: '6px 10px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>RESULTADO</th>
-                      <th style={{ width: '16%', padding: '6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>PNL (USD)</th>
-                      <th style={{ width: '16%', padding: '6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>R (TOTAL)</th>
-                      <th style={{ width: '10%', padding: '6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>DUR</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>FECHA</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>DIR</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'left', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>SETUP</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>RESULTADO</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>PNL (USD)</th>
+                      <th style={{ padding: '6px 16px 6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>R (TOTAL)</th>
+                      <th style={{ padding: '6px 10px', textAlign: 'right', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>DUR</th>
                     </tr>
                   </thead>
                   <tbody>
                     {tripleFilteredTrades.map(t => (
                       <tr key={t.id} style={{ cursor: 'pointer', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }} onClick={() => setShowLog(!showLog)}>
-                        <td className="mono" style={{ padding: '6px 10px', fontSize: '0.65rem' }}>{new Date(t.timestamp).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
-                        <td style={{ padding: '6px 10px', color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700, fontSize: '0.7rem', textAlign: 'center' }}>{t.direction}</td>
-                        <td style={{ padding: '6px 10px', fontWeight: 700, color: t.grade?.startsWith('A') ? 'var(--accent-gold)' : t.grade?.startsWith('B') ? '#0088ff' : 'var(--text-secondary)', fontSize: '0.7rem' }}>
+                        <td className="mono" style={{ padding: '6px 16px 6px 10px', fontSize: '0.65rem' }}>{new Date(t.timestamp).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td style={{ padding: '6px 16px 6px 10px', color: t.direction === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700, fontSize: '0.7rem', textAlign: 'center' }}>{t.direction}</td>
+                        <td style={{ padding: '6px 16px 6px 10px', fontWeight: 700, color: t.grade?.startsWith('A') ? 'var(--accent-gold)' : t.grade?.startsWith('B') ? '#0088ff' : 'var(--text-secondary)', fontSize: '0.7rem' }}>
                           {t.grade || '-'} <span style={{ color: t.points >= 8 ? 'var(--accent-gold)' : 'var(--text-secondary)', fontSize: '0.6rem', fontWeight: 'normal' }}>({t.points} pts)</span>
                         </td>
-                        <td style={{ padding: '6px 10px', color: resultColor(t.result), fontWeight: 700, fontSize: '0.7rem', textAlign: 'center' }}>{t.result || 'OPEN'}</td>
-                        <td className="mono" style={{ padding: '6px 10px', color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700, textAlign: 'right' }}>
+                        <td style={{ padding: '6px 16px 6px 10px', color: resultColor(t.result), fontWeight: 700, fontSize: '0.7rem', textAlign: 'center' }}>{t.result || 'OPEN'}</td>
+                        <td className="mono" style={{ padding: '6px 16px 6px 10px', color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700, textAlign: 'right' }}>
                           {t.rMultiple !== undefined ? `${(t.rMultiple * riskUsd) >= 0 ? '+$' : '-$'}${Math.abs(t.rMultiple * riskUsd).toFixed(2)}` : '—'}
                         </td>
-                        <td className="mono" style={{ padding: '6px 10px', color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700, textAlign: 'right' }}>
+                        <td className="mono" style={{ padding: '6px 16px 6px 10px', color: (t.rMultiple || 0) > 0 ? 'var(--accent-green)' : (t.rMultiple || 0) < 0 ? 'var(--accent-red)' : 'var(--text-tertiary)', fontSize: '0.7rem', fontWeight: 700, textAlign: 'right' }}>
                           {t.rMultiple !== undefined ? `${t.rMultiple > 0 ? '+' : ''}${t.rMultiple.toFixed(2)}R` : '—'}
                         </td>
                         <td className="mono" style={{ padding: '6px 10px', fontSize: '0.65rem', color: 'var(--text-tertiary)', textAlign: 'right' }}>
