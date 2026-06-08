@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase, Zap } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV, runBacktest } from '../services/backtestEngine';
@@ -396,6 +396,22 @@ export default function BacktestingPanel() {
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, sessionTriggers, toast]);
+
+  // AUTO-SIMULATE cuando cambian los filtros Bias (para UX fluida sin tener que re-simular)
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    // Si ya tenemos archivos cargados y un resultado previo, actualizamos en caliente (debounce de 300ms)
+    if (uploadedFiles.length > 0 && result && !isRunning) {
+      const timer = setTimeout(() => {
+        handleRun();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, handleRun, uploadedFiles.length, result, isRunning]);
 
   const handleDashboardOteSelect = useCallback((level: number) => {
     // 1. Update oteEntryPercent state
