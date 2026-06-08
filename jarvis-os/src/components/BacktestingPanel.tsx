@@ -171,6 +171,12 @@ export default function BacktestingPanel() {
   const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState(0);
   const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
   const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
+
+  const [maxSellsPerDay, setMaxSellsPerDay] = useState<number>(0);
+  const [sellScorePenalty, setSellScorePenalty] = useState<number>(0);
+  const [maxBuysPerDay, setMaxBuysPerDay] = useState<number>(0);
+  const [buyScorePenalty, setBuyScorePenalty] = useState<number>(0);
+
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -254,6 +260,10 @@ export default function BacktestingPanel() {
       setMaxConsecutiveLosses(config.maxConsecutiveLosses || 0);
       setMaxTradesPerDay(config.maxTradesPerDay || 0);
       setTrailingDrawdownR(config.trailingDrawdownR || 0);
+      setMaxSellsPerDay(config.maxSellsPerDay || 0);
+      setSellScorePenalty(config.sellScorePenalty || 0);
+      setMaxBuysPerDay(config.maxBuysPerDay || 0);
+      setBuyScorePenalty(config.buyScorePenalty || 0);
       setEnabled(config.enabled !== false);
       setResult(optResult);
       setTrades(optResult.trades);
@@ -275,6 +285,10 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses,
         maxTradesPerDay,
         trailingDrawdownR,
+        maxSellsPerDay,
+        sellScorePenalty,
+        maxBuysPerDay,
+        buyScorePenalty,
         enabled: enabled,
         sessions: sessionTriggers,
         updatedAt: new Date().toISOString()
@@ -326,6 +340,10 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
+        maxSellsPerDay: maxSellsPerDay || undefined,
+        sellScorePenalty: sellScorePenalty || undefined,
+        maxBuysPerDay: maxBuysPerDay || undefined,
+        buyScorePenalty: buyScorePenalty || undefined,
       };
 
       const res = runBacktest(logs, { 
@@ -377,7 +395,7 @@ export default function BacktestingPanel() {
       setSelectedSession(session.id);
       toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, sessionTriggers, toast]);
 
   const handleDashboardOteSelect = useCallback((level: number) => {
     // 1. Update oteEntryPercent state
@@ -466,6 +484,10 @@ export default function BacktestingPanel() {
             setMaxConsecutiveLosses(bestConfig.maxConsecutiveLosses || 0);
             setMaxTradesPerDay(bestConfig.maxTradesPerDay || 0);
             setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
+            setMaxSellsPerDay(bestConfig.maxSellsPerDay || 0);
+            setSellScorePenalty(bestConfig.sellScorePenalty || 0);
+            setMaxBuysPerDay(bestConfig.maxBuysPerDay || 0);
+            setBuyScorePenalty(bestConfig.buyScorePenalty || 0);
             setEnabled(bestConfig.enabled !== false);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -1682,7 +1704,33 @@ export default function BacktestingPanel() {
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
             </div>
 
+            {/* ANTI-BIAS FILTERS (SELL) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.03)', borderRadius: '4px', border: '1px dashed rgba(255,51,51,0.2)' }}>
+              <div>
+                <label style={{ fontSize: '0.55rem', color: 'var(--accent-red)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>MAX SELLs/DÍA</label>
+                <input type="number" min="0" value={maxSellsPerDay} onChange={e => setMaxSellsPerDay(parseInt(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.55rem', color: 'var(--accent-red)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>PENALIDAD SCORE (SELL)</label>
+                <input type="number" min="0" value={sellScorePenalty} onChange={e => setSellScorePenalty(parseInt(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Sin Penalidad (0)" />
+              </div>
+            </div>
 
+            {/* ANTI-BIAS FILTERS (BUY) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.03)', borderRadius: '4px', border: '1px dashed rgba(32,191,107,0.2)' }}>
+              <div>
+                <label style={{ fontSize: '0.55rem', color: 'var(--accent-green)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>MAX BUYs/DÍA</label>
+                <input type="number" min="0" value={maxBuysPerDay} onChange={e => setMaxBuysPerDay(parseInt(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.55rem', color: 'var(--accent-green)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>PENALIDAD SCORE (BUY)</label>
+                <input type="number" min="0" value={buyScorePenalty} onChange={e => setBuyScorePenalty(parseInt(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Sin Penalidad (0)" />
+              </div>
+            </div>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
               onClick={() => fileInputRef.current?.click()}
