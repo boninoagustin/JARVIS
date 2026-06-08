@@ -172,6 +172,8 @@ interface AssetSessionConfig {
     oteEntryPercent: number;
     entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
     enabled: boolean; // permite deshabilitar un activo/sesión
+    maxSellsPerDay: number;      // 🆕 v7.1: Máx. operaciones SELL diarias por activo (0 = ilimitado)
+    sellScorePenalty: number;    // 🆕 v7.1: Penalización extra de puntos para señales SELL (0 = sin penalización)
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
@@ -208,6 +210,8 @@ function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
 function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { 
     sessionEnabled: boolean;
+    maxSellsPerDay: number;
+    sellScorePenalty: number;
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
@@ -220,7 +224,7 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     
     // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
     if (session === 'OFF') {
-        return { ...dynamicBotConfig, sessionEnabled: false };
+        return { ...dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0 };
     }
     
     const specificKey = `${ticker}_${session}`;
@@ -239,6 +243,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
             oteEntryPercent: specific.oteEntryPercent,
             entryTrigger: specific.entryTrigger,
             sessionEnabled: specific.enabled,
+            maxSellsPerDay: specific.maxSellsPerDay,
+            sellScorePenalty: specific.sellScorePenalty,
             sessions: specific.sessions
         };
     }
@@ -256,12 +262,14 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
             oteEntryPercent: global.oteEntryPercent,
             entryTrigger: global.entryTrigger,
             sessionEnabled: global.enabled,
+            maxSellsPerDay: global.maxSellsPerDay,
+            sellScorePenalty: global.sellScorePenalty,
             sessions: global.sessions
         };
     }
     
     // 3. Fallback a config global
-    return { ...dynamicBotConfig, sessionEnabled: true };
+    return { ...dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0 };
 }
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -318,6 +326,8 @@ if (db) {
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
                     entryTrigger: (data.entryTrigger as any) || dynamicBotConfig.entryTrigger,
                     enabled: data.enabled !== false, // default enabled
+                    maxSellsPerDay: Number(data.maxSellsPerDay) || 0,       // 🆕 v7.1
+                    sellScorePenalty: Number(data.sellScorePenalty) || 0,     // 🆕 v7.1
                     sessions: data.sessions
                 });
             });
@@ -790,6 +800,47 @@ async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
     } catch (e: any) {
         console.error('[KILLSWITCH GLOBAL] Error evaluando el riesgo unificado:', e.message);
         return false;
+    }
+}
+
+/**
+ * 🆕 v7.1: Cuenta los trades SELL ejecutados hoy para un ticker específico.
+ * Se usa para implementar el límite diario de operaciones en corto por activo.
+ * Activos con sesgo alcista (NAS100, US500, etc.) pueden tener un cap de SELLs diarios
+ * para evitar rachas perdedoras que activen el killswitch.
+ */
+async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<number> {
+    if (!db) return 0;
+    try {
+        const now = new Date(nowMs);
+        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const argDateStr = formatter.format(now);
+        const dateParts = argDateStr.split('-');
+        const year = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]) - 1;
+        const day = parseInt(dateParts[2]);
+        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
+
+        // Normalizar nombres de ticker para la búsqueda (NAS100/US100 ambos se registran como NAS100)
+        const tickerVariants = [ticker];
+        if (ticker.includes('NAS') || ticker.includes('US100')) {
+            tickerVariants.push('NAS100', 'US100');
+        }
+
+        const snapshot = await db.collection('trade_journal')
+            .where('timestamp', '>=', artMidnightMs)
+            .where('direction', '==', 'SELL')
+            .get();
+
+        const count = snapshot.docs.filter(d => {
+            const data = d.data();
+            return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
+        }).length;
+
+        return count;
+    } catch (e: any) {
+        console.error(`[SELL LIMIT] Error contando SELLs diarios de ${ticker}:`, e.message);
+        return 0;
     }
 }
 
@@ -1828,6 +1879,50 @@ export async function processTradingAlert(alertText: string) {
                 activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
+            }
+
+            // 🆕 v7.1: FILTRO DE OPERACIONES SELL POR ACTIVO (Anti-Short Bias)
+            // Para activos con sesgo alcista (ej. NAS100), limita la cantidad de SELLs diarios
+            // y/o exige un puntaje mínimo más alto para señales bajistas.
+            if (oteData.direction === 'SELL' && !isBacktest) {
+                const sellConfig = getConfigForTicker(ticker);
+
+                // 📊 Verificar límite diario de SELLs
+                if (sellConfig.maxSellsPerDay > 0) {
+                    const dailySells = await countDailySellsForTicker(ticker, nowMs);
+                    if (dailySells >= sellConfig.maxSellsPerDay) {
+                        console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
+                        state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+
+                        sendTelegramAlert(
+                            `⚠️ <b>[SELL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
+                            `📊 Ya se ejecutaron <b>${dailySells}/${sellConfig.maxSellsPerDay}</b> operaciones SELL hoy en este activo.\n` +
+                            `💡 <i>Configurá maxSellsPerDay en asset_configs para ajustar el límite.</i>`
+                        ).catch(() => {});
+                        return;
+                    }
+                    console.log(`[SELL LIMIT] ✅ ${ticker} SELL permitido: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs usados hoy.`);
+                }
+
+                // 📏 Penalización de puntaje para SELLs (exige más confluencias en cortos)
+                if (sellConfig.sellScorePenalty > 0) {
+                    const originalPoints = oteData.points;
+                    const adjustedPoints = originalPoints - sellConfig.sellScorePenalty;
+                    const minRequired = sellConfig.minPointsForSell || 5;
+
+                    if (adjustedPoints < minRequired) {
+                        console.log(`[SELL FILTER] ⛔ Setup ${ticker} SELL FILTRADO por puntaje insuficiente: ${originalPoints} pts - ${sellConfig.sellScorePenalty} penalización = ${adjustedPoints} pts (mínimo: ${minRequired}).`);
+                        state.lastGatillo!.status = 'BLOCKED_SELL_SCORE';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        return;
+                    }
+                    console.log(`[SELL FILTER] ✅ ${ticker} SELL pasa filtro de puntaje: ${originalPoints} - ${sellConfig.sellScorePenalty} = ${adjustedPoints} pts (mín: ${minRequired}).`);
+                }
             }
 
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
