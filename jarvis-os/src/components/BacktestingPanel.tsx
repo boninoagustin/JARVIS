@@ -663,7 +663,7 @@ export default function BacktestingPanel() {
         const bestStage2Data: Record<string, { config: any, result: BacktestResult }> = {};
 
         const processStage2Chunk = async (startIndex: number) => {
-            const chunkSize = 100;
+            const chunkSize = 25;
             const endIndex = Math.min(startIndex + chunkSize, stage2Tasks.length);
 
             const validTasks = [];
@@ -726,7 +726,7 @@ export default function BacktestingPanel() {
     };
 
     const processStage1Chunk = async (startIndex: number) => {
-        const chunkSize = 100;
+        const chunkSize = 15;
         const endIndex = Math.min(startIndex + chunkSize, combinations.length);
         
         const chunkConfigs = [];
@@ -951,7 +951,7 @@ export default function BacktestingPanel() {
       }
 
       const processChunk = async (chunkStartIndex: number) => {
-        const chunkSize = 100;
+        const chunkSize = 25;
         const chunkEndIndex = Math.min(chunkStartIndex + chunkSize, combinations.length);
 
         const chunkConfigs = [];
