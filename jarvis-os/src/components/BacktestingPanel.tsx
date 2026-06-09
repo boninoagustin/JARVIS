@@ -420,15 +420,8 @@ export default function BacktestingPanel() {
     const currentStr = JSON.stringify(sessionTriggers);
     if (lastSessionTriggersStr.current !== currentStr) {
       lastSessionTriggersStr.current = currentStr;
-      if (isOptimizingRef.current) return;
-      if (uploadedFiles.length > 0 && result) {
-        const timer = setTimeout(() => {
-          handleRun(undefined, undefined, true);
-        }, 400);
-        return () => clearTimeout(timer);
-      }
     }
-  }, [sessionTriggers, handleRun, uploadedFiles.length, result]);
+  }, [sessionTriggers]);
 
   const isOptimizingRef = useRef(false);
   const handleOptimize = useCallback(() => {
@@ -1004,14 +997,34 @@ export default function BacktestingPanel() {
   const isGlobal = sessionFilter === 'GLOBAL';
   const baseTrades = isGlobal ? trades : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
-  const tripleFilteredTrades = (tradeFilter === 'ALL' || isGlobal)
-    ? baseTrades
-    : baseTrades.filter(t => {
+  const tripleFilteredTrades = baseTrades.filter(t => {
         const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
-        if (tradeFilter === 'BOS') return t.events?.some(e => e.includes('EVENTO_BOS')) && !hasOte;
-        if (tradeFilter === 'CHOCH') return t.events?.some(e => e.includes('EVENTO_CHOCH')) && !hasOte;
-        if (tradeFilter === 'OTE_CHOCH') return hasOte && t.events?.some(e => e.includes('EVENTO_CHOCH'));
-        if (tradeFilter === 'OTE_BOS') return hasOte && t.events?.some(e => e.includes('EVENTO_BOS'));
+        const isBos = t.events?.some(e => e.includes('EVENTO_BOS'));
+        const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
+
+        let triggerType: 'choch' | 'bos' | 'oteChoch' | 'oteBos' | null = null;
+        if (hasOte && isBos) triggerType = 'oteBos';
+        else if (hasOte && isChoch) triggerType = 'oteChoch';
+        else if (isBos && !hasOte) triggerType = 'bos';
+        else if (isChoch && !hasOte) triggerType = 'choch';
+
+        // 1. Local filter by selected tradeFilter in UI (when not in GLOBAL mode)
+        if (!isGlobal && tradeFilter !== 'ALL') {
+          if (tradeFilter === 'BOS' && triggerType !== 'bos') return false;
+          if (tradeFilter === 'CHOCH' && triggerType !== 'choch') return false;
+          if (tradeFilter === 'OTE_CHOCH' && triggerType !== 'oteChoch') return false;
+          if (tradeFilter === 'OTE_BOS' && triggerType !== 'oteBos') return false;
+        }
+
+        // 2. Dynamic filter based on sessionTriggers configuration (score & enabled)
+        const sessionName = getSessionForTimestamp(t.timestamp);
+        const config = sessionTriggers[sessionName];
+        if (config && triggerType) {
+          const triggerConfig = config[triggerType];
+          if (!triggerConfig || !triggerConfig.enabled) return false;
+          if ((t.points || 0) < triggerConfig.minScore) return false;
+        }
+
         return true;
     });
 
