@@ -358,6 +358,18 @@ const parseTF = (tf: string) => {
 const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
+export const parseTVPrice = (str: string): number => {
+    const lastComma = str.lastIndexOf(',');
+    const lastDot = str.lastIndexOf('.');
+    if (lastComma > -1 && lastDot > -1) {
+        if (lastComma > lastDot) return parseFloat(str.replace(/\./g, '').replace(',', '.'));
+        else return parseFloat(str.replace(/,/g, ''));
+    } else if (lastComma > -1) {
+        return parseFloat(str.replace(/,/g, '.'));
+    }
+    return parseFloat(str);
+};
+
 async function sendTelegramAlert(message: string) {
     console.log(`[TELEGRAM] Enviando alerta (${message.length} chars) a ${config.TELEGRAM_ALLOWED_USER_IDS.length} usuario(s): [${config.TELEGRAM_ALLOWED_USER_IDS.join(', ')}]`);
     if (message.length > 4096) {
@@ -997,14 +1009,14 @@ export async function processTradingAlert(alertText: string) {
             } catch (e) { }
         }
         else if (prefix === 'PING_PRICE') {
-            const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
+            const priceMatch = alertText.match(/Precio:\s*([0-9.,]+)/i);
             if (!priceMatch) return;
 
-            const currentPrice = parseFloat(priceMatch[1]);
-            const highMatch = alertText.match(/High:\s*([0-9.]+)/i);
-            const lowMatch = alertText.match(/Low:\s*([0-9.]+)/i);
-            const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
-            const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
+            const currentPrice = parseTVPrice(priceMatch[1]);
+            const highMatch = alertText.match(/High:\s*([0-9.,]+)/i);
+            const lowMatch = alertText.match(/Low:\s*([0-9.,]+)/i);
+            const highPrice = highMatch ? parseTVPrice(highMatch[1]) : currentPrice;
+            const lowPrice = lowMatch ? parseTVPrice(lowMatch[1]) : currentPrice;
 
             // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice; 
@@ -1351,12 +1363,12 @@ export async function processTradingAlert(alertText: string) {
                 state.marketBias[eventTf] = currentDirection;
                 
                 if (eventTf === '3') {
-                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
-                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
-                    const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice;
+                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
+                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
+                    const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
 
                     if (originMatch && actualPrice) {
-                        const newOrigin = parseFloat(originMatch[1]);
+                        const newOrigin = parseTVPrice(originMatch[1]);
                         const isBuy = currentDirection === 'BUY';
                         const activeLeg = isBuy ? state.activeImpulseBuy : state.activeImpulseSell;
                         
@@ -1413,12 +1425,12 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                 } else if (eventTf === '15' || eventTf === '60' || eventTf === '240') {
-                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
-                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
-                    const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice;
+                    const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
+                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
+                    const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
 
                     if (originMatch && actualPrice) {
-                        const newOrigin = parseFloat(originMatch[1]);
+                        const newOrigin = parseTVPrice(originMatch[1]);
                         const isBuy = currentDirection === 'BUY';
                         
                         const newLeg: ImpulseLeg = {
