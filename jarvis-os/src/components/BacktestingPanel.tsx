@@ -82,7 +82,7 @@ export default function BacktestingPanel() {
       const saved = localStorage.getItem('bt_session_triggers');
       if (saved) {
         const parsed = JSON.parse(saved);
-        for (const s of ['ALL', 'LONDON', 'NY', 'ASIA']) {
+        for (const s of ['OFF', 'LONDON', 'NY', 'ASIA']) {
           if (parsed[s]) {
             if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8, entryPercent: 62 };
             if (parsed[s].oteChoch.entryPercent === undefined) parsed[s].oteChoch.entryPercent = 62;
@@ -98,7 +98,7 @@ export default function BacktestingPanel() {
       }
     } catch {}
     return {
-      ALL: {
+      OFF: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
@@ -189,7 +189,7 @@ export default function BacktestingPanel() {
   });
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<'ALL' | 'LONDON' | 'NY' | 'ASIA'>('ALL');
+  const [sessionFilter, setSessionFilter] = useState<'OFF' | 'LONDON' | 'NY' | 'ASIA'>('OFF');
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
   const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
   const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
@@ -269,7 +269,7 @@ export default function BacktestingPanel() {
     return 'OFF';
   }, []);
 
-  const handleSessionSelect = useCallback((s: 'ALL' | 'LONDON' | 'NY' | 'ASIA') => {
+  const handleSessionSelect = useCallback((s: 'OFF' | 'LONDON' | 'NY' | 'ASIA') => {
     setSessionFilter(s);
     if (optimizedSessionResults[s]) {
       const { config, result: optResult } = optimizedSessionResults[s];
@@ -294,7 +294,7 @@ export default function BacktestingPanel() {
   const handlePushToBot = async () => {
     try {
       const configDoc = ticker; // v7.2 Unified master document
-      const allS: any = sessionTriggers['ALL'] || {};
+      const allS: any = sessionTriggers['OFF'] || {};
       
       await setDoc(doc(db, 'asset_configs', configDoc), {
         maxDailyLossR,
@@ -478,14 +478,14 @@ export default function BacktestingPanel() {
       }
     }
 
-    const bestPnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
+    const bestPnl: Record<string, number> = { OFF: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
     const bestData: Record<string, { config: any, result: BacktestResult }> = {};
 
     const finalizeOptimization = () => {
         if (Object.keys(bestData).length > 0) {
             setOptimizedSessionResults(bestData);
             
-            const currentData = bestData[sessionFilter] || bestData['ALL'];
+            const currentData = bestData[sessionFilter] || bestData['OFF'];
             const bestConfig = currentData.config;
             const bestResult = currentData.result;
             
@@ -596,11 +596,11 @@ export default function BacktestingPanel() {
         }
 
         const stage2Tasks: {
-            session: 'ALL' | 'LONDON' | 'NY' | 'ASIA',
+            session: 'OFF' | 'LONDON' | 'NY' | 'ASIA',
             ks: typeof ksCombinations[number]
         }[] = [];
 
-        const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+        const sessionsToEval = ['OFF', 'LONDON', 'NY', 'ASIA'] as const;
         sessionsToEval.forEach(s => {
             if (bestData[s]) {
                 for (const ks of ksCombinations) {
@@ -609,7 +609,7 @@ export default function BacktestingPanel() {
             }
         });
 
-        const bestStage2Pnl: Record<string, number> = { ALL: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
+        const bestStage2Pnl: Record<string, number> = { OFF: -Infinity, LONDON: -Infinity, NY: -Infinity, ASIA: -Infinity };
         const bestStage2Data: Record<string, { config: any, result: BacktestResult }> = {};
 
         const processStage2Chunk = async (startIndex: number) => {
@@ -639,9 +639,7 @@ export default function BacktestingPanel() {
                         const testConfig = chunkConfigs[j];
                         const res = chunkResults[j];
 
-                        const sessionTrades = task.session === 'ALL'
-                            ? res.trades
-                            : res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === task.session);
+                        const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === task.session);
                         
                         const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
                         const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
@@ -699,11 +697,9 @@ export default function BacktestingPanel() {
                 const config = chunkConfigs[i];
                 const res = chunkResults[i];
                 
-                const sessionsToEval = ['ALL', 'LONDON', 'NY', 'ASIA'] as const;
+                const sessionsToEval = ['OFF', 'LONDON', 'NY', 'ASIA'] as const;
                 sessionsToEval.forEach(s => {
-                    const sessionTrades = s === 'ALL'
-                        ? res.trades
-                        : res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
+                    const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
                     
                     const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
                     const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
@@ -1060,9 +1056,7 @@ export default function BacktestingPanel() {
     return trades;
   })();
 
-  const filteredTrades = sessionFilter === 'ALL'
-    ? oteSourceTrades
-    : oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+  const filteredTrades = oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
   const doubleFilteredTrades = tradeFilter === 'ALL'
     ? filteredTrades
@@ -1640,7 +1634,7 @@ export default function BacktestingPanel() {
             </h3>
 
             <div style={{ display: 'flex', gap: '4px', padding: '2px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', marginBottom: '12px' }}>
-              {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+              {(['OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
                 const isActive = sessionFilter === s;
                 return (
                   <button
@@ -1930,18 +1924,18 @@ export default function BacktestingPanel() {
               </span>
               {trades.length > 0 && (
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                  {tripleFilteredTrades.length}{tradeFilter !== 'ALL' || sessionFilter !== 'ALL' || scoreFilterMin > 5 || scoreFilterMax < 30 ? `/${trades.length}` : ''} total
+                  {tripleFilteredTrades.length}{tradeFilter !== 'ALL' || scoreFilterMin > 5 || scoreFilterMax < 30 ? `/${trades.length}` : ''} total
                 </span>
               )}
             </h3>
             {/* Session Filter */}
             {trades.length > 0 && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                {(['ALL', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
-                  const labels: Record<string, string> = { ALL: '🌍 Todas las Sesiones', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
+                {(['OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+                  const labels: Record<string, string> = { OFF: '🌍 Resto del Día', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
                   const isActive = sessionFilter === s;
                   return (
-                    <button key={s} onClick={() => handleSessionSelect(s as 'ALL' | 'LONDON' | 'NY' | 'ASIA')}
+                    <button key={s} onClick={() => handleSessionSelect(s as 'OFF' | 'LONDON' | 'NY' | 'ASIA')}
                       style={{
                         padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
                         border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
