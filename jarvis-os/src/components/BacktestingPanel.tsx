@@ -69,7 +69,7 @@ export default function BacktestingPanel() {
   const [slBufferPercent, setSlBufferPercent] = useState(0.1);
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
-  const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('OTE');
+  const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('BOTH');
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
     choch: { enabled: boolean; minScore: number };
     bos: { enabled: boolean; minScore: number };
@@ -299,13 +299,9 @@ export default function BacktestingPanel() {
   const handlePushToBot = async () => {
     try {
       const configDoc = ticker; // v7.2 Unified master document
+      const allS: any = sessionTriggers['ALL'] || {};
+      
       await setDoc(doc(db, 'asset_configs', configDoc), {
-        minPointsForBuy: minBuyPoints,
-        minPointsForSell: minSellPoints,
-        slBufferPercent: slBufferPercent,
-        fixedRR: fixedRR,
-        oteEntryPercent: oteEntryPercent,
-        entryTrigger: entryTrigger,
         maxDailyLossR,
         dailyProfitTargetR,
         maxConsecutiveLosses,
@@ -317,6 +313,13 @@ export default function BacktestingPanel() {
         buyScorePenalty,
         enabled: enabled,
         sessions: sessionTriggers,
+        
+        // Sincronización para el Panel de Control (AdminPanel)
+        slBufferPercent: allS.slBufferPercent ?? 0.1,
+        fixedRR: allS.fixedRR ?? 2.0,
+        minPointsForBuy: allS.choch?.minScore ?? 12,
+        minPointsForSell: allS.choch?.minScore ?? 12,
+
         updatedAt: new Date().toISOString()
       }, { merge: true });
       toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
@@ -803,86 +806,20 @@ export default function BacktestingPanel() {
     const slOptions = [0, 0.05, 0.1, 0.15, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
     
-    // Generar perfiles dinámicos inteligentes punto por punto de score según el gatillo seleccionado en la interfaz
+    // Generar perfiles dinámicos inteligentes punto por punto de score, simulando SIEMPRE ambos gatillos
     const triggerProfiles: any[] = [];
 
-    if (tradeFilter === 'ALL') {
-      // Si el filtro es ALL, evaluamos perfiles globales combinados con scores de 10 a 24 (en pasos de 2)
-      // para no multiplicar exponencialmente las combinaciones pero cubrir todo el espectro de consistencia.
-      const scores = [10, 12, 14, 16, 18, 20, 22, 24];
-      for (const sc of scores) {
-        triggerProfiles.push({
-          choch: { enabled: true, minScore: sc },
-          bos: { enabled: true, minScore: sc },
-          ote: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
-          oteChoch: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
-          oteBos: { enabled: true, minScore: sc, entryPercent: oteEntryPercent }
-        });
-      }
-    } else if (tradeFilter === 'CHOCH') {
-      // Punto por punto exacto de 8 a 25 para CHOCH directo
-      for (let sc = 8; sc <= 25; sc++) {
-        triggerProfiles.push({
-          choch: { enabled: true, minScore: sc },
-          bos: { enabled: false, minScore: 12 },
-          ote: { enabled: false, minScore: 12 },
-          oteChoch: { enabled: false, minScore: 12 },
-          oteBos: { enabled: false, minScore: 12 }
-        });
-      }
-    } else if (tradeFilter === 'BOS') {
-      // Punto por punto exacto de 8 a 25 para BOS directo
-      for (let sc = 8; sc <= 25; sc++) {
-        triggerProfiles.push({
-          choch: { enabled: false, minScore: 12 },
-          bos: { enabled: true, minScore: sc },
-          ote: { enabled: false, minScore: 12 },
-          oteChoch: { enabled: false, minScore: 12 },
-          oteBos: { enabled: false, minScore: 12 }
-        });
-      }
-    } else if (tradeFilter === 'OTE') {
-      // Punto por punto exacto de 8 a 25 para OTE general, evaluando niveles del 50%, 62% y 79%
-      const oteLevels = [50, 62, 79];
-      for (const lvl of oteLevels) {
-        for (let sc = 8; sc <= 25; sc++) {
-          triggerProfiles.push({
-            choch: { enabled: false, minScore: 12 },
-            bos: { enabled: false, minScore: 12 },
-            ote: { enabled: true, minScore: sc, entryPercent: lvl },
-            oteChoch: { enabled: false, minScore: 12 },
-            oteBos: { enabled: false, minScore: 12 }
-          });
-        }
-      }
-    } else if (tradeFilter === 'OTE_CHOCH') {
-      // Punto por punto exacto de 8 a 25 para OTE basado en CHOCH, evaluando niveles del 50%, 62% y 79%
-      const oteLevels = [50, 62, 79];
-      for (const lvl of oteLevels) {
-        for (let sc = 8; sc <= 25; sc++) {
-          triggerProfiles.push({
-            choch: { enabled: false, minScore: 12 },
-            bos: { enabled: false, minScore: 12 },
-            ote: { enabled: false, minScore: 12 },
-            oteChoch: { enabled: true, minScore: sc, entryPercent: lvl },
-            oteBos: { enabled: false, minScore: 12 }
-          });
-        }
-      }
-    } else if (tradeFilter === 'OTE_BOS') {
-      // Punto por punto exacto de 8 a 25 para OTE basado en BOS, evaluando niveles del 50%, 62% y 79%
-      const oteLevels = [50, 62, 79];
-      for (const lvl of oteLevels) {
-        for (let sc = 8; sc <= 25; sc++) {
-          triggerProfiles.push({
-            choch: { enabled: false, minScore: 12 },
-            bos: { enabled: false, minScore: 12 },
-            ote: { enabled: false, minScore: 12 },
-            oteChoch: { enabled: false, minScore: 12 },
-            oteBos: { enabled: true, minScore: sc, entryPercent: lvl }
-          });
-        }
-      }
+    // Evaluamos perfiles globales combinados con scores de 10 a 24 (en pasos de 2)
+    // para no multiplicar exponencialmente las combinaciones pero cubrir todo el espectro de consistencia.
+    const scores = [10, 12, 14, 16, 18, 20, 22, 24];
+    for (const sc of scores) {
+      triggerProfiles.push({
+        choch: { enabled: true, minScore: sc },
+        bos: { enabled: true, minScore: sc },
+        ote: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
+        oteChoch: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
+        oteBos: { enabled: true, minScore: sc, entryPercent: oteEntryPercent }
+      });
     }
 
     const sessionsList = targetSession === 'ALL' ? ['LONDON', 'NY', 'ASIA'] as const : [targetSession] as const;
@@ -1480,10 +1417,13 @@ export default function BacktestingPanel() {
     const pnlTotalR = closed.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
     
     const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '—';
+    const W = closed.length > 0 ? (wins / closed.length) : 0;
     
     let maxDD = 0, peak = 0, cumPnlTrack = 0;
     let grossProfitUsd = 0, grossLossUsd = 0;
+    let grossProfitR = 0, grossLossR = 0;
     let maxConsLosses = 0, currentLossStreak = 0;
+    let maxConsWins = 0, currentWinStreak = 0;
     let totalDuration = 0, tradesWithDuration = 0;
     
     let tp1OnlyCount = 0, tp2Count = 0, slCount = 0, beCount = 0;
@@ -1498,16 +1438,25 @@ export default function BacktestingPanel() {
       const dd = peak - cumPnlTrack;
       if (dd > maxDD) maxDD = dd;
 
-      // Profit Factor
+      // Profit Factor & Averages
       if (profitUsd > 0) grossProfitUsd += profitUsd;
       else grossLossUsd += Math.abs(profitUsd);
+      
+      if (r > 0) grossProfitR += r;
+      else grossLossR += Math.abs(r);
 
-      // Consecutive Losses
+      // Streaks
       if (t.result === 'LOSS') {
         currentLossStreak++;
+        currentWinStreak = 0;
         if (currentLossStreak > maxConsLosses) maxConsLosses = currentLossStreak;
       } else if (t.result === 'WIN') {
+        currentWinStreak++;
         currentLossStreak = 0;
+        if (currentWinStreak > maxConsWins) maxConsWins = currentWinStreak;
+      } else {
+        currentLossStreak = 0;
+        currentWinStreak = 0;
       }
 
       // Duration
@@ -1531,6 +1480,28 @@ export default function BacktestingPanel() {
     const expectancyR = closed.length > 0 ? (pnlTotalR / closed.length).toFixed(2) : '0.00';
     const avgDurationMin = tradesWithDuration > 0 ? Math.round(totalDuration / tradesWithDuration) : 0;
     
+    const avgWinR = wins > 0 ? (grossProfitR / wins).toFixed(2) : '0.00';
+    const avgLossR = losses > 0 ? (grossLossR / losses).toFixed(2) : '0.00';
+    
+    // Frequency
+    let daysDiff = 0;
+    if (closed.length > 1) {
+      const firstDate = new Date(closed[0].timestamp).getTime();
+      const lastDate = new Date(closed[closed.length - 1].timestamp).getTime();
+      daysDiff = (lastDate - firstDate) / (1000 * 60 * 60 * 24);
+    }
+    const tradesPerWeek = daysDiff > 0 ? ((closed.length / daysDiff) * 7).toFixed(1) : '—';
+    
+    // Kelly Criterion
+    const avgWinUsd = wins > 0 ? grossProfitUsd / wins : 0;
+    const avgLossUsd = losses > 0 ? grossLossUsd / losses : 0;
+    const avgRR = avgLossUsd > 0 ? avgWinUsd / avgLossUsd : 0;
+    let kellyPercent = 0;
+    if (avgRR > 0 && W > 0) {
+      kellyPercent = W - ((1 - W) / avgRR);
+    }
+    const kellyFormatted = closed.length > 0 && kellyPercent > 0 ? (kellyPercent * 100).toFixed(1) + '%' : (closed.length > 0 ? '0%' : '—');
+
     const formatDuration = (mins: number) => {
         if (mins < 60) return `${mins}m`;
         const h = Math.floor(mins / 60);
@@ -1544,8 +1515,9 @@ export default function BacktestingPanel() {
         pnlR: pnlTotalR.toFixed(2),
         count: closed.length, total: tripleFilteredTrades.length, 
         maxDDUsd: maxDD.toFixed(2), closed,
-        profitFactor, expectancyR, maxConsLosses, avgDuration: formatDuration(avgDurationMin),
-        tp1OnlyCount, tp2Count, slCount, beCount
+        profitFactor, expectancyR, maxConsLosses, maxConsWins, avgDuration: formatDuration(avgDurationMin),
+        tp1OnlyCount, tp2Count, slCount, beCount,
+        avgWinR, avgLossR, tradesPerWeek, kellyFormatted
     };
   })();
 
@@ -1747,9 +1719,246 @@ export default function BacktestingPanel() {
       </div>
 
       {activeTab === 'individual' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '24px' }}>
-          {/* LEFT COLUMN */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginBottom: '24px' }}>
+          
+          {/* DASHBOARD AVANZADO (FULL WIDTH HEADER) */}
+          <div className="panel" style={{ padding: '24px' }}>
+            <h3 style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <BarChart2 size={20} color="var(--accent-gold)" /> DASHBOARD AVANZADO
+              </span>
+              {result && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
+                  {result.processedEvents.toLocaleString()} eventos procesados | {result.startDate} → {result.endDate}
+                </span>
+              )}
+            </h3>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
+              {/* LEFT COL: Metrics Summary */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', justifyContent: 'center' }}>
+                {/* ROW 1: Principales */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 0.8fr', gap: '10px' }}>
+                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>WIN RATE</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{metrics.wr}%</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PROFIT FACTOR</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, color: parseFloat(metrics.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(metrics.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{metrics.profitFactor}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PNL TOTAL</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, color: parseFloat(metrics.pnlR) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                      {parseFloat(metrics.pnlR) > 0 ? '+' : ''}{metrics.pnlR}R <span style={{ fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ ${metrics.pnlUsd}</span>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRADES</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.count}</div>
+                  </div>
+                </div>
+
+                {/* ROW 2: Analíticas */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px' }}>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>ESPERANZA MAT.</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.expectancyR) > 0 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{parseFloat(metrics.expectancyR) > 0 ? '+' : ''}{metrics.expectancyR}R</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>MAX DRAWDOWN</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-red)' }}>-${metrics.maxDDUsd.replace('-', '')}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>RACHA G / P</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}><span style={{ color: 'var(--accent-green)' }}>{metrics.maxConsWins}</span> / <span style={{ color: 'var(--accent-red)' }}>{metrics.maxConsLosses}</span></div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>KELLY CRIT.</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.kellyFormatted) > 0 ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{metrics.kellyFormatted}</div>
+                  </div>
+                </div>
+
+                {/* ROW 3: Extra Stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '10px' }}>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>AVG WIN vs AVG LOSS</div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      <span style={{ color: 'var(--accent-green)' }}>+{metrics.avgWinR}R</span> <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>vs</span> <span style={{ color: 'var(--accent-red)' }}>-{metrics.avgLossR}R</span>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRADES / SEM</div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.tradesPerWeek}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>DURACIÓN PROM.</div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
+                  </div>
+                </div>
+
+                {/* ROW 3: Distribución */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 0.5fr', gap: '8px' }}>
+                  <div style={{ textAlign: 'center', padding: '8px', fontSize: '0.7rem' }}>
+                    <span style={{ color: '#0088ff', fontWeight: 700, fontSize: '0.85rem' }}>{metrics.tp2Count}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP2</span>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '8px', fontSize: '0.7rem' }}>
+                    <span style={{ color: 'var(--accent-green)', fontWeight: 700, fontSize: '0.85rem' }}>{metrics.tp1OnlyCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP1</span>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '8px', fontSize: '0.7rem' }}>
+                    <span style={{ color: 'var(--accent-gold)', fontWeight: 700, fontSize: '0.85rem' }}>{metrics.beCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>BE</span>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '8px', fontSize: '0.7rem' }}>
+                    <span style={{ color: 'var(--accent-red)', fontWeight: 700, fontSize: '0.85rem' }}>{metrics.slCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>SL</span>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '8px', fontSize: '0.7rem' }}>
+                    <span style={{ color: 'var(--text-tertiary)', fontWeight: 700, fontSize: '0.85rem' }}>{metrics.open}</span> <span style={{ color: 'var(--text-tertiary)' }}>OP</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* RIGHT COL: Equity Curve */}
+              <div style={{ height: '240px', display: 'flex', flexDirection: 'column' }}>
+                {metrics.closed.length > 0 ? (
+                  <div style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '16px 16px 16px 0', display: 'flex', flexDirection: 'column', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <h4 style={{ marginLeft: '16px', marginBottom: '12px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>CURVA DE CAPITAL (EQUITY CURVE)</h4>
+                    <div style={{ flex: 1, minHeight: 0 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={equityData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                          <XAxis dataKey="name" stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} />
+                          <YAxis stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `$${val}`} width={40} />
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.8rem' }}
+                            itemStyle={{ padding: 0 }}
+                            formatter={(value: any) => [`$${value}`]}
+                          />
+                          <Line type="monotone" dataKey="TP1" name="PNL TP1" stroke="var(--accent-green)" strokeWidth={2} dot={false} />
+                          <Line type="monotone" dataKey="TP2" name="PNL TP2" stroke="#0088ff" strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: '0.8rem', border: '1px solid rgba(255,255,255,0.02)' }}>
+                    Sin datos de curva de capital
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* BOTTOM ROW: Breakdowns */}
+            {(doubleFilteredTrades.length > 0 || trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement'))).length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                {/* SCORE RANGE BREAKDOWN */}
+                {doubleFilteredTrades.length > 0 ? (
+                  <div style={{ padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                    <h4 style={{ marginBottom: '16px', fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <TrendingUp size={16} color="var(--accent-gold)" /> DESGLOSE DE CONFLUENCIA POR SCORE
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {scoreRangesData.map(range => {
+                        const isPositive = parseFloat(range.pnlR) >= 0;
+                        return (
+                          <div key={range.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', borderLeft: `3px solid ${range.color}` }}>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>{range.label}</span>
+                              <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>{range.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{range.winRate}%</span></span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: parseFloat(range.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(range.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{range.profitFactor}</div>
+                              </div>
+                              <div style={{ textAlign: 'right', minWidth: '65px' }}>
+                                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                                  {isPositive ? '+' : ''}{range.pnlR}R
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : <div />}
+
+                {/* OTE ENTRY BREAKDOWN */}
+                {trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement'))).length > 0 ? (
+                  <div style={{ padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                    <h4 style={{ marginBottom: '16px', fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <TrendingUp size={16} color="var(--accent-gold)" /> DESGLOSE DE RENDIMIENTO POR OTE
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {oteBreakdownData.map(data => {
+                        const isPositive = parseFloat(data.pnlR) >= 0;
+                        const currentOteEntry = sessionFilter === 'ALL'
+                          ? oteEntryPercent
+                          : (sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? oteEntryPercent);
+                        const isCurrentlyActive = currentOteEntry === data.level;
+
+                        return (
+                          <div 
+                            key={data.level} 
+                            onClick={() => handleDashboardOteSelect(data.level)}
+                            style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'space-between', 
+                              padding: '10px 14px', 
+                              backgroundColor: isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)', 
+                              borderRadius: '4px', 
+                              border: isCurrentlyActive ? '1px solid rgba(255,170,0,0.3)' : '1px solid transparent',
+                              borderLeft: `4px solid ${data.color}`,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease-in-out',
+                            }}
+                            title="Haz clic para aplicar este OTE y re-correr backtest automáticamente"
+                            onMouseEnter={e => {
+                              e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.08)' : 'rgba(255,255,255,0.05)';
+                              e.currentTarget.style.transform = 'translateX(2px)';
+                            }}
+                            onMouseLeave={e => {
+                              e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)';
+                              e.currentTarget.style.transform = 'translateX(0)';
+                            }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                Retorno OTE {data.level}% {isCurrentlyActive && <span style={{ fontSize: '0.55rem', padding: '1px 4px', backgroundColor: 'rgba(255,170,0,0.2)', color: 'var(--accent-gold)', borderRadius: '3px', fontWeight: 700 }}>ACTIVO</span>}
+                              </span>
+                              <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
+                                {data.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{data.winRate}%</span>
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: parseFloat(data.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(data.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
+                                  {data.profitFactor}
+                                </div>
+                              </div>
+                              <div style={{ textAlign: 'right', minWidth: '65px' }}>
+                                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                                  {isPositive ? '+' : ''}{data.pnlR}R
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : <div />}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+            {/* LEFT COLUMN */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
           {/* UPLOAD */}
           <div className="panel">
@@ -1757,66 +1966,13 @@ export default function BacktestingPanel() {
               <Upload size={18} color="var(--accent-gold)" /> SUBIR LOGS CSV
             </h3>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-              <div>
-                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>ACTIVO</label>
-                <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} className="mono" placeholder="BTCUSD"
-                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>TIPO GATILLO</label>
-                <select value={entryTrigger} onChange={e => setEntryTrigger(e.target.value as 'CHOCH' | 'OTE' | 'BOTH')}
-                  style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}>
-                  <option value="OTE">Fibonacci (OTE)</option>
-                  <option value="CHOCH">Ruptura (CHOCH)</option>
-                  <option value="BOTH">Ambos</option>
-                </select>
-              </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>ACTIVO</label>
+              <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} className="mono" placeholder="BTCUSD"
+                style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.05)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600 }}>🛡️ SL BUF (Rel)</label>
-              <input type="range" min="0" max="0.5" step="0.01" value={slBufferPercent} onChange={e => setSlBufferPercent(parseFloat(e.target.value))}
-                style={{ flex: 1 }} />
-              <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{slBufferPercent}</span>
-            </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(0,136,255,0.05)', borderRadius: '4px', border: '1px solid rgba(0,136,255,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: '#0088ff', whiteSpace: 'nowrap', fontWeight: 600 }}>🎯 TP2 R:R</label>
-              <input type="range" min="1" max="5" step="0.1" value={fixedRR} onChange={e => setFixedRR(parseFloat(e.target.value))}
-                style={{ flex: 1 }} />
-              <span className="mono" style={{ fontSize: '0.75rem', color: '#0088ff', fontWeight: 700, minWidth: '42px', textAlign: 'right' }}>{fixedRR}x</span>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', fontWeight: 700 }}>📉 OTE ENTRY GLOBAL</label>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {[50, 62, 79].map(level => {
-                  const isActive = oteEntryPercent === level;
-                  return (
-                    <button
-                      key={level}
-                      type="button"
-                      onClick={() => setOteEntryPercent(level)}
-                      style={{
-                        flex: 1,
-                        padding: '4px 0',
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        borderRadius: '4px',
-                        border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
-                        backgroundColor: isActive ? 'rgba(255,170,0,0.15)' : 'var(--bg-secondary)',
-                        color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
-                    >
-                      {level}%
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
               <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
@@ -2256,203 +2412,6 @@ export default function BacktestingPanel() {
             </div>
           </div>
 
-          {/* METRICS */}
-          <div className="panel">
-            <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <BarChart2 size={18} color="var(--accent-gold)" /> DASHBOARD AVANZADO
-            </h3>
-            
-            {/* ROW 1: Principales */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 0.8fr', gap: '8px', marginBottom: '8px' }}>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>WIN RATE</div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{metrics.wr}%</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>PROFIT FACTOR</div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: parseFloat(metrics.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(metrics.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{metrics.profitFactor}</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>PNL TOTAL</div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: parseFloat(metrics.pnlR) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                  {parseFloat(metrics.pnlR) > 0 ? '+' : ''}{metrics.pnlR}R <span style={{ fontSize: '0.8rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ ${metrics.pnlUsd}</span>
-                </div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>TRADES</div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.count}</div>
-              </div>
-            </div>
-
-            {/* ROW 2: Analíticas */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>ESPERANZA MAT.</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: parseFloat(metrics.expectancyR) > 0 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{parseFloat(metrics.expectancyR) > 0 ? '+' : ''}{metrics.expectancyR}R</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>MAX DRAWDOWN</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--accent-red)' }}>-${metrics.maxDDUsd.replace('-', '')}</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>PEOR RACHA (L)</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: metrics.maxConsLosses >= 5 ? 'var(--accent-red)' : 'var(--text-primary)' }}>{metrics.maxConsLosses}</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
-                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>DURACIÓN PROM.</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
-              </div>
-            </div>
-
-            {/* ROW 3: Distribución */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 0.5fr', gap: '6px' }}>
-              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
-                <span style={{ color: '#0088ff', fontWeight: 700 }}>{metrics.tp2Count}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP2</span>
-              </div>
-              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
-                <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{metrics.tp1OnlyCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>TP1</span>
-              </div>
-              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
-                <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>{metrics.beCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>BE</span>
-              </div>
-              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
-                <span style={{ color: 'var(--accent-red)', fontWeight: 700 }}>{metrics.slCount}</span> <span style={{ color: 'var(--text-tertiary)' }}>SL</span>
-              </div>
-              <div style={{ textAlign: 'center', padding: '6px', fontSize: '0.65rem' }}>
-                <span style={{ color: 'var(--text-tertiary)', fontWeight: 700 }}>{metrics.open}</span> <span style={{ color: 'var(--text-tertiary)' }}>OP</span>
-              </div>
-            </div>
-            {result && (
-              <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '8px', textAlign: 'center' }}>
-                {result.processedEvents.toLocaleString()} eventos procesados | {result.startDate} → {result.endDate}
-              </div>
-            )}
-            
-            {/* EQUITY CURVE */}
-            {metrics.closed.length > 0 && (
-              <div style={{ marginTop: '24px', height: '200px', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px', padding: '16px 16px 16px 0' }}>
-                <h4 style={{ marginLeft: '16px', marginBottom: '12px', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>CURVA DE CAPITAL (EQUITY CURVE)</h4>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={equityData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                    <XAxis dataKey="name" stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis stroke="var(--text-tertiary)" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `$${val}`} width={40} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '4px', fontSize: '0.8rem' }}
-                      itemStyle={{ padding: 0 }}
-                      formatter={(value: any) => [`$${value}`]}
-                    />
-                    <Line type="monotone" dataKey="TP1" name="PNL TP1" stroke="var(--accent-green)" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="TP2" name="PNL TP2" stroke="#0088ff" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-
-            {/* SCORE RANGE BREAKDOWN */}
-            {doubleFilteredTrades.length > 0 && (
-              <div style={{ marginTop: '24px', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                <h4 style={{ marginBottom: '12px', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <TrendingUp size={14} color="var(--accent-gold)" /> DESGLOSE DE CONFLUENCIA POR SCORE
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {scoreRangesData.map(range => {
-                    const isPositive = parseFloat(range.pnlR) >= 0;
-                    return (
-                      <div key={range.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', borderLeft: `3px solid ${range.color}` }}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>{range.label}</span>
-                          <span style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>{range.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{range.winRate}%</span></span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
-                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: parseFloat(range.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(range.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{range.profitFactor}</div>
-                          </div>
-                          <div style={{ textAlign: 'right', minWidth: '60px' }}>
-                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                              {isPositive ? '+' : ''}{range.pnlR}R
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* OTE ENTRY BREAKDOWN */}
-            {trades.filter(t => t.events?.some(e => e.includes('OTE_Retracement'))).length > 0 && (
-              <div style={{ marginTop: '20px', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                <h4 style={{ marginBottom: '12px', fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <TrendingUp size={14} color="var(--accent-gold)" /> DESGLOSE DE RENDIMIENTO POR OTE
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {oteBreakdownData.map(data => {
-                    const isPositive = parseFloat(data.pnlR) >= 0;
-                    const currentOteEntry = sessionFilter === 'ALL'
-                      ? oteEntryPercent
-                      : (sessionTriggers[sessionFilter]?.oteChoch?.entryPercent ?? oteEntryPercent);
-                    const isCurrentlyActive = currentOteEntry === data.level;
-
-                    return (
-                      <div 
-                        key={data.level} 
-                        onClick={() => handleDashboardOteSelect(data.level)}
-                        style={{ 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'space-between', 
-                          padding: '10px 12px', 
-                          backgroundColor: isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)', 
-                          borderRadius: '4px', 
-                          border: isCurrentlyActive ? '1px solid rgba(255,170,0,0.3)' : '1px solid transparent',
-                          borderLeft: `4px solid ${data.color}`,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease-in-out',
-                        }}
-                        title="Haz clic para aplicar este OTE y re-correr backtest automáticamente"
-                        onMouseEnter={e => {
-                          e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.08)' : 'rgba(255,255,255,0.05)';
-                          e.currentTarget.style.transform = 'translateX(2px)';
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.backgroundColor = isCurrentlyActive ? 'rgba(255,170,0,0.05)' : 'rgba(255,255,255,0.02)';
-                          e.currentTarget.style.transform = 'translateX(0)';
-                        }}
-                      >
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            Retorno OTE {data.level}% {isCurrentlyActive && <span style={{ fontSize: '0.55rem', padding: '1px 4px', backgroundColor: 'rgba(255,170,0,0.2)', color: 'var(--accent-gold)', borderRadius: '3px', fontWeight: 700 }}>ACTIVO</span>}
-                          </span>
-                          <span style={{ fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>
-                            {data.tradesCount} trades | Win Rate: <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{data.winRate}%</span>
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>FACTOR BENEF.</div>
-                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: parseFloat(data.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(data.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
-                              {data.profitFactor}
-                            </div>
-                          </div>
-                          <div style={{ textAlign: 'right', minWidth: '60px' }}>
-                            <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>RETORNO</div>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: isPositive ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                              {isPositive ? '+' : ''}{data.pnlR}R
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            
-          </div>
         </div>
 
         {/* RIGHT COLUMN */}
@@ -2811,6 +2770,7 @@ export default function BacktestingPanel() {
             )}
           </div>
         </div>
+      </div>
       </div>
       ) : (
         /* ================= PEPE: PORTAFOLIO GLOBAL TAB ================= */
