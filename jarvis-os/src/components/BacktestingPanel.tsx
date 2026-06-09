@@ -175,8 +175,6 @@ export default function BacktestingPanel() {
   const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
   const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
 
-  const [maxSellsPerDay, setMaxSellsPerDay] = useState<number>(0);
-  const [sellScorePenalty, setSellScorePenalty] = useState<number>(0);
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -287,8 +285,6 @@ export default function BacktestingPanel() {
       setMaxConsecutiveLosses(config.maxConsecutiveLosses || 0);
       setMaxTradesPerDay(config.maxTradesPerDay || 0);
       setTrailingDrawdownR(config.trailingDrawdownR || 0);
-      setMaxSellsPerDay(config.maxSellsPerDay || 0);
-      setSellScorePenalty(config.sellScorePenalty || 0);
       setEnabled(config.enabled !== false);
       setResult(optResult);
       setTrades(optResult.trades);
@@ -306,8 +302,6 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses,
         maxTradesPerDay,
         trailingDrawdownR,
-        maxSellsPerDay,
-        sellScorePenalty,
         enabled: enabled,
         sessions: sessionTriggers,
         
@@ -365,8 +359,6 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
-        maxSellsPerDay: maxSellsPerDay || undefined,
-        sellScorePenalty: sellScorePenalty || undefined,
       };
 
       try {
@@ -432,35 +424,9 @@ export default function BacktestingPanel() {
         setIsRunning(false);
       }
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, sessionTriggers, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
 
-  // AUTO-SIMULATE cuando cambian los filtros Bias (para UX fluida sin tener que re-simular)
-  const isFirstRender = useRef(true);
-  const lastBiasValues = useRef({ maxSellsPerDay, sellScorePenalty });
   const isOptimizingRef = useRef(false);
-  useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false;
-      return;
-    }
-    // Solo disparar si realmente cambiaron los filtros Bias (no por otros re-renders)
-    const prev = lastBiasValues.current;
-    const biasChanged = prev.maxSellsPerDay !== maxSellsPerDay ||
-      prev.sellScorePenalty !== sellScorePenalty;
-    lastBiasValues.current = { maxSellsPerDay, sellScorePenalty };
-    if (!biasChanged) return;
-    
-    // No auto-simular si estamos optimizando
-    if (isOptimizingRef.current) return;
-    
-    if (uploadedFiles.length > 0 && result) {
-      const timer = setTimeout(() => {
-        handleRun();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [maxSellsPerDay, sellScorePenalty, handleRun, uploadedFiles.length, result]);
-
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     isOptimizingRef.current = true;
@@ -513,8 +479,6 @@ export default function BacktestingPanel() {
             setMaxConsecutiveLosses(bestConfig.maxConsecutiveLosses || 0);
             setMaxTradesPerDay(bestConfig.maxTradesPerDay || 0);
             setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
-            setMaxSellsPerDay(bestConfig.maxSellsPerDay || 0);
-            setSellScorePenalty(bestConfig.sellScorePenalty || 0);
             setEnabled(bestConfig.enabled !== false);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -747,199 +711,7 @@ export default function BacktestingPanel() {
     processStage1Chunk(0);
   }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
 
-  // ✨ AUTO-OPTIMIZADOR INTELIGENTE POR SESIÓN INDEPENDIENTE
-  const handleOptimizeSession = useCallback((targetSession: 'LONDON' | 'NY' | 'ASIA' | 'ALL') => {
-    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
-    isOptimizingRef.current = true;
-    setIsRunning(true);
-    setProgress(0);
-    setTrades([]);
-    setResult(null);
 
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
-
-    // Opciones del espacio de búsqueda para SL Buffer y R:R
-    const slOptions = [0, 0.05, 0.1, 0.15, 0.2];
-    const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
-    
-    // Generar perfiles dinámicos inteligentes punto por punto de score, simulando SIEMPRE ambos gatillos
-    const triggerProfiles: any[] = [];
-
-    // Evaluamos perfiles globales combinados con scores de 10 a 24 (en pasos de 2)
-    // para no multiplicar exponencialmente las combinaciones pero cubrir todo el espectro de consistencia.
-    const scores = [10, 12, 14, 16, 18, 20, 22, 24];
-    for (const sc of scores) {
-      triggerProfiles.push({
-        choch: { enabled: true, minScore: sc },
-        bos: { enabled: true, minScore: sc },
-        ote: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
-        oteChoch: { enabled: true, minScore: sc, entryPercent: oteEntryPercent },
-        oteBos: { enabled: true, minScore: sc, entryPercent: oteEntryPercent }
-      });
-    }
-
-    const sessionsList = targetSession === 'ALL' ? ['LONDON', 'NY', 'ASIA'] as const : [targetSession] as const;
-
-    let currentSessionTriggers = JSON.parse(JSON.stringify(sessionTriggers));
-
-    const optimizeSessionTask = (sessionIndex: number) => {
-      if (sessionIndex >= sessionsList.length) {
-        setSessionTriggers(currentSessionTriggers);
-        localStorage.setItem('bt_session_triggers', JSON.stringify(currentSessionTriggers));
-
-        // Corremos un backtest final con los parámetros nuevos optimizados
-        setTimeout(() => {
-          const baseParams = {
-            ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
-            maxDailyLossR: maxDailyLossR || undefined,
-            dailyProfitTargetR: dailyProfitTargetR || undefined,
-            maxConsecutiveLosses: maxConsecutiveLosses || undefined,
-            maxTradesPerDay: maxTradesPerDay || undefined,
-            trailingDrawdownR: trailingDrawdownR || undefined,
-          };
-          const finalRes = runBacktest(logs, {
-            ...baseParams,
-            oteEntryPercent,
-            sessions: currentSessionTriggers
-          });
-          setResult(finalRes);
-          setTrades(finalRes.trades);
-
-          // También actualizamos las simulaciones rápidas por ote
-          const sessions50 = getOverriddenSessions(currentSessionTriggers, 50);
-          const sessions62 = getOverriddenSessions(currentSessionTriggers, 62);
-          const sessions79 = getOverriddenSessions(currentSessionTriggers, 79);
-
-          const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
-          const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
-          const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
-
-          setTrades50(res50.trades);
-          setTrades62(res62.trades);
-          setTrades79(res79.trades);
-
-          setProgress(100);
-          setIsRunning(false);
-          isOptimizingRef.current = false;
-          toast(`✅ Optimización finalizada para ${targetSession === 'ALL' ? 'todas las sesiones individuales' : targetSession}.`, 'success');
-        }, 100);
-        return;
-      }
-
-      const s = sessionsList[sessionIndex];
-      let bestScore = -Infinity;
-      let bestConfig: typeof triggerProfiles[number] & { slBufferPercent: number, fixedRR: number } = {
-        ...triggerProfiles[0],
-        slBufferPercent: 0.1,
-        fixedRR: 2.0
-      };
-
-      const combinations: { sl: number, rr: number, profile: typeof triggerProfiles[number] }[] = [];
-      for (const sl of slOptions) {
-        for (const rr of rrOptions) {
-          for (const profile of triggerProfiles) {
-            combinations.push({ sl, rr, profile });
-          }
-        }
-      }
-
-      const processChunk = async (chunkStartIndex: number) => {
-        const chunkSize = 25;
-        const chunkEndIndex = Math.min(chunkStartIndex + chunkSize, combinations.length);
-
-        const chunkConfigs = [];
-        for (let i = chunkStartIndex; i < chunkEndIndex; i++) {
-          const comb = combinations[i];
-          
-          const tempSessions = JSON.parse(JSON.stringify(currentSessionTriggers));
-          tempSessions[s] = {
-            ...comb.profile,
-            slBufferPercent: comb.sl,
-            fixedRR: comb.rr
-          };
-
-          chunkConfigs.push({
-            ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
-            maxDailyLossR: maxDailyLossR || undefined,
-            dailyProfitTargetR: dailyProfitTargetR || undefined,
-            maxConsecutiveLosses: maxConsecutiveLosses || undefined,
-            maxTradesPerDay: maxTradesPerDay || undefined,
-            trailingDrawdownR: trailingDrawdownR || undefined,
-            oteEntryPercent,
-            sessions: tempSessions
-          });
-        }
-
-        try {
-            const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
-
-            for (let i = 0; i < chunkResults.length; i++) {
-                const comb = combinations[chunkStartIndex + i];
-                const testRes = chunkResults[i];
-
-                const sessionTrades = testRes.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
-                const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
-                
-                // Cálculo de PnL Neto en unidades de R
-                const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
-                
-                // Cálculo del Profit Factor local de la sesión
-                let grossProfit = 0;
-                let grossLoss = 0;
-                closed.forEach((t: any) => {
-                    const p = t.rMultiple || 0;
-                    if (p > 0) grossProfit += p;
-                    else if (p < 0) grossLoss += Math.abs(p);
-                });
-                const pf = grossLoss === 0 ? (grossProfit > 0 ? 2.5 : 1.0) : (grossProfit / grossLoss);
-                
-                // 1. Penalizador de Muestra Pequeña (Evita overfitting y trades de suerte con poca muestra)
-                const tradeCountFactor = closed.length < 3 ? 0.2 : (closed.length < 6 ? 0.6 : 1.0);
-                
-                // 2. Factor de Profit Factor saludable (topado en 2.5 para evitar sobreajuste absurdo)
-                const cappedPF = Math.min(pf, 2.5);
-                
-                // 3. Puntuación final multivariable (Score de Robustez)
-                const robustScore = pnl >= 0 
-                    ? pnl * cappedPF * tradeCountFactor 
-                    : pnl / (Math.max(0.1, cappedPF) * Math.max(0.1, tradeCountFactor));
-
-                if (robustScore > bestScore) {
-                    bestScore = robustScore;
-                    bestConfig = {
-                    ...comb.profile,
-                    slBufferPercent: comb.sl,
-                    fixedRR: comb.rr
-                    };
-                }
-            }
-
-            const sessionProgress = (chunkEndIndex / combinations.length);
-            const overallProgress = Math.floor(((sessionIndex + sessionProgress) / sessionsList.length) * 100);
-            setProgress(overallProgress);
-
-            if (chunkEndIndex < combinations.length) {
-                processChunk(chunkEndIndex);
-            } else {
-                currentSessionTriggers[s] = {
-                    ...currentSessionTriggers[s],
-                    ...bestConfig
-                };
-                setTimeout(() => optimizeSessionTask(sessionIndex + 1), 50);
-            }
-        } catch(err) {
-            toast(`❌ Error en Worker (Session): ${err}`, 'error');
-            setIsRunning(false);
-            isOptimizingRef.current = false;
-        }
-      };
-
-      processChunk(0);
-    };
-
-    setTimeout(() => optimizeSessionTask(0), 100);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, getSessionForTimestamp, tradeFilter]);
 
   // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
   const runPortfolioSimulation = useCallback((
@@ -1753,19 +1525,6 @@ export default function BacktestingPanel() {
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
             </div>
 
-            {/* ANTI-BIAS FILTERS (SELL) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,51,51,0.03)', borderRadius: '4px', border: '1px dashed rgba(255,51,51,0.2)' }}>
-              <div>
-                <label style={{ fontSize: '0.55rem', color: 'var(--accent-red)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>MAX SELLs/DÍA</label>
-                <input type="number" min="0" value={maxSellsPerDay} onChange={e => setMaxSellsPerDay(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.55rem', color: 'var(--accent-red)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>PENALIDAD SCORE (SELL)</label>
-                <input type="number" min="0" value={sellScorePenalty} onChange={e => setSellScorePenalty(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Sin Penalidad (0)" />
-              </div>
-            </div>
 
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
@@ -1881,63 +1640,6 @@ export default function BacktestingPanel() {
               })}
             </div>
 
-            {sessionFilter !== 'ALL' ? (
-              <button
-                type="button"
-                onClick={() => handleOptimizeSession(sessionFilter)}
-                disabled={isRunning}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  fontSize: '0.75rem',
-                  fontWeight: 800,
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: 'linear-gradient(90deg, #7c4dff 0%, #00e5ff 100%)',
-                  color: 'white',
-                  cursor: 'pointer',
-                  marginBottom: '16px',
-                  boxShadow: '0 4px 15px rgba(124, 77, 255, 0.3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'all 0.3s ease',
-                  opacity: isRunning ? 0.6 : 1
-                }}
-                onMouseEnter={e => {
-                  if (!isRunning) {
-                    (e.currentTarget as any).style.transform = 'translateY(-1px)';
-                    (e.currentTarget as any).style.boxShadow = '0 6px 20px rgba(124, 77, 255, 0.5)';
-                  }
-                }}
-                onMouseLeave={e => {
-                  if (!isRunning) {
-                    (e.currentTarget as any).style.transform = 'translateY(0)';
-                    (e.currentTarget as any).style.boxShadow = '0 4px 15px rgba(124, 77, 255, 0.3)';
-                  }
-                }}
-              >
-                <Zap size={14} /> ✨ AUTO-OPTIMIZAR SESIÓN {sessionFilter}
-              </button>
-            ) : (
-              <div style={{
-                textAlign: 'center',
-                padding: '10px 12px',
-                fontSize: '0.7rem',
-                color: 'var(--accent-gold)',
-                backgroundColor: 'rgba(255, 215, 0, 0.04)',
-                border: '1px dashed rgba(255, 215, 0, 0.2)',
-                borderRadius: '6px',
-                marginBottom: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px'
-              }}>
-                <span>💡 Seleccioná una sesión (London, NY, Asia) para optimizar su configuración individual.</span>
-              </div>
-            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* CHOCH Trigger */}
