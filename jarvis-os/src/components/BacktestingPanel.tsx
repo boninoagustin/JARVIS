@@ -147,7 +147,8 @@ export default function BacktestingPanel() {
     session: string,
     triggerType: 'choch' | 'bos' | 'oteChoch' | 'oteBos' | 'slBufferPercent' | 'fixedRR' | 'maxSellLosses' | 'maxBuyLosses',
     field: 'enabled' | 'minScore' | 'entryPercent' | '',
-    value: any
+    value: any,
+    autoRun: boolean = false
   ) => {
     setSessionTriggers(prev => {
       let updatedSession = { ...prev[session] };
@@ -167,6 +168,11 @@ export default function BacktestingPanel() {
         [session]: updatedSession
       };
       localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+      
+      if (autoRun && handleRunRef.current) {
+        setTimeout(() => handleRunRef.current(undefined, next, true), 50);
+      }
+      
       return next;
     });
   };
@@ -196,6 +202,7 @@ export default function BacktestingPanel() {
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const handleRunRef = useRef<any>(null);
   const { toast } = useToast();
 
   // 🚀 WORKER PARA BACKTESTING (Desbloquea la UI en operaciones pesadas)
@@ -407,6 +414,8 @@ export default function BacktestingPanel() {
       }
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
+
+  handleRunRef.current = handleRun;
 
   // AUTO-SIMULATE cuando cambian los filtros por sesión
   const isFirstRender = useRef(true);
@@ -1765,7 +1774,7 @@ export default function BacktestingPanel() {
                             <button
                               key={level}
                               type="button"
-                              onClick={() => updateSessionTrigger(sessionFilter, 'oteChoch', 'entryPercent', level)}
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteChoch', 'entryPercent', level, true)}
                               style={{
                                 flex: 1,
                                 padding: '4px 0',
@@ -1833,7 +1842,7 @@ export default function BacktestingPanel() {
                             <button
                               key={level}
                               type="button"
-                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', level)}
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', level, true)}
                               style={{
                                 flex: 1,
                                 padding: '4px 0',
