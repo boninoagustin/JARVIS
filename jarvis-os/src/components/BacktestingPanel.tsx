@@ -174,8 +174,6 @@ export default function BacktestingPanel() {
 
   const [maxSellsPerDay, setMaxSellsPerDay] = useState<number>(0);
   const [sellScorePenalty, setSellScorePenalty] = useState<number>(0);
-  const [maxBuysPerDay, setMaxBuysPerDay] = useState<number>(0);
-  const [buyScorePenalty, setBuyScorePenalty] = useState<number>(0);
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -288,8 +286,6 @@ export default function BacktestingPanel() {
       setTrailingDrawdownR(config.trailingDrawdownR || 0);
       setMaxSellsPerDay(config.maxSellsPerDay || 0);
       setSellScorePenalty(config.sellScorePenalty || 0);
-      setMaxBuysPerDay(config.maxBuysPerDay || 0);
-      setBuyScorePenalty(config.buyScorePenalty || 0);
       setEnabled(config.enabled !== false);
       setResult(optResult);
       setTrades(optResult.trades);
@@ -309,8 +305,6 @@ export default function BacktestingPanel() {
         trailingDrawdownR,
         maxSellsPerDay,
         sellScorePenalty,
-        maxBuysPerDay,
-        buyScorePenalty,
         enabled: enabled,
         sessions: sessionTriggers,
         
@@ -370,8 +364,6 @@ export default function BacktestingPanel() {
         trailingDrawdownR: trailingDrawdownR || undefined,
         maxSellsPerDay: maxSellsPerDay || undefined,
         sellScorePenalty: sellScorePenalty || undefined,
-        maxBuysPerDay: maxBuysPerDay || undefined,
-        buyScorePenalty: buyScorePenalty || undefined,
       };
 
       try {
@@ -437,11 +429,11 @@ export default function BacktestingPanel() {
         setIsRunning(false);
       }
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, sessionTriggers, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, maxSellsPerDay, sellScorePenalty, sessionTriggers, toast]);
 
   // AUTO-SIMULATE cuando cambian los filtros Bias (para UX fluida sin tener que re-simular)
   const isFirstRender = useRef(true);
-  const lastBiasValues = useRef({ maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty });
+  const lastBiasValues = useRef({ maxSellsPerDay, sellScorePenalty });
   const isOptimizingRef = useRef(false);
   useEffect(() => {
     if (isFirstRender.current) {
@@ -451,20 +443,20 @@ export default function BacktestingPanel() {
     // Solo disparar si realmente cambiaron los filtros Bias (no por otros re-renders)
     const prev = lastBiasValues.current;
     const biasChanged = prev.maxSellsPerDay !== maxSellsPerDay ||
-      prev.sellScorePenalty !== sellScorePenalty ||
-      prev.maxBuysPerDay !== maxBuysPerDay ||
-      prev.buyScorePenalty !== buyScorePenalty;
-    lastBiasValues.current = { maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty };
+      prev.sellScorePenalty !== sellScorePenalty;
+    lastBiasValues.current = { maxSellsPerDay, sellScorePenalty };
     if (!biasChanged) return;
-    // No auto-simular si estamos optimizando o no hay datos
-    if (isOptimizingRef.current || isRunning) return;
+    
+    // No auto-simular si estamos optimizando
+    if (isOptimizingRef.current) return;
+    
     if (uploadedFiles.length > 0 && result) {
       const timer = setTimeout(() => {
         handleRun();
-      }, 300);
+      }, 500);
       return () => clearTimeout(timer);
     }
-  }, [maxSellsPerDay, sellScorePenalty, maxBuysPerDay, buyScorePenalty, handleRun, uploadedFiles.length, result, isRunning]);
+  }, [maxSellsPerDay, sellScorePenalty, handleRun, uploadedFiles.length, result]);
 
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -520,8 +512,6 @@ export default function BacktestingPanel() {
             setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
             setMaxSellsPerDay(bestConfig.maxSellsPerDay || 0);
             setSellScorePenalty(bestConfig.sellScorePenalty || 0);
-            setMaxBuysPerDay(bestConfig.maxBuysPerDay || 0);
-            setBuyScorePenalty(bestConfig.buyScorePenalty || 0);
             setEnabled(bestConfig.enabled !== false);
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
@@ -1774,19 +1764,6 @@ export default function BacktestingPanel() {
               </div>
             </div>
 
-            {/* ANTI-BIAS FILTERS (BUY) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.03)', borderRadius: '4px', border: '1px dashed rgba(32,191,107,0.2)' }}>
-              <div>
-                <label style={{ fontSize: '0.55rem', color: 'var(--accent-green)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>MAX BUYs/DÍA</label>
-                <input type="number" min="0" value={maxBuysPerDay} onChange={e => setMaxBuysPerDay(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.55rem', color: 'var(--accent-green)', display: 'block', marginBottom: '2px', fontWeight: 600 }}>PENALIDAD SCORE (BUY)</label>
-                <input type="number" min="0" value={buyScorePenalty} onChange={e => setBuyScorePenalty(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Sin Penalidad (0)" />
-              </div>
-            </div>
 
             <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
               onClick={() => fileInputRef.current?.click()}
