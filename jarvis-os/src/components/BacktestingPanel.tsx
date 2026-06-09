@@ -340,7 +340,7 @@ export default function BacktestingPanel() {
     e.target.value = '';
   }, [toast]);
 
-  const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>) => {
+  const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>, isAutoRun: boolean = false) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
@@ -397,27 +397,31 @@ export default function BacktestingPanel() {
         setProgress(100);
         setIsRunning(false);
 
-      // Save to history
-      const closed = res.trades.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
-      const wins = closed.filter((t: BacktestTrade) => t.result === 'WIN').length;
-      const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
-      const pnl = closed.reduce((acc: number, t: BacktestTrade) => acc + (t.rMultiple || 0), 0).toFixed(2);
-      const session: SessionHistory = {
-        id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
-        trades: res.trades.length, winRate: wr, pnl, status: 'completed',
-        tradeData: res.trades,
-        config: { 
-          minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
-          sessions: finalSessions,
-        }
-      };
-      setSessions(prev => {
-        const next = [session, ...prev].slice(0, 20);
-        localStorage.setItem('bt_sessions', JSON.stringify(next));
-        return next;
-      });
-      setSelectedSession(session.id);
-      toast(`✅ Backtest completado: ${res.trades.length} trades detectados`, 'success');
+      if (!isAutoRun) {
+        // Save to history
+        const closed = res.trades.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
+        const wins = closed.filter((t: BacktestTrade) => t.result === 'WIN').length;
+        const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
+        const pnl = closed.reduce((acc: number, t: BacktestTrade) => acc + (t.rMultiple || 0), 0).toFixed(2);
+        const session: SessionHistory = {
+          id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
+          trades: res.trades.length, winRate: wr, pnl, status: 'completed',
+          tradeData: res.trades,
+          config: { 
+            minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
+            sessions: finalSessions,
+          }
+        };
+        setSessions(prev => {
+          const next = [session, ...prev].slice(0, 20);
+          localStorage.setItem('bt_sessions', JSON.stringify(next));
+          return next;
+        });
+        setSelectedSession(session.id);
+        toast(`✅ Backtest guardado: ${res.trades.length} trades detectados`, 'success');
+      } else {
+        toast(`✅ Filtros aplicados: ${res.trades.length} trades en pantalla`, 'success');
+      }
       
       } catch (err: any) {
         toast(`❌ Error en Worker: ${err}`, 'error');
@@ -441,7 +445,7 @@ export default function BacktestingPanel() {
       if (isOptimizingRef.current) return;
       if (uploadedFiles.length > 0 && result) {
         const timer = setTimeout(() => {
-          handleRun();
+          handleRun(undefined, undefined, true);
         }, 400);
         return () => clearTimeout(timer);
       }
