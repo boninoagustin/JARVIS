@@ -1601,6 +1601,28 @@ export default function BacktestingPanel() {
               <div style={{ padding: '20px', textAlign: 'center', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border-color)', color: 'var(--text-tertiary)' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Vista Global</span>
                 <p style={{ fontSize: '0.7rem', marginTop: '6px' }}>Selecciona una sesión individual para editar sus gatillos y filtros.</p>
+                <button 
+                  onClick={() => handleRun(undefined, undefined, false)}
+                  disabled={isRunning || uploadedFiles.length === 0}
+                  style={{
+                    marginTop: '15px',
+                    padding: '8px 16px',
+                    backgroundColor: 'var(--accent-gold)',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    cursor: (isRunning || uploadedFiles.length === 0) ? 'not-allowed' : 'pointer',
+                    opacity: (isRunning || uploadedFiles.length === 0) ? 0.7 : 1,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Play size={14} /> 
+                  {isRunning ? 'SIMULANDO...' : 'SIMULAR CON NUEVA CONFIGURACIÓN'}
+                </button>
               </div>
             ) : (
             <>
