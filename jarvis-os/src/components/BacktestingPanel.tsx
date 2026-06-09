@@ -1658,7 +1658,11 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(124,77,255,0.1)', color: '#7c4dff', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.choch.enabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                  <div 
+                    onClick={e => e.stopPropagation()} 
+                    onPointerDown={e => e.stopPropagation()} 
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}
+                  >
                     <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
                     <input
                       type="range"
@@ -1694,7 +1698,11 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,136,255,0.1)', color: '#0088ff', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.bos.enabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                  <div 
+                    onClick={e => e.stopPropagation()} 
+                    onPointerDown={e => e.stopPropagation()} 
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}
+                  >
                     <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Mín. Score:</span>
                     <input
                       type="range"
@@ -1731,7 +1739,7 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(213,0,249,0.1)', color: '#d500f9', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.oteChoch?.enabled && (
-                  <>
+                  <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
                       <input
@@ -1777,7 +1785,7 @@ export default function BacktestingPanel() {
                         })}
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
 
@@ -1799,7 +1807,7 @@ export default function BacktestingPanel() {
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
                 </div>
                 {sessionTriggers[sessionFilter]?.oteBos?.enabled && (
-                  <>
+                  <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
                       <input
@@ -1845,7 +1853,7 @@ export default function BacktestingPanel() {
                         })}
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
