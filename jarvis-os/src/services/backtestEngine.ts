@@ -123,7 +123,7 @@ function evaluateImpulse(
     
     // --- RESOLUCIÓN DINÁMICA DE OTE ENTRY PERCENT POR SESIÓN Y GATILLO ---
     const session = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[session] || config.sessions?.['ALL'];
+    const sessionConfig = config.sessions?.[session] || config.sessions?.['OFF'];
     const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
     const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
 
@@ -611,7 +611,7 @@ function processAlert(
 
     // Apply Anti-Bias Filters
     const session = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[session] || config.sessions?.['ALL'];
+    const sessionConfig = config.sessions?.[session] || config.sessions?.['OFF'];
     if (currentDirection === 'SELL') {
       if (sessionConfig?.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0 && dailyStats.sellLossCount >= sessionConfig.maxSellLosses) return;
     } else if (currentDirection === 'BUY') {

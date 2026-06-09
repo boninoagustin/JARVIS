@@ -189,7 +189,7 @@ export default function BacktestingPanel() {
   });
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<'OFF' | 'LONDON' | 'NY' | 'ASIA'>('OFF');
+  const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
   const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
   const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
   const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
@@ -269,7 +269,7 @@ export default function BacktestingPanel() {
     return 'OFF';
   }, []);
 
-  const handleSessionSelect = useCallback((s: 'OFF' | 'LONDON' | 'NY' | 'ASIA') => {
+  const handleSessionSelect = useCallback((s: 'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA') => {
     setSessionFilter(s);
     if (optimizedSessionResults[s]) {
       const { config, result: optResult } = optimizedSessionResults[s];
@@ -1056,7 +1056,9 @@ export default function BacktestingPanel() {
     return trades;
   })();
 
-  const filteredTrades = oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
+  const filteredTrades = sessionFilter === 'GLOBAL' 
+    ? oteSourceTrades 
+    : oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
   const doubleFilteredTrades = tradeFilter === 'ALL'
     ? filteredTrades
@@ -1634,7 +1636,7 @@ export default function BacktestingPanel() {
             </h3>
 
             <div style={{ display: 'flex', gap: '4px', padding: '2px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', marginBottom: '12px' }}>
-              {(['OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+              {(['GLOBAL', 'OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
                 const isActive = sessionFilter === s;
                 return (
                   <button
@@ -1654,13 +1656,19 @@ export default function BacktestingPanel() {
                       transition: 'all 0.2s ease-in-out'
                     }}
                   >
-                    {s}
+                    {s === 'GLOBAL' ? 'GLOBAL' : s}
                   </button>
                 );
               })}
             </div>
 
-
+            {sessionFilter === 'GLOBAL' ? (
+              <div style={{ padding: '20px', textAlign: 'center', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border-color)', color: 'var(--text-tertiary)' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Vista Global</span>
+                <p style={{ fontSize: '0.7rem', marginTop: '6px' }}>Selecciona una sesión individual para editar sus gatillos y filtros.</p>
+              </div>
+            ) : (
+            <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* CHOCH Trigger */}
               <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
@@ -1909,6 +1917,8 @@ export default function BacktestingPanel() {
             <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginTop: '12px', lineHeight: '1.4' }}>
               💡 Configura qué gatillos están activos y su puntaje mínimo para la sesión <strong>{sessionFilter}</strong>.
             </div>
+            </>
+            )}
           </div>
 
         </div>
@@ -1931,11 +1941,11 @@ export default function BacktestingPanel() {
             {/* Session Filter */}
             {trades.length > 0 && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                {(['OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
-                  const labels: Record<string, string> = { OFF: '🌍 Resto del Día', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
+                {(['GLOBAL', 'OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
+                  const labels: Record<string, string> = { GLOBAL: '🌎 Global', OFF: '🌍 Resto del Día', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
                   const isActive = sessionFilter === s;
                   return (
-                    <button key={s} onClick={() => handleSessionSelect(s as 'OFF' | 'LONDON' | 'NY' | 'ASIA')}
+                    <button key={s} onClick={() => handleSessionSelect(s as 'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA')}
                       style={{
                         padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
                         border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
