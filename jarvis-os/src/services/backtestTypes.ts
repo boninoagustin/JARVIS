@@ -40,17 +40,24 @@ export interface BacktestTrade {
 export interface TriggerConfig {
   enabled: boolean;
   minScore: number;
-  entryPercent?: number;
+  entryPercent: number;
+}
+
+export interface OteConfig {
+  enabled: boolean;
+  minScore: number;
+  entryPercent: number;
 }
 
 export interface SessionConfig {
   choch: TriggerConfig;
   bos: TriggerConfig;
-  ote: TriggerConfig;
-  oteChoch?: TriggerConfig;
-  oteBos?: TriggerConfig;
-  slBufferPercent?: number;
-  fixedRR?: number;
+  oteChoch?: OteConfig;
+  oteBos?: OteConfig;
+  slBufferPercent: number;
+  fixedRR: number;
+  maxSellLosses?: number;
+  maxBuyLosses?: number;
 }
 
 export interface BacktestConfig {
@@ -71,12 +78,6 @@ export interface BacktestConfig {
   maxConsecutiveLosses?: number;
   maxTradesPerDay?: number;
   trailingDrawdownR?: number;
-
-  // Anti-Bias Filters
-  maxSellsPerDay?: number;
-  sellScorePenalty?: number;
-  maxBuysPerDay?: number;
-  buyScorePenalty?: number;
 }
 
 export interface BacktestResult {
