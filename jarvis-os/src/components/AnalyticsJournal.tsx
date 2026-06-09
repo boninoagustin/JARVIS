@@ -19,6 +19,7 @@ import {
   BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid 
 } from 'recharts';
 import { useToast } from './Toast';
+import { getSessionForTimestamp } from '../services/backtestEngine';
 
 interface TradeLog {
   id: string;
@@ -404,6 +405,41 @@ export default function AnalyticsJournal() {
   const pointsStats = getPointsStats();
   const equityData = getEquityData();
   const kpis = getAdvancedKPIs();
+
+  const getSessionStats = () => {
+    const closed = trades.filter(t => t.result && t.result !== 'SKIP');
+    
+    const sessions: Record<string, { gp: number, gl: number }> = {
+      'LONDON': { gp: 0, gl: 0 },
+      'NY': { gp: 0, gl: 0 },
+      'ASIA': { gp: 0, gl: 0 },
+      'ALL': { gp: 0, gl: 0 }
+    };
+
+    closed.forEach(t => {
+      const session = getSessionForTimestamp(t.timestamp);
+      const sKey = session === 'OFF' ? 'ALL' : session;
+      const rr = getTradeRR(t);
+      if (t.result === 'WIN') {
+        sessions[sKey].gp += rr;
+      } else if (t.result === 'LOSS') {
+        sessions[sKey].gl += Math.abs(rr);
+      }
+    });
+
+    const getPF = (p: number, l: number) => {
+      if (p === 0 && l === 0) return '-';
+      return l > 0 ? (p / l).toFixed(2) : p > 0 ? '∞' : '0.00';
+    };
+
+    return {
+      LONDON: getPF(sessions['LONDON'].gp, sessions['LONDON'].gl),
+      NY: getPF(sessions['NY'].gp, sessions['NY'].gl),
+      ASIA: getPF(sessions['ASIA'].gp, sessions['ASIA'].gl)
+    };
+  };
+
+  const sessionKPIs = getSessionStats();
   
   const totalCompleted = stats.reduce((acc, curr) => acc + curr.value, 0);
   const winRate = totalCompleted > 0 ? ((stats[0].value / totalCompleted) * 100).toFixed(1) : '0.0';
@@ -511,16 +547,18 @@ export default function AnalyticsJournal() {
         <div className="panel" style={{ padding: '16px', marginBottom: 0, borderLeft: '3px solid #0088ff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>PROFIT FACTOR</span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>PROFIT FACTOR GLOBAL</span>
               <ShieldCheck size={14} color="#0088ff" />
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '8px 0 4px 0', color: '#0088ff' }}>
               {kpis.profitFactor}
             </div>
           </div>
-          <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
-            Retorno bruto vs pérdida bruta
-          </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', backgroundColor: 'rgba(0,0,0,0.15)', padding: '4px 6px', borderRadius: '4px' }}>
+            <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-tertiary)' }}>LN: <span style={{ color: 'var(--accent-blue)', fontWeight: 800 }}>{sessionKPIs.LONDON}</span></span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-tertiary)' }}>NY: <span style={{ color: 'var(--accent-gold)', fontWeight: 800 }}>{sessionKPIs.NY}</span></span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-tertiary)' }}>AS: <span style={{ color: 'var(--accent-red)', fontWeight: 800 }}>{sessionKPIs.ASIA}</span></span>
+          </div>
         </div>
 
         {/* EXPECTATIVA MATEMÁTICA */}
