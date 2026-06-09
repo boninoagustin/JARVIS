@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase, Zap } from 'lucide-react';
 import { useToast } from './Toast';
-import { parseCSV, runBacktest } from '../services/backtestEngine';
+import { parseCSV } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -44,21 +44,6 @@ interface SessionHistory {
     }>;
   };
 }
-
-const getOverriddenSessions = (sessions: Record<string, any> | undefined, level: number) => {
-  if (!sessions) return undefined;
-  const updated = JSON.parse(JSON.stringify(sessions)); // deep clone to prevent mutation
-  Object.keys(updated).forEach(s => {
-    if (updated[s]) {
-      if (!updated[s].oteChoch) updated[s].oteChoch = { enabled: false, minScore: 5 };
-      if (!updated[s].oteBos) updated[s].oteBos = { enabled: false, minScore: 5 };
-      
-      updated[s].oteChoch.entryPercent = level;
-      updated[s].oteBos.entryPercent = level;
-    }
-  });
-  return updated;
-};
 
 export default function BacktestingPanel() {
   const [ticker, setTicker] = useState('BTCUSD');
@@ -197,9 +182,7 @@ export default function BacktestingPanel() {
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [trades, setTrades] = useState<BacktestTrade[]>([]);
-  const [trades50, setTrades50] = useState<BacktestTrade[]>([]);
-  const [trades62, setTrades62] = useState<BacktestTrade[]>([]);
-  const [trades79, setTrades79] = useState<BacktestTrade[]>([]);
+
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [sessions, setSessions] = useState<SessionHistory[]>(() => {
     try { return JSON.parse(localStorage.getItem('bt_sessions') || '[]'); } catch { return []; }
@@ -207,10 +190,8 @@ export default function BacktestingPanel() {
   const [showLog, setShowLog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
-  const [tradeFilter, setTradeFilter] = useState<'ALL' | 'BOS' | 'CHOCH' | 'OTE' | 'OTE_CHOCH' | 'OTE_BOS'>('ALL');
-  const [scoreFilterMin, setScoreFilterMin] = useState<number>(5);
-  const [scoreFilterMax, setScoreFilterMax] = useState<number>(30);
-  const [oteFilter, setOteFilter] = useState<50 | 62 | 79>(50);
+  const [tradeFilter, setTradeFilter] = useState<string>('ALL');
+
   const optimizeSwitches = false;
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
@@ -293,7 +274,7 @@ export default function BacktestingPanel() {
       setSlBufferPercent(config.slBufferPercent);
       setFixedRR(config.fixedRR);
       setOteEntryPercent(config.oteEntryPercent);
-      setOteFilter(config.oteEntryPercent as 50 | 62 | 79);
+
       setEntryTrigger(config.entryTrigger);
       setMinBuyPoints(config.minBuyPoints);
       setMinSellPoints(config.minSellPoints);
@@ -389,28 +370,8 @@ export default function BacktestingPanel() {
         setProgress(50);
         setTrades(res.trades);
 
-        // Run background simulations for OTE level comparisons and fast filtering
-        const sessions50 = getOverriddenSessions(finalSessions, 50);
-        const sessions62 = getOverriddenSessions(finalSessions, 62);
-        const sessions79 = getOverriddenSessions(finalSessions, 79);
-
-        const batchRes = await runWorkerTask('RUN_BATCH', {
-            logsArray: payload.logsArray,
-            configs: [
-               { ...baseParams, oteEntryPercent: 50, sessions: sessions50 },
-               { ...baseParams, oteEntryPercent: 62, sessions: sessions62 },
-               { ...baseParams, oteEntryPercent: 79, sessions: sessions79 }
-            ]
-        });
-
-        const [res50, res62, res79] = batchRes;
-
         setResult(res);
         setTrades(res.trades);
-        setTrades50(res50.trades);
-        setTrades62(res62.trades);
-        setTrades79(res79.trades);
-        setOteFilter(finalOte as 50 | 62 | 79);
         setProgress(100);
         setIsRunning(false);
 
@@ -511,7 +472,7 @@ export default function BacktestingPanel() {
             setSlBufferPercent(bestConfig.slBufferPercent);
             setFixedRR(bestConfig.fixedRR);
             setOteEntryPercent(bestConfig.oteEntryPercent);
-            setOteFilter(bestConfig.oteEntryPercent as 50 | 62 | 79);
+
             setEntryTrigger(bestConfig.entryTrigger);
             setMinBuyPoints(bestConfig.minBuyPoints);
             setMinSellPoints(bestConfig.minSellPoints);
@@ -542,31 +503,9 @@ export default function BacktestingPanel() {
               localStorage.setItem('bt_sessions', JSON.stringify(next));
               return next;
             });
-            const baseParams = {
-              ticker,
-              minBuyPoints: bestConfig.minBuyPoints,
-              minSellPoints: bestConfig.minSellPoints,
-              slBufferPercent: bestConfig.slBufferPercent,
-              fixedRR: bestConfig.fixedRR,
-              entryTrigger: bestConfig.entryTrigger,
-              maxDailyLossR: bestConfig.maxDailyLossR || undefined,
-              dailyProfitTargetR: bestConfig.dailyProfitTargetR || undefined,
-              maxConsecutiveLosses: bestConfig.maxConsecutiveLosses || undefined,
-              maxTradesPerDay: bestConfig.maxTradesPerDay || undefined,
-              trailingDrawdownR: bestConfig.trailingDrawdownR || undefined,
-            };
 
-            const sessions50 = getOverriddenSessions(sessionTriggers, 50);
-            const sessions62 = getOverriddenSessions(sessionTriggers, 62);
-            const sessions79 = getOverriddenSessions(sessionTriggers, 79);
 
-            const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
-            const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
-            const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
 
-            setTrades50(res50.trades);
-            setTrades62(res62.trades);
-            setTrades79(res79.trades);
 
             setSelectedSession(session.id);
             setIsRunning(false);
@@ -1062,38 +1001,19 @@ export default function BacktestingPanel() {
     setPortfolioResults(res);
   };
 
-  const isOteFilterActive = ['OTE', 'OTE_CHOCH', 'OTE_BOS'].includes(tradeFilter);
+  const isGlobal = sessionFilter === 'GLOBAL';
+  const baseTrades = isGlobal ? trades : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
-  const oteSourceTrades = (() => {
-    if (isOteFilterActive) {
-      if (oteFilter === 50 && trades50.length > 0) return trades50;
-      if (oteFilter === 62 && trades62.length > 0) return trades62;
-      if (oteFilter === 79 && trades79.length > 0) return trades79;
-    }
-    return trades;
-  })();
-
-  const filteredTrades = sessionFilter === 'GLOBAL' 
-    ? oteSourceTrades 
-    : oteSourceTrades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
-
-  const doubleFilteredTrades = tradeFilter === 'ALL'
-    ? filteredTrades
-    : filteredTrades.filter(t => {
+  const tripleFilteredTrades = (tradeFilter === 'ALL' || isGlobal)
+    ? baseTrades
+    : baseTrades.filter(t => {
         const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
         if (tradeFilter === 'BOS') return t.events?.some(e => e.includes('EVENTO_BOS')) && !hasOte;
         if (tradeFilter === 'CHOCH') return t.events?.some(e => e.includes('EVENTO_CHOCH')) && !hasOte;
-        if (tradeFilter === 'OTE') return hasOte;
         if (tradeFilter === 'OTE_CHOCH') return hasOte && t.events?.some(e => e.includes('EVENTO_CHOCH'));
         if (tradeFilter === 'OTE_BOS') return hasOte && t.events?.some(e => e.includes('EVENTO_BOS'));
         return true;
     });
-
-  const tripleFilteredTrades = doubleFilteredTrades.filter(t => {
-    const scoreMatch = t.points >= scoreFilterMin && t.points <= scoreFilterMax;
-    const oteMatch = !isOteFilterActive || t.oteEntryUsed === undefined || t.oteEntryUsed === oteFilter;
-    return scoreMatch && oteMatch;
-  });
 
   // Metrics
   const metrics = (() => {
@@ -1320,9 +1240,7 @@ export default function BacktestingPanel() {
         exportDate: new Date().toISOString(),
         timeframe: result.startDate + ' -> ' + result.endDate,
         sessionFilter,
-        tradeFilter,
-        scoreFilterMin,
-        scoreFilterMax
+        tradeFilter
       },
       config: {
         minBuyPoints,
@@ -1345,7 +1263,7 @@ export default function BacktestingPanel() {
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast('✅ Archivo JSON descargado con éxito (historial completo de trades)', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, scoreFilterMin, scoreFilterMax, riskUsd, toast]);
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast]);
 
   return (
     <div className="animate-fadeIn">
@@ -1688,9 +1606,12 @@ export default function BacktestingPanel() {
             <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {/* CHOCH Trigger */}
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'CHOCH' ? 'ALL' : 'CHOCH')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'CHOCH' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'CHOCH' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={sessionTriggers[sessionFilter]?.choch.enabled ?? false}
@@ -1721,9 +1642,12 @@ export default function BacktestingPanel() {
               </div>
 
               {/* BOS Trigger */}
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'BOS' ? 'ALL' : 'BOS')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'BOS' ? 'rgba(0,136,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'BOS' ? '1px solid #0088ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={sessionTriggers[sessionFilter]?.bos.enabled ?? false}
@@ -1755,9 +1679,12 @@ export default function BacktestingPanel() {
 
 
               {/* OTE CHoCH Trigger */}
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH' ? 'ALL' : 'OTE_CHOCH')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH' ? 'rgba(213,0,249,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH' ? '1px solid #d500f9' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={sessionTriggers[sessionFilter]?.oteChoch?.enabled ?? false}
@@ -1820,9 +1747,12 @@ export default function BacktestingPanel() {
               </div>
 
               {/* OTE BOS Trigger */}
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={sessionTriggers[sessionFilter]?.oteBos?.enabled ?? false}
@@ -1951,196 +1881,11 @@ export default function BacktestingPanel() {
               </span>
               {trades.length > 0 && (
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                  {tripleFilteredTrades.length}{tradeFilter !== 'ALL' || scoreFilterMin > 5 || scoreFilterMax < 30 ? `/${trades.length}` : ''} total
+                  {tripleFilteredTrades.length}{tradeFilter !== 'ALL' ? `/${trades.length}` : ''} total
                 </span>
               )}
             </h3>
-            {/* Session Filter */}
-            {trades.length > 0 && (
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                {(['GLOBAL', 'OFF', 'LONDON', 'NY', 'ASIA'] as const).map(s => {
-                  const labels: Record<string, string> = { GLOBAL: '🌎 Global', OFF: '🌍 Resto del Día', LONDON: '🇬🇧 Londres (04-10:30h)', NY: '🇺🇸 New York (10:30-17h)', ASIA: '🇯🇵 Asia (21-04h)' };
-                  const isActive = sessionFilter === s;
-                  return (
-                    <button key={s} onClick={() => handleSessionSelect(s as 'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA')}
-                      style={{
-                        padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
-                        border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
-                        background: isActive ? 'rgba(255,193,7,0.15)' : 'transparent',
-                        color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
-                        fontWeight: isActive ? 700 : 400, transition: 'all 0.2s'
-                      }}>
-                      {labels[s]}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {/* Trade Filter */}
-            {trades.length > 0 && (
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                {(['ALL', 'CHOCH', 'BOS', 'OTE', 'OTE_CHOCH', 'OTE_BOS'] as const).map(f => {
-                  const labels: Record<string, string> = { 
-                    ALL: '⚡ Todos los Gatillos', 
-                    CHOCH: '🚀 Solo CHoCH', 
-                    BOS: '🔨 Solo BOS', 
-                    OTE: '📉 OTE (Todos)',
-                    OTE_CHOCH: '📉 OTE de CHoCH',
-                    OTE_BOS: '📉 OTE de BOS'
-                  };
-                  const isActive = tradeFilter === f;
-                  return (
-                    <button key={f} onClick={() => setTradeFilter(f)}
-                      style={{
-                        padding: '4px 10px', fontSize: '0.65rem', borderRadius: '4px', cursor: 'pointer',
-                        border: isActive ? '1px solid #0088ff' : '1px solid var(--border-color)',
-                        background: isActive ? 'rgba(0,136,255,0.1)' : 'transparent',
-                        color: isActive ? '#0088ff' : 'var(--text-secondary)',
-                        fontWeight: isActive ? 700 : 400, transition: 'all 0.2s'
-                      }}>
-                      {labels[f]}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {/* Score Filter */}
-            {trades.length > 0 && (
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '12px', 
-                marginBottom: '12px', 
-                padding: '8px 12px', 
-                backgroundColor: 'rgba(255, 255, 255, 0.02)', 
-                borderRadius: '6px',
-                border: '1px solid var(--border-color)',
-                flexWrap: 'wrap'
-              }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                  🎯 SCORE:
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '130px' }}>
-                  <input 
-                    type="range" 
-                    min="5" 
-                    max="30" 
-                    value={scoreFilterMin} 
-                    onChange={e => {
-                      const val = Number(e.target.value);
-                      setScoreFilterMin(val);
-                      if (val > scoreFilterMax) setScoreFilterMax(val);
-                    }}
-                    style={{ flex: 1, accentColor: 'var(--accent-gold)', height: '4px', cursor: 'pointer' }} 
-                  />
-                  <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '45px', textAlign: 'right' }}>
-                    Min: {scoreFilterMin}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '130px' }}>
-                  <input 
-                    type="range" 
-                    min="5" 
-                    max="30" 
-                    value={scoreFilterMax} 
-                    onChange={e => {
-                      const val = Number(e.target.value);
-                      setScoreFilterMax(val);
-                      if (val < scoreFilterMin) setScoreFilterMin(val);
-                    }}
-                    style={{ flex: 1, accentColor: '#0088ff', height: '4px', cursor: 'pointer' }} 
-                  />
-                  <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0088ff', minWidth: '45px', textAlign: 'right' }}>
-                    Max: {scoreFilterMax}
-                  </span>
-                </div>
-                
-                {/* Pre-sets */}
-                <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                  {[
-                    { label: 'Todos (5+)', min: 5, max: 30 },
-                    { label: '≥10 pts', min: 10, max: 30 },
-                    { label: '≥15 pts', min: 15, max: 30 },
-                    { label: '≥20 pts', min: 20, max: 30 }
-                  ].map(preset => {
-                    const isActive = scoreFilterMin === preset.min && scoreFilterMax === preset.max;
-                    return (
-                      <button 
-                        key={preset.label}
-                        onClick={() => {
-                          setScoreFilterMin(preset.min);
-                          setScoreFilterMax(preset.max);
-                        }}
-                        style={{
-                          padding: '2px 8px',
-                          fontSize: '0.65rem',
-                          borderRadius: '4px',
-                          border: isActive ? '1px solid var(--accent-gold)' : '1px solid var(--border-color)',
-                          backgroundColor: isActive ? 'rgba(255,170,0,0.1)' : 'transparent',
-                          color: isActive ? 'var(--accent-gold)' : 'var(--text-secondary)',
-                          fontWeight: isActive ? 700 : 400,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
-            {/* OTE Filter */}
-            {trades.length > 0 && (() => {
-              const isOteFilterActive = ['OTE', 'OTE_CHOCH', 'OTE_BOS'].includes(tradeFilter);
-              return (
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '12px', 
-                  marginBottom: '12px', 
-                  padding: '8px 12px', 
-                  backgroundColor: 'rgba(255, 255, 255, 0.02)', 
-                  borderRadius: '6px',
-                  border: '1px solid var(--border-color)',
-                  flexWrap: 'wrap',
-                  opacity: isOteFilterActive ? 1 : 0.45,
-                  pointerEvents: isOteFilterActive ? 'auto' : 'none',
-                  transition: 'opacity 0.2s'
-                }}>
-                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                    🎯 OTE ENTRY {!isOteFilterActive && <span style={{ color: 'var(--accent-gold)', fontWeight: 400, marginLeft: '4px' }}>(Inactivo)</span>}:
-                  </span>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {([50, 62, 79] as const).map(level => {
-                      const label = `${level}%`;
-                      const isActive = isOteFilterActive && oteFilter === level;
-                      return (
-                        <button 
-                          key={level} 
-                          disabled={!isOteFilterActive}
-                          onClick={() => setOteFilter(level)}
-                          style={{
-                            padding: '4px 12px',
-                            fontSize: '0.65rem',
-                            borderRadius: '4px',
-                            border: isActive ? '1px solid var(--accent-magenta)' : '1px solid var(--border-color)',
-                            backgroundColor: isActive ? 'rgba(213,0,249,0.1)' : 'transparent',
-                            color: isActive ? 'var(--accent-magenta)' : 'var(--text-secondary)',
-                            fontWeight: isActive ? 700 : 400,
-                            cursor: isOteFilterActive ? 'pointer' : 'not-allowed',
-                            transition: 'all 0.2s'
-                          }}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: '200px' }}>
               {trades.length === 0 ? (
@@ -2225,33 +1970,8 @@ export default function BacktestingPanel() {
                             const logs = new Map<string, string[]>();
                             uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
                             
-                            const baseParams = {
-                              ticker: s.ticker,
-                              minBuyPoints: s.config.minBuyPoints,
-                              minSellPoints: s.config.minSellPoints,
-                              slBufferPercent: s.config.slBufferPercent,
-                              fixedRR: s.config.fixedRR,
-                              entryTrigger: s.config.entryTrigger,
-                              maxDailyLossR: s.config.maxDailyLossR || undefined,
-                              dailyProfitTargetR: s.config.dailyProfitTargetR || undefined,
-                              maxConsecutiveLosses: s.config.maxConsecutiveLosses || undefined,
-                              maxTradesPerDay: s.config.maxTradesPerDay || undefined,
-                              trailingDrawdownR: s.config.trailingDrawdownR || undefined,
-                            };
-                            
                             // @ts-ignore
                             const finalSessions = s.config.sessions || sessionTriggers;
-                            const sessions50 = getOverriddenSessions(finalSessions, 50);
-                            const sessions62 = getOverriddenSessions(finalSessions, 62);
-                            const sessions79 = getOverriddenSessions(finalSessions, 79);
-                            
-                            const res50 = runBacktest(logs, { ...baseParams, oteEntryPercent: 50, sessions: sessions50 });
-                            const res62 = runBacktest(logs, { ...baseParams, oteEntryPercent: 62, sessions: sessions62 });
-                            const res79 = runBacktest(logs, { ...baseParams, oteEntryPercent: 79, sessions: sessions79 });
-                            
-                            setTrades50(res50.trades);
-                            setTrades62(res62.trades);
-                            setTrades79(res79.trades);
                           }
                         }
                       }
