@@ -426,6 +426,28 @@ export default function BacktestingPanel() {
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
 
+  // AUTO-SIMULATE cuando cambian los filtros por sesión
+  const isFirstRender = useRef(true);
+  const lastSessionTriggersStr = useRef(JSON.stringify(sessionTriggers));
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    const currentStr = JSON.stringify(sessionTriggers);
+    if (lastSessionTriggersStr.current !== currentStr) {
+      lastSessionTriggersStr.current = currentStr;
+      if (isOptimizingRef.current) return;
+      if (uploadedFiles.length > 0 && result) {
+        const timer = setTimeout(() => {
+          handleRun();
+        }, 400);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [sessionTriggers, handleRun, uploadedFiles.length, result]);
+
   const isOptimizingRef = useRef(false);
   const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
