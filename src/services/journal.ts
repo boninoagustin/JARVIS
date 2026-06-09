@@ -46,6 +46,14 @@ export interface TradeRecord {
     tp2Timestamp?: number;      // Cuándo se alcanzó TP2
     slTimestamp?: number;       // Cuándo se alcanzó SL
     isChochEntry?: boolean;     // Se marca true si la entrada fue directa por CHoCH (sin esperar retroceso OTE)
+    
+    // 🧠 FASE 1 - MACHINE LEARNING FEATURES (Data Engineering)
+    hourOfDay?: number;         // 0-23
+    dayOfWeek?: number;         // 0 (Dom) a 6 (Sab)
+    session?: string;           // LONDON, NY, ASIA
+    bias4H?: 'ALIGNED' | 'AGAINST' | 'NEUTRAL';
+    bias1H?: 'ALIGNED' | 'AGAINST' | 'NEUTRAL';
+    vwapDistance?: number;      // Feature simplificado por ahora (1=Cerca/A favor, 0=Lejos)
 }
 
 export interface PerformanceMetrics {

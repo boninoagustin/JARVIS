@@ -870,6 +870,15 @@ export async function processTradingAlert(alertText: string) {
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
     const isBacktest = tsMatch !== null && Math.abs(Date.now() - nowMs) > 300000;
 
+    // 🧠 FASE 1 - MACHINE LEARNING: Guardar la señal cruda para la Fase 2 (Auto-Tune)
+    if (!isBacktest) { // Solo guardamos las señales reales en vivo
+        db.collection('raw_signals').add({
+            timestamp: nowMs,
+            alertText,
+            createdAt: new Date(nowMs).toISOString()
+        }).catch(() => {});
+    }
+
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
     const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
 
@@ -2110,6 +2119,13 @@ export async function processTradingAlert(alertText: string) {
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
                     isChochEntry: oteData.isChochEntry,
+                    // 🧠 MACHINE LEARNING FEATURES (Fase 1)
+                    hourOfDay: new Date(nowMs).getHours(),
+                    dayOfWeek: new Date(nowMs).getDay(),
+                    session: getCurrentSession(),
+                    bias4H: state.marketBias['240'] === oteData.direction ? 'ALIGNED' : state.marketBias['240'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
+                    bias1H: state.marketBias['60'] === oteData.direction ? 'ALIGNED' : state.marketBias['60'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
+                    vwapDistance: (oteData.events.includes('VWAP_Premium') || oteData.events.includes('VWAP_Discount')) ? 1 : 0,
                 }).catch(() => 'ERR');
                 
                 // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)

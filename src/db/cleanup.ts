@@ -54,8 +54,25 @@ async function cleanupOldData() {
             await stateBatch.commit();
         }
 
-        if (deletedRequests > 0 || deletedStates > 0) {
-            console.log(`[CLEANUP] Limpieza completada: ${deletedRequests} requests, ${deletedStates} market states borrados.`);
+        // 3. Limpiar raw_signals antiguos (señales de más de 45 días)
+        const FORTY_FIVE_DAYS_MS = 45 * 24 * 60 * 60 * 1000;
+        const cutoff45 = now - FORTY_FIVE_DAYS_MS;
+        let deletedSignals = 0;
+        const signalsSnap = await db.collection('raw_signals')
+            .where('timestamp', '<', cutoff45)
+            .limit(490)
+            .get();
+        if (!signalsSnap.empty) {
+            const signalBatch = db.batch();
+            for (const doc of signalsSnap.docs) {
+                signalBatch.delete(doc.ref);
+                deletedSignals++;
+            }
+            await signalBatch.commit();
+        }
+
+        if (deletedRequests > 0 || deletedStates > 0 || deletedSignals > 0) {
+            console.log(`[CLEANUP] Limpieza completada: ${deletedRequests} requests, ${deletedStates} market states, ${deletedSignals} raw signals borrados.`);
         }
     } catch (err: any) {
         console.error('[CLEANUP] Error en limpieza:', err.message);

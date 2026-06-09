@@ -145,6 +145,20 @@ async function main() {
         setInterval(fetchFundamentals, 900_000);
         console.log(`[FINNHUB] Fundamentals update scheduled every 15 minutes.`);
 
+        // 🧠 Motor Auto-Tune (Fase 2)
+        const runAutoTuneScheduler = async () => {
+            try {
+                const { checkAndRunAutoTune } = await import('./services/autotune.js');
+                await checkAndRunAutoTune();
+            } catch (e: any) {
+                console.error('[AUTO-TUNE] Error scheduling autotune:', e.message);
+            }
+        };
+        // Revisar cada 24 horas (86400000 ms)
+        setInterval(runAutoTuneScheduler, 86_400_000);
+        // También revisar al iniciar
+        setTimeout(runAutoTuneScheduler, 10_000);
+
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }
