@@ -10,13 +10,14 @@ export type { BacktestTrade, BacktestResult, BacktestConfig } from './backtestTy
 
 export interface DailyStats {
   currentDayStr: string;
+  currentSessionStr: string;
   pnlR: number;
   peakPnlR: number;
   consecutiveLosses: number;
   tradeCount: number;
   isKilled: boolean;
-  sellCount: number;
-  buyCount: number;
+  sellLossCount: number;
+  buyLossCount: number;
 }
 
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
@@ -28,8 +29,12 @@ function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats,
     
     if (trade.result === 'LOSS') {
       dailyStats.consecutiveLosses++;
+      if (trade.direction === 'SELL') dailyStats.sellLossCount++;
+      if (trade.direction === 'BUY') dailyStats.buyLossCount++;
     } else if (trade.result === 'WIN') {
       dailyStats.consecutiveLosses = 0;
+      if (trade.direction === 'SELL') dailyStats.sellLossCount = 0;
+      if (trade.direction === 'BUY') dailyStats.buyLossCount = 0;
     }
 
     if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
@@ -118,18 +123,16 @@ function evaluateImpulse(
     
     // --- RESOLUCIÓN DINÁMICA DE OTE ENTRY PERCENT POR SESIÓN Y GATILLO ---
     const session = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[session];
+    const sessionConfig = config.sessions?.[session] || config.sessions?.['ALL'];
     const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
     const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
 
     let activeOteEntryPercent = config.oteEntryPercent || 50;
     if (sessionConfig) {
       if (isChoch) {
-        activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+        activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? config.oteEntryPercent ?? 50;
       } else if (isBos) {
-        activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
-      } else {
-        activeOteEntryPercent = sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+        activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? config.oteEntryPercent ?? 50;
       }
     }
 
@@ -144,14 +147,11 @@ function evaluateImpulse(
 
       if (sessionConfig) {
         if (isChoch) {
-          oteEnabled = sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false;
-          oteMinScore = sessionConfig.oteChoch?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+          oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
+          oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
         } else if (isBos) {
-          oteEnabled = sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false;
-          oteMinScore = sessionConfig.oteBos?.minScore ?? sessionConfig.ote?.minScore ?? 8;
-        } else {
-          oteEnabled = sessionConfig.ote?.enabled ?? false;
-          oteMinScore = sessionConfig.ote?.minScore ?? 8;
+          oteEnabled = sessionConfig.oteBos?.enabled ?? false;
+          oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
         }
       } else {
         oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
@@ -230,13 +230,14 @@ export function runBacktest(
   const activeTrades = new Map<string, BacktestTrade>();
   const dailyStats: DailyStats = {
     currentDayStr: '',
+    currentSessionStr: '',
     pnlR: 0,
     peakPnlR: 0,
     consecutiveLosses: 0,
     tradeCount: 0,
     isKilled: false,
-    sellCount: 0,
-    buyCount: 0
+    sellLossCount: 0,
+    buyLossCount: 0
   };
 
   // 1. Parse all entries with timestamps
@@ -310,6 +311,8 @@ function processAlert(
   const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
   const readableTf = parseTF(eventTf);
   const todayStr = new Date(nowMs).toISOString().split('T')[0];
+  const currentSession = getSessionForTimestamp(nowMs);
+  const sessionId = `${todayStr}-${currentSession}`;
 
   if (dailyStats.currentDayStr !== todayStr) {
     dailyStats.currentDayStr = todayStr;
@@ -318,8 +321,12 @@ function processAlert(
     dailyStats.consecutiveLosses = 0;
     dailyStats.tradeCount = 0;
     dailyStats.isKilled = false;
-    dailyStats.sellCount = 0;
-    dailyStats.buyCount = 0;
+  }
+
+  if (dailyStats.currentSessionStr !== sessionId) {
+    dailyStats.currentSessionStr = sessionId;
+    dailyStats.sellLossCount = 0;
+    dailyStats.buyLossCount = 0;
   }
 
   let currentDirection: 'BUY' | 'SELL' | null = null;
@@ -602,13 +609,13 @@ function processAlert(
 
     let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus;
 
-    // Apply Anti-Bias Penalties
+    // Apply Anti-Bias Filters
+    const session = getSessionForTimestamp(nowMs);
+    const sessionConfig = config.sessions?.[session] || config.sessions?.['ALL'];
     if (currentDirection === 'SELL') {
-      if (config.maxSellsPerDay !== undefined && dailyStats.sellCount >= config.maxSellsPerDay) return;
-      if (config.sellScorePenalty) totalPoints -= config.sellScorePenalty;
+      if (sessionConfig?.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0 && dailyStats.sellLossCount >= sessionConfig.maxSellLosses) return;
     } else if (currentDirection === 'BUY') {
-      if (config.maxBuysPerDay !== undefined && dailyStats.buyCount >= config.maxBuysPerDay) return;
-      if (config.buyScorePenalty) totalPoints -= config.buyScorePenalty;
+      if (sessionConfig?.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0 && dailyStats.buyLossCount >= sessionConfig.maxBuyLosses) return;
     }
 
     // Spatial backing
@@ -654,8 +661,6 @@ function processAlert(
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
 
     // Validate leg
-    const session = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[session];
     
     let triggerEnabled = false;
     let minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
@@ -711,7 +716,7 @@ function processAlert(
         createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
         
         const oteSessionEnabled = sessionConfig 
-          ? (prefix === 'EVENTO_CHOCH' ? (sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false))
+          ? (prefix === 'EVENTO_CHOCH' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
           : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
         if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
       }
@@ -747,8 +752,6 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   activeTrades.set(trade.id, trade);
 
   dailyStats.tradeCount++;
-  if (oteData.direction === 'SELL') dailyStats.sellCount++;
-  if (oteData.direction === 'BUY') dailyStats.buyCount++;
 
   if (config.maxTradesPerDay && dailyStats.tradeCount >= config.maxTradesPerDay) {
     dailyStats.isKilled = true;

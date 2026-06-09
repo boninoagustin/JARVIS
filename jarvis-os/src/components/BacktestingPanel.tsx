@@ -50,11 +50,9 @@ const getOverriddenSessions = (sessions: Record<string, any> | undefined, level:
   const updated = JSON.parse(JSON.stringify(sessions)); // deep clone to prevent mutation
   Object.keys(updated).forEach(s => {
     if (updated[s]) {
-      if (!updated[s].ote) updated[s].ote = { enabled: false, minScore: 5 };
       if (!updated[s].oteChoch) updated[s].oteChoch = { enabled: false, minScore: 5 };
       if (!updated[s].oteBos) updated[s].oteBos = { enabled: false, minScore: 5 };
       
-      updated[s].ote.entryPercent = level;
       updated[s].oteChoch.entryPercent = level;
       updated[s].oteBos.entryPercent = level;
     }
@@ -73,11 +71,12 @@ export default function BacktestingPanel() {
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
     choch: { enabled: boolean; minScore: number };
     bos: { enabled: boolean; minScore: number };
-    ote: { enabled: boolean; minScore: number; entryPercent?: number };
     oteChoch: { enabled: boolean; minScore: number; entryPercent?: number };
     oteBos: { enabled: boolean; minScore: number; entryPercent?: number };
     slBufferPercent?: number;
     fixedRR?: number;
+    maxSellLosses?: number;
+    maxBuyLosses?: number;
   }>>(() => {
     try {
       const saved = localStorage.getItem('bt_session_triggers');
@@ -85,14 +84,14 @@ export default function BacktestingPanel() {
         const parsed = JSON.parse(saved);
         for (const s of ['ALL', 'LONDON', 'NY', 'ASIA']) {
           if (parsed[s]) {
-            if (!parsed[s].ote) parsed[s].ote = { enabled: true, minScore: 8, entryPercent: 62 };
-            if (parsed[s].ote.entryPercent === undefined) parsed[s].ote.entryPercent = 62;
             if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8, entryPercent: 62 };
             if (parsed[s].oteChoch.entryPercent === undefined) parsed[s].oteChoch.entryPercent = 62;
             if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8, entryPercent: 62 };
             if (parsed[s].oteBos.entryPercent === undefined) parsed[s].oteBos.entryPercent = 62;
             if (parsed[s].slBufferPercent === undefined) parsed[s].slBufferPercent = 0.1;
             if (parsed[s].fixedRR === undefined) parsed[s].fixedRR = 2.0;
+            if (parsed[s].maxSellLosses === undefined) parsed[s].maxSellLosses = 0;
+            if (parsed[s].maxBuyLosses === undefined) parsed[s].maxBuyLosses = 0;
           }
         }
         return parsed;
@@ -102,54 +101,58 @@ export default function BacktestingPanel() {
       ALL: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
         oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
         slBufferPercent: 0.1,
-        fixedRR: 2.0
+        fixedRR: 2.0,
+        maxSellLosses: 0,
+        maxBuyLosses: 0
       },
       LONDON: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
         oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
         slBufferPercent: 0.1,
-        fixedRR: 2.0
+        fixedRR: 2.0,
+        maxSellLosses: 1,
+        maxBuyLosses: 1
       },
       NY: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
         oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
         slBufferPercent: 0.1,
-        fixedRR: 2.0
+        fixedRR: 2.0,
+        maxSellLosses: 2,
+        maxBuyLosses: 2
       },
       ASIA: {
         choch: { enabled: true, minScore: 5 },
         bos: { enabled: true, minScore: 10 },
-        ote: { enabled: true, minScore: 8, entryPercent: 62 },
         oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
         oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
         slBufferPercent: 0.1,
-        fixedRR: 2.0
+        fixedRR: 2.0,
+        maxSellLosses: 1,
+        maxBuyLosses: 1
       }
     };
   });
 
   const updateSessionTrigger = (
     session: string,
-    triggerType: 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos' | 'slBufferPercent' | 'fixedRR',
+    triggerType: 'choch' | 'bos' | 'oteChoch' | 'oteBos' | 'slBufferPercent' | 'fixedRR' | 'maxSellLosses' | 'maxBuyLosses',
     field: 'enabled' | 'minScore' | 'entryPercent' | '',
     value: any
   ) => {
     setSessionTriggers(prev => {
       let updatedSession = { ...prev[session] };
-      if (triggerType === 'slBufferPercent' || triggerType === 'fixedRR') {
+      if (triggerType === 'slBufferPercent' || triggerType === 'fixedRR' || triggerType === 'maxSellLosses' || triggerType === 'maxBuyLosses') {
         updatedSession[triggerType] = value;
       } else {
-        const type = triggerType as 'choch' | 'bos' | 'ote' | 'oteChoch' | 'oteBos';
+        const type = triggerType as 'choch' | 'bos' | 'oteChoch' | 'oteBos';
         const f = field as 'enabled' | 'minScore' | 'entryPercent';
         updatedSession[type] = {
           ...updatedSession[type],
@@ -2161,6 +2164,23 @@ export default function BacktestingPanel() {
                 <span className="mono" style={{ fontSize: '0.7rem', color: '#0088ff', fontWeight: 700, minWidth: '36px', textAlign: 'right' }}>
                   {sessionTriggers[sessionFilter]?.fixedRR ?? 2.0}x
                 </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '6px 8px', backgroundColor: 'rgba(255,165,0,0.03)', borderRadius: '4px', border: '1px solid rgba(255,165,0,0.08)' }}>
+                <div>
+                  <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS SELLs ({sessionFilter})</label>
+                  <input type="number" min="0" 
+                    value={sessionTriggers[sessionFilter]?.maxSellLosses ?? 0} 
+                    onChange={e => updateSessionTrigger(sessionFilter, 'maxSellLosses', '', parseInt(e.target.value) || 0)}
+                    style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS BUYs ({sessionFilter})</label>
+                  <input type="number" min="0" 
+                    value={sessionTriggers[sessionFilter]?.maxBuyLosses ?? 0} 
+                    onChange={e => updateSessionTrigger(sessionFilter, 'maxBuyLosses', '', parseInt(e.target.value) || 0)}
+                    style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+                </div>
               </div>
             </div>
             
