@@ -667,11 +667,11 @@ function processAlert(
     
     if (sessionConfig) {
       if (prefix === 'EVENTO_CHOCH') {
-        triggerEnabled = sessionConfig.choch.enabled;
-        minPtsRequired = sessionConfig.choch.minScore;
+        triggerEnabled = sessionConfig.choch?.enabled ?? false;
+        minPtsRequired = sessionConfig.choch?.minScore ?? 5;
       } else if (prefix === 'EVENTO_BOS') {
-        triggerEnabled = sessionConfig.bos.enabled;
-        minPtsRequired = sessionConfig.bos.minScore;
+        triggerEnabled = sessionConfig.bos?.enabled ?? false;
+        minPtsRequired = sessionConfig.bos?.minScore ?? 10;
       }
     } else {
       triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH');

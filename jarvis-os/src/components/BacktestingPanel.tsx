@@ -82,8 +82,25 @@ export default function BacktestingPanel() {
       const saved = localStorage.getItem('bt_session_triggers');
       if (saved) {
         const parsed = JSON.parse(saved);
+        if (parsed['ALL'] && !parsed['OFF']) {
+          parsed['OFF'] = parsed['ALL'];
+        }
+
         for (const s of ['OFF', 'LONDON', 'NY', 'ASIA']) {
-          if (parsed[s]) {
+          if (!parsed[s]) {
+            parsed[s] = {
+              choch: { enabled: true, minScore: 5 },
+              bos: { enabled: true, minScore: 10 },
+              oteChoch: { enabled: true, minScore: 8, entryPercent: 62 },
+              oteBos: { enabled: true, minScore: 8, entryPercent: 62 },
+              slBufferPercent: 0.1,
+              fixedRR: 2.0,
+              maxSellLosses: 0,
+              maxBuyLosses: 0
+            };
+          } else {
+            if (!parsed[s].choch) parsed[s].choch = { enabled: true, minScore: 5 };
+            if (!parsed[s].bos) parsed[s].bos = { enabled: true, minScore: 10 };
             if (!parsed[s].oteChoch) parsed[s].oteChoch = { enabled: true, minScore: 8, entryPercent: 62 };
             if (parsed[s].oteChoch.entryPercent === undefined) parsed[s].oteChoch.entryPercent = 62;
             if (!parsed[s].oteBos) parsed[s].oteBos = { enabled: true, minScore: 8, entryPercent: 62 };
