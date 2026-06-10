@@ -1,4 +1,4 @@
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 
 // ---------------------------------------------------------
 // JARVIS-OS: Auto-Tune Engine (Fase 2 - Machine Learning Roadmap)
