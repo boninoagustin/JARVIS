@@ -14,6 +14,8 @@ export interface SessionConfig {
   oteBos?: SessionTriggerConfig;
   maxSellLosses?: number;
   maxBuyLosses?: number;
+  slBufferPercent?: number;
+  fixedRR?: number;
 }
 
 export interface AssetConfig {

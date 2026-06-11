@@ -91,7 +91,7 @@ export default function SessionCard({ session, config, onChange }: Props) {
             onToggle={() => update('ote', 'enabled', !cfg.ote.enabled)}
             onScoreChange={v => update('ote', 'minScore', v)} />
 
-          {/* Directional Max Consecutive Losses */}
+          {/* Directional Max Consecutive Losses & Risk Settings */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🔴 Pérdidas Consec. Máx (SELL):</span>
@@ -110,6 +110,30 @@ export default function SessionCard({ session, config, onChange }: Props) {
                 onChange={e => {
                   const val = parseInt(e.target.value);
                   const next = { ...cfg, maxBuyLosses: isNaN(val) ? 0 : val };
+                  onChange(session, next);
+                }}
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🛡️ SL Buffer %:</span>
+              <input type="number" step="0.01" min={0} value={cfg.slBufferPercent !== undefined ? cfg.slBufferPercent : ''}
+                placeholder="Global"
+                onChange={e => {
+                  const val = parseFloat(e.target.value);
+                  const next = { ...cfg, slBufferPercent: isNaN(val) ? undefined : val };
+                  onChange(session, next);
+                }}
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🎯 R:R Fijo (TP2):</span>
+              <input type="number" step="0.1" min={0} value={cfg.fixedRR !== undefined ? cfg.fixedRR : ''}
+                placeholder="Global"
+                onChange={e => {
+                  const val = parseFloat(e.target.value);
+                  const next = { ...cfg, fixedRR: isNaN(val) ? undefined : val };
                   onChange(session, next);
                 }}
                 style={inputStyle}

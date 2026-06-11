@@ -184,6 +184,8 @@ interface AssetSessionConfig {
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
       maxSellLosses?: number;
       maxBuyLosses?: number;
+      slBufferPercent?: number;  // 🆕 SL buffer por sesión
+      fixedRR?: number;          // 🆕 TP2 R:R por sesión
     }>;
 }
 
@@ -226,6 +228,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
       maxSellLosses?: number;
       maxBuyLosses?: number;
+      slBufferPercent?: number;
+      fixedRR?: number;
     }>;
 } {
     const session = getCurrentSession();
@@ -241,12 +245,13 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     
     if (config) {
         console.log(`[CONFIG] 📋 Usando config de: ${ticker}`);
+        const sessionConfig = config.sessions?.[session];
         return {
             ...dynamicBotConfig,
             minPointsForBuy: config.minPointsForBuy,
             minPointsForSell: config.minPointsForSell,
-            slBufferPercent: config.slBufferPercent,
-            fixedRR: config.fixedRR,
+            slBufferPercent: sessionConfig?.slBufferPercent ?? config.slBufferPercent,
+            fixedRR: sessionConfig?.fixedRR ?? config.fixedRR,
             oteEntryPercent: config.oteEntryPercent,
             entryTrigger: config.entryTrigger,
             sessionEnabled: config.enabled,

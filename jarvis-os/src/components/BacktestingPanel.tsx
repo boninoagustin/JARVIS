@@ -486,6 +486,19 @@ export default function BacktestingPanel() {
             setMaxTradesPerDay(bestConfig.maxTradesPerDay || 0);
             setTrailingDrawdownR(bestConfig.trailingDrawdownR || 0);
             setEnabled(bestConfig.enabled !== false);
+
+            const updatedSessions = { ...sessionTriggers };
+            (Object.keys(bestData) as Array<keyof typeof bestData>).forEach(s => {
+              if (updatedSessions[s]) {
+                updatedSessions[s] = {
+                  ...updatedSessions[s],
+                  slBufferPercent: bestData[s].config.slBufferPercent,
+                  fixedRR: bestData[s].config.fixedRR
+                };
+              }
+            });
+            setSessionTriggers(updatedSessions);
+            localStorage.setItem('bt_session_triggers', JSON.stringify(updatedSessions));
             
             const closed = bestResult.trades.filter(t => t.result && t.result !== 'TIMEOUT');
             const wins = closed.filter(t => t.result === 'WIN').length;
@@ -497,7 +510,7 @@ export default function BacktestingPanel() {
               tradeData: bestResult.trades,
               config: {
                 ...bestConfig,
-                sessions: sessionTriggers,
+                sessions: updatedSessions,
               }
             };
             setSessions(prev => {
