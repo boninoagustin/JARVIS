@@ -493,7 +493,9 @@ export default function BacktestingPanel() {
                 updatedSessions[s] = {
                   ...updatedSessions[s],
                   slBufferPercent: bestData[s].config.slBufferPercent,
-                  fixedRR: bestData[s].config.fixedRR
+                  fixedRR: bestData[s].config.fixedRR,
+                  maxSellLosses: 2,
+                  maxBuyLosses: 2
                 };
               }
             });
@@ -651,6 +653,15 @@ export default function BacktestingPanel() {
         const chunkConfigs = [];
         for (let i = startIndex; i < endIndex; i++) {
             const c = combinations[i];
+            const optSessions: Record<string, any> = {};
+            const sessionsToEval = ['OFF', 'LONDON', 'NY', 'ASIA'] as const;
+            sessionsToEval.forEach(s => {
+                optSessions[s] = {
+                    ...(sessionTriggers[s] || {}),
+                    maxSellLosses: 2,
+                    maxBuyLosses: 2
+                };
+            });
             chunkConfigs.push({ 
                 ticker, minBuyPoints: c.score, minSellPoints: c.score, slBufferPercent: c.sl, fixedRR: c.rr, oteEntryPercent: c.ote, entryTrigger: c.trigger,
                 maxDailyLossR: optimizeSwitches ? undefined : (maxDailyLossR || undefined),
@@ -658,6 +669,7 @@ export default function BacktestingPanel() {
                 maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
                 maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
                 trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
+                sessions: optSessions
             });
         }
         
