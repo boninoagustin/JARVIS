@@ -182,6 +182,8 @@ interface AssetSessionConfig {
       ote: { enabled: boolean; minScore: number; entryPercent?: number };
       oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
+      maxSellLosses?: number;
+      maxBuyLosses?: number;
     }>;
 }
 
@@ -222,6 +224,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
       ote: { enabled: boolean; minScore: number; entryPercent?: number };
       oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
+      maxSellLosses?: number;
+      maxBuyLosses?: number;
     }>;
 } {
     const session = getCurrentSession();
@@ -870,6 +874,68 @@ async function countDailyBuysForTicker(ticker: string, nowMs: number): Promise<n
             return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
         }).length;
     } catch (e: any) {
+        return 0;
+    }
+}
+
+/**
+ * Cuenta las pérdidas consecutivas de un activo en la sesión y dirección actual para el día de hoy.
+ */
+async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number): Promise<number> {
+    if (!db) return 0;
+    try {
+        const now = new Date(nowMs);
+        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
+        const argDateStr = formatter.format(now);
+        const dateParts = argDateStr.split('-');
+        const year = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]) - 1;
+        const day = parseInt(dateParts[2]);
+        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
+
+        const tickerVariants = [ticker];
+        if (ticker.includes('NAS') || ticker.includes('US100')) {
+            tickerVariants.push('NAS100', 'US100');
+        }
+
+        const snapshot = await db.collection('trade_journal')
+            .where('timestamp', '>=', artMidnightMs)
+            .where('direction', '==', direction)
+            .get();
+
+        if (snapshot.empty) return 0;
+
+        const trades = snapshot.docs
+            .map(d => d.data())
+            .filter(t => {
+                const isMatchingTicker = tickerVariants.includes(t.ticker);
+                const isMatchingSession = t.session === session || t.sessionId === session;
+                return t.mode !== 'backtesting' && isMatchingTicker && isMatchingSession && t.result;
+            })
+            .sort((a, b) => a.timestamp - b.timestamp);
+
+        let streak = 0;
+        for (const t of trades) {
+            let rMultiple = Number(t.rMultiple);
+            if (isNaN(rMultiple) || rMultiple === undefined) {
+                if (t.result === 'WIN') {
+                    rMultiple = 1.5;
+                } else if (t.result === 'LOSS') {
+                    rMultiple = -1.0;
+                } else {
+                    rMultiple = 0;
+                }
+            }
+
+            if (rMultiple < 0) {
+                streak++;
+            } else if (rMultiple > 0) {
+                streak = 0;
+            }
+        }
+        return streak;
+    } catch (e: any) {
+        console.error('[STREAK LIMIT] Error contando pérdidas consecutivas:', e.message);
         return 0;
     }
 }
@@ -1926,6 +1992,28 @@ export async function processTradingAlert(alertText: string) {
             if (oteData.direction === 'SELL' && !isBacktest) {
                 const sellConfig = getConfigForTicker(ticker);
 
+                // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
+                const currentSession = getCurrentSession();
+                const sessionConfig = sellConfig.sessions?.[currentSession];
+                if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
+                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs);
+                    if (consecutiveLosses >= sessionConfig.maxSellLosses) {
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                        state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+
+                        sendTelegramAlert(
+                            `🚨 <b>[MCL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
+                            `📊 Se alcanzaron <b>${consecutiveLosses}/${sessionConfig.maxSellLosses}</b> pérdidas consecutivas de tipo SELL hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `💡 <i>Límite de pérdidas consecutivas (maxSellLosses) superado.</i>`
+                        ).catch(() => {});
+                        return;
+                    }
+                    console.log(`[MCL LIMIT] ✅ ${ticker} SELL permitido: ${consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas de tipo SELL.`);
+                }
+
                 // 📊 Verificar límite diario de SELLs
                 if (sellConfig.maxSellsPerDay > 0) {
                     const dailySells = await countDailySellsForTicker(ticker, nowMs);
@@ -1967,6 +2055,28 @@ export async function processTradingAlert(alertText: string) {
             // 🆕 v7.2: FILTRO DE OPERACIONES BUY (Anti-Long Bias)
             if (oteData.direction === 'BUY' && !isBacktest) {
                 const buyConfig = getConfigForTicker(ticker);
+
+                // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
+                const currentSession = getCurrentSession();
+                const sessionConfig = buyConfig.sessions?.[currentSession];
+                if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
+                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs);
+                    if (consecutiveLosses >= sessionConfig.maxBuyLosses) {
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                        state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
+                        docRef.set(state).catch(() => {});
+                        activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+
+                        sendTelegramAlert(
+                            `🚨 <b>[MCL LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
+                            `📊 Se alcanzaron <b>${consecutiveLosses}/${sessionConfig.maxBuyLosses}</b> pérdidas consecutivas de tipo BUY hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `💡 <i>Límite de pérdidas consecutivas (maxBuyLosses) superado.</i>`
+                        ).catch(() => {});
+                        return;
+                    }
+                    console.log(`[MCL LIMIT] ✅ ${ticker} BUY permitido: ${consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas de tipo BUY.`);
+                }
 
                 // 📊 Verificar límite diario de BUYs
                 if (buyConfig.maxBuysPerDay > 0) {

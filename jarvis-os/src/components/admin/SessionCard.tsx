@@ -90,6 +90,32 @@ export default function SessionCard({ session, config, onChange }: Props) {
           <TriggerRow label="OTE" emoji="🎯" trigger={cfg.ote}
             onToggle={() => update('ote', 'enabled', !cfg.ote.enabled)}
             onScoreChange={v => update('ote', 'minScore', v)} />
+
+          {/* Directional Max Consecutive Losses */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🔴 Pérdidas Consec. Máx (SELL):</span>
+              <input type="number" min={0} max={10} value={cfg.maxSellLosses ?? 0}
+                onChange={e => {
+                  const val = parseInt(e.target.value);
+                  const next = { ...cfg, maxSellLosses: isNaN(val) ? 0 : val };
+                  onChange(session, next);
+                }}
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🟢 Pérdidas Consec. Máx (BUY):</span>
+              <input type="number" min={0} max={10} value={cfg.maxBuyLosses ?? 0}
+                onChange={e => {
+                  const val = parseInt(e.target.value);
+                  const next = { ...cfg, maxBuyLosses: isNaN(val) ? 0 : val };
+                  onChange(session, next);
+                }}
+                style={inputStyle}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
