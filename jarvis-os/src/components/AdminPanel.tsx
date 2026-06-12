@@ -25,7 +25,8 @@ export default function AdminPanel() {
             if (!sessions[s]) sessions[s] = {
               choch: { enabled: true, minScore: 12 },
               bos: { enabled: true, minScore: 12 },
-              ote: { enabled: true, minScore: 8 }
+              oteChoch: { enabled: true, minScore: 8 },
+              oteBos: { enabled: true, minScore: 8 }
             };
           });
           setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
@@ -36,7 +37,8 @@ export default function AdminPanel() {
             newConfig.sessions[s] = {
               choch: { enabled: true, minScore: 12 },
               bos: { enabled: true, minScore: 12 },
-              ote: { enabled: true, minScore: 8 }
+              oteChoch: { enabled: true, minScore: 8 },
+              oteBos: { enabled: true, minScore: 8 }
             };
           });
           setAssetConfig(newConfig);
