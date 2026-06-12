@@ -220,7 +220,7 @@ export default function BacktestingPanel() {
       if (!workerRef.current) return reject('Worker no inicializado');
       const id = Date.now() + Math.random();
       
-      let timeoutId: NodeJS.Timeout;
+      let timeoutId: ReturnType<typeof setTimeout>;
       
       const handler = (e: MessageEvent) => {
         if (e.data.id === id) {

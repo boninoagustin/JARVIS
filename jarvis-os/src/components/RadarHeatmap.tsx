@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, getDocs } from 'firebase/firestore';
+import { collection, query, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Activity, Zap, Crosshair, AlertTriangle, Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -59,7 +59,7 @@ export default function RadarHeatmap() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+    let intervalId: ReturnType<typeof setInterval>;
     
     const fetchRadarStates = async () => {
       try {
