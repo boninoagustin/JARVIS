@@ -74,7 +74,8 @@ export default function SessionCard({ session, config, onChange }: Props) {
           <span style={{ fontWeight: 700, fontSize: '0.8rem', color: meta.color }}>{meta.label}</span>
           {cfg.choch?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#00e67615', color: '#00e676', borderRadius: '3px' }}>CHoCH</span>}
           {cfg.bos?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#0088ff15', color: '#0088ff', borderRadius: '3px' }}>BOS</span>}
-          {cfg.ote?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE</span>}
+          {cfg.oteChoch?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE CHOCH</span>}
+          {cfg.oteBos?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE BOS</span>}
         </div>
         {expanded ? <ChevronUp size={14} color="#666" /> : <ChevronDown size={14} color="#666" />}
       </button>
@@ -87,9 +88,12 @@ export default function SessionCard({ session, config, onChange }: Props) {
           <TriggerRow label="BOS" emoji="🔨" trigger={cfg.bos}
             onToggle={() => update('bos', 'enabled', !cfg.bos.enabled)}
             onScoreChange={v => update('bos', 'minScore', v)} />
-          <TriggerRow label="OTE" emoji="🎯" trigger={cfg.ote}
-            onToggle={() => update('ote', 'enabled', !cfg.ote.enabled)}
-            onScoreChange={v => update('ote', 'minScore', v)} />
+          <TriggerRow label="OTE CHoCH" emoji="🎯" trigger={cfg.oteChoch || DEFAULT_SESSION_CONFIG.oteChoch!}
+            onToggle={() => update('oteChoch', 'enabled', !(cfg.oteChoch?.enabled ?? DEFAULT_SESSION_CONFIG.oteChoch!.enabled))}
+            onScoreChange={v => update('oteChoch', 'minScore', v)} />
+          <TriggerRow label="OTE BOS" emoji="🎯" trigger={cfg.oteBos || DEFAULT_SESSION_CONFIG.oteBos!}
+            onToggle={() => update('oteBos', 'enabled', !(cfg.oteBos?.enabled ?? DEFAULT_SESSION_CONFIG.oteBos!.enabled))}
+            onScoreChange={v => update('oteBos', 'minScore', v)} />
 
           {/* Directional Max Consecutive Losses & Risk Settings */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>

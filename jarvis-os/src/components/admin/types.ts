@@ -9,7 +9,6 @@ export interface SessionTriggerConfig {
 export interface SessionConfig {
   choch: SessionTriggerConfig;
   bos: SessionTriggerConfig;
-  ote: SessionTriggerConfig;
   oteChoch?: SessionTriggerConfig;
   oteBos?: SessionTriggerConfig;
   maxSellLosses?: number;
@@ -87,7 +86,8 @@ export const DEFAULT_ASSET_CONFIG: AssetConfig = {
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   choch: { enabled: true, minScore: 12 },
   bos:   { enabled: true, minScore: 12 },
-  ote:   { enabled: true, minScore: 8 },
+  oteChoch: { enabled: true, minScore: 8 },
+  oteBos:   { enabled: true, minScore: 8 },
   maxSellLosses: 0,
   maxBuyLosses: 0,
 };

@@ -172,7 +172,6 @@ let dynamicBotConfig = {
 const SessionSchema = z.object({
     choch: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
     bos: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    ote: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
     oteChoch: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
     oteBos: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
     maxSellLosses: z.number().optional(),
@@ -232,7 +231,6 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     sessions?: Record<string, {
       choch: { enabled: boolean; minScore: number };
       bos: { enabled: boolean; minScore: number };
-      ote: { enabled: boolean; minScore: number; entryPercent?: number };
       oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
       maxSellLosses?: number;
@@ -561,11 +559,11 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         let activeOteEntryPercent = config.oteEntryPercent || 50;
         if (sessionConfig) {
             if (isChoch) {
-                activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+                activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? config.oteEntryPercent ?? 50;
             } else if (isBos) {
-                activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+                activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? config.oteEntryPercent ?? 50;
             } else {
-                activeOteEntryPercent = sessionConfig.ote?.entryPercent ?? config.oteEntryPercent ?? 50;
+                activeOteEntryPercent = config.oteEntryPercent ?? 50;
             }
         }
 
@@ -587,14 +585,14 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
             if (sessionConfig) {
                 if (isChoch) {
-                    oteEnabled = sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false;
-                    oteMinScore = sessionConfig.oteChoch?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+                    oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
+                    oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
                 } else if (isBos) {
-                    oteEnabled = sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false;
-                    oteMinScore = sessionConfig.oteBos?.minScore ?? sessionConfig.ote?.minScore ?? 8;
+                    oteEnabled = sessionConfig.oteBos?.enabled ?? false;
+                    oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
                 } else {
-                    oteEnabled = sessionConfig.ote?.enabled ?? false;
-                    oteMinScore = sessionConfig.ote?.minScore ?? 8;
+                    oteEnabled = false;
+                    oteMinScore = 8;
                 }
             } else {
                 oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
@@ -1920,7 +1918,7 @@ export async function processTradingAlert(alertText: string) {
                             triggerOte = true;
                             
                             const oteSessionEnabled = sessionConfig 
-                              ? (triggerType === 'CHoCH🚀' ? (sessionConfig.oteChoch?.enabled ?? sessionConfig.ote?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? sessionConfig.ote?.enabled ?? false))
+                              ? (triggerType === 'CHoCH🚀' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
                               : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
                             if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
                         }
