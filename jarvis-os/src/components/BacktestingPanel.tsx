@@ -233,8 +233,8 @@ export default function BacktestingPanel() {
       
       timeoutId = setTimeout(() => {
         workerRef.current?.removeEventListener('message', handler);
-        reject(new Error('Worker Task Timeout (30s)'));
-      }, 30000);
+        reject(new Error('Worker Task Timeout (5m)'));
+      }, 300000);
 
       workerRef.current.addEventListener('message', handler);
       workerRef.current.postMessage({ type, id, payload });
