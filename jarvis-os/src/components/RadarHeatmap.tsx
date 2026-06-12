@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, query } from 'firebase/firestore';
+import { collection, onSnapshot, query, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Activity, Zap, Crosshair, AlertTriangle, Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -59,22 +59,30 @@ export default function RadarHeatmap() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    const q = query(collection(db, 'radar_states'));
-    const unsubscribe = onSnapshot(q, 
-      (snapshot) => {
+    let intervalId: NodeJS.Timeout;
+    
+    const fetchRadarStates = async () => {
+      try {
+        const q = query(collection(db, 'radar_states'));
+        const snapshot = await getDocs(q);
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as RadarState));
         setStates(data);
         setLoading(false);
         setError(null);
-      },
-      (err) => {
-        console.error('[Radar] Error Firestore:', err);
+      } catch (err) {
+        console.error('[Radar] Error fetching Firestore data:', err);
         setError('Error de conexión con Firebase. Verificá tu conexión.');
         setLoading(false);
       }
-    );
-    return () => unsubscribe();
+    };
+
+    setLoading(true);
+    fetchRadarStates();
+    
+    // Polling cada 30 segundos (Estrategia de Caché de Lectura)
+    intervalId = setInterval(fetchRadarStates, 30000);
+
+    return () => clearInterval(intervalId);
   }, []);
 
   return (

@@ -219,13 +219,23 @@ export default function BacktestingPanel() {
     return new Promise((resolve, reject) => {
       if (!workerRef.current) return reject('Worker no inicializado');
       const id = Date.now() + Math.random();
+      
+      let timeoutId: NodeJS.Timeout;
+      
       const handler = (e: MessageEvent) => {
         if (e.data.id === id) {
+          clearTimeout(timeoutId);
           workerRef.current?.removeEventListener('message', handler);
           if (e.data.type === 'DONE') resolve(e.data.result);
           else reject(e.data.error);
         }
       };
+      
+      timeoutId = setTimeout(() => {
+        workerRef.current?.removeEventListener('message', handler);
+        reject(new Error('Worker Task Timeout (30s)'));
+      }, 30000);
+
       workerRef.current.addEventListener('message', handler);
       workerRef.current.postMessage({ type, id, payload });
     });

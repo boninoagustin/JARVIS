@@ -94,7 +94,10 @@ export default function SessionCard({ session, config, onChange }: Props) {
           {/* Directional Max Consecutive Losses & Risk Settings */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🔴 Pérdidas Consec. Máx (SELL):</span>
+              <span style={{ fontSize: '0.75rem', color: '#aaa', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                🔴 Pérdidas Consec. Máx (SELL):
+                <span style={{ fontSize: '0.55rem', backgroundColor: 'var(--accent-gold)', color: '#000', padding: '1px 4px', borderRadius: '3px', fontWeight: 'bold' }}>AUTO</span>
+              </span>
               <input type="number" min={0} max={10} value={cfg.maxSellLosses ?? 0}
                 onChange={e => {
                   const val = parseInt(e.target.value);
@@ -105,7 +108,10 @@ export default function SessionCard({ session, config, onChange }: Props) {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>🟢 Pérdidas Consec. Máx (BUY):</span>
+              <span style={{ fontSize: '0.75rem', color: '#aaa', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                🟢 Pérdidas Consec. Máx (BUY):
+                <span style={{ fontSize: '0.55rem', backgroundColor: 'var(--accent-gold)', color: '#000', padding: '1px 4px', borderRadius: '3px', fontWeight: 'bold' }}>AUTO</span>
+              </span>
               <input type="number" min={0} max={10} value={cfg.maxBuyLosses ?? 0}
                 onChange={e => {
                   const val = parseInt(e.target.value);

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { Activity, Terminal, PieChart, Settings, Play } from 'lucide-react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
 import FundamentalTerminal from './components/FundamentalTerminal';
@@ -54,13 +54,24 @@ function Header({ time }: { time: Date }) {
   const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'app_settings', 'global'), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setKillswitches(data?.killswitches || {});
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const fetchGlobalSettings = async () => {
+      try {
+        const docSnap = await getDoc(doc(db, 'app_settings', 'global'));
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setKillswitches(data?.killswitches || {});
+        }
+      } catch (err) {
+        console.error('[Header] Error fetching global settings:', err);
       }
-    });
-    return () => unsub();
+    };
+
+    fetchGlobalSettings();
+    intervalId = setInterval(fetchGlobalSettings, 30000); // Polling cada 30s
+
+    return () => clearInterval(intervalId);
   }, []);
 
   const isBotActive = !killswitches['GLOBAL_SYSTEM'];

@@ -30,7 +30,8 @@
     "node-fetch": "^2.7.0",
     "openai": "^6.34.0",
     "puppeteer": "^24.39.1",
-    "tradingview-mcp": "github:tradesdontlie/tradingview-mcp"
+    "tradingview-mcp": "github:tradesdontlie/tradingview-mcp",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

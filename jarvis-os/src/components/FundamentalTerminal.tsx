@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, onSnapshot, setDoc, query, collection } from 'firebase/firestore';
+import { doc, setDoc, query, collection, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   Terminal, 
@@ -236,49 +236,56 @@ export default function FundamentalTerminal() {
   const [macroError, setMacroError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubGlobal = onSnapshot(doc(db, 'app_settings', 'global'), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as Partial<AppSettings>;
-        setSettings({ killswitches: data.killswitches || {} });
-      }
-    });
+    const abortController = new AbortController();
 
-    const unsubFundamentals = onSnapshot(doc(db, 'app_settings', 'fundamentals'), 
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setFundamentals(docSnap.data() as Fundamentals);
+    const fetchFirebaseData = async () => {
+      try {
+        const [globalSnap, fundamentalsSnap, radarSnap] = await Promise.all([
+          getDoc(doc(db, 'app_settings', 'global')),
+          getDoc(doc(db, 'app_settings', 'fundamentals')),
+          getDocs(query(collection(db, 'radar_states')))
+        ]);
+
+        if (globalSnap.exists()) {
+          const data = globalSnap.data() as Partial<AppSettings>;
+          setSettings({ killswitches: data.killswitches || {} });
+        }
+
+        if (fundamentalsSnap.exists()) {
+          setFundamentals(fundamentalsSnap.data() as Fundamentals);
           setErrorFundamentals(null);
         }
         setLoadingFundamentals(false);
-      },
-      (err) => {
-        console.error('[FundTerm] Error Firestore fundamentals:', err);
+
+        const assets = radarSnap.docs.map(doc => doc.id);
+        setTradedAssets(assets.sort());
+      } catch (err) {
+        console.error('[FundTerm] Error fetching Firestore data:', err);
         setErrorFundamentals('Error cargando datos fundamentales');
         setLoadingFundamentals(false);
       }
-    );
+    };
 
-    const unsubRadar = onSnapshot(query(collection(db, 'radar_states')), (snapshot) => {
-      const assets = snapshot.docs.map(doc => doc.id);
-      setTradedAssets(assets.sort());
+    fetchFirebaseData();
+    const intervalId = setInterval(fetchFirebaseData, 60000); // Actualizar cada 60s (Estrategia de Caché/Polling)
+
+    fetchMacroData(abortController.signal).catch(err => {
+      if (err.name !== 'AbortError') console.error('[FundTerm]', err);
     });
 
-    fetchMacroData();
-
     return () => {
-      unsubGlobal();
-      unsubFundamentals();
-      unsubRadar();
+      abortController.abort();
+      clearInterval(intervalId);
     };
   }, []);
 
-  const fetchMacroData = async () => {
+  const fetchMacroData = async (signal?: AbortSignal) => {
     setLoadingMacro(true);
     setMacroError(null);
 
     const fetchYahooChart = async (symbol: string): Promise<number | null> => {
       try {
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`);
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`, { signal });
         if (!res.ok) return null;
         const data = await res.json();
         const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
@@ -459,7 +466,7 @@ export default function FundamentalTerminal() {
             </span>
           )}
           <button 
-            onClick={() => { fetchMacroData(); }} 
+            onClick={() => { fetchMacroData().catch(err => { if (err.name !== 'AbortError') console.error('[FundTerm]', err); }); }} 
             disabled={loadingMacro}
             style={{ 
               background: 'none', border: 'none', cursor: loadingMacro ? 'wait' : 'pointer', 

@@ -46,19 +46,69 @@ export async function runAutoTune() {
         // TODO: Extraer las señales en bruto (raw signals) si se guardan, 
         // para simular combinaciones que no fueron ejecutadas originalmente.
         
-        // 3. (Mock) Bucle de Optimización por Sesión y Activo
-        const assets = ['US100', 'XAUUSD'];
-        const sessions = ['LONDON', 'NY', 'ASIA'];
+        // 3. Agrupar trades por Activo
+        const tradesByTicker: Record<string, any[]> = {};
+        journalSnap.forEach(doc => {
+            const data = doc.data();
+            if (data.mode !== 'backtesting' && data.result) { // Solo trades reales cerrados
+                if (!tradesByTicker[data.ticker]) tradesByTicker[data.ticker] = [];
+                tradesByTicker[data.ticker].push(data);
+            }
+        });
 
-        for (const asset of assets) {
-            console.log(`\n🔎 Analizando Activo: ${asset}`);
-            for (const session of sessions) {
-                console.log(`   🔸 Optimizando sesión: ${session}`);
-                // Aquí implementaremos la búsqueda en el espacio de parámetros (Grid Search o Algoritmo Genético)
-                // - SL Buffer
-                // - TP2 Target
-                // - Min Score
-                // - Max Loss
+        // 4. Bucle de Optimización por Activo
+        const assetConfigs: Record<string, any> = {};
+        
+        for (const [ticker, assetTrades] of Object.entries(tradesByTicker)) {
+            console.log(`\n🔎 Analizando Activo: ${ticker} con ${assetTrades.length} operaciones`);
+            
+            // Separar por dirección
+            const buys = assetTrades.filter(t => t.direction === 'BUY');
+            const sells = assetTrades.filter(t => t.direction === 'SELL');
+            
+            const optimalBuyPoints = optimizeMinScore(buys);
+            const optimalSellPoints = optimizeMinScore(sells);
+            
+            console.log(`   🔸 Optimal minPointsForBuy: ${optimalBuyPoints}`);
+            console.log(`   🔸 Optimal minPointsForSell: ${optimalSellPoints}`);
+            
+            // Analizar por sesión
+            const sessions: Record<string, any> = {};
+            const tradesBySession: Record<string, any[]> = {};
+            assetTrades.forEach(t => {
+                const s = t.session || 'UNKNOWN';
+                if (!tradesBySession[s]) tradesBySession[s] = [];
+                tradesBySession[s].push(t);
+            });
+
+            for (const [session, sessionTrades] of Object.entries(tradesBySession)) {
+                if (session === 'UNKNOWN') continue;
+                
+                // Calcular racha de perdidas
+                const maxBuyLosses = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'BUY'));
+                const maxSellLosses = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'SELL'));
+                
+                console.log(`   🔹 Sesión ${session} -> maxBuyLosses: ${maxBuyLosses || 'KEE'}, maxSellLosses: ${maxSellLosses || 'KEEP'}`);
+                
+                sessions[session] = {};
+                if (maxBuyLosses !== undefined) sessions[session].maxBuyLosses = maxBuyLosses;
+                if (maxSellLosses !== undefined) sessions[session].maxSellLosses = maxSellLosses;
+            }
+            
+            assetConfigs[ticker] = {
+                minPointsForBuy: optimalBuyPoints,
+                minPointsForSell: optimalSellPoints,
+                sessions: Object.keys(sessions).length > 0 ? sessions : undefined
+            };
+        }
+        
+        // 5. Escribir configuraciones optimizadas
+        console.log("\n💾 Escribiendo nuevas configuraciones en Firestore...");
+        for (const [ticker, config] of Object.entries(assetConfigs)) {
+            // Eliminamos undefined del objeto base para no pisar si está vacío
+            const cleanConfig = Object.fromEntries(Object.entries(config).filter(([_, v]) => v !== undefined));
+            if (Object.keys(cleanConfig).length > 0) {
+                await db.collection('asset_configs').doc(ticker).set(cleanConfig, { merge: true });
             }
         }
         
@@ -117,4 +167,47 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     });
     
     runAutoTune().then(() => process.exit(0));
+}
+
+// ---------------------------------------------------------
+// FUNCIONES AUXILIARES DE OPTIMIZACIÓN
+// ---------------------------------------------------------
+function optimizeMinScore(trades: any[]) {
+    // Buscar umbral ampliado entre 3 y 8
+    let bestScore = 5; // Default
+    let bestPnL = -Infinity;
+    let bestWinRate = 0;
+    
+    for (const testScore of [3, 4, 5, 6, 7, 8]) {
+        const filtered = trades.filter(t => t.points >= testScore);
+        if (filtered.length < 3) continue; // Muestra muy chica
+        
+        const winRate = filtered.filter(t => t.result === 'WIN').length / filtered.length;
+        
+        // Calculamos PnL. Si no hay pnl guardado, estimamos con un R:R base de 2:1
+        const pnl = filtered.reduce((sum, t) => sum + (t.pnl !== undefined ? t.pnl : (t.result === 'WIN' ? 2 : -1)), 0);
+        
+        // Criterio de Sensibilidad Refinada tras 15 días:
+        // Preferimos PnL absoluto, pero en caso de empate buscamos mayor Win Rate.
+        // Se reduce el filtro de Win Rate a 40% para dar lugar a estrategias de alto R:R (e.g. OTE)
+        if (winRate >= 0.40) {
+            if (pnl > bestPnL || (pnl === bestPnL && winRate > bestWinRate)) {
+                bestPnL = pnl;
+                bestWinRate = winRate;
+                bestScore = testScore;
+            }
+        }
+    }
+    
+    return bestPnL !== -Infinity ? bestScore : 5;
+}
+
+function optimizeConsecutiveLosses(trades: any[]) {
+    const wins = trades.filter(t => t.result === 'WIN').length;
+    const total = trades.length;
+    if (total < 5) return undefined; // No tocar
+    const winRate = wins / total;
+    if (winRate < 0.4) return 2;
+    if (winRate > 0.6) return 3;
+    return undefined; // Dejar la configuración que estaba
 }

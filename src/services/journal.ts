@@ -11,50 +11,50 @@
 import { db } from '../db/memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
+import { z } from 'zod';
 
 // ─── Interfaces ───
 
-export interface TradeRecord {
-    id: string;
-    ticker: string;
-    direction: 'BUY' | 'SELL';
-    grade: 'A+' | 'B';
-    points: number;
-    events: string[];
-    macroContext: Record<string, string>;
-    kronosVerdict?: string;
-    investmentSentiment?: string;
-    mixtureConsensus?: string;
-    timestamp: number;
-    date: string;              // YYYY-MM-DD for daily grouping
-    result?: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'PARTIAL_TP1' | 'TIMEOUT';
-    pnl?: number;
-    durationMin?: number;       // 🆕 Duración del trade en minutos (entrada → cierre)
-    mode?: 'live' | 'backtesting'; // 🆕 Modo de ejecución (default: live)
-    sessionId?: string;         // 🆕 ID de sesión para agrupar trades de backtesting
-    configNote?: string;        // 🆕 Nota sobre la configuración del indicador
-    // 🆕 Niveles de ejecución para tracking automático en el Diario Analítico
-    entryPrice?: number;
-    tp1Price?: number;
-    tp2Price?: number;
-    slPrice?: number;
-    originalSlPrice?: number;   // 🆕 Precio del Stop Loss original antes de ser movido a Breakeven
-    tp1Hit?: boolean;           // Se marca true cuando el precio toca TP1
-    tp2Hit?: boolean;           // Se marca true cuando el precio toca TP2
-    slHit?: boolean;            // Se marca true cuando el precio toca SL
-    tp1Timestamp?: number;      // Cuándo se alcanzó TP1
-    tp2Timestamp?: number;      // Cuándo se alcanzó TP2
-    slTimestamp?: number;       // Cuándo se alcanzó SL
-    isChochEntry?: boolean;     // Se marca true si la entrada fue directa por CHoCH (sin esperar retroceso OTE)
-    
-    // 🧠 FASE 1 - MACHINE LEARNING FEATURES (Data Engineering)
-    hourOfDay?: number;         // 0-23
-    dayOfWeek?: number;         // 0 (Dom) a 6 (Sab)
-    session?: string;           // LONDON, NY, ASIA
-    bias4H?: 'ALIGNED' | 'AGAINST' | 'NEUTRAL';
-    bias1H?: 'ALIGNED' | 'AGAINST' | 'NEUTRAL';
-    vwapDistance?: number;      // Feature simplificado por ahora (1=Cerca/A favor, 0=Lejos)
-}
+export const TradeRecordSchema = z.object({
+    id: z.string(),
+    ticker: z.string(),
+    direction: z.enum(['BUY', 'SELL']),
+    grade: z.enum(['A+', 'B']),
+    points: z.number(),
+    events: z.array(z.string()),
+    macroContext: z.record(z.string(), z.string()),
+    kronosVerdict: z.string().optional(),
+    investmentSentiment: z.string().optional(),
+    mixtureConsensus: z.string().optional(),
+    timestamp: z.number(),
+    date: z.string(),
+    result: z.enum(['WIN', 'LOSS', 'BREAKEVEN', 'PARTIAL_TP1', 'TIMEOUT']).optional(),
+    pnl: z.number().optional(),
+    durationMin: z.number().optional(),
+    mode: z.enum(['live', 'backtesting']).optional(),
+    sessionId: z.string().optional(),
+    configNote: z.string().optional(),
+    entryPrice: z.number().optional(),
+    tp1Price: z.number().optional(),
+    tp2Price: z.number().optional(),
+    slPrice: z.number().optional(),
+    originalSlPrice: z.number().optional(),
+    tp1Hit: z.boolean().optional(),
+    tp2Hit: z.boolean().optional(),
+    slHit: z.boolean().optional(),
+    tp1Timestamp: z.number().optional(),
+    tp2Timestamp: z.number().optional(),
+    slTimestamp: z.number().optional(),
+    isChochEntry: z.boolean().optional(),
+    hourOfDay: z.number().optional(),
+    dayOfWeek: z.number().optional(),
+    session: z.string().optional(),
+    bias4H: z.enum(['ALIGNED', 'AGAINST', 'NEUTRAL']).optional(),
+    bias1H: z.enum(['ALIGNED', 'AGAINST', 'NEUTRAL']).optional(),
+    vwapDistance: z.number().optional()
+}).passthrough();
+
+export type TradeRecord = z.infer<typeof TradeRecordSchema>;
 
 export interface PerformanceMetrics {
     totalTrades: number;
@@ -86,7 +86,7 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
     }
 
     const id = generateTradeId();
-    const date = new Date(record.timestamp).toISOString().split('T')[0];
+    const date = new Date(Number(record.timestamp)).toISOString().split('T')[0];
 
     try {
         // Eliminar propiedades undefined para evitar errores en Firestore
@@ -163,8 +163,15 @@ export async function getPerformance(days: number = 30): Promise<PerformanceMetr
         if (snapshot.empty) return empty;
 
         const trades = snapshot.docs
-            .map(d => d.data() as TradeRecord)
-            .filter(t => t.mode !== 'backtesting'); // Excluir backtesting de métricas reales
+            .map(d => {
+                const parsed = TradeRecordSchema.safeParse(d.data());
+                if (!parsed.success) {
+                    console.warn(`[JOURNAL] Invalid trade data for ${d.id}:`, parsed.error.format());
+                    return null;
+                }
+                return parsed.data;
+            })
+            .filter((t): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting de métricas reales
         const withResult = trades.filter(t => t.result);
 
         const wins = withResult.filter(t => t.result === 'WIN').length;
@@ -229,7 +236,9 @@ export async function getOptimalThresholds(): Promise<Record<string, number>> {
         const tickerData: Record<string, { wins: number[]; losses: number[] }> = {};
         
         for (const doc of snapshot.docs) {
-            const t = doc.data() as TradeRecord;
+            const parsed = TradeRecordSchema.safeParse(doc.data());
+            if (!parsed.success) continue;
+            const t = parsed.data;
             if (!tickerData[t.ticker]) tickerData[t.ticker] = { wins: [], losses: [] };
             if (t.result === 'WIN') tickerData[t.ticker].wins.push(t.points);
             else if (t.result === 'LOSS') tickerData[t.ticker].losses.push(t.points);
@@ -277,8 +286,11 @@ export async function getPendingTrades(): Promise<TradeRecord[]> {
             .get();
 
         return snapshot.docs
-            .map(d => d.data() as TradeRecord)
-            .filter(t => !t.result);
+            .map(d => {
+                const parsed = TradeRecordSchema.safeParse(d.data());
+                return parsed.success ? parsed.data : null;
+            })
+            .filter((t): t is TradeRecord => t !== null && !t.result);
     } catch (err: any) {
         console.error('[JOURNAL] Error getting pending trades:', err.message);
         return [];
@@ -299,8 +311,11 @@ export async function sendDailyReview(): Promise<void> {
             .get();
 
         const allToday = snapshot.docs
-            .map(d => d.data() as TradeRecord)
-            .filter(t => t.mode !== 'backtesting'); // Excluir backtesting del resumen diario
+            .map(d => {
+                const parsed = TradeRecordSchema.safeParse(d.data());
+                return parsed.success ? parsed.data : null;
+            })
+            .filter((t): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting del resumen diario
         const withResult = allToday.filter(t => t.result);
         const pending = allToday.filter(t => !t.result);
 

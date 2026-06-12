@@ -1,4 +1,5 @@
 import { db } from './memory.js';
+import { z } from 'zod';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { logTrade, recordResult, getPerformance, sendDailyReview } from '../services/journal.js';
@@ -78,6 +79,8 @@ interface RadarState {
     activeMacroImpulseBuy?: ImpulseLeg | null;  
     activeMacroImpulseSell?: ImpulseLeg | null; 
     lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
+    version?: number;
+    lastModified?: number;
 }
 
 const emptyState = (): RadarState => ({
@@ -94,7 +97,9 @@ const emptyState = (): RadarState => ({
     activeImpulseSell: null,
     activeMacroImpulseBuy: null,
     activeMacroImpulseSell: null,
-    lastGatillo: undefined
+    lastGatillo: undefined,
+    version: 0,
+    lastModified: 0
 });
 
 const SETUP_MEMORY_WINDOW_MS = 21600000; // 6 Horas (cubre London → NY completo)
@@ -164,30 +169,34 @@ let dynamicBotConfig = {
 };
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
-interface AssetSessionConfig {
-    minPointsForBuy: number;
-    minPointsForSell: number;
-    slBufferPercent: number;
-    fixedRR: number;
-    oteEntryPercent: number;
-    entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
-    enabled: boolean; // permite deshabilitar un activo/sesión
-    maxSellsPerDay: number;      // 🆕 v7.1: Máx. operaciones SELL diarias por activo (0 = ilimitado)
-    sellScorePenalty: number;    // 🆕 v7.1: Penalización extra de puntos para señales SELL (0 = sin penalización)
-    maxBuysPerDay: number;       // 🆕 v7.2: Máx. operaciones BUY diarias por activo
-    buyScorePenalty: number;     // 🆕 v7.2: Penalización extra de puntos para señales BUY
-    sessions?: Record<string, {
-      choch: { enabled: boolean; minScore: number };
-      bos: { enabled: boolean; minScore: number };
-      ote: { enabled: boolean; minScore: number; entryPercent?: number };
-      oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
-      oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
-      maxSellLosses?: number;
-      maxBuyLosses?: number;
-      slBufferPercent?: number;  // 🆕 SL buffer por sesión
-      fixedRR?: number;          // 🆕 TP2 R:R por sesión
-    }>;
-}
+const SessionSchema = z.object({
+    choch: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    bos: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    ote: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    oteChoch: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    oteBos: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    maxSellLosses: z.number().optional(),
+    maxBuyLosses: z.number().optional(),
+    slBufferPercent: z.number().optional(),
+    fixedRR: z.number().optional()
+});
+
+const AssetSessionConfigSchema = z.object({
+    minPointsForBuy: z.coerce.number().optional(),
+    minPointsForSell: z.coerce.number().optional(),
+    slBufferPercent: z.coerce.number().optional(),
+    fixedRR: z.coerce.number().optional(),
+    oteEntryPercent: z.coerce.number().optional(),
+    entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH']).optional(),
+    enabled: z.boolean().optional(),
+    maxSellsPerDay: z.coerce.number().optional(),
+    sellScorePenalty: z.coerce.number().optional(),
+    maxBuysPerDay: z.coerce.number().optional(),
+    buyScorePenalty: z.coerce.number().optional(),
+    sessions: z.record(z.string(), SessionSchema).optional()
+}).passthrough();
+
+type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
 
 // Map: "BTCUSD_LONDON" -> config
 const assetSessionConfigs = new Map<string, AssetSessionConfig>();
@@ -245,21 +254,21 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
     
     if (config) {
         console.log(`[CONFIG] 📋 Usando config de: ${ticker}`);
-        const sessionConfig = config.sessions?.[session];
+        const sessionConfig = config.sessions ? config.sessions[session] : undefined;
         return {
             ...dynamicBotConfig,
-            minPointsForBuy: config.minPointsForBuy,
-            minPointsForSell: config.minPointsForSell,
-            slBufferPercent: sessionConfig?.slBufferPercent ?? config.slBufferPercent,
-            fixedRR: sessionConfig?.fixedRR ?? config.fixedRR,
-            oteEntryPercent: config.oteEntryPercent,
-            entryTrigger: config.entryTrigger,
-            sessionEnabled: config.enabled,
-            maxSellsPerDay: config.maxSellsPerDay,
-            sellScorePenalty: config.sellScorePenalty,
-            maxBuysPerDay: config.maxBuysPerDay,
-            buyScorePenalty: config.buyScorePenalty,
-            sessions: config.sessions
+            minPointsForBuy: config.minPointsForBuy ?? dynamicBotConfig.minPointsForBuy,
+            minPointsForSell: config.minPointsForSell ?? dynamicBotConfig.minPointsForSell,
+            slBufferPercent: sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? dynamicBotConfig.slBufferPercent,
+            fixedRR: sessionConfig?.fixedRR ?? config.fixedRR ?? dynamicBotConfig.fixedRR,
+            oteEntryPercent: config.oteEntryPercent ?? dynamicBotConfig.oteEntryPercent,
+            entryTrigger: config.entryTrigger ?? dynamicBotConfig.entryTrigger,
+            sessionEnabled: config.enabled ?? true,
+            maxSellsPerDay: config.maxSellsPerDay ?? 0,
+            sellScorePenalty: config.sellScorePenalty ?? 0,
+            maxBuysPerDay: config.maxBuysPerDay ?? 0,
+            buyScorePenalty: config.buyScorePenalty ?? 0,
+            sessions: config.sessions as any
         };
     }
     
@@ -268,6 +277,8 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
 }
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
+const unsubscribers: (() => void)[] = [];
+
 if (db) {
     try {
         db.collection('active_trades').get().then(snap => {
@@ -277,10 +288,10 @@ if (db) {
             console.log(`[RADAR] 🧠 Memoria restaurada: ${activeTrades.size} trades activos cargados.`);
         });
 
-        db.collection('app_settings').doc('global').onSnapshot((snap) => {
+        unsubscribers.push(db.collection('app_settings').doc('global').onSnapshot((snap) => {
             if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
-        });
-        db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
+        }));
+        unsubscribers.push(db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
             if (snap.exists) {
                 const data = snap.data() || {};
                 dynamicBotConfig = {
@@ -294,10 +305,10 @@ if (db) {
                     entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger
                 };
             }
-        });
+        }));
 
         // 🆕 v6.0: Listener para configs por activo+sesión
-        db.collection('asset_configs').onSnapshot((snap) => {
+        unsubscribers.push(db.collection('asset_configs').onSnapshot((snap) => {
             snap.forEach(doc => {
                 if (doc.id === 'GLOBAL') {
                     const data = doc.data() || {};
@@ -312,25 +323,37 @@ if (db) {
                     console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalPortfolioConfig);
                     return;
                 }
-                const data = doc.data() as Partial<AssetSessionConfig>;
+                const parsed = AssetSessionConfigSchema.safeParse(doc.data());
+                if (!parsed.success) {
+                    console.warn(`[CONFIG] Invalid data in asset_configs for ${doc.id}:`, parsed.error.format());
+                    return;
+                }
+                const data = parsed.data;
                 assetSessionConfigs.set(doc.id, {
-                    minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
-                    minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
-                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
-                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
-                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
-                    entryTrigger: (data.entryTrigger as any) || dynamicBotConfig.entryTrigger,
+                    minPointsForBuy: data.minPointsForBuy || dynamicBotConfig.minPointsForBuy,
+                    minPointsForSell: data.minPointsForSell || dynamicBotConfig.minPointsForSell,
+                    slBufferPercent: data.slBufferPercent !== undefined ? data.slBufferPercent : dynamicBotConfig.slBufferPercent,
+                    fixedRR: data.fixedRR !== undefined ? data.fixedRR : dynamicBotConfig.fixedRR,
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? data.oteEntryPercent : dynamicBotConfig.oteEntryPercent,
+                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger,
                     enabled: data.enabled !== false, // default enabled
-                    maxSellsPerDay: Number(data.maxSellsPerDay) || 0,
-                    sellScorePenalty: Number(data.sellScorePenalty) || 0,
-                    maxBuysPerDay: Number(data.maxBuysPerDay) || 0,
-                    buyScorePenalty: Number(data.buyScorePenalty) || 0,
-                    sessions: data.sessions
+                    maxSellsPerDay: data.maxSellsPerDay || 0,
+                    sellScorePenalty: data.sellScorePenalty || 0,
+                    maxBuysPerDay: data.maxBuysPerDay || 0,
+                    buyScorePenalty: data.buyScorePenalty || 0,
+                    sessions: data.sessions as any
                 });
             });
             const actualAssets = [...assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
             console.log(`[CONFIG] 🧠 ${actualAssets.length} configs por activo+sesión cargadas:`, actualAssets.join(', '));
-        });
+        }));
+        
+        const cleanupAndExit = () => {
+            console.log('[SHUTDOWN] Limpiando listeners de Firestore en trading.ts...');
+            unsubscribers.forEach(unsub => unsub());
+        };
+        process.on('SIGTERM', cleanupAndExit);
+        process.on('SIGINT', cleanupAndExit);
     } catch (e) {
         console.error('[TRADING] Error iniciando listeners de configuración', e);
     }
@@ -603,8 +626,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             // A 50% retroceso: R:R = 1.0, a 79% retroceso: R:R = 3.76
             const riskDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.21; // peor caso: 79% fib
             const rewardDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.50; // 50% fib OTE
-            const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 0;
-            if (rrRatioOTE < 1.2) {
+            const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 1.0;
+            if (riskDistanceOTE === 0 || rrRatioOTE < 1.2) {
+                console.error(`[FIBO] ❌ R:R invalid: risk=${riskDistanceOTE}, reward=${rewardDistanceOTE}, ratio=${rrRatioOTE}`);
                 console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
                 return { updatedLeg: leg };
             }
@@ -1928,8 +1952,11 @@ export async function processTradingAlert(alertText: string) {
         const timeSinceLastSave = nowMs - (lastFirebaseSave.get(ticker) || 0);
         const FIREBASE_INTERVAL_MS = 5 * 60 * 1000; // 5 Minutos
 
+        state.version = (state.version || 0) + 1;
+        state.lastModified = nowMs;
+
         if (prefix !== 'PING_PRICE' || timeSinceLastSave > FIREBASE_INTERVAL_MS) {
-            docRef.set(state).catch(() => {}); // Guardado silencioso sin await
+            docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando estado ${ticker}: ${err.message}`));
             lastFirebaseSave.set(ticker, nowMs);
         }
 
@@ -1946,7 +1973,10 @@ export async function processTradingAlert(alertText: string) {
                 type: 'OTE',
                 status: 'EVALUANDO...'
             };
-            docRef.set(state).catch(() => {}); // Update status in UI immediately
+            
+            state.version = (state.version || 0) + 1;
+            state.lastModified = nowMs;
+            docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando gatillo ${ticker}: ${err.message}`)); // Update status in UI immediately
 
             const config = getConfigForTicker(ticker);
             if (!config.sessionEnabled) {

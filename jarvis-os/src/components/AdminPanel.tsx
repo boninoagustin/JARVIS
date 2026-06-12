@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Settings, Save, Shield, TrendingDown, TrendingUp } from 'lucide-react';
 import { useToast } from './Toast';
@@ -14,33 +14,42 @@ export default function AdminPanel() {
 
   // Cargar config del activo seleccionado
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'asset_configs', activeTicker), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as AssetConfig;
-        // Asegurar estructura de sesiones
-        const sessions = data.sessions || {};
-        SESSIONS.forEach((s: SessionKey) => {
-          if (!sessions[s]) sessions[s] = {
-            choch: { enabled: true, minScore: 12 },
-            bos: { enabled: true, minScore: 12 },
-            ote: { enabled: true, minScore: 8 }
-          };
-        });
-        setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
-      } else {
-        // Inicializar si no existe
-        const newConfig = { ...DEFAULT_ASSET_CONFIG, sessions: {} as Record<string, SessionConfig> };
-        SESSIONS.forEach((s: SessionKey) => {
-          newConfig.sessions[s] = {
-            choch: { enabled: true, minScore: 12 },
-            bos: { enabled: true, minScore: 12 },
-            ote: { enabled: true, minScore: 8 }
-          };
-        });
-        setAssetConfig(newConfig);
+    const fetchConfig = async () => {
+      try {
+        const docSnap = await getDoc(doc(db, 'asset_configs', activeTicker));
+        if (docSnap.exists()) {
+          const data = docSnap.data() as AssetConfig;
+          // Asegurar estructura de sesiones
+          const sessions = data.sessions || {};
+          SESSIONS.forEach((s: SessionKey) => {
+            if (!sessions[s]) sessions[s] = {
+              choch: { enabled: true, minScore: 12 },
+              bos: { enabled: true, minScore: 12 },
+              ote: { enabled: true, minScore: 8 }
+            };
+          });
+          setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
+        } else {
+          // Inicializar si no existe
+          const newConfig = { ...DEFAULT_ASSET_CONFIG, sessions: {} as Record<string, SessionConfig> };
+          SESSIONS.forEach((s: SessionKey) => {
+            newConfig.sessions[s] = {
+              choch: { enabled: true, minScore: 12 },
+              bos: { enabled: true, minScore: 12 },
+              ote: { enabled: true, minScore: 8 }
+            };
+          });
+          setAssetConfig(newConfig);
+        }
+      } catch (err) {
+        console.error("Error fetching config:", err);
       }
-    });
-    return () => unsub();
+    };
+
+    fetchConfig();
+    const intervalId = setInterval(fetchConfig, 60000); // 60s polling
+
+    return () => clearInterval(intervalId);
   }, [activeTicker]);
 
   const handleChange = (field: keyof AssetConfig, value: any) => {
@@ -145,11 +154,17 @@ export default function AdminPanel() {
                 <input type="number" step="0.01" value={assetConfig.slBufferPercent} onChange={e => handleChange('slBufferPercent', parseFloat(e.target.value))} style={inputClass} />
               </div>
               <div>
-                <label style={{ fontSize: '0.75rem', color: '#888' }}>Puntos Mín. BUY</label>
+                <label style={{ fontSize: '0.75rem', color: '#888', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Puntos Mín. BUY
+                  <span style={{ fontSize: '0.6rem', backgroundColor: 'var(--accent-gold)', color: '#000', padding: '1px 4px', borderRadius: '3px', fontWeight: 'bold' }}>AUTO</span>
+                </label>
                 <input type="number" value={assetConfig.minPointsForBuy} onChange={e => handleChange('minPointsForBuy', parseInt(e.target.value))} style={inputClass} />
               </div>
               <div>
-                <label style={{ fontSize: '0.75rem', color: '#888' }}>Puntos Mín. SELL</label>
+                <label style={{ fontSize: '0.75rem', color: '#888', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Puntos Mín. SELL
+                  <span style={{ fontSize: '0.6rem', backgroundColor: 'var(--accent-gold)', color: '#000', padding: '1px 4px', borderRadius: '3px', fontWeight: 'bold' }}>AUTO</span>
+                </label>
                 <input type="number" value={assetConfig.minPointsForSell} onChange={e => handleChange('minPointsForSell', parseInt(e.target.value))} style={inputClass} />
               </div>
             </div>

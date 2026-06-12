@@ -31,11 +31,20 @@ async function main() {
         console.log(`[SYSTEM] JARVIS is online as @${bot.botInfo.username}`);
 
         console.log('[TELEGRAM] Starting Firebase Queue Listener...');
+        const unsubscribers: (() => void)[] = [];
+        
+        const cleanupAndExit = () => {
+            console.log('[SHUTDOWN] Limpiando listeners de index.ts...');
+            unsubscribers.forEach(unsub => unsub());
+            process.exit(0);
+        };
+        process.on('SIGTERM', cleanupAndExit);
+        process.on('SIGINT', cleanupAndExit);
         
         // Emular start()
         console.log('[SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---');
 
-        db.collection('telegram_incoming')
+        unsubscribers.push(db.collection('telegram_incoming')
             .where('status', '==', 'pending')
             .onSnapshot(async (snapshot) => {
                 for (const change of snapshot.docChanges()) {
@@ -58,7 +67,7 @@ async function main() {
                 }
             }, (error) => {
                 console.error('[FIREBASE] Listener error:', error);
-            });
+            }));
 
         // Pre-cargar trading module para activar listeners de config
         const tradingModule = await import('./db/trading.js');
@@ -67,30 +76,40 @@ async function main() {
         tradingModule.startWatchdog();
         
         console.log('[TRADING] Starting Firebase Queue Listener...');
-        db.collection('trading_incoming')
+        let isProcessingTrading = false;
+        const tradingQueue: any[] = [];
+
+        const processTradingQueue = async () => {
+            if (isProcessingTrading) return;
+            isProcessingTrading = true;
+            while (tradingQueue.length > 0) {
+                const change = tradingQueue.shift();
+                const docId = change.doc.id;
+                const alertText = change.doc.data().alertText;
+                try {
+                    const { processTradingAlert } = await import('./db/trading.js');
+                    await processTradingAlert(alertText);
+                    await db?.collection('trading_incoming').doc(docId).delete();
+                } catch (err: any) {
+                    console.error('[LOCAL TRADING ERROR] Error procesando update:', err.message);
+                    await db?.collection('trading_incoming').doc(docId).update({ status: 'failed' });
+                }
+            }
+            isProcessingTrading = false;
+        };
+
+        unsubscribers.push(db.collection('trading_incoming')
             .where('status', '==', 'pending')
             .onSnapshot(async (snapshot) => {
                 for (const change of snapshot.docChanges()) {
                     if (change.type === 'added') {
-                        const docId = change.doc.id;
-                        const alertText = change.doc.data().alertText;
-                        
-                        try {
-                            const { processTradingAlert } = await import('./db/trading.js');
-                            await processTradingAlert(alertText);
-                            
-                            // Si procesa correctamente, borrar el mensaje de la cola
-                            await db?.collection('trading_incoming').doc(docId).delete();
-                        } catch (err: any) {
-                            console.error('[LOCAL TRADING ERROR] Error procesando update:', err.message);
-                            // Marcar como failed para no atascar la cola
-                            await db?.collection('trading_incoming').doc(docId).update({ status: 'failed' });
-                        }
+                        tradingQueue.push(change);
                     }
                 }
+                processTradingQueue();
             }, (error) => {
                 console.error('[FIREBASE TRADING] Listener error:', error);
-            });
+            }));
 
         console.log('[APP] Resetting backtesting status...');
         await db.collection('app_settings').doc('backtesting_status').set({
@@ -99,7 +118,7 @@ async function main() {
         }, { merge: true });
 
         console.log('[APP] Starting Command Listener...');
-        db.collection('app_commands')
+        unsubscribers.push(db.collection('app_commands')
             .where('status', '==', 'pending')
             .onSnapshot(async (snapshot) => {
                 for (const change of snapshot.docChanges()) {
@@ -124,7 +143,7 @@ async function main() {
                         }
                     }
                 }
-            });
+            }));
 
         // 📊 Resumen diario unificado — se ejecuta desde trading.ts (scheduleDailySummary a las 18:00 ART)
         // El resumen nocturno (22:00 ART) fue eliminado para evitar mensajes duplicados.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, doc, updateDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   PieChart as PieChartIcon, 
@@ -162,12 +162,21 @@ export default function AnalyticsJournal() {
   const { toast } = useToast();
 
   useEffect(() => {
-    const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TradeLog));
-      setTrades(data);
-    });
-    return () => unsubscribe();
+    const fetchTrades = async () => {
+      try {
+        const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradeLog));
+        setTrades(data);
+      } catch (err) {
+        console.error('Error fetching trade journal:', err);
+      }
+    };
+
+    fetchTrades();
+    const intervalId = setInterval(fetchTrades, 60000); // Polling 60s
+
+    return () => clearInterval(intervalId);
   }, []);
 
   const handleSetResult = async (tradeId: string, result: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'SKIP') => {

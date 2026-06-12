@@ -1,7 +1,17 @@
 import { db } from '../src/db/memory.js';
+import { z } from 'zod';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
+
+const WebhookPayloadSchema = z.union([
+    z.string(),
+    z.object({
+        text: z.string().optional(),
+        content: z.string().optional(),
+        message: z.string().optional()
+    }).passthrough()
+]);
 
 export default async function handler(req: any, res: any) {
     // 🏥 Healthcheck GET
@@ -22,9 +32,15 @@ export default async function handler(req: any, res: any) {
     }
 
     try {
-        // 📥 Leer el raw body como texto y guardarlo a Firebase
-        const alertText = typeof req.body === 'string' ? req.body : 
-                         req.body?.text || JSON.stringify(req.body);
+        const parsed = WebhookPayloadSchema.safeParse(req.body);
+        if (!parsed.success) {
+            console.error('[WEBHOOK TW] Invalid payload structure:', parsed.error.message);
+            return res.status(400).json({ error: 'Invalid payload structure' });
+        }
+
+        const validBody = parsed.data;
+        const alertText = typeof validBody === 'string' ? validBody : 
+                         validBody?.text || validBody?.content || validBody?.message || JSON.stringify(validBody);
         
         console.log(`[WEBHOOK TW] ${alertText.substring(0, 120)}...`);
 
