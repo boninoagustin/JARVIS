@@ -840,7 +840,7 @@ async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
  * Activos con sesgo alcista (NAS100, US500, etc.) pueden tener un cap de SELLs diarios
  * para evitar rachas perdedoras que activen el killswitch.
  */
-async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<number> {
+async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
         const now = new Date(nowMs);
@@ -864,7 +864,9 @@ async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<
 
         return snapshot.docs.filter(d => {
             const data = d.data();
-            return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
+            const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
+            const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
+            return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
     } catch (e: any) {
         return 0;
@@ -874,7 +876,7 @@ async function countDailySellsForTicker(ticker: string, nowMs: number): Promise<
 /**
  * 🆕 v7.2: Cuenta los trades BUY ejecutados hoy para un ticker específico.
  */
-async function countDailyBuysForTicker(ticker: string, nowMs: number): Promise<number> {
+async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
         const now = new Date(nowMs);
@@ -898,7 +900,9 @@ async function countDailyBuysForTicker(ticker: string, nowMs: number): Promise<n
 
         return snapshot.docs.filter(d => {
             const data = d.data();
-            return data.mode !== 'backtesting' && tickerVariants.includes(data.ticker);
+            const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
+            const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
+            return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
     } catch (e: any) {
         return 0;
@@ -908,7 +912,7 @@ async function countDailyBuysForTicker(ticker: string, nowMs: number): Promise<n
 /**
  * Cuenta las pérdidas consecutivas de un activo en la sesión y dirección actual para el día de hoy.
  */
-async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number): Promise<number> {
+async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
         const now = new Date(nowMs);
@@ -936,8 +940,10 @@ async function countConsecutiveLosses(ticker: string, session: string, direction
             .map(d => d.data())
             .filter(t => {
                 const isMatchingTicker = tickerVariants.includes(t.ticker);
-                const isMatchingSession = t.session === session || t.sessionId === session;
-                return t.mode !== 'backtesting' && isMatchingTicker && isMatchingSession && t.result;
+                const isMatchingSession = t.session === session;
+                const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
+                const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
+                return modeMatch && sessionMatch && isMatchingTicker && isMatchingSession && t.result;
             })
             .sort((a, b) => a.timestamp - b.timestamp);
 
@@ -2019,17 +2025,23 @@ export async function processTradingAlert(alertText: string) {
                 return;
             }
 
+            let activeSessionId: string | undefined;
+            if (isBacktest) {
+                const { getCurrentSessionId } = await import('../services/backtesting.js');
+                activeSessionId = getCurrentSessionId() || undefined;
+            }
+
             // 🆕 v7.1: FILTRO DE OPERACIONES SELL POR ACTIVO (Anti-Short Bias)
             // Para activos con sesgo alcista (ej. NAS100), limita la cantidad de SELLs diarios
             // y/o exige un puntaje mínimo más alto para señales bajistas.
-            if (oteData.direction === 'SELL' && !isBacktest) {
+            if (oteData.direction === 'SELL') {
                 const sellConfig = getConfigForTicker(ticker);
 
                 // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
                 const currentSession = getCurrentSession();
                 const sessionConfig = sellConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
-                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs);
+                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, isBacktest, activeSessionId);
                     if (consecutiveLosses >= sessionConfig.maxSellLosses) {
                         console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
@@ -2049,7 +2061,7 @@ export async function processTradingAlert(alertText: string) {
 
                 // 📊 Verificar límite diario de SELLs
                 if (sellConfig.maxSellsPerDay > 0) {
-                    const dailySells = await countDailySellsForTicker(ticker, nowMs);
+                    const dailySells = await countDailySellsForTicker(ticker, nowMs, isBacktest, activeSessionId);
                     if (dailySells >= sellConfig.maxSellsPerDay) {
                         console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
@@ -2086,14 +2098,14 @@ export async function processTradingAlert(alertText: string) {
             }
 
             // 🆕 v7.2: FILTRO DE OPERACIONES BUY (Anti-Long Bias)
-            if (oteData.direction === 'BUY' && !isBacktest) {
+            if (oteData.direction === 'BUY') {
                 const buyConfig = getConfigForTicker(ticker);
 
                 // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
                 const currentSession = getCurrentSession();
                 const sessionConfig = buyConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
-                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs);
+                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, isBacktest, activeSessionId);
                     if (consecutiveLosses >= sessionConfig.maxBuyLosses) {
                         console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
@@ -2113,7 +2125,7 @@ export async function processTradingAlert(alertText: string) {
 
                 // 📊 Verificar límite diario de BUYs
                 if (buyConfig.maxBuysPerDay > 0) {
-                    const dailyBuys = await countDailyBuysForTicker(ticker, nowMs);
+                    const dailyBuys = await countDailyBuysForTicker(ticker, nowMs, isBacktest, activeSessionId);
                     if (dailyBuys >= buyConfig.maxBuysPerDay) {
                         console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
