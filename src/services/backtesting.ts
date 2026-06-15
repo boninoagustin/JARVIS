@@ -41,12 +41,20 @@ export async function replayUploadedLogs(
 
     // 1. Parsear todas las líneas con timestamp de los archivos
     let allEntries: LogEntry[] = [];
+    const seenLines = new Set<string>();
 
     for (const [tf, lines] of logs.entries()) {
         for (const line of lines) {
             const tsMatch = line.match(/TS:\s*(\d+)/i);
+            const ts = tsMatch ? parseInt(tsMatch[1], 10) : 0;
+            
+            // 🛡️ DEDUPLICACIÓN: Evitar líneas idénticas (ej. mismo log exportado 2 veces o solapado en TFs)
+            const uniqueKey = `${ts}_${line.trim()}`;
+            if (seenLines.has(uniqueKey)) continue;
+            seenLines.add(uniqueKey);
+
             allEntries.push({
-                ts: tsMatch ? parseInt(tsMatch[1], 10) : 0,
+                ts,
                 line,
                 tf
             });

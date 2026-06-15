@@ -78,6 +78,7 @@ async function main() {
         console.log('[TRADING] Starting Firebase Queue Listener...');
         let isProcessingTrading = false;
         const tradingQueue: any[] = [];
+        const recentAlerts = new Set<string>();
 
         const processTradingQueue = async () => {
             if (isProcessingTrading) return;
@@ -86,6 +87,16 @@ async function main() {
                 const change = tradingQueue.shift();
                 const docId = change.doc.id;
                 const alertText = change.doc.data().alertText;
+                
+                // 🛡️ DEDUPLICACIÓN DE ALERTAS IDÉNTICAS (Evita trades dobles si TV manda 2 webhooks)
+                if (recentAlerts.has(alertText)) {
+                    console.log(`[DEDUP] ♻️ Alerta duplicada ignorada (procesada recientemente): ${alertText.substring(0, 50)}...`);
+                    await db?.collection('trading_incoming').doc(docId).delete().catch(() => {});
+                    continue;
+                }
+                recentAlerts.add(alertText);
+                setTimeout(() => recentAlerts.delete(alertText), 15000);
+
                 try {
                     const { processTradingAlert } = await import('./db/trading.js');
                     await processTradingAlert(alertText);
