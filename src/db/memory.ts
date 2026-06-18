@@ -27,10 +27,36 @@ try {
     console.error('[DATABASE] Error initializing Firebase:', err.message);
 }
 
-let firestoreInstance: admin.firestore.Firestore | null = null;
-if (admin.apps.length > 0) {
+let firestoreInstance: any = null;
+if (admin.apps.length > 0 && process.env.NO_DB !== 'true') {
     firestoreInstance = admin.firestore();
     firestoreInstance.settings({ ignoreUndefinedProperties: true });
+} else if (process.env.NO_DB === 'true') {
+    // Mock db to bypass if (!db) checks
+    firestoreInstance = {
+        collection: () => ({
+            doc: () => ({
+                set: async () => {},
+                get: async () => ({ exists: false, data: () => ({}) }),
+                update: async () => {},
+                delete: async () => {},
+                onSnapshot: () => () => {}
+            }),
+            add: async () => ({ id: 'mock' }),
+            where: () => ({
+                get: async () => ({ empty: true, docs: [] }),
+                orderBy: () => ({
+                    get: async () => ({ empty: true, docs: [] })
+                })
+            }),
+            get: async () => ({ empty: true, docs: [], forEach: (cb:any) => {} }),
+            onSnapshot: () => () => {}
+        }),
+        batch: () => ({
+            delete: () => {},
+            commit: async () => {}
+        })
+    };
 }
 export const db = firestoreInstance;
 
@@ -66,7 +92,7 @@ export const memory = {
             .limitToLast(limitCount)
             .get();
 
-        return snapshot.docs.map(doc => ({
+        return snapshot.docs.map((doc: any) => ({
             role: doc.data().role as 'user' | 'model' | 'system',
             content: doc.data().content
         }));
@@ -84,7 +110,7 @@ export const memory = {
         let snapshot = await collRef.limit(MAX_BATCH).get();
         while (!snapshot.empty) {
             const batch = db.batch();
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            snapshot.docs.forEach((doc: any) => batch.delete(doc.ref));
             await batch.commit();
             if (snapshot.docs.length < MAX_BATCH) break;
             snapshot = await collRef.limit(MAX_BATCH).get();
@@ -115,7 +141,7 @@ export const memory = {
             .orderBy('created_at', 'asc')
             .get();
 
-        return snapshot.docs.map(doc => doc.data().fact);
+        return snapshot.docs.map((doc: any) => doc.data().fact);
     } catch (err: any) {
         console.error('[DATABASE] Error fetching facts from Firebase:', err.message);
         return [];

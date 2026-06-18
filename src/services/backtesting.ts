@@ -47,15 +47,23 @@ export async function replayUploadedLogs(
         for (const line of lines) {
             const tsMatch = line.match(/TS:\s*(\d+)/i);
             const ts = tsMatch ? parseInt(tsMatch[1], 10) : 0;
-            
+            let finalLine = line;
+            const textUpToPayload = line.includes('Payload:') ? line.split('Payload:')[0] : line;
+            const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
+            // If the second part isn't the ticker, inject the ticker.
+            if (parts.length > 1 && !parts[1].replace(/"/g, '').toUpperCase().includes(ticker.toUpperCase())) {
+                // Inject right after prefix (parts[0])
+                finalLine = line.replace(parts[0], `${parts[0]} | ${ticker}`);
+            }
+
             // 🛡️ DEDUPLICACIÓN: Evitar líneas idénticas (ej. mismo log exportado 2 veces o solapado en TFs)
-            const uniqueKey = `${ts}_${line.trim()}`;
+            const uniqueKey = `${ts}_${finalLine.trim()}`;
             if (seenLines.has(uniqueKey)) continue;
             seenLines.add(uniqueKey);
 
             allEntries.push({
                 ts,
-                line,
+                line: finalLine,
                 tf
             });
         }
@@ -212,7 +220,7 @@ export async function replayBacktestingFromFirestore(
                     // 🛡️ v5.5: Leer chunks de subcolección
                     const chunksSnap = await db.collection('backtesting_logs').doc(`${sessionId}_${tf}`).collection('chunks').orderBy('index', 'asc').get();
                     const allLines: string[] = [];
-                    chunksSnap.forEach(chunkDoc => {
+                    chunksSnap.forEach((chunkDoc: any) => {
                         const chunk = chunkDoc.data();
                         if (chunk && Array.isArray(chunk.lines)) {
                             allLines.push(...chunk.lines);

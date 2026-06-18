@@ -286,17 +286,17 @@ const unsubscribers: (() => void)[] = [];
 
 if (db) {
     try {
-        db.collection('active_trades').get().then(snap => {
-            snap.forEach(doc => {
+        db.collection('active_trades').get().then((snap: any) => {
+            snap.forEach((doc: any) => {
                 activeTrades.set(doc.id, doc.data() as ActiveTrade);
             });
             console.log(`[RADAR] 🧠 Memoria restaurada: ${activeTrades.size} trades activos cargados.`);
         });
 
-        unsubscribers.push(db.collection('app_settings').doc('global').onSnapshot((snap) => {
+        unsubscribers.push(db.collection('app_settings').doc('global').onSnapshot((snap: any) => {
             if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
         }));
-        unsubscribers.push(db.collection('app_settings').doc('bot_config').onSnapshot((snap) => {
+        unsubscribers.push(db.collection('app_settings').doc('bot_config').onSnapshot((snap: any) => {
             if (snap.exists) {
                 const data = snap.data() || {};
                 dynamicBotConfig = {
@@ -313,7 +313,7 @@ if (db) {
         }));
 
         // 🆕 v6.0: Listener para configs por activo+sesión
-        unsubscribers.push(db.collection('asset_configs').onSnapshot((snap) => {
+        unsubscribers.push(db.collection('asset_configs').onSnapshot((snap: FirebaseFirestore.QuerySnapshot) => {
             snap.forEach(doc => {
                 if (doc.id === 'GLOBAL') {
                     const data = doc.data() || {};
@@ -507,7 +507,7 @@ function isInsideMacroOteZone(leg: ImpulseLeg | null | undefined, price: number)
     }
 }
 
-function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
+function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number, sessionThresholds: { buy: number; sell: number } | null = null) {
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
 
@@ -605,7 +605,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 }
             } else {
                 oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
-                oteMinScore = 8;
+                oteMinScore = sessionThresholds ? (leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell) : 8;
             }
 
             const totalPoints = (leg.chochPoints || 0) + 4;
@@ -616,7 +616,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     return { updatedLeg: leg };
                 }
             } else {
-                const MIN_OTE_POINTS = 8;
+                const MIN_OTE_POINTS = oteMinScore;
                 if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
                     console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
                     return { updatedLeg: leg };
@@ -756,9 +756,9 @@ async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
 
         // Mapear y ordenar ascendentemente por timestamp para evaluar rachas correctamente
         const trades = snapshot.docs
-            .map(d => d.data())
-            .filter(t => t.mode !== 'backtesting' && t.result)
-            .sort((a, b) => a.timestamp - b.timestamp);
+            .map((d: any) => d.data())
+            .filter((t: any) => t.mode !== 'backtesting' && t.result)
+            .sort((a: any, b: any) => a.timestamp - b.timestamp);
 
         let totalTrades = trades.length;
         let dailyPnLR = 0;
@@ -871,7 +871,7 @@ async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktes
             .where('direction', '==', 'SELL')
             .get();
 
-        return snapshot.docs.filter(d => {
+        return snapshot.docs.filter((d: any) => {
             const data = d.data();
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
@@ -907,7 +907,7 @@ async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest
             .where('direction', '==', 'BUY')
             .get();
 
-        return snapshot.docs.filter(d => {
+        return snapshot.docs.filter((d: any) => {
             const data = d.data();
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
@@ -946,15 +946,15 @@ async function countConsecutiveLosses(ticker: string, session: string, direction
         if (snapshot.empty) return 0;
 
         const trades = snapshot.docs
-            .map(d => d.data())
-            .filter(t => {
+            .map((d: any) => d.data())
+            .filter((t: any) => {
                 const isMatchingTicker = tickerVariants.includes(t.ticker);
                 const isMatchingSession = t.session === session;
                 const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
                 const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
                 return modeMatch && sessionMatch && isMatchingTicker && isMatchingSession && t.result;
             })
-            .sort((a, b) => a.timestamp - b.timestamp);
+            .sort((a: any, b: any) => a.timestamp - b.timestamp);
 
         let streak = 0;
         for (const t of trades) {
@@ -989,6 +989,12 @@ export async function processTradingAlert(alertText: string) {
     const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
     const isBacktest = tsMatch !== null && Math.abs(Date.now() - nowMs) > 300000;
+
+    let sessionThresholds: { buy: number; sell: number } | null = null;
+    if (isBacktest) {
+        const { getCurrentSessionThresholds } = await import('../services/backtesting.js');
+        sessionThresholds = getCurrentSessionThresholds();
+    }
 
     // 🧠 FASE 1 - MACHINE LEARNING: Guardar la señal cruda para la Fase 2 (Auto-Tune)
     if (!isBacktest) { // Solo guardamos las señales reales en vivo
@@ -1143,11 +1149,11 @@ export async function processTradingAlert(alertText: string) {
                     state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
                 }
 
-                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
 
-                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds);
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para ${ticker}`); }
             }
@@ -1465,7 +1471,7 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
                 state.marketBias[eventTf] = currentDirection;
                 
-                if (eventTf === '3') {
+                if (eventTf === '3' || eventTf === '5' || eventTf === '15') {
                     const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
                     const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
                     const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
@@ -1830,11 +1836,7 @@ export async function processTradingAlert(alertText: string) {
                 }
                 if (!hasSpatialBacking && !hasSequentialBacking && orphanPenalty === 0) confluenceReport += `ℹ️ <b>Sin respaldo de zonas:</b> se permite por bono macro suficiente\n`;
                 // 🎯 5. VALIDACIÓN FINAL Y GATILLO
-                let sessionThresholds: { buy: number; sell: number } | null = null;
-                if (isBacktest) {
-                    const { getCurrentSessionThresholds } = await import('../services/backtesting.js');
-                    sessionThresholds = getCurrentSessionThresholds();
-                }
+                // (sessionThresholds defined at the top of the function)
 
                 if (!config.sessionEnabled) {
                     console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión`);
