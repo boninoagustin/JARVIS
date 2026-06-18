@@ -1938,7 +1938,33 @@ export async function processTradingAlert(alertText: string) {
                               : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
 
                             if (config.entryTrigger === 'SMART') {
-                                const oppositeZones = state.zones.filter(z => z.dir !== currentDirection);
+                                function parseTfToMinutes(tfStr: string): number {
+                                    if (!tfStr) return 0;
+                                    const upper = tfStr.toUpperCase();
+                                    if (upper === 'D' || upper === '1D') return 1440;
+                                    if (upper === 'W' || upper === '1W') return 10080;
+                                    const val = parseInt(upper);
+                                    if (!isNaN(val)) {
+                                        if (upper.includes('H')) return val * 60;
+                                        return val;
+                                    }
+                                    return 0;
+                                }
+
+                                const signalTfMs = parseTfToMinutes(readableTf);
+                                
+                                // 🔧 MEJORA 1: Filtrar Paredes de Papel (Ignorar debiles y de menor TF)
+                                const oppositeZones = state.zones.filter(z => {
+                                    if (z.dir === currentDirection) return false;
+                                    if (z.medal === 'SMC_DIV') return false; // Divergencias no son zonas duras
+                                    
+                                    const zTfMs = parseTfToMinutes(z.tf || '');
+                                    const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD');
+                                    
+                                    // Consideramos el obstáculo SI es fuerte O SI es de igual/mayor temporalidad
+                                    return isStrong || zTfMs >= signalTfMs;
+                                });
+
                                 let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
                                 for (const z of oppositeZones) {
                                     if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
@@ -1951,12 +1977,20 @@ export async function processTradingAlert(alertText: string) {
                                     rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
                                 }
                             
-                                if (rrChoch >= 1.5) {
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Se toma el CHoCH directo (OTE desactivado).`;
+                                // 🔧 MEJORA 2: Locomotora Institucional (Ignorar mal RR si el momentum es brutal)
+                                const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5; // ej: si min es 8, 13 es extremo
+                                const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
+
+                                if (rrChoch >= 1.5 || hasExtremeMomentum) {
+                                    if (rrChoch < 1.5) {
+                                        smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Obstáculo detectado, pero ignorado por MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
+                                    } else {
+                                        smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Camino despejado. Se toma el CHoCH directo (OTE desactivado).`;
+                                    }
                                     takeChoch = true;
                                     disableOte = true;
                                 } else {
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Riesgo alto para CHoCH, esperando pullback a OTE.`;
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Riesgo alto para CHoCH directo, esperando pullback a OTE.`;
                                     takeChoch = false;
                                     disableOte = false;
                                 }
