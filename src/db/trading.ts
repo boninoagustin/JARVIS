@@ -2133,22 +2133,6 @@ export async function processTradingAlert(alertText: string) {
                     console.log(`[SELL LIMIT] ✅ ${ticker} SELL permitido: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs usados hoy.`);
                 }
 
-                // 📏 Penalización de puntaje para SELLs (exige más confluencias en cortos)
-                if (sellConfig.sellScorePenalty > 0) {
-                    const originalPoints = oteData.points;
-                    const adjustedPoints = originalPoints - sellConfig.sellScorePenalty;
-                    const minRequired = sellConfig.minPointsForSell || 5;
-
-                    if (adjustedPoints < minRequired) {
-                        console.log(`[SELL FILTER] ⛔ Setup ${ticker} SELL FILTRADO por puntaje insuficiente: ${originalPoints} pts - ${sellConfig.sellScorePenalty} penalización = ${adjustedPoints} pts (mínimo: ${minRequired}).`);
-                        state.lastGatillo!.status = 'BLOCKED_SELL_SCORE';
-                        docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
-                        return;
-                    }
-                    console.log(`[SELL FILTER] ✅ ${ticker} SELL pasa filtro de puntaje: ${originalPoints} - ${sellConfig.sellScorePenalty} = ${adjustedPoints} pts (mín: ${minRequired}).`);
-                }
             }
 
             // 🆕 v7.2: FILTRO DE OPERACIONES BUY (Anti-Long Bias)
@@ -2197,22 +2181,6 @@ export async function processTradingAlert(alertText: string) {
                     console.log(`[BUY LIMIT] ✅ ${ticker} BUY permitido: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs usados hoy.`);
                 }
 
-                // 📏 Penalización de puntaje para BUYs
-                if (buyConfig.buyScorePenalty > 0) {
-                    const originalPoints = oteData.points;
-                    const adjustedPoints = originalPoints - buyConfig.buyScorePenalty;
-                    const minRequired = buyConfig.minPointsForBuy || 5;
-
-                    if (adjustedPoints < minRequired) {
-                        console.log(`[BUY FILTER] ⛔ Setup ${ticker} BUY FILTRADO por puntaje insuficiente: ${originalPoints} pts - ${buyConfig.buyScorePenalty} penalización = ${adjustedPoints} pts (mínimo: ${minRequired}).`);
-                        state.lastGatillo!.status = 'BLOCKED_BUY_SCORE';
-                        docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
-                        return;
-                    }
-                    console.log(`[BUY FILTER] ✅ ${ticker} BUY pasa filtro de puntaje: ${originalPoints} - ${buyConfig.buyScorePenalty} = ${adjustedPoints} pts (mín: ${minRequired}).`);
-                }
             }
 
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
