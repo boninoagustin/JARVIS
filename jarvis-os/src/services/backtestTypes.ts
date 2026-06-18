@@ -67,7 +67,7 @@ export interface BacktestConfig {
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
-  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
   
   // Session-specific triggers and scores
   sessions?: Record<string, SessionConfig>;

@@ -154,7 +154,7 @@ function evaluateImpulse(
           oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
         }
       } else {
-        oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
+        oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
         oteMinScore = 8;
       }
 
@@ -674,7 +674,7 @@ function processAlert(
         minPtsRequired = sessionConfig.bos?.minScore ?? 10;
       }
     } else {
-      triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH');
+      triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
     }
 
     if (totalPoints >= Math.max(minPtsRequired - 3, 5) && activeLeg) {
@@ -708,17 +708,56 @@ function processAlert(
         const tp2 = fixedTP2.toFixed(decimals);
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
         
-        const oteData = {
-          tradeId, direction: currentDirection,
-          entryPrice: currentPrice,
-          stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
-        };
-        createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
-        
+        let takeChoch = false;
+        let disableOte = false;
+
         const oteSessionEnabled = sessionConfig 
           ? (prefix === 'EVENTO_CHOCH' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
-          : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
-        if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
+          : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+
+        if (config.entryTrigger === 'SMART') {
+            const oppositeZones = state.zones.filter(z => z.dir !== currentDirection);
+            let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
+            for (const z of oppositeZones) {
+                if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
+                else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
+            }
+            
+            let rrChoch = 3.0; // Default optimista
+            if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
+                const rewardDist = Math.abs(closestZonePrice - currentPrice);
+                rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
+            }
+        
+            if (rrChoch >= 1.5) {
+                takeChoch = true;
+                disableOte = true;
+            } else {
+                takeChoch = false;
+                disableOte = false;
+            }
+        } else if (config.entryTrigger === 'OTE') {
+            takeChoch = false;
+            disableOte = false;
+        } else if (config.entryTrigger === 'BOTH') {
+            takeChoch = true;
+            disableOte = !oteSessionEnabled;
+        } else {
+            // CHOCH Only
+            takeChoch = true;
+            disableOte = true;
+        }
+
+        if (takeChoch) {
+            const oteData = {
+              tradeId, direction: currentDirection,
+              entryPrice: currentPrice,
+              stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
+            };
+            createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
+        }
+        
+        if (disableOte) activeLeg.oteScored = true;
       }
 
       if (totalPoints >= minPtsRequired) {

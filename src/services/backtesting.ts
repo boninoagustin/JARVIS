@@ -201,7 +201,7 @@ export async function replayBacktestingFromFirestore(
     console.log(`[REPLAY] Cargando logs desde Firestore para sesión ${sessionId}...`);
 
     const logs = new Map<string, string[]>();
-    const tfs = ['3', '15', '60', '240'];
+    const tfs = ['3', '5', '15', '60', '240'];
 
     for (const tf of tfs) {
         try {

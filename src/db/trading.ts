@@ -13,8 +13,6 @@ interface RadarZone {
     lvl?: string;
     medal?: string;
     score?: number;
-    tp?: number;       // 🆕 v5.4: Take Profit desde el indicador
-    sl?: number;       // 🆕 v5.4: Stop Loss desde el indicador
     mid?: number;
     atr?: number;
     t?: string;      
@@ -102,7 +100,16 @@ const emptyState = (): RadarState => ({
     lastModified: 0
 });
 
-const SETUP_MEMORY_WINDOW_MS = 21600000; // 6 Horas (cubre London → NY completo)
+const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
+
+const TF_WEIGHT: Record<string, number> = {
+    '3': 0.5,    // 3M: medio punto (mucho ruido)
+    '5': 0.75,   // 5M: tres cuartos
+    '15': 1.0,   // 15M: base (gatillo principal)
+    '60': 1.5,   // 1H: 50% más
+    '240': 2.0,  // 4H: doble
+    'D': 3.0,    // Daily: triple
+};
 
 interface ActiveTrade {
     tradeId: string;
@@ -165,7 +172,7 @@ let dynamicBotConfig = {
     slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
     fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
     oteEntryPercent: 50,           // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
-    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH'
+    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART'
 };
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
@@ -186,7 +193,7 @@ const AssetSessionConfigSchema = z.object({
     slBufferPercent: z.coerce.number().optional(),
     fixedRR: z.coerce.number().optional(),
     oteEntryPercent: z.coerce.number().optional(),
-    entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH']).optional(),
+    entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH', 'SMART']).optional(),
     enabled: z.boolean().optional(),
     maxSellsPerDay: z.coerce.number().optional(),
     sellScorePenalty: z.coerce.number().optional(),
@@ -504,8 +511,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
 
-    // 🔧 FIX 1: Stale leg cleaner — legs de más de 4 horas se invalidan automáticamente
-    const MAX_LEG_AGE_MS = 4 * 60 * 60 * 1000;
+    // 🔧 FIX 1: Stale leg cleaner — legs de más de 24 horas se invalidan automáticamente (Swing)
+    const MAX_LEG_AGE_MS = 24 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
         console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 240 min).`);
         return { updatedLeg: null };
@@ -1092,11 +1099,6 @@ export async function processTradingAlert(alertText: string) {
                 const rawZones = JSON.parse(payloadStr) as any[];
                 const parsedZones: RadarZone[] = rawZones.map(normalizeZone).filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
                 parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
-                // 🔍 Log de TP/SL si están disponibles para diagnóstico
-                const zonesWithTPSL = parsedZones.filter(z => z.tp !== undefined || z.sl !== undefined);
-                if (zonesWithTPSL.length > 0) {
-                    console.log(`[SYNC_ZONES] ${ticker} ${sourceTf}: ${zonesWithTPSL.length}/${parsedZones.length} zonas con TP/SL explícito`);
-                }
 
                 if (state.lastSyncDate !== todayStr) {
                     state.zones = [];
@@ -1545,8 +1547,9 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[FIBO-MACRO] 🗺️ Creado nuevo ImpulseLeg MACRO (${eventTf}M) ${currentDirection} en ${ticker}: origin=${newOrigin}, extreme=${actualPrice}`);
                     }
                 }
-                // CHoCH da 3 puntos (fuerte), BOS da 1 punto (continuación)
-                addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1; 
+                // 🆕 HÍBRIDO: Ponderar score por TF
+                const basePoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
+                addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1); 
             }
 
             if (prefix === 'ZONE_BROKEN') {
@@ -1606,8 +1609,9 @@ export async function processTradingAlert(alertText: string) {
             }
             else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
                 if (!activeScore.events.includes(`Sweep_${readableTf}`) && !activeScore.events.includes(`🩸_V-Shape_Absorb_${readableTf}`)) {
-                    if (upperText.includes('ABSORCION')) { addedPoints = 6; activeScore.events.push(`🩸_V-Shape_Absorb_${readableTf}`); }
-                    else { addedPoints = 3; activeScore.events.push(`Sweep_${readableTf}`); }
+                    const basePoints = upperText.includes('ABSORCION') ? 6 : 3;
+                    addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
+                    activeScore.events.push(upperText.includes('ABSORCION') ? `🩸_V-Shape_Absorb_${readableTf}` : `Sweep_${readableTf}`);
                 }
             }
             else if (prefix === 'EVENTO_SMC_DIV') {
@@ -1629,7 +1633,8 @@ export async function processTradingAlert(alertText: string) {
                 const zoneScore = parseInt(alertText.match(/Score:\s*([0-9]+)/i)?.[1] || '2');
                 const eventName = `🎯_ZoneTouched_${zoneMedal}_${readableTf}`;
                 if (!activeScore.events.includes(eventName)) {
-                    addedPoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
+                    const basePoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
+                    addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
                     activeScore.events.push(eventName);
                 }
             }
@@ -1658,7 +1663,7 @@ export async function processTradingAlert(alertText: string) {
                         );
                         if (hasZoneNow) {
                             pendingLeg.isValidated = true;
-                            pendingLeg.chochEvents = [...activeScore.events, 'CHoCH_3M'];
+                            pendingLeg.chochEvents = [...activeScore.events, `CHoCH_${readableTf}`];
                             console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO tardíamente con confluencia: ${addedPoints} pts de ${prefix}`);
                         }
                     }
@@ -1666,7 +1671,8 @@ export async function processTradingAlert(alertText: string) {
             }
 
             // --- CAPA 4: VALIDACIÓN DEL CHOCH / BOS ---
-            if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && eventTf === '3') { 
+            // 🆕 v5.5 HÍBRIDO: Permitir que 15M (o 5M) actúe como gatillo principal en lugar de solo 3M
+            if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '3' || eventTf === '5' || eventTf === '15')) { 
                 const triggerType = prefix === 'EVENTO_CHOCH' ? 'CHoCH🚀' : 'BOS🔨';
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
@@ -1801,7 +1807,7 @@ export async function processTradingAlert(alertText: string) {
                 confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
-                confluenceReport += `${getIcon("3")} Gatillo 3M: ${currentDirection} (${triggerType})\n\n`; 
+                confluenceReport += `${getIcon(eventTf)} Gatillo ${readableTf}: ${currentDirection} (${triggerType})\n\n`; 
                 confluenceReport += `⚖️ <b>Bono de Alineación Macro:</b> +${baseBiasPoints} Pts\n`;
                 if (macroOteBonus > 0 && activeMacroLeg) {
                     confluenceReport += `🎯 <b>Confluencia OTE Fractal:</b> +${macroOteBonus} Pts (Precio en OTE Macro [Origin: ${activeMacroLeg.origin.toFixed(5)} | Extreme: ${activeMacroLeg.extreme.toFixed(5)}])\n`;
@@ -1891,7 +1897,7 @@ export async function processTradingAlert(alertText: string) {
                         }
                         
                         activeLeg.chochPoints = totalPoints;
-                        activeLeg.chochEvents = [...activeScore.events, `${triggerType}_3M`];
+                        activeLeg.chochEvents = [...activeScore.events, `${triggerType}_${readableTf}`];
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
 
@@ -1916,17 +1922,65 @@ export async function processTradingAlert(alertText: string) {
                                 tradeId, direction: currentDirection,
                                 dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
                                 stopLoss, tp1, tp2, entryPrice: currentPrice,
-                                points: totalPoints, events: [...activeScore.events, `${triggerType}_3M`],
+                                points: totalPoints, events: [...activeScore.events, `${triggerType}_${readableTf}`],
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true
                             };
-                            triggerOte = true;
-                            
+                            let takeChoch = false;
+                            let disableOte = false;
+                            let smartReport = '';
+
                             const oteSessionEnabled = sessionConfig 
                               ? (triggerType === 'CHoCH🚀' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
-                              : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
-                            if (!oteSessionEnabled || config.entryTrigger === 'CHOCH') activeLeg.oteScored = true;
+                              : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+
+                            if (config.entryTrigger === 'SMART') {
+                                const oppositeZones = state.zones.filter(z => z.dir !== currentDirection);
+                                let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
+                                for (const z of oppositeZones) {
+                                    if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
+                                    else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
+                                }
+                                
+                                let rrChoch = 3.0; // Default optimista
+                                if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
+                                    const rewardDist = Math.abs(closestZonePrice - currentPrice);
+                                    rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
+                                }
+                            
+                                if (rrChoch >= 1.5) {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Se toma el CHoCH directo (OTE desactivado).`;
+                                    takeChoch = true;
+                                    disableOte = true;
+                                } else {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Riesgo alto para CHoCH, esperando pullback a OTE.`;
+                                    takeChoch = false;
+                                    disableOte = false;
+                                }
+                            } else if (config.entryTrigger === 'OTE') {
+                                takeChoch = false;
+                                disableOte = false;
+                            } else if (config.entryTrigger === 'BOTH') {
+                                takeChoch = true;
+                                disableOte = !oteSessionEnabled;
+                            } else {
+                                // CHOCH Only
+                                takeChoch = true;
+                                disableOte = true;
+                            }
+
+                            if (!takeChoch) {
+                                triggerOte = false; // Bloqueamos la ejecución inmediata de este trade
+                                console.log(`[RADAR] 🧠 Modo SMART/OTE: Gatillo inicial omitido para ${ticker}. Esperando retroceso OTE.`);
+                            } else {
+                                if (smartReport) oteData.confluenceReport += smartReport;
+                                triggerOte = true;
+                            }
+
+                            if (disableOte) {
+                                activeLeg.oteScored = true; // Al marcarlo puntuado, JARVIS ignorará futuros retrocesos
+                            }
                         }
                     }
                     
@@ -2262,7 +2316,7 @@ export async function processTradingAlert(alertText: string) {
                     : `Llegada a zona OTE confirmada. ${avisoRiesgo}`;
                 msg += `🧠 <b>Jarvis:</b> ${jarvisNote}\n\n`;
                 msg += `📐 <b>Niveles de Ejecución (GATILLO):</b>\n`;
-                msg += `🎯 Precio de Entrada: OTE Actual\n`;
+                msg += `🎯 Precio de Entrada: ${oteData.entryPrice}\n`;
                 msg += `🛑 Stop Loss Sugerido: ${oteData.stopLoss}\n`;
                 msg += `💰 Take Profit 1 (Interno): ${oteData.tp1}\n`;
                 msg += `🚀 Take Profit 2 (Externo): ${oteData.tp2}\n`;

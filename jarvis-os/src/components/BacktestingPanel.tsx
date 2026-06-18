@@ -30,7 +30,7 @@ interface SessionHistory {
     slBufferPercent: number;
     fixedRR: number;
     oteEntryPercent: number;
-    entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+    entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
     maxDailyLossR?: number;
     dailyProfitTargetR?: number;
     maxConsecutiveLosses?: number;
@@ -52,7 +52,7 @@ export default function BacktestingPanel() {
   const [slBufferPercent, setSlBufferPercent] = useState(0.1);
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
-  const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH'>('BOTH');
+  const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH' | 'SMART'>('BOTH');
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
     choch: { enabled: boolean; minScore: number };
     bos: { enabled: boolean; minScore: number };
@@ -457,7 +457,7 @@ export default function BacktestingPanel() {
     const oteOptions = [50, 62, 79];
     const scoreOptions = [5, 8, 12, 15, 20]; // Puntos mínimos simétricos
 
-    const combinations: {sl:number, rr:number, ote:number, score:number, trigger: 'CHOCH' | 'OTE' | 'BOTH'}[] = [];
+    const combinations: {sl:number, rr:number, ote:number, score:number, trigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART'}[] = [];
     for (const sl of slOptions) {
       for (const rr of rrOptions) {
         for (const ote of oteOptions) {
@@ -1537,6 +1537,17 @@ export default function BacktestingPanel() {
               <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
               <input type="number" min="1" step="1" value={riskUsd} onChange={e => setRiskUsd(parseFloat(e.target.value) || 0)}
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(124,77,255,0.05)', borderRadius: '4px', border: '1px solid rgba(124,77,255,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: '#7c4dff', whiteSpace: 'nowrap', fontWeight: 600 }}>⚙️ GATILLO GLOBAL</label>
+              <select value={entryTrigger} onChange={e => setEntryTrigger(e.target.value as any)}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
+                <option value="SMART">SMART (Filtro R:R)</option>
+                <option value="BOTH">BOTH (Choch + Ote)</option>
+                <option value="CHOCH">CHOCH (Ruptura)</option>
+                <option value="OTE">OTE (Pullback)</option>
+              </select>
             </div>
 
 
