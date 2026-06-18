@@ -511,6 +511,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
 
+    const config = getConfigForTicker(ticker);
+    const currentSession = getCurrentSession();
+    const sessionConfig = config.sessions?.[currentSession];
+
     // 🔧 FIX 1: Stale leg cleaner — legs de más de 24 horas se invalidan automáticamente (Swing)
     const MAX_LEG_AGE_MS = 24 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
@@ -518,11 +522,13 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         return { updatedLeg: null };
     }
 
-    // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y tiene ≥9pts, el leg se anula
+    // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y el minScore de sesión, el leg se anula
     const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
     const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
-    if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= 9 && (nowMs - oppositeScore.lastUpdate) < 900000) {
-        console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+    const minOppositeScore = sessionConfig?.choch?.minScore ?? 9;
+    
+    if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
+        console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
         return { updatedLeg: null };
     }
 
@@ -556,10 +562,6 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         } else {
             minRange = 0.00010; // 1.0 pip para forex majors
         }
-
-        const config = getConfigForTicker(ticker);
-        const currentSession = getCurrentSession();
-        const sessionConfig = config.sessions?.[currentSession];
         const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
         const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
 
