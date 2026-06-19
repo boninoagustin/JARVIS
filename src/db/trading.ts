@@ -595,12 +595,12 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             if (sessionThresholds) {
                 oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                 oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
-            } else if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
+            } else if (sessionConfig) {
                 if (isChoch) {
-                    oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
+                    oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteChoch?.enabled ?? false);
                     oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
                 } else if (isBos) {
-                    oteEnabled = sessionConfig.oteBos?.enabled ?? false;
+                    oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteBos?.enabled ?? false);
                     oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
                 } else {
                     oteEnabled = false;
@@ -1857,13 +1857,13 @@ export async function processTradingAlert(alertText: string) {
                 if (sessionThresholds) {
                     triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                     minPtsRequired = currentDirection === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
-                } else if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
+                } else if (sessionConfig) {
                     if (triggerType === 'CHoCH🚀') {
-                        triggerEnabled = sessionConfig.choch?.enabled ?? false;
-                        minPtsRequired = sessionConfig.choch?.minScore ?? 8;
+                        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.choch?.enabled ?? false);
+                        minPtsRequired = sessionConfig.choch?.minScore ?? config.minPointsForBuy;
                     } else if (triggerType === 'BOS🔨') {
-                        triggerEnabled = sessionConfig.bos?.enabled ?? false;
-                        minPtsRequired = sessionConfig.bos?.minScore ?? 8;
+                        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.bos?.enabled ?? false);
+                        minPtsRequired = sessionConfig.bos?.minScore ?? config.minPointsForBuy;
                     }
                 } else {
                     triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');

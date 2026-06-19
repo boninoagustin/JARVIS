@@ -147,11 +147,14 @@ function evaluateImpulse(
 
       if (sessionConfig) {
         if (isChoch) {
-          oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
+          oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteChoch?.enabled ?? false);
           oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
         } else if (isBos) {
-          oteEnabled = sessionConfig.oteBos?.enabled ?? false;
+          oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteBos?.enabled ?? false);
           oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
+        } else {
+          oteEnabled = false;
+          oteMinScore = 8;
         }
       } else {
         oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
@@ -165,7 +168,7 @@ function evaluateImpulse(
           return { updatedLeg: leg };
         }
       } else {
-        const MIN_OTE_POINTS = 8;
+        const MIN_OTE_POINTS = oteMinScore;
         if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
           return { updatedLeg: leg };
         if (!oteEnabled || totalPoints < oteMinScore)
@@ -667,11 +670,11 @@ function processAlert(
     
     if (sessionConfig) {
       if (prefix === 'EVENTO_CHOCH') {
-        triggerEnabled = sessionConfig.choch?.enabled ?? false;
-        minPtsRequired = sessionConfig.choch?.minScore ?? 5;
+        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.choch?.enabled ?? false);
+        minPtsRequired = sessionConfig.choch?.minScore ?? config.minBuyPoints;
       } else if (prefix === 'EVENTO_BOS') {
-        triggerEnabled = sessionConfig.bos?.enabled ?? false;
-        minPtsRequired = sessionConfig.bos?.minScore ?? 10;
+        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.bos?.enabled ?? false);
+        minPtsRequired = sessionConfig.bos?.minScore ?? config.minBuyPoints;
       }
     } else {
       triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');

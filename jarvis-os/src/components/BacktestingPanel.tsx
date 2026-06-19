@@ -309,7 +309,6 @@ export default function BacktestingPanel() {
   const handlePushToBot = async () => {
     try {
       const configDoc = ticker; // v7.2 Unified master document
-      const allS: any = sessionTriggers['OFF'] || {};
       
       await setDoc(doc(db, 'asset_configs', configDoc), {
         maxDailyLossR,
@@ -321,10 +320,12 @@ export default function BacktestingPanel() {
         sessions: sessionTriggers,
         
         // Sincronización para el Panel de Control (AdminPanel)
-        slBufferPercent: allS.slBufferPercent ?? 0.1,
-        fixedRR: allS.fixedRR ?? 2.0,
-        minPointsForBuy: allS.choch?.minScore ?? 12,
-        minPointsForSell: allS.choch?.minScore ?? 12,
+        slBufferPercent: slBufferPercent,
+        fixedRR: fixedRR,
+        minPointsForBuy: minBuyPoints,
+        minPointsForSell: minSellPoints,
+        entryTrigger: entryTrigger,
+        oteEntryPercent: oteEntryPercent,
 
         updatedAt: new Date().toISOString()
       }, { merge: true });
