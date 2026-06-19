@@ -147,10 +147,10 @@ function evaluateImpulse(
 
       if (sessionConfig) {
         if (isChoch) {
-          oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteChoch?.enabled ?? false);
+          oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
           oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
         } else if (isBos) {
-          oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteBos?.enabled ?? false);
+          oteEnabled = sessionConfig.oteBos?.enabled ?? false;
           oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
         } else {
           oteEnabled = false;
@@ -680,7 +680,7 @@ function processAlert(
       triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
     }
 
-    if (totalPoints >= Math.max(minPtsRequired - 3, 5) && activeLeg) {
+    if (activeLeg) {
       const hasZoneConf = activeScore.events.some(e =>
         e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
         e.includes('Sweep_') || e.includes('DIV_') || e.includes('Silver_Bullet_')

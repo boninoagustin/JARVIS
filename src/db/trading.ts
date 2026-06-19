@@ -597,10 +597,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
             } else if (sessionConfig) {
                 if (isChoch) {
-                    oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteChoch?.enabled ?? false);
+                    oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
                     oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
                 } else if (isBos) {
-                    oteEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') ? true : (sessionConfig.oteBos?.enabled ?? false);
+                    oteEnabled = sessionConfig.oteBos?.enabled ?? false;
                     oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
                 } else {
                     oteEnabled = false;
@@ -1876,7 +1876,7 @@ export async function processTradingAlert(alertText: string) {
 
                 const bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
-                if (totalPoints >= Math.max(minPtsRequired - 3, 5)) {
+                if (true) {
                     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (activeLeg) {
                         // 🛡️ Requiere al menos 1 evento de zona real O respaldo espacial del mapa de zonas
