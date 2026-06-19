@@ -670,10 +670,10 @@ function processAlert(
     
     if (sessionConfig) {
       if (prefix === 'EVENTO_CHOCH') {
-        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.choch?.enabled ?? false);
+        triggerEnabled = sessionConfig.choch?.enabled ?? false;
         minPtsRequired = sessionConfig.choch?.minScore ?? config.minBuyPoints;
       } else if (prefix === 'EVENTO_BOS') {
-        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.bos?.enabled ?? false);
+        triggerEnabled = sessionConfig.bos?.enabled ?? false;
         minPtsRequired = sessionConfig.bos?.minScore ?? config.minBuyPoints;
       }
     } else {

@@ -1859,10 +1859,10 @@ export async function processTradingAlert(alertText: string) {
                     minPtsRequired = currentDirection === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
                 } else if (sessionConfig) {
                     if (triggerType === 'CHoCH🚀') {
-                        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.choch?.enabled ?? false);
+                        triggerEnabled = sessionConfig.choch?.enabled ?? false;
                         minPtsRequired = sessionConfig.choch?.minScore ?? config.minPointsForBuy;
                     } else if (triggerType === 'BOS🔨') {
-                        triggerEnabled = (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'CHOCH') ? true : (sessionConfig.bos?.enabled ?? false);
+                        triggerEnabled = sessionConfig.bos?.enabled ?? false;
                         minPtsRequired = sessionConfig.bos?.minScore ?? config.minPointsForBuy;
                     }
                 } else {
