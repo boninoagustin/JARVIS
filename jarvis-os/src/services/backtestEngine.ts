@@ -514,7 +514,7 @@ function processAlert(
   if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
     state.marketBias[eventTf] = currentDirection;
 
-    if (eventTf === '3') {
+    if (eventTf === '3' || eventTf === '5' || eventTf === '15') {
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
       const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
       const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice || 0;
@@ -597,8 +597,8 @@ function processAlert(
     activeScore.lastUpdate = nowMs;
   }
 
-  // --- CHoCH/BOS TRIGGER VALIDATION (3M only) ---
-  if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && eventTf === '3') {
+  // --- CHoCH/BOS TRIGGER VALIDATION ---
+  if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '3' || eventTf === '5' || eventTf === '15')) {
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
 
     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
