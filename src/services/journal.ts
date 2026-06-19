@@ -163,7 +163,7 @@ export async function getPerformance(days: number = 30): Promise<PerformanceMetr
         if (snapshot.empty) return empty;
 
         const trades = snapshot.docs
-            .map(d => {
+            .map((d: any) => {
                 const parsed = TradeRecordSchema.safeParse(d.data());
                 if (!parsed.success) {
                     console.warn(`[JOURNAL] Invalid trade data for ${d.id}:`, parsed.error.format());
@@ -171,12 +171,12 @@ export async function getPerformance(days: number = 30): Promise<PerformanceMetr
                 }
                 return parsed.data;
             })
-            .filter((t): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting de métricas reales
-        const withResult = trades.filter(t => t.result);
+            .filter((t: any): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting de métricas reales
+        const withResult = trades.filter((t: any) => t.result);
 
-        const wins = withResult.filter(t => t.result === 'WIN').length;
-        const losses = withResult.filter(t => t.result === 'LOSS').length;
-        const be = withResult.filter(t => t.result === 'BREAKEVEN').length;
+        const wins = withResult.filter((t: any) => t.result === 'WIN').length;
+        const losses = withResult.filter((t: any) => t.result === 'LOSS').length;
+        const be = withResult.filter((t: any) => t.result === 'BREAKEVEN').length;
 
         // By ticker
         const byTicker: PerformanceMetrics['byTicker'] = {};
@@ -286,11 +286,11 @@ export async function getPendingTrades(): Promise<TradeRecord[]> {
             .get();
 
         return snapshot.docs
-            .map(d => {
+            .map((d: any) => {
                 const parsed = TradeRecordSchema.safeParse(d.data());
                 return parsed.success ? parsed.data : null;
             })
-            .filter((t): t is TradeRecord => t !== null && !t.result);
+            .filter((t: any): t is TradeRecord => t !== null && !t.result);
     } catch (err: any) {
         console.error('[JOURNAL] Error getting pending trades:', err.message);
         return [];
@@ -311,29 +311,29 @@ export async function sendDailyReview(): Promise<void> {
             .get();
 
         const allToday = snapshot.docs
-            .map(d => {
+            .map((d: any) => {
                 const parsed = TradeRecordSchema.safeParse(d.data());
                 return parsed.success ? parsed.data : null;
             })
-            .filter((t): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting del resumen diario
-        const withResult = allToday.filter(t => t.result);
-        const pending = allToday.filter(t => !t.result);
+            .filter((t: any): t is TradeRecord => t !== null && t.mode !== 'backtesting'); // Excluir backtesting del resumen diario
+        const withResult = allToday.filter((t: any) => t.result);
+        const pending = allToday.filter((t: any) => !t.result);
 
-        const wins = withResult.filter(t => t.result === 'WIN').length;
-        const losses = withResult.filter(t => t.result === 'LOSS').length;
-        const be = withResult.filter(t => t.result === 'BREAKEVEN').length;
-        const partials = withResult.filter(t => t.result === 'PARTIAL_TP1').length;
+        const wins = withResult.filter((t: any) => t.result === 'WIN').length;
+        const losses = withResult.filter((t: any) => t.result === 'LOSS').length;
+        const be = withResult.filter((t: any) => t.result === 'BREAKEVEN').length;
+        const partials = withResult.filter((t: any) => t.result === 'PARTIAL_TP1').length;
         const closed = wins + losses + be;
         const winRate = closed > 0 ? ((wins / closed) * 100).toFixed(1) : '—';
 
         // PnL acumulado
-        const totalPnl = withResult.reduce((sum, t) => sum + (t.pnl || 0), 0);
+        const totalPnl = withResult.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
         const pnlSign = totalPnl >= 0 ? '+' : '';
 
         // Duración promedio
-        const tradesWithDuration = withResult.filter(t => (t as any).durationMin);
+        const tradesWithDuration = withResult.filter((t: any) => (t as any).durationMin);
         const avgDuration = tradesWithDuration.length > 0
-            ? Math.round(tradesWithDuration.reduce((sum, t) => sum + ((t as any).durationMin || 0), 0) / tradesWithDuration.length)
+            ? Math.round(tradesWithDuration.reduce((sum: number, t: any) => sum + ((t as any).durationMin || 0), 0) / tradesWithDuration.length)
             : null;
 
         // Mejor par

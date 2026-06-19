@@ -208,8 +208,8 @@ type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
 const assetSessionConfigs = new Map<string, AssetSessionConfig>();
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
-function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
-    const now = new Date();
+function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
+    const now = nowMs ? new Date(nowMs) : new Date();
     
     // 📅 Verificar si es fin de semana en Argentina (Sábado o Domingo)
     const dayName = now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', weekday: 'short' });
@@ -229,7 +229,7 @@ function getCurrentSession(): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
 }
 
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
-function getConfigForTicker(ticker: string): typeof dynamicBotConfig & { 
+function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotConfig & { 
     sessionEnabled: boolean;
     maxSellsPerDay: number;
     sellScorePenalty: number;
@@ -246,7 +246,7 @@ function getConfigForTicker(ticker: string): typeof dynamicBotConfig & {
       fixedRR?: number;
     }>;
 } {
-    const session = getCurrentSession();
+    const session = getCurrentSession(nowMs);
     
     // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
     if (session === 'OFF') {
@@ -511,8 +511,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     if (!leg) return { updatedLeg: null };
     let impulseInvalidated = false;
 
-    const config = getConfigForTicker(ticker);
-    const currentSession = getCurrentSession();
+    const config = getConfigForTicker(ticker, nowMs);
+    const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
 
     // 🔧 FIX 1: Stale leg cleaner — legs de más de 24 horas se invalidan automáticamente (Swing)
@@ -592,7 +592,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             let oteEnabled = false;
             let oteMinScore = 8;
 
-            if (sessionConfig) {
+            if (sessionThresholds) {
+                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
+            } else if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (isChoch) {
                     oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
                     oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
@@ -604,13 +607,13 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     oteMinScore = 8;
                 }
             } else {
-                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH');
-                oteMinScore = sessionThresholds ? (leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell) : 8;
+                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                oteMinScore = 8;
             }
 
             const totalPoints = (leg.chochPoints || 0) + 4;
 
-            if (sessionConfig) {
+            if (sessionConfig && !sessionThresholds && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (!oteEnabled || totalPoints < oteMinScore) {
                     console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
                     return { updatedLeg: leg };
@@ -1137,7 +1140,7 @@ export async function processTradingAlert(alertText: string) {
             (state as any).previousPrice = previousPrice;
 
             // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
-            const config = getConfigForTicker(ticker);
+            const config = getConfigForTicker(ticker, nowMs);
             const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil || !config.sessionEnabled;
             
             if (!isKillswitched) {
@@ -1685,7 +1688,7 @@ export async function processTradingAlert(alertText: string) {
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
                 // Durante el cooldown, NO reseteamos el score — se acumula para el siguiente CHoCH.
-                const config = getConfigForTicker(ticker);
+                const config = getConfigForTicker(ticker, nowMs);
                 if (nowMs - (state.lastSniperAlert ?? 0) < config.sniperCooldownMs) {
                     console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${activeScore.points} pts).`);
                     return;
@@ -1843,7 +1846,7 @@ export async function processTradingAlert(alertText: string) {
                     return;
                 }
 
-                const currentSession = getCurrentSession();
+                const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = config.sessions?.[currentSession];
 
                 let triggerEnabled = false;
@@ -1851,7 +1854,10 @@ export async function processTradingAlert(alertText: string) {
                     ? (sessionThresholds?.buy || config.minPointsForBuy) 
                     : (sessionThresholds?.sell || config.minPointsForSell);
 
-                if (sessionConfig) {
+                if (sessionThresholds) {
+                    triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                    minPtsRequired = currentDirection === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
+                } else if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                     if (triggerType === 'CHoCH🚀') {
                         triggerEnabled = sessionConfig.choch?.enabled ?? false;
                         minPtsRequired = sessionConfig.choch?.minScore ?? 8;
@@ -1860,7 +1866,7 @@ export async function processTradingAlert(alertText: string) {
                         minPtsRequired = sessionConfig.bos?.minScore ?? 8;
                     }
                 } else {
-                    triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH');
+                    triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                 }
                 
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
@@ -2074,7 +2080,7 @@ export async function processTradingAlert(alertText: string) {
             state.lastModified = nowMs;
             docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando gatillo ${ticker}: ${err.message}`)); // Update status in UI immediately
 
-            const config = getConfigForTicker(ticker);
+            const config = getConfigForTicker(ticker, nowMs);
             if (!config.sessionEnabled) {
                 console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
                 state.lastGatillo.status = 'BLOCKED_SESSION';
@@ -2127,10 +2133,10 @@ export async function processTradingAlert(alertText: string) {
             // Para activos con sesgo alcista (ej. NAS100), limita la cantidad de SELLs diarios
             // y/o exige un puntaje mínimo más alto para señales bajistas.
             if (oteData.direction === 'SELL') {
-                const sellConfig = getConfigForTicker(ticker);
+                const sellConfig = getConfigForTicker(ticker, nowMs);
 
                 // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
-                const currentSession = getCurrentSession();
+                const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = sellConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
                     const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, isBacktest, activeSessionId);
@@ -2175,10 +2181,10 @@ export async function processTradingAlert(alertText: string) {
 
             // 🆕 v7.2: FILTRO DE OPERACIONES BUY (Anti-Long Bias)
             if (oteData.direction === 'BUY') {
-                const buyConfig = getConfigForTicker(ticker);
+                const buyConfig = getConfigForTicker(ticker, nowMs);
 
                 // 🛑 Verificar pérdidas consecutivas (MCL) direccionales por sesión y activo
-                const currentSession = getCurrentSession();
+                const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = buyConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
                     const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, isBacktest, activeSessionId);
@@ -2312,7 +2318,7 @@ export async function processTradingAlert(alertText: string) {
                 msg += `🎯 <b>Puntaje Total:</b> ${oteData.points} Puntos\n`;
                 msg += `🧱 <b>Confluencias:</b> ${oteData.events?.join(', ')}\n\n`;
 
-                const config = getConfigForTicker(ticker);
+                const config = getConfigForTicker(ticker, nowMs);
                 let avisoRiesgo = oteData.points >= 8
                     ? `Operar con riesgo estándar (${config.baseRiskPercentage}%).`
                     : `Setup de puntaje medio. Riesgo reducido (${config.baseRiskPercentage / 2}%).`;
@@ -2349,7 +2355,7 @@ export async function processTradingAlert(alertText: string) {
                     // 🧠 MACHINE LEARNING FEATURES (Fase 1)
                     hourOfDay: new Date(nowMs).getHours(),
                     dayOfWeek: new Date(nowMs).getDay(),
-                    session: getCurrentSession(),
+                    session: getCurrentSession(nowMs),
                     bias4H: state.marketBias['240'] === oteData.direction ? 'ALIGNED' : state.marketBias['240'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
                     bias1H: state.marketBias['60'] === oteData.direction ? 'ALIGNED' : state.marketBias['60'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
                     vwapDistance: (oteData.events.includes('VWAP_Premium') || oteData.events.includes('VWAP_Discount')) ? 1 : 0,

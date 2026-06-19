@@ -95,7 +95,7 @@ export async function storeFacts(userId: number, newFacts: string[]): Promise<vo
 
         // Get existing facts
         const existingSnapshot = await factsRef.orderBy('created_at', 'asc').get();
-        const existingFacts = existingSnapshot.docs.map(doc => ({
+        const existingFacts = existingSnapshot.docs.map((doc: any) => ({
             id: doc.id,
             fact: doc.data().fact as string,
             category: doc.data().category as string
@@ -111,7 +111,7 @@ export async function storeFacts(userId: number, newFacts: string[]): Promise<vo
             const factContent = colonIndex > 0 ? newFact.substring(colonIndex + 1).trim() : newFact;
 
             // Check for duplicates: same category with similar content
-            const duplicate = existingFacts.find(ef => {
+            const duplicate = existingFacts.find((ef: any) => {
                 if (ef.category !== category) return false;
                 // Simple similarity: if 60%+ of words match, consider it a duplicate/update
                 const existingWords = new Set(ef.fact.toLowerCase().split(/\s+/));
@@ -173,7 +173,7 @@ export async function getSmartContext(userId: number): Promise<string> {
 
         // Group by category for clean formatting
         const grouped: Record<string, string[]> = {};
-        snapshot.docs.forEach(doc => {
+        snapshot.docs.forEach((doc: any) => {
             const data = doc.data();
             const cat = data.category || 'general';
             if (!grouped[cat]) grouped[cat] = [];
@@ -209,7 +209,7 @@ export async function clearFacts(userId: number): Promise<void> {
 
         while (!snapshot.empty) {
             const batch = db.batch();
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            snapshot.docs.forEach((doc: any) => batch.delete(doc.ref));
             await batch.commit();
             totalDeleted += snapshot.docs.length;
             if (snapshot.docs.length < MAX_BATCH) break;

@@ -46,7 +46,7 @@ async function main() {
 
         unsubscribers.push(db.collection('telegram_incoming')
             .where('status', '==', 'pending')
-            .onSnapshot(async (snapshot) => {
+            .onSnapshot(async (snapshot: any) => {
                 for (const change of snapshot.docChanges()) {
                     if (change.type === 'added') {
                         const docId = change.doc.id;
@@ -65,7 +65,7 @@ async function main() {
                         }
                     }
                 }
-            }, (error) => {
+            }, (error: any) => {
                 console.error('[FIREBASE] Listener error:', error);
             }));
 
@@ -111,14 +111,14 @@ async function main() {
 
         unsubscribers.push(db.collection('trading_incoming')
             .where('status', '==', 'pending')
-            .onSnapshot(async (snapshot) => {
+            .onSnapshot(async (snapshot: any) => {
                 for (const change of snapshot.docChanges()) {
                     if (change.type === 'added') {
                         tradingQueue.push(change);
                     }
                 }
                 processTradingQueue();
-            }, (error) => {
+            }, (error: any) => {
                 console.error('[FIREBASE TRADING] Listener error:', error);
             }));
 
@@ -131,7 +131,7 @@ async function main() {
         console.log('[APP] Starting Command Listener...');
         unsubscribers.push(db.collection('app_commands')
             .where('status', '==', 'pending')
-            .onSnapshot(async (snapshot) => {
+            .onSnapshot(async (snapshot: any) => {
                 for (const change of snapshot.docChanges()) {
                     if (change.type === 'added') {
                         const docId = change.doc.id;

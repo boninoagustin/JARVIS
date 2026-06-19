@@ -60,7 +60,7 @@ export async function getCampaigns(): Promise<BacktestCampaign[]> {
     if (!db) throw new Error("Database not initialized");
     const snap = await db.collection('backtest_campaigns').orderBy('createdAt', 'desc').get();
     const campaigns: BacktestCampaign[] = [];
-    snap.forEach(doc => campaigns.push(doc.data() as BacktestCampaign));
+    snap.forEach((doc: any) => campaigns.push(doc.data() as BacktestCampaign));
     return campaigns;
 }
 
@@ -72,7 +72,7 @@ export async function getPresetsForCampaign(campaignId: string): Promise<SMCPres
     const snap = await db.collection('backtest_campaigns').doc(campaignId)
         .collection('smc_configs').orderBy('updatedAt', 'desc').get();
     const presets: SMCPresetConfig[] = [];
-    snap.forEach(doc => presets.push(doc.data() as SMCPresetConfig));
+    snap.forEach((doc: any) => presets.push(doc.data() as SMCPresetConfig));
     return presets;
 }
 
@@ -146,7 +146,7 @@ export async function getPresetLogs(campaignId: string, presetId: string, tf: st
         .collection('chunks').orderBy('index', 'asc').get();
         
     const allLines: string[] = [];
-    chunksSnap.forEach(chunkDoc => {
+    chunksSnap.forEach((chunkDoc: any) => {
         const chunk = chunkDoc.data();
         if (chunk && Array.isArray(chunk.lines)) {
             allLines.push(...chunk.lines);
