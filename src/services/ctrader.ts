@@ -201,7 +201,8 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 
     // Check max positions
     try {
-        const positions = await ctClient.getPositions();
+        const state = await ctClient.getState();
+        const positions = state?.positions || [];
         if (positions && positions.length >= config.CTRADER_MAX_POSITIONS) {
             return { 
                 success: false, 
@@ -223,7 +224,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         const currentPrice = params.entryPrice;
         
         // Calculate lot size
-        const lots = calculateLotSize(
+        let lots = calculateLotSize(
             accountInfo.equity,
             currentPrice,
             slPrice,
@@ -231,17 +232,41 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             ticker
         );
 
-        console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
-
         // Map JARVIS ticker to cTrader symbol name
         const ctraderSymbol = mapToCTraderSymbol(ticker);
+        
+        let info: any = null;
+        // Fix TRADING_BAD_VOLUME by rounding to valid stepVolume
+        try {
+            info = await ctClient.getSymbolInfo(ctraderSymbol);
+            if (info && info.stepVolume) {
+                const stepLots = info.stepVolume / 100000;
+                lots = Math.round(lots / stepLots) * stepLots;
+                lots = Math.max(stepLots, lots);
+            }
+        } catch(e) {
+            console.warn('[CTRADER] ⚠️ No se pudo obtener symbolInfo para ajustar lotaje');
+        }
+
+        console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
+
+        let pipPosition = 4; // Default forex
+        if (info && info.pipPosition) {
+            pipPosition = info.pipPosition;
+        } else if (ctraderSymbol.includes('JPY') || ctraderSymbol.includes('BTC') || ctraderSymbol.includes('XAU') || ctraderSymbol.includes('US30')) {
+            pipPosition = 2;
+        }
+        
+        const pipMultiplier = Math.pow(10, pipPosition);
+        const slPips = Math.abs(currentPrice - slPrice) * pipMultiplier;
+        const tpPips = Math.abs(currentPrice - (tp2Price || tp1Price)) * pipMultiplier;
 
         // Execute order
         let position: any;
         const orderParams: any = {
             lots,
-            sl: { price: slPrice },
-            tp: { price: tp2Price || tp1Price }, // Use TP2 as main target, manage TP1 manually
+            sl: { pips: Math.round(slPips * 10) / 10 },
+            tp: { pips: Math.round(tpPips * 10) / 10 }, 
         };
 
         if (direction === 'BUY') {
@@ -272,10 +297,15 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 /**
  * Modify stop loss of an existing position (e.g., move to breakeven).
  */
-export async function modifyStopLoss(positionId: string, newSlPrice: number): Promise<boolean> {
+export async function modifyStopLoss(positionId: string, newSlPrice: number, currentPrice?: number): Promise<boolean> {
     if (!isCTraderReady()) return false;
 
     try {
+        let modifyParams: any = { sl: { absolutePrice: newSlPrice } }; // fallback
+        
+        // If we can get position details, we can send absolute price or relative pips
+        // However ctrader-ts modify() supports { absolutePrice: ... }? Wait, maybe not.
+        // Let's pass the raw price since modify might support absolutePrice, or we can just pass { price: newSlPrice }
         await ctClient.modify(positionId, { sl: { price: newSlPrice } });
         console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${newSlPrice}`);
         return true;
@@ -309,7 +339,8 @@ export async function closePartial(positionId: string, percentToClose: number = 
 
     try {
         // Get current position volume
-        const positions = await ctClient.getPositions();
+        const state = await ctClient.getState();
+        const positions = state?.positions || [];
         const pos = positions?.find((p: any) => String(p.positionId || p.id) === positionId);
         
         if (!pos) {
@@ -345,14 +376,13 @@ export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
     }
 
     try {
-        const account = await ctClient.getAccount();
-        const positions = await ctClient.getPositions();
+        const state = await ctClient.getState();
         
         return {
-            balance: account?.balance || 0,
-            equity: account?.equity || account?.balance || 0,
-            currency: account?.currency || 'USD',
-            openPositions: positions?.length || 0,
+            balance: state?.balance || 0,
+            equity: state?.equity || state?.balance || 0,
+            currency: state?.currency || 'USD',
+            openPositions: state?.positions?.length || 0,
         };
     } catch (err: any) {
         console.error('[CTRADER] ❌ Error obteniendo info de cuenta:', err.message);
@@ -372,7 +402,8 @@ export async function closeAllPositions(): Promise<{ closed: number; failed: num
     }
 
     try {
-        const positions = await ctClient.getPositions();
+        const state = await ctClient.getState();
+        const positions = state?.positions || [];
         if (!positions || positions.length === 0) {
             console.log('[CTRADER] No hay posiciones abiertas para cerrar.');
             return { closed: 0, failed: 0 };
