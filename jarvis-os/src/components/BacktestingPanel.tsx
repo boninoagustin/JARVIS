@@ -1059,25 +1059,29 @@ export default function BacktestingPanel() {
         const isBos = t.events?.some(e => e.includes('EVENTO_BOS'));
         const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
 
-        let triggerType: 'choch' | 'bos' | 'oteChoch' | 'oteBos' | null = null;
-        if (hasOte && isBos) triggerType = 'oteBos';
-        else if (hasOte && isChoch) triggerType = 'oteChoch';
-        else if (isBos && !hasOte) triggerType = 'bos';
-        else if (isChoch && !hasOte) triggerType = 'choch';
+        const tfEvent = t.events?.find(e => e.includes('EVENTO_BOS') || e.includes('EVENTO_CHOCH') || e.includes('OTE_Retracement'));
+        const is15m = tfEvent?.includes('15M') || tfEvent?.includes('15');
+        const tfSuffix = is15m ? '15m' : '5m';
+
+        let triggerType: 'choch5m' | 'choch15m' | 'bos5m' | 'bos15m' | 'oteChoch5m' | 'oteChoch15m' | 'oteBos5m' | 'oteBos15m' | null = null;
+        if (hasOte && isBos) triggerType = `oteBos${tfSuffix}` as any;
+        else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}` as any;
+        else if (isBos && !hasOte) triggerType = `bos${tfSuffix}` as any;
+        else if (isChoch && !hasOte) triggerType = `choch${tfSuffix}` as any;
 
         // 1. Local filter by selected tradeFilter in UI (when not in GLOBAL mode)
         if (!isGlobal && tradeFilter !== 'ALL') {
-          if (tradeFilter === 'BOS' && triggerType !== 'bos') return false;
-          if (tradeFilter === 'CHOCH' && triggerType !== 'choch') return false;
-          if (tradeFilter === 'OTE_CHOCH' && triggerType !== 'oteChoch') return false;
-          if (tradeFilter === 'OTE_BOS' && triggerType !== 'oteBos') return false;
+          if (tradeFilter === 'BOS' && !triggerType?.startsWith('bos')) return false;
+          if (tradeFilter === 'CHOCH' && !triggerType?.startsWith('choch')) return false;
+          if (tradeFilter === 'OTE_CHOCH' && !triggerType?.startsWith('oteChoch')) return false;
+          if (tradeFilter === 'OTE_BOS' && !triggerType?.startsWith('oteBos')) return false;
         }
 
         // 2. Dynamic filter based on sessionTriggers configuration (score & enabled)
         const sessionName = getSessionForTimestamp(t.timestamp);
         const config = sessionTriggers[sessionName];
         if (config && triggerType) {
-          const triggerConfig = config[triggerType];
+          const triggerConfig = config[triggerType] as any;
           if (!triggerConfig || !triggerConfig.enabled) return false;
           if ((t.points || 0) < triggerConfig.minScore) return false;
         }
@@ -1868,24 +1872,24 @@ export default function BacktestingPanel() {
                   </div>
                 )}
               </div>
-{/* OTE BOS Trigger */}
+{/* OTE CHOCH 5m Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH' ? 'ALL' : 'OTE_CHOCH')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
-                      checked={sessionTriggers[sessionFilter]?.oteBos?.enabled ?? false}
-                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'enabled', e.target.checked)}
+                      checked={sessionTriggers[sessionFilter]?.oteChoch5m?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch5m', 'enabled', e.target.checked)}
                       style={{ cursor: 'pointer', accentColor: '#00e5ff', width: '14px', height: '14px' }}
                     />
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE (Basado en BOS)</span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE CHOCH (5m)</span>
                   </label>
                   <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
                 </div>
-                {sessionTriggers[sessionFilter]?.oteBos?.enabled && (
+                {sessionTriggers[sessionFilter]?.oteChoch5m?.enabled && (
                   <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
@@ -1894,36 +1898,220 @@ export default function BacktestingPanel() {
                         min="1"
                         max="30"
                         step="1"
-                        value={sessionTriggers[sessionFilter]?.oteBos?.minScore ?? 8}
-                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos', 'minScore', parseInt(e.target.value))}
+                        value={sessionTriggers[sessionFilter]?.oteChoch5m?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch5m', 'minScore', parseInt(e.target.value))}
                         style={{ flex: 1, accentColor: '#00e5ff' }}
                       />
                       <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
-                        +{sessionTriggers[sessionFilter]?.oteBos?.minScore}
+                        +{sessionTriggers[sessionFilter]?.oteChoch5m?.minScore}
                       </span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
                       <div style={{ display: 'flex', gap: '6px' }}>
                         {[50, 62, 79].map(level => {
-                          const currentVal = sessionTriggers[sessionFilter]?.oteBos?.entryPercent ?? 62;
+                          const currentVal = sessionTriggers[sessionFilter]?.oteChoch5m?.entryPercent ?? 62;
                           const isActive = currentVal === level;
                           return (
                             <button
                               key={level}
                               type="button"
-                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos', 'entryPercent', level, true)}
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteChoch5m', 'entryPercent', level, true)}
                               style={{
-                                flex: 1,
-                                padding: '4px 0',
-                                fontSize: '0.7rem',
-                                fontWeight: 700,
-                                borderRadius: '4px',
+                                flex: 1, padding: '4px 0', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px',
                                 border: isActive ? '1px solid #00e5ff' : '1px solid var(--border-color)',
                                 backgroundColor: isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-secondary)',
                                 color: isActive ? '#00e5ff' : 'var(--text-secondary)',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s'
+                                cursor: 'pointer', transition: 'all 0.2s'
+                              }}
+                            >
+                              {level}%
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+{/* OTE CHOCH 15m Trigger */}
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH' ? 'ALL' : 'OTE_CHOCH')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.oteChoch15m?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch15m', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#00e5ff', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE CHOCH (15m)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.oteChoch15m?.enabled && (
+                  <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteChoch15m?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteChoch15m', 'minScore', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#00e5ff' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                        +{sessionTriggers[sessionFilter]?.oteChoch15m?.minScore}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {[50, 62, 79].map(level => {
+                          const currentVal = sessionTriggers[sessionFilter]?.oteChoch15m?.entryPercent ?? 62;
+                          const isActive = currentVal === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteChoch15m', 'entryPercent', level, true)}
+                              style={{
+                                flex: 1, padding: '4px 0', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px',
+                                border: isActive ? '1px solid #00e5ff' : '1px solid var(--border-color)',
+                                backgroundColor: isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-secondary)',
+                                color: isActive ? '#00e5ff' : 'var(--text-secondary)',
+                                cursor: 'pointer', transition: 'all 0.2s'
+                              }}
+                            >
+                              {level}%
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+{/* OTE BOS 5m Trigger */}
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.oteBos5m?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos5m', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#00e5ff', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE BOS (5m)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.oteBos5m?.enabled && (
+                  <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteBos5m?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos5m', 'minScore', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#00e5ff' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                        +{sessionTriggers[sessionFilter]?.oteBos5m?.minScore}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {[50, 62, 79].map(level => {
+                          const currentVal = sessionTriggers[sessionFilter]?.oteBos5m?.entryPercent ?? 62;
+                          const isActive = currentVal === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos5m', 'entryPercent', level, true)}
+                              style={{
+                                flex: 1, padding: '4px 0', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px',
+                                border: isActive ? '1px solid #00e5ff' : '1px solid var(--border-color)',
+                                backgroundColor: isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-secondary)',
+                                color: isActive ? '#00e5ff' : 'var(--text-secondary)',
+                                cursor: 'pointer', transition: 'all 0.2s'
+                              }}
+                            >
+                              {level}%
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+{/* OTE BOS 15m Trigger */}
+              <div 
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={sessionTriggers[sessionFilter]?.oteBos15m?.enabled ?? false}
+                      onChange={e => updateSessionTrigger(sessionFilter, 'oteBos15m', 'enabled', e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#00e5ff', width: '14px', height: '14px' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>📈 OTE BOS (15m)</span>
+                  </label>
+                  <span style={{ fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(0,229,255,0.1)', color: '#00e5ff', fontWeight: 600 }}>Gatillo</span>
+                </div>
+                {sessionTriggers[sessionFilter]?.oteBos15m?.enabled && (
+                  <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="30"
+                        step="1"
+                        value={sessionTriggers[sessionFilter]?.oteBos15m?.minScore ?? 8}
+                        onChange={e => updateSessionTrigger(sessionFilter, 'oteBos15m', 'minScore', parseInt(e.target.value))}
+                        style={{ flex: 1, accentColor: '#00e5ff' }}
+                      />
+                      <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#00e5ff', minWidth: '24px', textAlign: 'right' }}>
+                        +{sessionTriggers[sessionFilter]?.oteBos15m?.minScore}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>Entry Fib:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {[50, 62, 79].map(level => {
+                          const currentVal = sessionTriggers[sessionFilter]?.oteBos15m?.entryPercent ?? 62;
+                          const isActive = currentVal === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              onClick={() => updateSessionTrigger(sessionFilter, 'oteBos15m', 'entryPercent', level, true)}
+                              style={{
+                                flex: 1, padding: '4px 0', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px',
+                                border: isActive ? '1px solid #00e5ff' : '1px solid var(--border-color)',
+                                backgroundColor: isActive ? 'rgba(0,229,255,0.15)' : 'var(--bg-secondary)',
+                                color: isActive ? '#00e5ff' : 'var(--text-secondary)',
+                                cursor: 'pointer', transition: 'all 0.2s'
                               }}
                             >
                               {level}%

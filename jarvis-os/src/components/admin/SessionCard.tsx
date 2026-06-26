@@ -26,23 +26,25 @@ const dotStyle = (active: boolean): React.CSSProperties => ({
 
 function TriggerRow({ label, emoji, trigger, onToggle, onScoreChange }: {
   label: string; emoji: string;
-  trigger: { enabled: boolean; minScore: number };
+  trigger?: { enabled: boolean; minScore: number };
   onToggle: () => void; onScoreChange: (v: number) => void;
 }) {
+  const isEnabled = trigger?.enabled ?? false;
+  const score = trigger?.minScore ?? 8;
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #1a1a1a' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '90px' }}>
         <span>{emoji}</span>
-        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: trigger.enabled ? '#e6e6e6' : '#555' }}>{label}</span>
+        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isEnabled ? '#e6e6e6' : '#555' }}>{label}</span>
       </div>
-      <button onClick={onToggle} style={toggleStyle(trigger.enabled)}>
-        <div style={dotStyle(trigger.enabled)} />
+      <button onClick={onToggle} style={toggleStyle(isEnabled)}>
+        <div style={dotStyle(isEnabled)} />
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{ fontSize: '0.7rem', color: '#666' }}>Min:</span>
-        <input type="number" min={1} max={50} value={trigger.minScore}
+        <input type="number" min={1} max={50} value={score}
           onChange={e => onScoreChange(parseInt(e.target.value) || 1)}
-          disabled={!trigger.enabled} style={{ ...inputStyle, opacity: trigger.enabled ? 1 : 0.4 }}
+          disabled={!isEnabled} style={{ ...inputStyle, opacity: isEnabled ? 1 : 0.4 }}
         />
       </div>
     </div>
