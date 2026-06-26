@@ -1071,10 +1071,14 @@ export default function BacktestingPanel() {
 
         // 1. Local filter by selected tradeFilter in UI (when not in GLOBAL mode)
         if (!isGlobal && tradeFilter !== 'ALL') {
-          if (tradeFilter === 'BOS' && !triggerType?.startsWith('bos')) return false;
-          if (tradeFilter === 'CHOCH' && !triggerType?.startsWith('choch')) return false;
-          if (tradeFilter === 'OTE_CHOCH' && !triggerType?.startsWith('oteChoch')) return false;
-          if (tradeFilter === 'OTE_BOS' && !triggerType?.startsWith('oteBos')) return false;
+          if (tradeFilter === 'CHOCH_5M' && triggerType !== 'choch5m') return false;
+          if (tradeFilter === 'CHOCH_15M' && triggerType !== 'choch15m') return false;
+          if (tradeFilter === 'BOS_5M' && triggerType !== 'bos5m') return false;
+          if (tradeFilter === 'BOS_15M' && triggerType !== 'bos15m') return false;
+          if (tradeFilter === 'OTE_CHOCH_5M' && triggerType !== 'oteChoch5m') return false;
+          if (tradeFilter === 'OTE_CHOCH_15M' && triggerType !== 'oteChoch15m') return false;
+          if (tradeFilter === 'OTE_BOS_5M' && triggerType !== 'oteBos5m') return false;
+          if (tradeFilter === 'OTE_BOS_15M' && triggerType !== 'oteBos15m') return false;
         }
 
         // 2. Dynamic filter based on sessionTriggers configuration (score & enabled)
@@ -1715,8 +1719,8 @@ export default function BacktestingPanel() {
               
               {/* CHOCH 5M Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'CHOCH' ? 'ALL' : 'CHOCH')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'CHOCH' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'CHOCH' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'CHOCH_5M' ? 'ALL' : 'CHOCH_5M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'CHOCH_5M' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'CHOCH_5M' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -1755,8 +1759,8 @@ export default function BacktestingPanel() {
 
               {/* CHOCH 15M Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'CHOCH' ? 'ALL' : 'CHOCH')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'CHOCH' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'CHOCH' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'CHOCH_15M' ? 'ALL' : 'CHOCH_15M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'CHOCH_15M' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'CHOCH_15M' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -1795,8 +1799,8 @@ export default function BacktestingPanel() {
 
               {/* BOS 5M Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'BOS' ? 'ALL' : 'BOS')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'BOS' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'BOS' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'BOS_5M' ? 'ALL' : 'BOS_5M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'BOS_5M' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'BOS_5M' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -1835,8 +1839,8 @@ export default function BacktestingPanel() {
 
               {/* BOS 15M Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'BOS' ? 'ALL' : 'BOS')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'BOS' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'BOS' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'BOS_15M' ? 'ALL' : 'BOS_15M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'BOS_15M' ? 'rgba(124,77,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'BOS_15M' ? '1px solid #7c4dff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -1874,8 +1878,8 @@ export default function BacktestingPanel() {
               </div>
 {/* OTE CHOCH 5m Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH' ? 'ALL' : 'OTE_CHOCH')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH_5M' ? 'ALL' : 'OTE_CHOCH_5M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH_5M' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH_5M' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -1937,8 +1941,8 @@ export default function BacktestingPanel() {
 
 {/* OTE CHOCH 15m Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH' ? 'ALL' : 'OTE_CHOCH')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_CHOCH_15M' ? 'ALL' : 'OTE_CHOCH_15M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_CHOCH_15M' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_CHOCH_15M' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -2000,8 +2004,8 @@ export default function BacktestingPanel() {
 
 {/* OTE BOS 5m Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS_5M' ? 'ALL' : 'OTE_BOS_5M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS_5M' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS_5M' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s', marginBottom: '8px' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
@@ -2063,8 +2067,8 @@ export default function BacktestingPanel() {
 
 {/* OTE BOS 15m Trigger */}
               <div 
-                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS' ? 'ALL' : 'OTE_BOS')}
-                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
+                onClick={() => setTradeFilter(tradeFilter === 'OTE_BOS_15M' ? 'ALL' : 'OTE_BOS_15M')}
+                style={{ cursor: 'pointer', padding: '10px', backgroundColor: tradeFilter === 'OTE_BOS_15M' ? 'rgba(0,229,255,0.08)' : 'rgba(255,255,255,0.02)', border: tradeFilter === 'OTE_BOS_15M' ? '1px solid #00e5ff' : '1px solid var(--border-color)', borderRadius: '6px', transition: 'all 0.2s' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }} onClick={e => e.stopPropagation()}>
