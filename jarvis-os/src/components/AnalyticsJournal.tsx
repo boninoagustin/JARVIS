@@ -42,6 +42,7 @@ interface TradeLog {
   events?: string[];
   isChochEntry?: boolean;
   rMultiple?: number;
+  tf?: string;
 }
 
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
@@ -759,7 +760,14 @@ export default function AnalyticsJournal() {
                   <td>{new Date(t.timestamp).toLocaleString()}</td>
                   <td style={{ fontWeight: 700 }}>{t.ticker}</td>
                   <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
-                    {t.direction}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {t.direction}
+                      {t.tf && (
+                        <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: 'rgba(255,255,255,0.1)', color: '#ccc', borderRadius: '3px', fontWeight: 600 }}>
+                          {t.tf}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     {(() => {
@@ -924,9 +932,16 @@ export default function AnalyticsJournal() {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Dirección:</span>
-                  <span className={selectedTradeForModal.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
-                    {selectedTradeForModal.direction}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className={selectedTradeForModal.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
+                      {selectedTradeForModal.direction}
+                    </span>
+                    {selectedTradeForModal.tf && (
+                      <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: 'rgba(255,255,255,0.1)', color: '#ccc', borderRadius: '3px', fontWeight: 600 }}>
+                        {selectedTradeForModal.tf}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                   <span style={{ color: 'var(--text-secondary)' }}>Niveles:</span>

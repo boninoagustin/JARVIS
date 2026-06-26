@@ -35,6 +35,7 @@ export interface BacktestTrade {
   tp1Hit?: boolean; closeTimestamp?: number; durationMin?: number;
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number;
   oteEntryUsed?: number;
+  tf?: string;
 }
 
 export interface TriggerConfig {
@@ -50,10 +51,14 @@ export interface OteConfig {
 }
 
 export interface SessionConfig {
-  choch: TriggerConfig;
-  bos: TriggerConfig;
-  oteChoch?: OteConfig;
-  oteBos?: OteConfig;
+  choch5m: TriggerConfig;
+  choch15m: TriggerConfig;
+  bos5m: TriggerConfig;
+  bos15m: TriggerConfig;
+  oteChoch5m?: OteConfig;
+  oteChoch15m?: OteConfig;
+  oteBos5m?: OteConfig;
+  oteBos15m?: OteConfig;
   slBufferPercent: number;
   fixedRR: number;
   maxSellLosses?: number;

@@ -21,7 +21,7 @@ interface RadarState {
   lastPrice?: number;
   activeImpulseBuy?: ImpulseLeg | null;
   activeImpulseSell?: ImpulseLeg | null;
-  lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
+  lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; tf?: string; };
 }
 
 /** Calcula el precio del 50% OTE (Fibonacci) del impulse leg */
@@ -146,7 +146,7 @@ export default function RadarHeatmap() {
               <th>4H (MACRO)</th>
               <th>1H (TREND)</th>
               <th>15M (MICRO)</th>
-              <th>GATILLO (3M)</th>
+              <th>GATILLO</th>
               <th>PUNTOS C</th>
               <th>PUNTOS V</th>
               <th>TERMÓMETRO</th>
@@ -318,6 +318,7 @@ export default function RadarHeatmap() {
                             color: asset.lastGatillo.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)' 
                           }}>
                             {asset.lastGatillo.dir === 'BUY' ? '🟢 BUY' : '🔴 SELL'}
+                            {asset.lastGatillo.tf ? ` (${asset.lastGatillo.tf})` : ''}
                           </span>
                           <span className="mono" style={{ color: 'var(--text-tertiary)', fontSize: '0.65rem' }}>
                             {Math.round((Date.now() - asset.lastGatillo.time) / 60000)}m ago

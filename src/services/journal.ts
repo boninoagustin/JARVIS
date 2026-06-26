@@ -51,7 +51,8 @@ export const TradeRecordSchema = z.object({
     session: z.string().optional(),
     bias4H: z.enum(['ALIGNED', 'AGAINST', 'NEUTRAL']).optional(),
     bias1H: z.enum(['ALIGNED', 'AGAINST', 'NEUTRAL']).optional(),
-    vwapDistance: z.number().optional()
+    vwapDistance: z.number().optional(),
+    tf: z.string().optional()
 }).passthrough();
 
 export type TradeRecord = z.infer<typeof TradeRecordSchema>;

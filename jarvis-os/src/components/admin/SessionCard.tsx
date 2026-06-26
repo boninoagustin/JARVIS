@@ -72,28 +72,40 @@ export default function SessionCard({ session, config, onChange }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>{meta.emoji}</span>
           <span style={{ fontWeight: 700, fontSize: '0.8rem', color: meta.color }}>{meta.label}</span>
-          {cfg.choch?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#00e67615', color: '#00e676', borderRadius: '3px' }}>CHoCH</span>}
-          {cfg.bos?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#0088ff15', color: '#0088ff', borderRadius: '3px' }}>BOS</span>}
-          {cfg.oteChoch?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE CHOCH</span>}
-          {cfg.oteBos?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE BOS</span>}
+          {cfg.choch5m?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#00e67615', color: '#00e676', borderRadius: '3px' }}>CHoCH</span>}
+          {cfg.bos5m?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#0088ff15', color: '#0088ff', borderRadius: '3px' }}>BOS</span>}
+          {cfg.oteChoch5m?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE CHOCH</span>}
+          {cfg.oteBos5m?.enabled && <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: '#ffaa0015', color: '#ffaa00', borderRadius: '3px' }}>OTE BOS</span>}
         </div>
         {expanded ? <ChevronUp size={14} color="#666" /> : <ChevronDown size={14} color="#666" />}
       </button>
 
       {expanded && (
         <div style={{ padding: '0 14px 14px' }}>
-          <TriggerRow label="CHoCH" emoji="🚀" trigger={cfg.choch}
-            onToggle={() => update('choch', 'enabled', !cfg.choch.enabled)}
-            onScoreChange={v => update('choch', 'minScore', v)} />
-          <TriggerRow label="BOS" emoji="🔨" trigger={cfg.bos}
-            onToggle={() => update('bos', 'enabled', !cfg.bos.enabled)}
-            onScoreChange={v => update('bos', 'minScore', v)} />
-          <TriggerRow label="OTE CHoCH" emoji="🎯" trigger={cfg.oteChoch || DEFAULT_SESSION_CONFIG.oteChoch!}
-            onToggle={() => update('oteChoch', 'enabled', !(cfg.oteChoch?.enabled ?? DEFAULT_SESSION_CONFIG.oteChoch!.enabled))}
-            onScoreChange={v => update('oteChoch', 'minScore', v)} />
-          <TriggerRow label="OTE BOS" emoji="🎯" trigger={cfg.oteBos || DEFAULT_SESSION_CONFIG.oteBos!}
-            onToggle={() => update('oteBos', 'enabled', !(cfg.oteBos?.enabled ?? DEFAULT_SESSION_CONFIG.oteBos!.enabled))}
-            onScoreChange={v => update('oteBos', 'minScore', v)} />
+          <TriggerRow label="CHoCH (5m)" emoji="🚀" trigger={cfg.choch5m}
+            onToggle={() => update('choch5m', 'enabled', !cfg.choch5m?.enabled)}
+            onScoreChange={v => update('choch5m', 'minScore', v)} />
+          <TriggerRow label="CHoCH (15m)" emoji="🚀" trigger={cfg.choch15m}
+            onToggle={() => update('choch15m', 'enabled', !cfg.choch15m?.enabled)}
+            onScoreChange={v => update('choch15m', 'minScore', v)} />
+          <TriggerRow label="BOS (5m)" emoji="🔨" trigger={cfg.bos5m}
+            onToggle={() => update('bos5m', 'enabled', !cfg.bos5m?.enabled)}
+            onScoreChange={v => update('bos5m', 'minScore', v)} />
+          <TriggerRow label="BOS (15m)" emoji="🔨" trigger={cfg.bos15m}
+            onToggle={() => update('bos15m', 'enabled', !cfg.bos15m?.enabled)}
+            onScoreChange={v => update('bos15m', 'minScore', v)} />
+          <TriggerRow label="OTE CHoCH (5m)" emoji="🎯" trigger={cfg.oteChoch5m}
+            onToggle={() => update('oteChoch5m', 'enabled', !cfg.oteChoch5m?.enabled)}
+            onScoreChange={v => update('oteChoch5m', 'minScore', v)} />
+          <TriggerRow label="OTE CHoCH (15m)" emoji="🎯" trigger={cfg.oteChoch15m}
+            onToggle={() => update('oteChoch15m', 'enabled', !cfg.oteChoch15m?.enabled)}
+            onScoreChange={v => update('oteChoch15m', 'minScore', v)} />
+          <TriggerRow label="OTE BOS (5m)" emoji="🎯" trigger={cfg.oteBos5m}
+            onToggle={() => update('oteBos5m', 'enabled', !cfg.oteBos5m?.enabled)}
+            onScoreChange={v => update('oteBos5m', 'minScore', v)} />
+          <TriggerRow label="OTE BOS (15m)" emoji="🎯" trigger={cfg.oteBos15m}
+            onToggle={() => update('oteBos15m', 'enabled', !cfg.oteBos15m?.enabled)}
+            onScoreChange={v => update('oteBos15m', 'minScore', v)} />
 
           {/* Directional Max Consecutive Losses & Risk Settings */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>

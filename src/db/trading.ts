@@ -76,7 +76,7 @@ interface RadarState {
     activeImpulseSell?: ImpulseLeg | null; 
     activeMacroImpulseBuy?: ImpulseLeg | null;  
     activeMacroImpulseSell?: ImpulseLeg | null; 
-    lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; };
+    lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; tf?: string; };
     version?: number;
     lastModified?: number;
 }
@@ -177,10 +177,14 @@ let dynamicBotConfig = {
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
 const SessionSchema = z.object({
-    choch: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    bos: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    oteChoch: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
-    oteBos: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    choch5m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    choch15m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    bos5m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    bos15m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
+    oteChoch5m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    oteChoch15m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    oteBos5m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    oteBos15m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
     maxSellLosses: z.number().optional(),
     maxBuyLosses: z.number().optional(),
     slBufferPercent: z.number().optional(),
@@ -236,8 +240,17 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotCo
     maxBuysPerDay: number;
     buyScorePenalty: number;
     sessions?: Record<string, {
-      choch: { enabled: boolean; minScore: number };
-      bos: { enabled: boolean; minScore: number };
+      choch5m?: { enabled: boolean; minScore: number };
+      choch15m?: { enabled: boolean; minScore: number };
+      bos5m?: { enabled: boolean; minScore: number };
+      bos15m?: { enabled: boolean; minScore: number };
+      oteChoch5m?: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteChoch15m?: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos5m?: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos15m?: { enabled: boolean; minScore: number; entryPercent?: number };
+      // Legacy fallback keys
+      choch?: { enabled: boolean; minScore: number };
+      bos?: { enabled: boolean; minScore: number };
       oteChoch?: { enabled: boolean; minScore: number; entryPercent?: number };
       oteBos?: { enabled: boolean; minScore: number; entryPercent?: number };
       maxSellLosses?: number;
@@ -565,12 +578,30 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
         const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
 
+        let triggerTfStr = leg.chochEvents?.map(e => {
+            const parts = e.split('_');
+            return parts[parts.length - 1]; // "5M" or "15M"
+        }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+        let triggerTf = triggerTfStr.toLowerCase(); // "5m" or "15m"
+
         let activeOteEntryPercent = config.oteEntryPercent || 50;
         if (sessionConfig) {
             if (isChoch) {
-                activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? config.oteEntryPercent ?? 50;
+                const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+                const tfConfig = sessionConfig[tfKey] as any;
+                if (tfConfig) {
+                    activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+                } else if ((sessionConfig as any).oteChoch) {
+                    activeOteEntryPercent = (sessionConfig as any).oteChoch.entryPercent ?? config.oteEntryPercent ?? 50;
+                }
             } else if (isBos) {
-                activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? config.oteEntryPercent ?? 50;
+                const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+                const tfConfig = sessionConfig[tfKey] as any;
+                if (tfConfig) {
+                    activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+                } else if ((sessionConfig as any).oteBos) {
+                    activeOteEntryPercent = (sessionConfig as any).oteBos.entryPercent ?? config.oteEntryPercent ?? 50;
+                }
             } else {
                 activeOteEntryPercent = config.oteEntryPercent ?? 50;
             }
@@ -597,11 +628,25 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
             } else if (sessionConfig) {
                 if (isChoch) {
-                    oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
-                    oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
+                    const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+                    const tfConfig = sessionConfig[tfKey] as any;
+                    if (tfConfig) {
+                        oteEnabled = tfConfig.enabled ?? false;
+                        oteMinScore = tfConfig.minScore ?? 8;
+                    } else if ((sessionConfig as any).oteChoch) {
+                        oteEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
+                        oteMinScore = (sessionConfig as any).oteChoch.minScore ?? 8;
+                    }
                 } else if (isBos) {
-                    oteEnabled = sessionConfig.oteBos?.enabled ?? false;
-                    oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
+                    const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+                    const tfConfig = sessionConfig[tfKey] as any;
+                    if (tfConfig) {
+                        oteEnabled = tfConfig.enabled ?? false;
+                        oteMinScore = tfConfig.minScore ?? 8;
+                    } else if ((sessionConfig as any).oteBos) {
+                        oteEnabled = (sessionConfig as any).oteBos.enabled ?? false;
+                        oteMinScore = (sessionConfig as any).oteBos.minScore ?? 8;
+                    }
                 } else {
                     oteEnabled = false;
                     oteMinScore = 8;
@@ -693,6 +738,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     confluenceReport: leg.chochReport || fallbackReport,
                     bestZone: leg.bestZone || null,
                     marketBias: { ...state.marketBias },
+                    tf: eventName.split('_').pop(),
                     isChochEntry: false
                 };
 
@@ -1474,7 +1520,7 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
                 state.marketBias[eventTf] = currentDirection;
                 
-                if (eventTf === '3' || eventTf === '5' || eventTf === '15') {
+                if (eventTf === '5' || eventTf === '15') {
                     const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
                     const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
                     const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
@@ -1683,7 +1729,7 @@ export async function processTradingAlert(alertText: string) {
 
             // --- CAPA 4: VALIDACIÓN DEL CHOCH / BOS ---
             // 🆕 v5.5 HÍBRIDO: Permitir que 15M (o 5M) actúe como gatillo principal en lugar de solo 3M
-            if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '3' || eventTf === '5' || eventTf === '15')) { 
+            if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) { 
                 const triggerType = prefix === 'EVENTO_CHOCH' ? 'CHoCH🚀' : 'BOS🔨';
                 
                 // 🧹 1. FIX DE MEMORIA FANTASMA (Cooldown)
@@ -1858,12 +1904,27 @@ export async function processTradingAlert(alertText: string) {
                     triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                     minPtsRequired = currentDirection === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
                 } else if (sessionConfig) {
+                    const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
+                    const tfKeyBos = `bos${eventTf}m` as keyof typeof sessionConfig;
+                    
                     if (triggerType === 'CHoCH🚀') {
-                        triggerEnabled = sessionConfig.choch?.enabled ?? false;
-                        minPtsRequired = sessionConfig.choch?.minScore ?? config.minPointsForBuy;
+                        const tfConfig = sessionConfig[tfKeyChoch] as any;
+                        if (tfConfig) {
+                            triggerEnabled = tfConfig.enabled ?? false;
+                            minPtsRequired = tfConfig.minScore ?? config.minPointsForBuy;
+                        } else if ((sessionConfig as any).choch) {
+                            triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
+                            minPtsRequired = (sessionConfig as any).choch.minScore ?? config.minPointsForBuy;
+                        }
                     } else if (triggerType === 'BOS🔨') {
-                        triggerEnabled = sessionConfig.bos?.enabled ?? false;
-                        minPtsRequired = sessionConfig.bos?.minScore ?? config.minPointsForBuy;
+                        const tfConfig = sessionConfig[tfKeyBos] as any;
+                        if (tfConfig) {
+                            triggerEnabled = tfConfig.enabled ?? false;
+                            minPtsRequired = tfConfig.minScore ?? config.minPointsForBuy;
+                        } else if ((sessionConfig as any).bos) {
+                            triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
+                            minPtsRequired = (sessionConfig as any).bos.minScore ?? config.minPointsForBuy;
+                        }
                     }
                 } else {
                     triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
@@ -1935,15 +1996,30 @@ export async function processTradingAlert(alertText: string) {
                                 points: totalPoints, events: [...activeScore.events, `${triggerType}_${readableTf}`],
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
-                                isChochEntry: true
+                                isChochEntry: true,
+                                tf: readableTf
                             };
                             let takeChoch = false;
                             let disableOte = false;
                             let smartReport = '';
 
-                            const oteSessionEnabled = sessionConfig 
-                              ? (triggerType === 'CHoCH🚀' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
-                              : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                            let oteSessionEnabled = false;
+                            if (sessionConfig) {
+                                const oteTfKeyChoch = `oteChoch${eventTf}m` as keyof typeof sessionConfig;
+                                const oteTfKeyBos = `oteBos${eventTf}m` as keyof typeof sessionConfig;
+
+                                if (triggerType === 'CHoCH🚀') {
+                                    const tfConfig = sessionConfig[oteTfKeyChoch] as any;
+                                    if (tfConfig) oteSessionEnabled = tfConfig.enabled ?? false;
+                                    else if ((sessionConfig as any).oteChoch) oteSessionEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
+                                } else {
+                                    const tfConfig = sessionConfig[oteTfKeyBos] as any;
+                                    if (tfConfig) oteSessionEnabled = tfConfig.enabled ?? false;
+                                    else if ((sessionConfig as any).oteBos) oteSessionEnabled = (sessionConfig as any).oteBos.enabled ?? false;
+                                }
+                            } else {
+                                oteSessionEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                            }
 
                             if (config.entryTrigger === 'SMART') {
                                 function parseTfToMinutes(tfStr: string): number {
@@ -2072,8 +2148,9 @@ export async function processTradingAlert(alertText: string) {
                 dir: oteData.direction as 'BUY' | 'SELL',
                 price: oteData.entryPrice,
                 time: nowMs,
-                type: 'OTE',
-                status: 'EVALUANDO...'
+                type: oteData.isChochEntry ? 'CHOCH' : 'OTE',
+                status: 'EVALUANDO...',
+                tf: oteData.tf
             };
             
             state.version = (state.version || 0) + 1;
@@ -2359,6 +2436,7 @@ export async function processTradingAlert(alertText: string) {
                     bias4H: state.marketBias['240'] === oteData.direction ? 'ALIGNED' : state.marketBias['240'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
                     bias1H: state.marketBias['60'] === oteData.direction ? 'ALIGNED' : state.marketBias['60'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
                     vwapDistance: (oteData.events.includes('VWAP_Premium') || oteData.events.includes('VWAP_Discount')) ? 1 : 0,
+                    tf: oteData.tf
                 }).catch(() => 'ERR');
                 
                 // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)

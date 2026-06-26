@@ -129,10 +129,22 @@ function evaluateImpulse(
 
     let activeOteEntryPercent = config.oteEntryPercent || 50;
     if (sessionConfig) {
+      const triggerTfStr = leg.chochEvents?.map(e => {
+          const parts = e.split('_');
+          return parts[parts.length - 1];
+      }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+      const triggerTf = triggerTfStr.toLowerCase();
+
       if (isChoch) {
-        activeOteEntryPercent = sessionConfig.oteChoch?.entryPercent ?? config.oteEntryPercent ?? 50;
+        const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+        const tfConfig = sessionConfig[tfKey] as any;
+        if (tfConfig) activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+        else if ((sessionConfig as any).oteChoch) activeOteEntryPercent = (sessionConfig as any).oteChoch.entryPercent ?? config.oteEntryPercent ?? 50;
       } else if (isBos) {
-        activeOteEntryPercent = sessionConfig.oteBos?.entryPercent ?? config.oteEntryPercent ?? 50;
+        const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+        const tfConfig = sessionConfig[tfKey] as any;
+        if (tfConfig) activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+        else if ((sessionConfig as any).oteBos) activeOteEntryPercent = (sessionConfig as any).oteBos.entryPercent ?? config.oteEntryPercent ?? 50;
       }
     }
 
@@ -145,13 +157,34 @@ function evaluateImpulse(
       let oteEnabled = false;
       let oteMinScore = 8;
 
+      const triggerTfStr = leg.chochEvents?.map(e => {
+          const parts = e.split('_');
+          return parts[parts.length - 1];
+      }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+      const triggerTf = triggerTfStr.toLowerCase();
+
       if (sessionConfig) {
+
         if (isChoch) {
-          oteEnabled = sessionConfig.oteChoch?.enabled ?? false;
-          oteMinScore = sessionConfig.oteChoch?.minScore ?? 8;
+          const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+          const tfConfig = sessionConfig[tfKey] as any;
+          if (tfConfig) {
+              oteEnabled = tfConfig.enabled ?? false;
+              oteMinScore = tfConfig.minScore ?? 8;
+          } else if ((sessionConfig as any).oteChoch) {
+              oteEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
+              oteMinScore = (sessionConfig as any).oteChoch.minScore ?? 8;
+          }
         } else if (isBos) {
-          oteEnabled = sessionConfig.oteBos?.enabled ?? false;
-          oteMinScore = sessionConfig.oteBos?.minScore ?? 8;
+          const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+          const tfConfig = sessionConfig[tfKey] as any;
+          if (tfConfig) {
+              oteEnabled = tfConfig.enabled ?? false;
+              oteMinScore = tfConfig.minScore ?? 8;
+          } else if ((sessionConfig as any).oteBos) {
+              oteEnabled = (sessionConfig as any).oteBos.enabled ?? false;
+              oteMinScore = (sessionConfig as any).oteBos.minScore ?? 8;
+          }
         } else {
           oteEnabled = false;
           oteMinScore = 8;
@@ -180,7 +213,8 @@ function evaluateImpulse(
       if (riskDist > 0 && rewardDist / riskDist < 1.2) return { updatedLeg: leg };
 
       const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-      const eventName = '🎯_OTE_Retracement_3M';
+      const tfFormatted = triggerTf.toUpperCase();
+      const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
       if (!activeScore.events.includes(eventName)) {
         activeScore.events.push(eventName);
         activeScore.points += 4;
@@ -214,6 +248,7 @@ function evaluateImpulse(
             bestZone: leg.bestZone || null,
             marketBias: { ...state.marketBias },
             oteEntryUsed: activeOteEntryPercent,
+            tf: tfFormatted
           }
         };
       }
@@ -514,7 +549,7 @@ function processAlert(
   if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
     state.marketBias[eventTf] = currentDirection;
 
-    if (eventTf === '3' || eventTf === '5' || eventTf === '15') {
+    if (eventTf === '5' || eventTf === '15') {
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
       const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
       const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice || 0;
@@ -598,7 +633,7 @@ function processAlert(
   }
 
   // --- CHoCH/BOS TRIGGER VALIDATION ---
-  if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '3' || eventTf === '5' || eventTf === '15')) {
+  if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) {
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
 
     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
@@ -669,12 +704,27 @@ function processAlert(
     let minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
     
     if (sessionConfig) {
+      const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
+      const tfKeyBos = `bos${eventTf}m` as keyof typeof sessionConfig;
+
       if (prefix === 'EVENTO_CHOCH') {
-        triggerEnabled = sessionConfig.choch?.enabled ?? false;
-        minPtsRequired = sessionConfig.choch?.minScore ?? config.minBuyPoints;
+        const tfConfig = sessionConfig[tfKeyChoch] as any;
+        if (tfConfig) {
+            triggerEnabled = tfConfig.enabled ?? false;
+            minPtsRequired = tfConfig.minScore ?? config.minBuyPoints;
+        } else if ((sessionConfig as any).choch) {
+            triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
+            minPtsRequired = (sessionConfig as any).choch.minScore ?? config.minBuyPoints;
+        }
       } else if (prefix === 'EVENTO_BOS') {
-        triggerEnabled = sessionConfig.bos?.enabled ?? false;
-        minPtsRequired = sessionConfig.bos?.minScore ?? config.minBuyPoints;
+        const tfConfig = sessionConfig[tfKeyBos] as any;
+        if (tfConfig) {
+            triggerEnabled = tfConfig.enabled ?? false;
+            minPtsRequired = tfConfig.minScore ?? config.minBuyPoints;
+        } else if ((sessionConfig as any).bos) {
+            triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
+            minPtsRequired = (sessionConfig as any).bos.minScore ?? config.minBuyPoints;
+        }
       }
     } else {
       triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
@@ -714,9 +764,23 @@ function processAlert(
         let takeChoch = false;
         let disableOte = false;
 
-        const oteSessionEnabled = sessionConfig 
-          ? (prefix === 'EVENTO_CHOCH' ? (sessionConfig.oteChoch?.enabled ?? false) : (sessionConfig.oteBos?.enabled ?? false))
-          : (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+        let oteSessionEnabled = false;
+        if (sessionConfig) {
+            const oteTfKeyChoch = `oteChoch${eventTf}m` as keyof typeof sessionConfig;
+            const oteTfKeyBos = `oteBos${eventTf}m` as keyof typeof sessionConfig;
+
+            if (prefix === 'EVENTO_CHOCH') {
+                const tfConfig = sessionConfig[oteTfKeyChoch] as any;
+                if (tfConfig) oteSessionEnabled = tfConfig.enabled ?? false;
+                else if ((sessionConfig as any).oteChoch) oteSessionEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
+            } else {
+                const tfConfig = sessionConfig[oteTfKeyBos] as any;
+                if (tfConfig) oteSessionEnabled = tfConfig.enabled ?? false;
+                else if ((sessionConfig as any).oteBos) oteSessionEnabled = (sessionConfig as any).oteBos.enabled ?? false;
+            }
+        } else {
+            oteSessionEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+        }
 
         if (config.entryTrigger === 'SMART') {
             const oppositeZones = state.zones.filter(z => z.dir !== currentDirection);
@@ -752,10 +816,12 @@ function processAlert(
         }
 
         if (takeChoch) {
+            const readableTf = parseTF(eventTf);
             const oteData = {
               tradeId, direction: currentDirection,
               entryPrice: currentPrice,
-              stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_3M`]
+              stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_${readableTf}`],
+              tf: readableTf
             };
             createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
         }
@@ -789,6 +855,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     events: oteData.events || [],
     grade: oteData.points >= 8 ? 'A+' : 'B',
     oteEntryUsed: oteData.oteEntryUsed,
+    tf: oteData.tf,
   };
   trades.push(trade);
   activeTrades.set(trade.id, trade);

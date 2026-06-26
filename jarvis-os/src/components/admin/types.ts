@@ -7,10 +7,14 @@ export interface SessionTriggerConfig {
 }
 
 export interface SessionConfig {
-  choch: SessionTriggerConfig;
-  bos: SessionTriggerConfig;
-  oteChoch?: SessionTriggerConfig;
-  oteBos?: SessionTriggerConfig;
+  choch5m?: SessionTriggerConfig;
+  choch15m?: SessionTriggerConfig;
+  bos5m?: SessionTriggerConfig;
+  bos15m?: SessionTriggerConfig;
+  oteChoch5m?: SessionTriggerConfig;
+  oteChoch15m?: SessionTriggerConfig;
+  oteBos5m?: SessionTriggerConfig;
+  oteBos15m?: SessionTriggerConfig;
   maxSellLosses?: number;
   maxBuyLosses?: number;
   slBufferPercent?: number;
@@ -84,10 +88,14 @@ export const DEFAULT_ASSET_CONFIG: AssetConfig = {
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
-  choch: { enabled: true, minScore: 12 },
-  bos:   { enabled: true, minScore: 12 },
-  oteChoch: { enabled: true, minScore: 8 },
-  oteBos:   { enabled: true, minScore: 8 },
+  choch5m: { enabled: true, minScore: 12 },
+  choch15m: { enabled: true, minScore: 12 },
+  bos5m:   { enabled: true, minScore: 12 },
+  bos15m:   { enabled: true, minScore: 12 },
+  oteChoch5m: { enabled: true, minScore: 8 },
+  oteChoch15m: { enabled: true, minScore: 8 },
+  oteBos5m:   { enabled: true, minScore: 8 },
+  oteBos15m:   { enabled: true, minScore: 8 },
   maxSellLosses: 0,
   maxBuyLosses: 0,
 };

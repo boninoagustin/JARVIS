@@ -23,10 +23,14 @@ export default function AdminPanel() {
           const sessions = data.sessions || {};
           SESSIONS.forEach((s: SessionKey) => {
             if (!sessions[s]) sessions[s] = {
-              choch: { enabled: true, minScore: 12 },
-              bos: { enabled: true, minScore: 12 },
-              oteChoch: { enabled: true, minScore: 8 },
-              oteBos: { enabled: true, minScore: 8 }
+              choch5m: { enabled: true, minScore: 12 },
+              choch15m: { enabled: true, minScore: 12 },
+              bos5m: { enabled: true, minScore: 12 },
+              bos15m: { enabled: true, minScore: 12 },
+              oteChoch5m: { enabled: true, minScore: 8 },
+              oteChoch15m: { enabled: true, minScore: 8 },
+              oteBos5m: { enabled: true, minScore: 8 },
+              oteBos15m: { enabled: true, minScore: 8 },
             };
           });
           setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
@@ -35,10 +39,14 @@ export default function AdminPanel() {
           const newConfig = { ...DEFAULT_ASSET_CONFIG, sessions: {} as Record<string, SessionConfig> };
           SESSIONS.forEach((s: SessionKey) => {
             newConfig.sessions[s] = {
-              choch: { enabled: true, minScore: 12 },
-              bos: { enabled: true, minScore: 12 },
-              oteChoch: { enabled: true, minScore: 8 },
-              oteBos: { enabled: true, minScore: 8 }
+              choch5m: { enabled: true, minScore: 12 },
+              choch15m: { enabled: true, minScore: 12 },
+              bos5m: { enabled: true, minScore: 12 },
+              bos15m: { enabled: true, minScore: 12 },
+              oteChoch5m: { enabled: true, minScore: 8 },
+              oteChoch15m: { enabled: true, minScore: 8 },
+              oteBos5m: { enabled: true, minScore: 8 },
+              oteBos15m: { enabled: true, minScore: 8 },
             };
           });
           setAssetConfig(newConfig);
