@@ -727,7 +727,11 @@ function processAlert(
         }
       }
     } else {
-      triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+      if (prefix === 'EVENTO_BOS') {
+        triggerEnabled = (config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+      } else {
+        triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+      }
     }
 
     if (activeLeg) {
