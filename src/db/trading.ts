@@ -1952,7 +1952,7 @@ export async function processTradingAlert(alertText: string) {
                         // ⚡ HIGH_SCORE_BYPASS: si acumuló ≥12 pts por eventos puros (CHoCH + Sweeps + DIV),
                         // se valida aunque no haya zonas en memoria. Caso típico: reversión contra tendencia
                         // donde 4H/1H son SELL pero 3M hace CHoCH BUY con múltiples confluencias.
-                        const HIGH_SCORE_BYPASS = 12;
+                        const HIGH_SCORE_BYPASS = minPtsRequired; // Use the configured minimum score instead of hardcoded 12
                         const efectiveValidation = hasZoneConfluence || hasSpatialBacking || (totalPoints >= HIGH_SCORE_BYPASS);
                         
                         if (efectiveValidation) {

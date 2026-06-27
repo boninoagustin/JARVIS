@@ -739,7 +739,7 @@ function processAlert(
         e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
         e.includes('Sweep_') || e.includes('DIV_') || e.includes('Silver_Bullet_')
       );
-      const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= 12);
+      const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
       activeLeg.isValidated = efectiveValidation;
       activeLeg.chochPoints = totalPoints;
       activeLeg.chochEvents = [...activeScore.events, prefix];
