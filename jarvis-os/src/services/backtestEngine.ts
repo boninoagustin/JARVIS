@@ -744,7 +744,7 @@ function processAlert(
       const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
       activeLeg.isValidated = efectiveValidation;
       activeLeg.chochPoints = totalPoints;
-      activeLeg.chochEvents = [...activeScore.events, prefix];
+      activeLeg.chochEvents = [...activeScore.events, `${prefix}_${parseTF(eventTf)}`];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
