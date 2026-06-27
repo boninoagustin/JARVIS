@@ -749,7 +749,7 @@ function processAlert(
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
-        const activeSlBufferPercent = 0; // SL Buffer only applies to OTE entries
+        const activeSlBufferPercent = sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? 0;
         const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
 
         const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, activeSlBufferPercent);

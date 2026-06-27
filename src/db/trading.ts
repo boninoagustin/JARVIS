@@ -1974,7 +1974,7 @@ export async function processTradingAlert(alertText: string) {
 
                         if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
                             const decimals = getDecimals(ticker);
-                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, 0); // SL Buffer ONLY for OTE
+                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, config.slBufferPercent ?? 0); // Apply configured SL buffer
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
                             const currentPrice = state.lastPrice ?? activeLeg.extreme;
