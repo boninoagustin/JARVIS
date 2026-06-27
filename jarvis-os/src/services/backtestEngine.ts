@@ -90,7 +90,37 @@ export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | '
   return 'OFF';
 }
 
-// --- EVALUATE IMPULSE (ported from backend) ---
+// --- MACRO OTE ZONE CHECK (ported from live) ---
+function isInsideMacroOteZone(leg: ImpulseLeg | null | undefined, price: number): boolean {
+  if (!leg) return false;
+  const range = Math.abs(leg.extreme - leg.origin);
+  if (range === 0) return false;
+  if (leg.dir === 'BUY') {
+    const oteBtm = leg.extreme - (range * 0.79);
+    const oteTop = leg.extreme - (range * 0.50);
+    return price >= oteBtm && price <= oteTop;
+  } else {
+    const oteBtm = leg.extreme + (range * 0.50);
+    const oteTop = leg.extreme + (range * 0.79);
+    return price >= oteBtm && price <= oteTop;
+  }
+}
+
+// --- MACRO IMPULSE LEG STRETCHING (ported from live) ---
+function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number): ImpulseLeg | null {
+  if (!leg) return null;
+  const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;
+  if (leg.createdAt && (nowMs - leg.createdAt) > MAX_MACRO_LEG_AGE_MS) return null;
+
+  let macroInvalidated = false;
+  if (leg.dir === 'BUY' && lowPrice < leg.origin) macroInvalidated = true;
+  else if (leg.dir === 'SELL' && highPrice > leg.origin) macroInvalidated = true;
+  if (macroInvalidated) return null;
+
+  if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
+  else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
+  return leg;
+}
 function evaluateImpulse(
   leg: ImpulseLeg | null | undefined, currentPrice: number,
   highPrice: number, lowPrice: number, ticker: string,
@@ -238,9 +268,12 @@ function evaluateImpulse(
             tp1: leg.extreme.toFixed(decimals),
             tp2: (() => {
               const riskDist = Math.abs(entryLevel - adjustedSL);
+              const oteTP2Limit = leg.dir === 'BUY'
+                ? leg.extreme + (r2 * 0.27)
+                : leg.extreme - (r2 * 0.27);
               const fixedTP2 = leg.dir === 'BUY'
-                ? entryLevel + (riskDist * activeFixedRR)
-                : entryLevel - (riskDist * activeFixedRR);
+                ? Math.max(oteTP2Limit, entryLevel + (riskDist * activeFixedRR))
+                : Math.min(oteTP2Limit, entryLevel - (riskDist * activeFixedRR));
               return fixedTP2.toFixed(decimals);
             })(),
             points: totalPoints,
@@ -422,6 +455,10 @@ function processAlert(
     state.activeImpulseSell = sellRes.updatedLeg;
     if (sellRes.triggerOte && sellRes.oteData) createTrade(sellRes.oteData, nowMs, trades, activeTrades, dailyStats, config);
 
+    // Evaluate macro impulse legs (1H/4H stretching)
+    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs);
+    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
+
     // Evaluate active trades TP/SL
     for (const [tradeId, trade] of activeTrades) {
       const tradeAge = nowMs - trade.timestamp;
@@ -584,6 +621,22 @@ function processAlert(
         }
       }
     }
+    // Macro impulse legs for 1H/4H (used for macro OTE bonus)
+    if (eventTf === '60' || eventTf === '240') {
+      const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
+      const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
+      const actualPrice = priceMatch ? parseFloat(priceMatch[1]) : state.lastPrice || 0;
+      if (originMatch && actualPrice) {
+        const newOrigin = parseFloat(originMatch[1]);
+        const isBuy = currentDirection === 'BUY';
+        const newMacroLeg: ImpulseLeg = {
+          dir: currentDirection, origin: newOrigin, extreme: actualPrice,
+          createdAt: nowMs, oteScored: false,
+        };
+        if (isBuy) state.activeMacroImpulseBuy = newMacroLeg;
+        else state.activeMacroImpulseSell = newMacroLeg;
+      }
+    }
     addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
   }
   else if (prefix === 'ZONE_BROKEN') {
@@ -632,6 +685,21 @@ function processAlert(
     activeScore.lastUpdate = nowMs;
   }
 
+  // --- LATE RE-VALIDATION (ported from live) ---
+  if (prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS' && currentDirection) {
+    const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
+    if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
+      const hasZoneNow = activeScore.events.some(e =>
+        e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
+        e.includes('Sweep_') || e.includes('DIV_') || e.includes('Silver_Bullet_')
+      );
+      if (hasZoneNow) {
+        pendingLeg.isValidated = true;
+        pendingLeg.chochEvents = [...activeScore.events, `CHoCH_${readableTf}`];
+      }
+    }
+  }
+
   // --- CHoCH/BOS TRIGGER VALIDATION ---
   if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) {
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
@@ -644,8 +712,6 @@ function processAlert(
     let vwapBonus = 0;
     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') vwapBonus = 2;
     else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') vwapBonus = 2;
-
-    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus;
 
     // Apply Anti-Bias Filters
     const session = getSessionForTimestamp(nowMs);
@@ -721,16 +787,50 @@ function processAlert(
       }
     }
 
+    // Macro OTE bonus (ported from live)
+    let macroOteBonus = 0;
+    const activeMacroLeg = currentDirection === 'BUY' ? state.activeMacroImpulseBuy : state.activeMacroImpulseSell;
+    const chExtremePriceForMacro = chExtreme ?? state.lastPrice ?? 0;
+    if (isInsideMacroOteZone(activeMacroLeg, chExtremePriceForMacro)) {
+      macroOteBonus = 6;
+    }
+
+    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus + macroOteBonus;
+
+    // Trap Zone penalty (Caso C - ported from live)
+    if (chOrigin && chExtreme) {
+      const chLow = Math.min(chOrigin, chExtreme);
+      const chHigh = Math.max(chOrigin, chExtreme);
+      const trapZoneCount = state.zones.filter(z =>
+        z.dir !== currentDirection &&
+        z.top >= chLow && z.btm <= chHigh
+      ).length;
+      if (trapZoneCount > 0) totalPoints -= trapZoneCount * 2;
+    }
+
     if (hasSpatialBacking) totalPoints += spatialBonus;
     else {
       const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
       const hasSeqBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('DIV_') || e.includes('Sweep_'));
       if (!hasSeqBacking) {
         const penalty = isCrypto ? 1 : 3;
-        if (totalPoints < minPtsRequired) totalPoints -= penalty;
+        // Orphan penalty bypass for high score (ported from live)
+        const wouldBeAfterPenalty = totalPoints - penalty;
+        if (totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
+          // High-score bypass: penalty nullified
+        } else {
+          totalPoints -= penalty;
+        }
       }
     }
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+
+    // Crypto: reduce minPtsRequired by 1 (ported from live)
+    const isCryptoTicker = ticker.includes('BTC') || ticker.includes('ETH');
+    if (isCryptoTicker) minPtsRequired = Math.max(minPtsRequired - 1, 3);
+
+    // Consecutive losses escalation (ported from live)
+    if (dailyStats.consecutiveLosses >= 2) minPtsRequired += 2;
 
     // Validate leg
     
@@ -789,7 +889,31 @@ function processAlert(
         }
 
         if (config.entryTrigger === 'SMART') {
-            const oppositeZones = state.zones.filter(z => z.dir !== currentDirection);
+            function parseTfToMinutes(tfStr: string): number {
+                if (!tfStr) return 0;
+                const upper = tfStr.toUpperCase();
+                if (upper === 'D' || upper === '1D') return 1440;
+                if (upper === 'W' || upper === '1W') return 10080;
+                const val = parseInt(upper);
+                if (!isNaN(val)) {
+                    if (upper.includes('H')) return val * 60;
+                    return val;
+                }
+                return 0;
+            }
+
+            const signalTfMs = parseTfToMinutes(parseTF(eventTf));
+            
+            const oppositeZones = state.zones.filter(z => {
+                if (z.dir === currentDirection) return false;
+                if (z.medal === 'SMC_DIV') return false; 
+                
+                const zTfMs = parseTfToMinutes(z.tf || '');
+                const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD');
+                
+                return isStrong || zTfMs >= signalTfMs;
+            });
+
             let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
             for (const z of oppositeZones) {
                 if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
@@ -802,7 +926,10 @@ function processAlert(
                 rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
             }
         
-            if (rrChoch >= 1.5) {
+            const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5;
+            const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
+
+            if (rrChoch >= 1.5 || hasExtremeMomentum) {
                 takeChoch = true;
                 disableOte = true;
             } else {

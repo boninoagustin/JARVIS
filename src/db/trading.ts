@@ -689,7 +689,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             }
 
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-            const eventName = `🎯_OTE_Retracement_3M`;
+            const tfFormatted = triggerTf.toUpperCase() || '3M';
+            const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
             
             if (!activeScore.events.includes(eventName)) {
                 activeScore.events.push(eventName);
@@ -699,7 +700,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                 
                 const decimals = getDecimals(ticker);
                 // 🔧 FIX: Calculamos la distancia del stop loss usando el buffer dinámico por activo
-                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, config.slBufferPercent);
+                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
                 const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
@@ -1927,7 +1928,11 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                 } else {
-                    triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                    if (triggerType === 'BOS🔨') {
+                        triggerEnabled = (config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                    } else {
+                        triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+                    }
                 }
                 
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');

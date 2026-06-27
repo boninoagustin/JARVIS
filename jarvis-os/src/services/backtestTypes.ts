@@ -22,6 +22,7 @@ export interface RadarState {
   marketBias: Record<string, string>;
   lastSyncDate: string | null; lastSniperAlert?: number; lastHeartbeat?: number;
   activeImpulseBuy?: ImpulseLeg | null; activeImpulseSell?: ImpulseLeg | null;
+  activeMacroImpulseBuy?: ImpulseLeg | null; activeMacroImpulseSell?: ImpulseLeg | null;
 }
 
 export interface BacktestTrade {
@@ -102,6 +103,7 @@ export function emptyState(): RadarState {
     marketBias: { '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '3': 'NEUTRAL' },
     lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
     activeImpulseBuy: null, activeImpulseSell: null,
+    activeMacroImpulseBuy: null, activeMacroImpulseSell: null,
   };
 }
 
