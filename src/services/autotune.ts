@@ -1,14 +1,37 @@
 import admin from 'firebase-admin';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 // ---------------------------------------------------------
 // JARVIS-OS: Auto-Tune Engine (Fase 2 - Machine Learning Roadmap)
 // ---------------------------------------------------------
 // Este motor está diseñado para correr cada 15/30 días.
 // Extrae el historial reciente (e.g. 45 días) de Firebase y aplica
-// algoritmos de optimización para encontrar los mejores parámetros
-// (SL_buffer, minScore, gatillos) por sesión y por activo, sin
-// caer en el sobre-ajuste (overfitting).
+// algoritmos de optimización para encontrar los mejores parámetros.
+// Ahora funciona en modo "Recomendación" guardando reportes
+// para ser aprobados en JARVIS-OS.
 // ---------------------------------------------------------
+
+interface MetricSet {
+    score: number;
+    pnl: number;
+    winRate: number;
+    tradeCount: number;
+    profitFactor: number;
+    maxDrawdown: number;
+    expectancy: number;
+}
+
+interface OptimizeScoreResult {
+    old: MetricSet;
+    new: MetricSet;
+}
+
+interface OptimizeLossesResult {
+    oldLimit: number | undefined;
+    newLimit: number | undefined;
+    winRate: number;
+}
 
 export async function runAutoTune() {
     console.log("=========================================");
@@ -30,21 +53,20 @@ export async function runAutoTune() {
     console.log(`📅 Ventana de análisis: Últimos ${windowDays} días`);
 
     try {
-        // 2. Extraer el historial de la base de datos
-        // NOTA: Para una simulación real necesitamos no solo el trade_journal,
-        // sino todas las alertas (trading_incoming o radar_states) para probar 
-        // qué hubiera pasado si el límite de score fuera más bajo o más alto.
-        
         console.log("⏳ Descargando datos de Firestore...");
         
+        // Cargar config actual
+        const configsSnap = await db.collection('asset_configs').get();
+        const currentConfigs: Record<string, any> = {};
+        configsSnap.forEach(doc => {
+            currentConfigs[doc.id] = doc.data();
+        });
+
         const journalSnap = await db.collection('trade_journal')
             .where('timestamp', '>=', startDateMs)
             .get();
             
         console.log(`✅ Se encontraron ${journalSnap.size} operaciones en el historial de ${windowDays} días.`);
-        
-        // TODO: Extraer las señales en bruto (raw signals) si se guardan, 
-        // para simular combinaciones que no fueron ejecutadas originalmente.
         
         // 3. Agrupar trades por Activo
         const tradesByTicker: Record<string, any[]> = {};
@@ -57,23 +79,27 @@ export async function runAutoTune() {
         });
 
         // 4. Bucle de Optimización por Activo
-        const assetConfigs: Record<string, any> = {};
+        const reports: Record<string, any> = {};
         
         for (const [ticker, assetTrades] of Object.entries(tradesByTicker)) {
             console.log(`\n🔎 Analizando Activo: ${ticker} con ${assetTrades.length} operaciones`);
             
+            const currentConfig = currentConfigs[ticker] || {};
+            const oldBuyScore = currentConfig.minPointsForBuy || 5;
+            const oldSellScore = currentConfig.minPointsForSell || 5;
+
             // Separar por dirección
             const buys = assetTrades.filter(t => t.direction === 'BUY');
             const sells = assetTrades.filter(t => t.direction === 'SELL');
             
-            const optimalBuyPoints = optimizeMinScore(buys);
-            const optimalSellPoints = optimizeMinScore(sells);
+            const buyResult = optimizeMinScore(buys, oldBuyScore);
+            const sellResult = optimizeMinScore(sells, oldSellScore);
             
-            console.log(`   🔸 Optimal minPointsForBuy: ${optimalBuyPoints}`);
-            console.log(`   🔸 Optimal minPointsForSell: ${optimalSellPoints}`);
+            console.log(`   🔸 Buy Score Rec: ${oldBuyScore} -> ${buyResult.new.score} (PnL: ${buyResult.old.pnl} -> ${buyResult.new.pnl})`);
+            console.log(`   🔸 Sell Score Rec: ${oldSellScore} -> ${sellResult.new.score} (PnL: ${sellResult.old.pnl} -> ${sellResult.new.pnl})`);
             
             // Analizar por sesión
-            const sessions: Record<string, any> = {};
+            const sessionReports: Record<string, any> = {};
             const tradesBySession: Record<string, any[]> = {};
             assetTrades.forEach(t => {
                 const s = t.session || 'UNKNOWN';
@@ -84,44 +110,44 @@ export async function runAutoTune() {
             for (const [session, sessionTrades] of Object.entries(tradesBySession)) {
                 if (session === 'UNKNOWN') continue;
                 
-                // Calcular racha de perdidas
-                const maxBuyLosses = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'BUY'));
-                const maxSellLosses = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'SELL'));
+                const oldSessionConf = currentConfig.sessions?.[session] || {};
                 
-                console.log(`   🔹 Sesión ${session} -> maxBuyLosses: ${maxBuyLosses || 'KEE'}, maxSellLosses: ${maxSellLosses || 'KEEP'}`);
+                const buyLossesResult = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'BUY'), oldSessionConf.maxBuyLosses);
+                const sellLossesResult = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'SELL'), oldSessionConf.maxSellLosses);
                 
-                sessions[session] = {};
-                if (maxBuyLosses !== undefined) sessions[session].maxBuyLosses = maxBuyLosses;
-                if (maxSellLosses !== undefined) sessions[session].maxSellLosses = maxSellLosses;
+                // Solo guardar si hay algo útil
+                if (buyLossesResult.newLimit !== undefined || sellLossesResult.newLimit !== undefined || oldSessionConf.maxBuyLosses || oldSessionConf.maxSellLosses) {
+                    sessionReports[session] = {
+                        buy: buyLossesResult,
+                        sell: sellLossesResult
+                    };
+                }
             }
             
-            assetConfigs[ticker] = {
-                minPointsForBuy: optimalBuyPoints,
-                minPointsForSell: optimalSellPoints,
-                sessions: Object.keys(sessions).length > 0 ? sessions : undefined
+            reports[ticker] = {
+                timestamp: Date.now(),
+                ticker: ticker,
+                buy: buyResult,
+                sell: sellResult,
+                sessions: Object.keys(sessionReports).length > 0 ? sessionReports : undefined
             };
         }
         
-        // 5. Escribir configuraciones optimizadas
-        console.log("\n💾 Escribiendo nuevas configuraciones en Firestore...");
-        for (const [ticker, config] of Object.entries(assetConfigs)) {
+        // 5. Escribir reportes de optimización para ser revisados
+        console.log("\n💾 Escribiendo reportes de recomendación en Firestore (autotune_reports)...");
+        for (const [ticker, report] of Object.entries(reports)) {
             // Eliminamos undefined del objeto base para no pisar si está vacío
-            const cleanConfig = Object.fromEntries(Object.entries(config).filter(([_, v]) => v !== undefined));
-            if (Object.keys(cleanConfig).length > 0) {
-                await db.collection('asset_configs').doc(ticker).set(cleanConfig, { merge: true });
-            }
+            const cleanReport = JSON.parse(JSON.stringify(report)); // quick deep clean of undefined
+            await db.collection('autotune_reports').doc(ticker).set(cleanReport);
         }
         
         console.log("\n✅ AUTO-TUNE FINALIZADO CON ÉXITO.");
-        console.log("Próximamente: Escritura de la nueva configuración en Firebase (app_settings/bot_config)");
+        console.log("Los reportes están listos para ser revisados y aprobados en JARVIS-OS.");
         
     } catch (error) {
         console.error("❌ Error en Auto-Tune:", error);
     }
 }
-
-import { fileURLToPath } from 'url';
-import fs from 'fs';
 
 // ---------------------------------------------------------
 // FUNCIONES DE AGENDAMIENTO PARA EL INDEX
@@ -161,7 +187,7 @@ export async function checkAndRunAutoTune() {
 // Permitir ejecutar el script directamente desde la consola
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Inicializar firebase localmente para pruebas si se corre suelto
-    const serviceAccount = JSON.parse(fs.readFileSync(new URL('../../firebase-key.json', import.meta.url), 'utf8'));
+    const serviceAccount = JSON.parse(fs.readFileSync(new URL('../../service-account.json', import.meta.url), 'utf8'));
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount)
     });
@@ -172,42 +198,94 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 // ---------------------------------------------------------
 // FUNCIONES AUXILIARES DE OPTIMIZACIÓN
 // ---------------------------------------------------------
-function optimizeMinScore(trades: any[]) {
-    // Buscar umbral ampliado entre 3 y 8
-    let bestScore = 5; // Default
-    let bestPnL = -Infinity;
-    let bestWinRate = 0;
+function getMetricsForScore(trades: any[], score: number): MetricSet {
+    const filtered = trades.filter(t => t.points >= score);
+    if (filtered.length === 0) return { score, pnl: 0, winRate: 0, tradeCount: 0, profitFactor: 0, maxDrawdown: 0, expectancy: 0 };
+    
+    // Ordenar cronológicamente para el Max Drawdown
+    filtered.sort((a, b) => a.timestamp - b.timestamp);
+
+    let wins = 0;
+    let losses = 0;
+    let grossProfit = 0;
+    let grossLoss = 0;
+    
+    let runningPnL = 0;
+    let peakPnL = 0;
+    let maxDrawdown = 0;
+
+    for (const t of filtered) {
+        const tradePnL = t.pnl !== undefined ? t.pnl : (t.result === 'WIN' ? 2 : -1);
+        runningPnL += tradePnL;
+        
+        if (runningPnL > peakPnL) peakPnL = runningPnL;
+        const currentDrawdown = peakPnL - runningPnL;
+        if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
+
+        if (tradePnL > 0) {
+            wins++;
+            grossProfit += tradePnL;
+        } else {
+            losses++;
+            grossLoss += Math.abs(tradePnL);
+        }
+    }
+
+    const tradeCount = filtered.length;
+    const winRate = wins / tradeCount;
+    const pnl = runningPnL;
+    const profitFactor = grossLoss === 0 ? grossProfit : grossProfit / grossLoss;
+    const expectancy = pnl / tradeCount;
+
+    return { 
+        score,
+        pnl: Number(pnl.toFixed(2)), 
+        winRate, 
+        tradeCount, 
+        profitFactor: Number(profitFactor.toFixed(2)), 
+        maxDrawdown: Number(maxDrawdown.toFixed(2)), 
+        expectancy: Number(expectancy.toFixed(2)) 
+    };
+}
+
+function optimizeMinScore(trades: any[], currentScore: number): OptimizeScoreResult {
+    const oldMetrics = getMetricsForScore(trades, currentScore);
+
+    let bestMetrics = oldMetrics;
     
     for (const testScore of [3, 4, 5, 6, 7, 8]) {
-        const filtered = trades.filter(t => t.points >= testScore);
-        if (filtered.length < 3) continue; // Muestra muy chica
+        const testMetrics = getMetricsForScore(trades, testScore);
         
-        const winRate = filtered.filter(t => t.result === 'WIN').length / filtered.length;
+        // Filtramos resultados estadísticamente irrelevantes o malos
+        if (testMetrics.tradeCount < 3) continue;
         
-        // Calculamos PnL. Si no hay pnl guardado, estimamos con un R:R base de 2:1
-        const pnl = filtered.reduce((sum, t) => sum + (t.pnl !== undefined ? t.pnl : (t.result === 'WIN' ? 2 : -1)), 0);
-        
-        // Criterio de Sensibilidad Refinada tras 15 días:
-        // Preferimos PnL absoluto, pero en caso de empate buscamos mayor Win Rate.
-        // Se reduce el filtro de Win Rate a 40% para dar lugar a estrategias de alto R:R (e.g. OTE)
-        if (winRate >= 0.40) {
-            if (pnl > bestPnL || (pnl === bestPnL && winRate > bestWinRate)) {
-                bestPnL = pnl;
-                bestWinRate = winRate;
-                bestScore = testScore;
+        if (testMetrics.winRate >= 0.40) {
+            if (testMetrics.pnl > bestMetrics.pnl || (testMetrics.pnl === bestMetrics.pnl && testMetrics.winRate > bestMetrics.winRate)) {
+                bestMetrics = testMetrics;
             }
         }
     }
     
-    return bestPnL !== -Infinity ? bestScore : 5;
+    return {
+        old: oldMetrics,
+        new: bestMetrics
+    };
 }
 
-function optimizeConsecutiveLosses(trades: any[]) {
+function optimizeConsecutiveLosses(trades: any[], currentLimit: number | undefined): OptimizeLossesResult {
     const wins = trades.filter(t => t.result === 'WIN').length;
     const total = trades.length;
-    if (total < 5) return undefined; // No tocar
-    const winRate = wins / total;
-    if (winRate < 0.4) return 2;
-    if (winRate > 0.6) return 3;
-    return undefined; // Dejar la configuración que estaba
+    const winRate = total > 0 ? wins / total : 0;
+    
+    let newLimit = currentLimit;
+    if (total >= 5) {
+        if (winRate < 0.4) newLimit = 2;
+        else if (winRate > 0.6) newLimit = 3;
+    }
+    
+    return {
+        oldLimit: currentLimit,
+        newLimit,
+        winRate
+    };
 }

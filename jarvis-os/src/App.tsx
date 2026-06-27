@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Terminal, PieChart, Settings, Play } from 'lucide-react';
+import { Activity, Terminal, PieChart, Settings, Play, BrainCircuit } from 'lucide-react';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
@@ -8,6 +8,7 @@ import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
 import BacktestingPanel from './components/BacktestingPanel';
+import AutoTunePanel from './components/AutoTunePanel';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
@@ -34,6 +35,9 @@ function Sidebar() {
         </NavLink>
         <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Settings size={18} /> Panel de Control
+        </NavLink>
+        <NavLink to="/autotune" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <BrainCircuit size={18} /> Auto-Tune (ML)
         </NavLink>
       </nav>
       
@@ -203,6 +207,7 @@ function App() {
             <Route path="/journal" element={<AnalyticsJournal />} />
             <Route path="/backtesting" element={<BacktestingPanel />} />
             <Route path="/admin" element={<AdminPanel />} />
+            <Route path="/autotune" element={<AutoTunePanel />} />
           </Routes>
         </main>
       </div>
