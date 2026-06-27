@@ -173,7 +173,8 @@ let dynamicBotConfig = {
     slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
     fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
     oteEntryPercent: 50,           // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
-    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART'
+    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART',
+    autoTrading: false             // 🆕 Modo Automático (bypass confirmación de Telegram)
 };
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
@@ -321,7 +322,8 @@ if (db) {
                     slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
                     fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
-                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger
+                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger,
+                    autoTrading: data.autoTrading !== undefined ? data.autoTrading : dynamicBotConfig.autoTrading
                 };
             }
         }));
@@ -2490,27 +2492,61 @@ export async function processTradingAlert(alertText: string) {
                         const ctraderConfigured = !!(globalConfig.CTRADER_CLIENT_ID && globalConfig.CTRADER_ACCESS_TOKEN);
                         
                         if (ctraderConfigured) {
-                            // Send alert WITH cTrader execution buttons
-                            await sendTradeConfirmation({
-                                tradeId: oteData.tradeId,
-                                ticker,
-                                direction: oteData.direction as 'BUY' | 'SELL',
-                                dirText: oteData.dirText,
-                                entryPrice: oteData.entryPrice,
-                                slPrice: parseFloat(oteData.stopLoss),
-                                tp1Price: parseFloat(oteData.tp1),
-                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
-                                points: oteData.points,
-                                grade: oteData.points >= 8 ? 'A+' : 'B',
-                                events: oteData.events || [],
-                                confluenceReport: oteData.confluenceReport || '',
-                                kronosVerdict: kronosVerdict,
-                                swarmConsensus: swarmConsensus,
-                                alertMessage: msg,
-                                journalId: typeof journalId === 'string' ? journalId : undefined,
-                                isChochEntry: oteData.isChochEntry,
-                            });
-                            console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR + botones cTrader enviada para ${ticker}`);
+                            if (dynamicBotConfig.autoTrading) {
+                                // 🚀 MODO AUTOMÁTICO: Ejecutar directamente
+                                const { executeMarketOrder } = await import('../services/ctrader.js');
+                                console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
+                                
+                                const result = await executeMarketOrder({
+                                    ticker,
+                                    direction: oteData.direction as 'BUY' | 'SELL',
+                                    entryPrice: oteData.entryPrice,
+                                    slPrice: parseFloat(oteData.stopLoss),
+                                    tp1Price: parseFloat(oteData.tp1),
+                                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                    tradeId: oteData.tradeId,
+                                });
+
+                                if (result.success && result.positionId) {
+                                    updateTradePositionId(oteData.tradeId, result.positionId);
+                                    if (db && journalId) {
+                                        db.collection('trade_journal').doc(journalId).update({
+                                            ctraderPositionId: result.positionId,
+                                            ctraderLots: result.lots,
+                                            ctraderExecutedPrice: result.executedPrice,
+                                            ctraderStatus: 'EXECUTED',
+                                            ctraderDemo: globalConfig.CTRADER_DEMO,
+                                        }).catch(() => {});
+                                    }
+                                    const successMsg = `🚀 <b>AUTO-EJECUCIÓN EXITOSA</b>\n\n${msg}\n\n✅ <b>Ejecutado a:</b> ${result.executedPrice}\n🆔 <b>posID:</b> ${result.positionId}`;
+                                    await sendTelegramAlert(successMsg);
+                                } else {
+                                    const errorMsg = `❌ <b>ERROR AUTO-EJECUCIÓN</b>\n\n${msg}\n\n⚠️ Error: ${result.error}`;
+                                    await sendTelegramAlert(errorMsg);
+                                }
+                            } else {
+                                // ⏸️ MODO SEMI-AUTOMÁTICO: Enviar alerta WITH cTrader execution buttons
+                                await sendTradeConfirmation({
+                                    tradeId: oteData.tradeId,
+                                    ticker,
+                                    direction: oteData.direction as 'BUY' | 'SELL',
+                                    dirText: oteData.dirText,
+                                    entryPrice: oteData.entryPrice,
+                                    slPrice: parseFloat(oteData.stopLoss),
+                                    tp1Price: parseFloat(oteData.tp1),
+                                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                    points: oteData.points,
+                                    grade: oteData.points >= 8 ? 'A+' : 'B',
+                                    events: oteData.events || [],
+                                    confluenceReport: oteData.confluenceReport || '',
+                                    kronosVerdict: kronosVerdict,
+                                    swarmConsensus: swarmConsensus,
+                                    alertMessage: msg,
+                                    journalId: typeof journalId === 'string' ? journalId : undefined,
+                                    isChochEntry: oteData.isChochEntry,
+                                });
+                                console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR + botones cTrader enviada para ${ticker}`);
+                            }
                         } else {
                             // cTrader not configured — send normal alert (original behavior)
                             await sendTelegramAlert(msg);

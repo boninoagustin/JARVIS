@@ -60,6 +60,7 @@ export interface BotConfig {
   fixedRR: number;
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
+  autoTrading: boolean; // 🆕 Modo Automático (bypass Telegram)
 }
 
 export const TICKERS = ['NAS100', 'BTCUSD', 'EURUSD', 'XAUUSD', 'GBPUSD'] as const;
@@ -118,4 +119,5 @@ export const DEFAULT_BOT_CONFIG: BotConfig = {
   fixedRR: 2.0,
   oteEntryPercent: 50,
   entryTrigger: 'OTE',
+  autoTrading: false,
 };
