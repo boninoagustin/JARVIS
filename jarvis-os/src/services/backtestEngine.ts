@@ -687,19 +687,6 @@ function processAlert(
       }
     }
 
-    if (hasSpatialBacking) totalPoints += spatialBonus;
-    else {
-      const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
-      const hasSeqBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('DIV_') || e.includes('Sweep_'));
-      if (!hasSeqBacking) {
-        const penalty = isCrypto ? 1 : 3;
-        if (totalPoints < 12) totalPoints -= penalty;
-      }
-    }
-    if (is4HAgainst && is1HAgainst) totalPoints -= 3;
-
-    // Validate leg
-    
     let triggerEnabled = false;
     let minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
     
@@ -733,6 +720,21 @@ function processAlert(
         triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
       }
     }
+
+    if (hasSpatialBacking) totalPoints += spatialBonus;
+    else {
+      const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
+      const hasSeqBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('DIV_') || e.includes('Sweep_'));
+      if (!hasSeqBacking) {
+        const penalty = isCrypto ? 1 : 3;
+        if (totalPoints < minPtsRequired) totalPoints -= penalty;
+      }
+    }
+    if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+
+    // Validate leg
+    
+    // Block moved up
 
     if (activeLeg) {
       const hasZoneConf = activeScore.events.some(e =>
