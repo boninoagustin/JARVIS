@@ -547,8 +547,8 @@ export default function FundamentalTerminal() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
             {displayAssets.map(asset => {
               // Obtener datos de Firestore o usar valores por defecto
-              const data = fundamentals?.sentiment[asset] || { score: 'N/A', reason: 'Sin datos', status: 'status-neutral' };
-              const isLocked = settings.killswitches[asset] || false;
+              const data = fundamentals?.sentiment?.[asset] || { score: 'N/A', reason: 'Sin datos', status: 'status-neutral' };
+              const isLocked = settings?.killswitches?.[asset] || false;
 
               // Determinar la dirección visual (Insignia)
               let badgeText = 'LATERAL ⚖️';
