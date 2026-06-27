@@ -15,6 +15,7 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { executeMarketOrder, isCTraderReady, type CTraderOrderParams, type CTraderOrderResult } from './ctrader.js';
 import { db } from '../db/memory.js';
+import { updateTradePositionId } from '../db/trading.js';
 
 // ─── Pending Confirmations Store ───
 
@@ -268,6 +269,10 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
                 ctraderLots: result.lots,
                 ctraderExecutedPrice: result.executedPrice,
             }).catch(() => {});
+        }
+
+        if (result.positionId) {
+            updateTradePositionId(tradeId, result.positionId);
         }
 
         console.log(`[CTRADER_CONFIRM] 🎉 Trade ejecutado: ${pending.ticker} ${pending.direction} | ${result.lots} lotes @ ${result.executedPrice} | posID: ${result.positionId}`);

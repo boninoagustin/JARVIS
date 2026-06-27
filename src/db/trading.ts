@@ -124,6 +124,7 @@ interface ActiveTrade {
     tp1Hit: boolean;          
     tp2Hit: boolean;          
     timestamp: number;
+    ctraderPositionId?: string; // 🆕 ID de la posición en cTrader para poder manejar Breakeven
 }
 
 const activeTrades = new Map<string, ActiveTrade>();
@@ -1272,6 +1273,17 @@ export async function processTradingAlert(alertText: string) {
                                 `💡 Toma parcial ejecutada (50%). El Stop Loss se ha movido automáticamente al precio de entrada (Breakeven) para proteger la operación.`;
                             if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => {});
                             console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL ajustado a Breakeven`);
+
+                            // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
+                            if (!isBacktest && trade.ctraderPositionId) {
+                                import('../services/ctrader.js').then(async (ctrader) => {
+                                    console.log(`[CTRADER] 🔄 Ejecutando Breakeven Automático para posID: ${trade.ctraderPositionId}`);
+                                    await ctrader.closePartial(trade.ctraderPositionId!, 50);
+                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.entryPrice);
+                                }).catch(err => {
+                                    console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
+                                });
+                            }
                         }
                     }
                     
@@ -2654,4 +2666,16 @@ export function startWatchdog() {
             }
         }
     }, WATCHDOG_INTERVAL_MS);
+}
+
+/**
+ * 🆕 v7.2: Inyectar el ID de la posición de cTrader en la RAM
+ * Esto permite que trading.ts pueda hacer cierres parciales y breakeven automáticamente
+ */
+export function updateTradePositionId(tradeId: string, positionId: string) {
+    const trade = activeTrades.get(tradeId);
+    if (trade) {
+        trade.ctraderPositionId = positionId;
+        console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
+    }
 }
