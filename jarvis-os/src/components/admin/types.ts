@@ -27,7 +27,7 @@ export interface AssetConfig {
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
-  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
   enabled: boolean;
   maxSellsPerDay: number;
   sellScorePenalty: number;
@@ -59,7 +59,7 @@ export interface BotConfig {
   slBufferPercent: number;
   fixedRR: number;
   oteEntryPercent: number;
-  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH';
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
 }
 
 export const TICKERS = ['NAS100', 'BTCUSD', 'EURUSD', 'XAUUSD', 'GBPUSD'] as const;

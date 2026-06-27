@@ -322,6 +322,14 @@ export default function BacktestingPanel() {
     try {
       const configDoc = ticker; // v7.2 Unified master document
       
+      const { OFF, LONDON, NY, ASIA } = sessionTriggers;
+      const exportedSessions = {
+        ALL: OFF,
+        LONDON,
+        NY,
+        ASIA
+      };
+
       await setDoc(doc(db, 'asset_configs', configDoc), {
         maxDailyLossR,
         dailyProfitTargetR,
@@ -329,7 +337,7 @@ export default function BacktestingPanel() {
         maxTradesPerDay,
         trailingDrawdownR,
         enabled: enabled,
-        sessions: sessionTriggers,
+        sessions: exportedSessions,
         
         // Sincronización para el Panel de Control (AdminPanel)
         slBufferPercent: slBufferPercent,
