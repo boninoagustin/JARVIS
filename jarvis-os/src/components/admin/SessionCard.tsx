@@ -24,28 +24,39 @@ const dotStyle = (active: boolean): React.CSSProperties => ({
   left: active ? '18px' : '2px', backgroundColor: active ? '#000' : '#666', transition: 'all 0.2s',
 });
 
-function TriggerRow({ label, emoji, trigger, onToggle, onScoreChange }: {
+function TriggerRow({ label, emoji, trigger, onToggle, onScoreChange, onEntryPercentChange }: {
   label: string; emoji: string;
-  trigger?: { enabled: boolean; minScore: number };
+  trigger?: { enabled: boolean; minScore: number; entryPercent?: number };
   onToggle: () => void; onScoreChange: (v: number) => void;
+  onEntryPercentChange?: (v: number) => void;
 }) {
   const isEnabled = trigger?.enabled ?? false;
   const score = trigger?.minScore ?? 8;
+  const fib = trigger?.entryPercent ?? 50;
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #1a1a1a' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '90px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '80px' }}>
         <span>{emoji}</span>
-        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isEnabled ? '#e6e6e6' : '#555' }}>{label}</span>
+        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isEnabled ? '#e6e6e6' : '#555' }}>{label}</span>
       </div>
       <button onClick={onToggle} style={toggleStyle(isEnabled)}>
         <div style={dotStyle(isEnabled)} />
       </button>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <span style={{ fontSize: '0.7rem', color: '#666' }}>Min:</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <span style={{ fontSize: '0.65rem', color: '#666' }}>Min</span>
         <input type="number" min={1} max={50} value={score}
           onChange={e => onScoreChange(parseInt(e.target.value) || 1)}
-          disabled={!isEnabled} style={{ ...inputStyle, opacity: isEnabled ? 1 : 0.4 }}
+          disabled={!isEnabled} style={{ ...inputStyle, width: '40px', padding: '4px', opacity: isEnabled ? 1 : 0.4 }}
         />
+        {onEntryPercentChange && (
+          <>
+            <span style={{ fontSize: '0.65rem', color: '#666' }}>Fib%</span>
+            <input type="number" min={1} max={100} step="0.1" value={fib}
+              onChange={e => onEntryPercentChange(parseFloat(e.target.value) || 50)}
+              disabled={!isEnabled} style={{ ...inputStyle, width: '45px', padding: '4px', opacity: isEnabled ? 1 : 0.4 }}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -98,16 +109,20 @@ export default function SessionCard({ session, config, onChange }: Props) {
             onScoreChange={v => update('bos15m', 'minScore', v)} />
           <TriggerRow label="OTE CHoCH (5m)" emoji="🎯" trigger={cfg.oteChoch5m}
             onToggle={() => update('oteChoch5m', 'enabled', !cfg.oteChoch5m?.enabled)}
-            onScoreChange={v => update('oteChoch5m', 'minScore', v)} />
+            onScoreChange={v => update('oteChoch5m', 'minScore', v)}
+            onEntryPercentChange={v => update('oteChoch5m', 'entryPercent', v)} />
           <TriggerRow label="OTE CHoCH (15m)" emoji="🎯" trigger={cfg.oteChoch15m}
             onToggle={() => update('oteChoch15m', 'enabled', !cfg.oteChoch15m?.enabled)}
-            onScoreChange={v => update('oteChoch15m', 'minScore', v)} />
+            onScoreChange={v => update('oteChoch15m', 'minScore', v)}
+            onEntryPercentChange={v => update('oteChoch15m', 'entryPercent', v)} />
           <TriggerRow label="OTE BOS (5m)" emoji="🎯" trigger={cfg.oteBos5m}
             onToggle={() => update('oteBos5m', 'enabled', !cfg.oteBos5m?.enabled)}
-            onScoreChange={v => update('oteBos5m', 'minScore', v)} />
+            onScoreChange={v => update('oteBos5m', 'minScore', v)}
+            onEntryPercentChange={v => update('oteBos5m', 'entryPercent', v)} />
           <TriggerRow label="OTE BOS (15m)" emoji="🎯" trigger={cfg.oteBos15m}
             onToggle={() => update('oteBos15m', 'enabled', !cfg.oteBos15m?.enabled)}
-            onScoreChange={v => update('oteBos15m', 'minScore', v)} />
+            onScoreChange={v => update('oteBos15m', 'minScore', v)}
+            onEntryPercentChange={v => update('oteBos15m', 'entryPercent', v)} />
 
           {/* Directional Max Consecutive Losses & Risk Settings */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a1a1a' }}>
