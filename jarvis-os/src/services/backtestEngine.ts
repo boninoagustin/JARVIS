@@ -346,9 +346,9 @@ export function runBacktest(
     }
   }
 
-  // Close remaining active trades as TIMEOUT
+  // Close remaining active trades as BE (previously TIMEOUT)
   for (const [, trade] of activeTrades) {
-    trade.result = 'TIMEOUT';
+    trade.result = 'BE';
     trade.closeTimestamp = validEntries[validEntries.length - 1].ts;
   }
 
@@ -464,13 +464,36 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
+      // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
+      if (trade.tp1Hit && !trade.slHalfwayHit) {
+        const distEntryToTp1 = Math.abs(trade.tp1Price - trade.entryPrice);
+        const halfwayPrice = trade.direction === 'BUY'
+          ? trade.tp1Price + (distEntryToTp1 * 0.5)
+          : trade.tp1Price - (distEntryToTp1 * 0.5);
+
+        const halfwayHit = trade.direction === 'BUY'
+          ? highPrice >= halfwayPrice
+          : lowPrice <= halfwayPrice;
+
+        if (halfwayHit) {
+          trade.slHalfwayHit = true;
+          trade.slPrice = trade.entryPrice;
+        }
+      }
+
       // TP1
       if (!trade.tp1Hit) {
         const tp1Hit = trade.direction === 'BUY' ? highPrice >= trade.tp1Price : lowPrice <= trade.tp1Price;
         if (tp1Hit) {
           trade.tp1Hit = true;
           const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          trade.slPrice = trade.entryPrice; // Move SL to entry price (BE)
+          
+          // 🆕 MOVER SL AL 50% DE REDUCCIÓN DE RIESGO POST-TP1
+          const riskDist = Math.abs(trade.entryPrice - trade.slPrice);
+          trade.slPrice = trade.direction === 'BUY'
+            ? trade.slPrice + (riskDist * 0.5)
+            : trade.slPrice - (riskDist * 0.5);
+            
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
           trade.rMultipleTp1 = slLossPct > 0 ? (trade.pnlTp1 / slLossPct) * 0.5 : 0.5;
@@ -535,16 +558,6 @@ function processAlert(
         continue;
       }
 
-      // Timeout: 6 hours
-      if (tradeAge > 6 * 60 * 60 * 1000) {
-        trade.result = 'TIMEOUT';
-        trade.resultTp2 = 'TIMEOUT';
-        if (!trade.tp1Hit) trade.resultTp1 = 'TIMEOUT';
-        
-        trade.closeTimestamp = nowMs;
-        trade.durationMin = Math.round(tradeAge / 60000);
-        activeTrades.delete(tradeId);
-      }
     }
 
     // Zone touching (scoring)
@@ -975,6 +988,33 @@ function processAlert(
 // --- CREATE TRADE ---
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig) {
   if (dailyStats.isKilled) return;
+
+  // 🛡️ ANTI-PYRAMIDACIÓN & SAR
+  let existingTradeForTicker: BacktestTrade | undefined;
+  for (const t of activeTrades.values()) {
+    existingTradeForTicker = t;
+    break; // En standalone backtester asumimos 1 ticker (el config.ticker actual)
+  }
+
+  if (existingTradeForTicker) {
+    if (existingTradeForTicker.direction === oteData.direction) {
+      return; // Bloqueo de piramidación
+    } else {
+      if (oteData.points > existingTradeForTicker.points) {
+        // Ejecutar SAR (Reversión)
+        existingTradeForTicker.result = 'REVERSAL';
+        existingTradeForTicker.resultTp2 = 'REVERSAL';
+        if (!existingTradeForTicker.tp1Hit) existingTradeForTicker.resultTp1 = 'REVERSAL';
+        existingTradeForTicker.closeTimestamp = nowMs;
+        existingTradeForTicker.durationMin = Math.round((nowMs - existingTradeForTicker.timestamp) / 60000);
+        activeTrades.delete(existingTradeForTicker.id);
+        updateDailyStatsFromClose(existingTradeForTicker, dailyStats, config);
+      } else {
+        return; // Contra-tendencia más débil, ignorar entrada
+      }
+    }
+  }
+
   const trade: BacktestTrade = {
     id: oteData.tradeId,
     timestamp: nowMs,
