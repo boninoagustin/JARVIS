@@ -197,20 +197,21 @@ export default function RadarHeatmap() {
               
               return (
                 <tr key={asset.id} className={rowClass} style={{ transition: 'all 0.3s ease' }}>
-                  {/* ACTIVO + Rayo Confluencia */}
-                  <td style={{ paddingLeft: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', height: '52px' }}>
-                    <span style={{ color: isPerfectlyAligned ? 'var(--accent-gold)' : 'var(--text-primary)' }}>
-                      {asset.id}
-                    </span>
-                    {isPerfectlyAligned && (
-                      <span 
-                        title={`¡CONFLUENCIA PERFECTA 100% ${isAlignedBuy ? 'ALCISTA' : 'BAJISTA'}!`}
-                        className="thunder-animate"
-                        style={{ display: 'flex', alignItems: 'center' }}
-                      >
-                        <Zap size={13} fill="var(--accent-gold)" color="var(--accent-gold)" />
+                  <td style={{ paddingLeft: '16px', fontWeight: 700 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', height: '100%' }}>
+                      <span style={{ color: isPerfectlyAligned ? 'var(--accent-gold)' : 'var(--text-primary)' }}>
+                        {asset.id}
                       </span>
-                    )}
+                      {isPerfectlyAligned && (
+                        <span 
+                          title={`¡CONFLUENCIA PERFECTA 100% ${isAlignedBuy ? 'ALCISTA' : 'BAJISTA'}!`}
+                          className="thunder-animate"
+                          style={{ display: 'flex', alignItems: 'center' }}
+                        >
+                          <Zap size={13} fill="var(--accent-gold)" color="var(--accent-gold)" />
+                        </span>
+                      )}
+                    </div>
                   </td>
 
                   {/* PRECIO (Con sutil color si está alineado) */}
