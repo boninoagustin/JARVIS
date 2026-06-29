@@ -1099,7 +1099,7 @@ export async function processTradingAlert(alertText: string) {
     const FAKE_TICKERS = new Set(['HEARTBEAT', 'EVENTO_CHOCH', 'EVENTO_BOS', 'SWEEP_BROKEN', 
                                    'DIV_BROKEN', 'EVENTO_SMC_DIV', 'EVENTO_SWEEP', 'EVENTO_SWEEP_TL',
                                    'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE']);
-    if (!FAKE_TICKERS.has(prefix)) {
+    if (!FAKE_TICKERS.has(ticker)) {
         tickerLastSeen.set(ticker, nowMs);
     }
 
@@ -1127,7 +1127,10 @@ export async function processTradingAlert(alertText: string) {
         
         // Si el servidor se reinició y la RAM está vacía, hacemos 1 sola lectura a Firebase
         if (!state) {
-            const docSnap = await docRef.get();
+            const docSnap = await Promise.race([
+                docRef.get(),
+                new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore docRef.get() timeout tras 5s")), 5000))
+            ]);
             state = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
             localRadarStates.set(ticker, state);
         }
