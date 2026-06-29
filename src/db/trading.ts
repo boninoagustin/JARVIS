@@ -123,6 +123,7 @@ interface ActiveTrade {
     originalSlPrice?: number; // 🆕 Precio del Stop Loss original antes de ser movido a Breakeven
     tp1Hit: boolean;          
     tp2Hit: boolean;          
+    slHalfwayHit?: boolean;   // 🆕 Indica si ya se movió el SL un 50% post-TP1
     timestamp: number;
     ctraderPositionId?: string; // 🆕 ID de la posición en cTrader para poder manejar Breakeven
 }
@@ -1244,15 +1245,19 @@ export async function processTradingAlert(alertText: string) {
 
                             trade.tp1Hit = true;
                             trade.originalSlPrice = trade.slPrice;
-                            trade.slPrice = trade.entryPrice; // Move SL to entry price (BE)
+                            
+                            // 🆕 RISK REDUCTION: Mover el SL al 50% del riesgo inicial
+                            const distanceToEntry = trade.entryPrice - trade.originalSlPrice;
+                            const slHalfway = trade.originalSlPrice + (distanceToEntry * 0.5);
+                            trade.slPrice = parseFloat(slHalfway.toFixed(5));
                             
                             const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
                             const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
                             
-                            // 💾 Sincronizar actualización de TP1 (SL cambia a Breakeven)
+                            // 💾 Sincronizar actualización de TP1 (SL cambia al 50%)
                             if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
                                 tp1Hit: true,
-                                slPrice: trade.entryPrice,
+                                slPrice: trade.slPrice,
                                 originalSlPrice: trade.originalSlPrice
                             }).catch(() => {});
                             
@@ -1262,7 +1267,7 @@ export async function processTradingAlert(alertText: string) {
                                     fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         tp1Hit: true,
                                         tp1Timestamp: nowTrade,
-                                        slPrice: trade.entryPrice,
+                                        slPrice: trade.slPrice,
                                         originalSlPrice: trade.originalSlPrice
                                     }).catch(() => {});
                                 }
@@ -1273,21 +1278,69 @@ export async function processTradingAlert(alertText: string) {
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ✅\n` +
                                 `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
-                                `🛑 SL (Ajustado a Breakeven): ${trade.entryPrice}\n` +
+                                `🛑 SL (Reducido 50%): ${trade.slPrice}\n` +
                                 `⏱️ Duración: ${durationStr}\n\n` +
-                                `💡 Toma parcial ejecutada (50%). El Stop Loss se ha movido automáticamente al precio de entrada (Breakeven) para proteger la operación.`;
+                                `💡 Toma parcial ejecutada (50%). El Stop Loss se ha acercado a la entrada para reducir el riesgo a la mitad (Risk Reduction).`;
                             if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => {});
-                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL ajustado a Breakeven`);
+                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL reducido al 50%`);
 
                             // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
-                                    console.log(`[CTRADER] 🔄 Ejecutando Breakeven Automático para posID: ${trade.ctraderPositionId}`);
+                                    console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
                                     await ctrader.closePartial(trade.ctraderPositionId!, 50);
-                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.entryPrice);
+                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.slPrice);
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
                                 });
+                            }
+                        }
+                    }
+
+                    // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
+                    if (trade.tp1Hit && !trade.slHalfwayHit) {
+                        const riskDist = Math.abs(trade.tp1Price - trade.entryPrice);
+                        const tp1_5Price = trade.direction === 'BUY' ? trade.tp1Price + (riskDist * 0.5) : trade.tp1Price - (riskDist * 0.5);
+
+                        const beHit = trade.direction === 'BUY'
+                        ? highPrice >= tp1_5Price
+                        : lowPrice <= tp1_5Price;
+
+                        if (beHit) {
+                            if (isDuplicate(`BE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+
+                            trade.slHalfwayHit = true;
+                            trade.slPrice = trade.entryPrice;
+
+                            // Actualizar Firebase
+                            if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
+                                slHalfwayHit: true,
+                                slPrice: trade.entryPrice 
+                            }).catch(() => {});
+                            
+                            if (trade.journalId) {
+                                const { db: fireDb } = await import('./memory.js');
+                                if (fireDb) {
+                                    fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                        slHalfwayHit: true,
+                                        slPrice: trade.entryPrice
+                                    }).catch(() => {});
+                                }
+                            }
+
+                            const beMsg = `🛡️ <b>BREAKEVEN ACTIVADO | ${ticker} | ${trade.direction}</b>\n\n` +
+                                `📈 El precio avanzó un 50% extra después del TP1.\n` +
+                                `🛑 SL Ajustado a Precio de Entrada: ${trade.entryPrice}\n\n` +
+                                `💡 Operación 100% libre de riesgo.`;
+                            
+                            if (!isBacktest) sendTelegramAlert(beMsg).catch(() => {});
+                            console.log(`[JOURNAL] 🛡️ Breakeven diferido activado: ${ticker} ${trade.direction} #${tradeId}`);
+
+                            if (!isBacktest && trade.ctraderPositionId) {
+                                import('../services/ctrader.js').then(async (ctrader) => {
+                                    console.log(`[CTRADER] 🔄 Ejecutando Breakeven Definitivo para posID: ${trade.ctraderPositionId}`);
+                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.entryPrice);
+                                }).catch(err => {});
                             }
                         }
                     }
@@ -1996,6 +2049,8 @@ export async function processTradingAlert(alertText: string) {
 
                         if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
                             const decimals = getDecimals(ticker);
+                            const currentSession = getCurrentSession(nowMs);
+                            const sessionConfig = config.sessions?.[currentSession];
                             const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, 0); // SL Buffer ONLY for OTE
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
@@ -2474,6 +2529,7 @@ export async function processTradingAlert(alertText: string) {
                         slPrice: parseFloat(oteData.stopLoss),
                         tp1Hit: false,
                         tp2Hit: false,
+                        slHalfwayHit: false,
                         timestamp: nowMs
                     };
                     activeTrades.set(oteData.tradeId, activeTrade);

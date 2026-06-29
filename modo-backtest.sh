@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "🔴 Deteniendo el servicio JARVIS de producción..."
-sudo systemctl stop jarvis.service
+pm2 stop JARVIS
 
 echo "🟢 Iniciando JARVIS en Modo Desarrollo (Modo Visual para Backtesting)..."
 echo "👉 Presiona Ctrl+C cuando termines de hacer backtest para volver al modo producción."
@@ -14,5 +14,5 @@ npm run dev
 echo "----------------------------------------------------------------------"
 echo "🟡 Modo Desarrollo cerrado."
 echo "🚀 Reiniciando el servicio JARVIS de producción..."
-sudo systemctl start jarvis.service
+pm2 start JARVIS
 echo "✅ JARVIS está operando en segundo plano nuevamente."
