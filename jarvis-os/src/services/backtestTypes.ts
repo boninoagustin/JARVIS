@@ -100,7 +100,7 @@ export function emptyState(): RadarState {
     zones: [], lastPrice: null, previousPrice: null,
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '3': 'NEUTRAL' },
+    marketBias: { '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '5': 'NEUTRAL' },
     lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
     activeImpulseBuy: null, activeImpulseSell: null,
     activeMacroImpulseBuy: null, activeMacroImpulseSell: null,

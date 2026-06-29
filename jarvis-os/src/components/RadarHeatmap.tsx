@@ -14,7 +14,7 @@ interface ImpulseLeg {
 
 interface RadarState {
   id: string;
-  marketBias: { '240': string, '60': string, '15': string, '3': string };
+  marketBias: { '240': string, '60': string, '15': string, '5': string };
   scoreBuy: { points: number };
   scoreSell: { points: number };
   zones: any[];
