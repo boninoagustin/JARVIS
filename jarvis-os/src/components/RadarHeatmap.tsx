@@ -40,14 +40,14 @@ function getDecimals(ticker: string): number {
 }
 
 const getIcon = (dir: string) => {
-  if (dir === 'BUY') return <span className="status-buy" style={{ fontWeight: 700 }}>BUY 🟢</span>;
-  if (dir === 'SELL') return <span className="status-sell" style={{ fontWeight: 700 }}>SELL 🔴</span>;
-  return <span className="status-neutral" style={{ opacity: 0.5 }}>NEUT ⚪</span>;
+  if (dir === 'BUY') return <span className="status-buy">🟢</span>;
+  if (dir === 'SELL') return <span className="status-sell">🔴</span>;
+  return <span className="status-neutral" style={{ opacity: 0.5 }}>⚪</span>;
 };
 
 const SkeletonRow = () => (
   <tr>
-    {Array.from({ length: 12 }, (_, i) => (
+    {Array.from({ length: 11 }, (_, i) => (
       <td key={i}><div className="skeleton skeleton-row" /></td>
     ))}
   </tr>
@@ -143,16 +143,15 @@ export default function RadarHeatmap() {
             <tr>
               <th style={{ paddingLeft: '16px' }}>ACTIVO</th>
               <th>PRECIO</th>
-              <th>4H (MACRO)</th>
-              <th>1H (TREND)</th>
-              <th>15M (MICRO)</th>
+              <th>4H</th>
+              <th>1H</th>
+              <th>15M</th>
               <th>GATILLO</th>
-              <th>PUNTOS C</th>
-              <th>PUNTOS V</th>
+              <th>PUNTOS B</th>
+              <th>PUNTOS S</th>
               <th>TERMÓMETRO</th>
-              <th style={{ minWidth: '170px' }}>OTE 50%</th>
-              <th style={{ minWidth: '160px' }}>ÚLT. GATILLO</th>
-              <th style={{ minWidth: '165px', paddingRight: '16px' }}>PRÓX. ZONAS</th>
+              <th style={{ minWidth: '170px' }}>OTE</th>
+              <th style={{ minWidth: '160px', paddingRight: '16px' }}>ÚLT. GATILLO</th>
             </tr>
           </thead>
           <tbody>
@@ -300,7 +299,7 @@ export default function RadarHeatmap() {
                   </td>
 
                   {/* ÚLTIMO GATILLO (Con caja estilizada institucional) */}
-                  <td>
+                  <td style={{ paddingRight: '16px' }}>
                     {asset.lastGatillo ? (
                       <div style={{ 
                         display: 'flex', 
@@ -343,46 +342,12 @@ export default function RadarHeatmap() {
                       <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>
                     )}
                   </td>
-
-                  {/* PRÓXIMAS ZONAS */}
-                  <td style={{ paddingRight: '16px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.7rem' }}>
-                      {(asset.nextZones && asset.nextZones.length > 0) 
-                        ? asset.nextZones.slice(0, 3).map((z: any, zi: number) => {
-                          const isGold = z.medal?.includes('Oro');
-                          const isPlat = z.medal?.includes('Platino');
-                          
-                          return (
-                            <div key={zi} style={{
-                              display: 'flex', alignItems: 'center', gap: '4px',
-                              color: z.dir === 'BUY' ? 'var(--accent-green)' : 'var(--accent-red)',
-                              opacity: 0.85
-                            }}>
-                              <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-                                {z.tf ? (z.tf === '240' ? '4H' : z.tf === '60' ? '1H' : z.tf === '15' ? '15M' : '3M') : '?'}
-                              </span>
-                              <span className="mono">{z.btm?.toFixed(decimals)}→{z.top?.toFixed(decimals)}</span>
-                              <span style={{
-                                fontSize: '0.55rem', padding: '0px 3px', borderRadius: '2px',
-                                backgroundColor: isPlat ? 'rgba(142,36,170,0.25)' : isGold ? 'rgba(245,127,23,0.25)' : 'rgba(100,100,100,0.1)',
-                                color: isPlat ? '#ba68c8' : isGold ? 'var(--accent-gold)' : 'var(--text-secondary)',
-                                fontWeight: 700
-                              }}>
-                                {z.medal?.substring(0, 4) || 'OB'}
-                              </span>
-                            </div>
-                          );
-                        }) : (
-                        <span style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem' }}>—</span>
-                      )}
-                    </div>
-                  </td>
                 </tr>
               );
             })}
             {!loading && states.length === 0 && (
               <tr>
-                <td colSpan={12} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-tertiary)' }}>
+                <td colSpan={11} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-tertiary)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                     <Activity size={24} opacity={0.3} />
                     <span style={{ fontWeight: 600 }}>Esperando datos del Radar Cuantitativo...</span>
