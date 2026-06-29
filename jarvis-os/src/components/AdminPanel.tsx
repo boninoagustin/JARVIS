@@ -54,6 +54,8 @@ export default function AdminPanel() {
       } catch (err) {
         console.error("Error fetching config:", err);
       }
+    };
+
     fetchConfig();
     const intervalId = setInterval(() => {
       fetchConfig();
