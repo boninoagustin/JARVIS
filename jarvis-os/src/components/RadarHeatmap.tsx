@@ -548,6 +548,7 @@ export default function RadarHeatmap() {
             )}
           </tbody>
         </table>
+        )}
       </div>
 
       {/* HISTORIAL RECIENTE */}
