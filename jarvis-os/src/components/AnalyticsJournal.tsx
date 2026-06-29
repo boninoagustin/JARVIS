@@ -8,7 +8,6 @@ import {
   Crosshair, 
   Target, 
   Award,
-  Activity,
   Download,
   ShieldCheck
 } from 'lucide-react';
@@ -85,72 +84,7 @@ const getTradeRR = (t: TradeLog): number => {
   return 0;
 };
 
-const getSuggestedR = (t: TradeLog): number => {
-  if (t.rMultiple !== undefined && t.rMultiple !== null) {
-    return Math.abs(t.rMultiple);
-  }
-  if (t.entryPrice && t.slPrice) {
-    const risk = Math.abs(t.entryPrice - t.slPrice);
-    if (risk > 0) {
-      let targetPrice = t.tp1Price;
-      if (t.tp2Hit && t.tp2Price) {
-        targetPrice = t.tp2Price;
-      } else if (t.tp1Price) {
-        targetPrice = t.tp1Price;
-      } else if (t.tp2Price) {
-        targetPrice = t.tp2Price;
-      }
-      
-      if (targetPrice) {
-        const reward = Math.abs(targetPrice - t.entryPrice);
-        return Number((reward / risk).toFixed(2));
-      }
-    }
-  }
-  return 1; // Conservador: sin datos suficientes para calcular
-};
 
-const resultButtonStyle = (color: string, isActive: boolean) => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '4px',
-  padding: '4px 10px',
-  fontSize: '0.75rem',
-  fontWeight: 600,
-  fontFamily: 'var(--font-mono)',
-  border: `1px solid ${color}`,
-  borderRadius: '4px',
-  cursor: 'pointer',
-  transition: 'all 0.2s ease',
-  backgroundColor: isActive ? color : 'transparent',
-  color: isActive ? 'var(--bg-base)' : color,
-  opacity: isActive ? 1 : 0.7,
-});
-
-const getEntryTypeBadge = (t: TradeLog) => {
-  const events = t.events || [];
-  const hasBos = events.some(e => e.includes('BOS🔨'));
-  const hasChoch = events.some(e => e.includes('CHoCH🚀'));
-  const hasOte = events.includes('🎯_OTE_Retracement_3M');
-
-  if (t.isChochEntry) {
-    if (hasBos) {
-      return { label: 'BOS Directo', color: '#7c4dff', bg: 'rgba(124,77,255,0.1)' };
-    }
-    return { label: 'CHoCH Directo', color: '#ffaa00', bg: 'rgba(255,170,0,0.1)' };
-  }
-  
-  if (hasOte) {
-    if (hasChoch) return { label: 'OTE (CHoCH)', color: '#00ffcc', bg: 'rgba(0,255,204,0.1)' };
-    if (hasBos) return { label: 'OTE (BOS)', color: '#00ccff', bg: 'rgba(0,204,255,0.1)' };
-    return { label: 'OTE', color: '#00ffcc', bg: 'rgba(0,255,204,0.1)' };
-  }
-  
-  if (hasChoch) return { label: 'CHoCH', color: '#ff7700', bg: 'rgba(255,119,0,0.1)' };
-  if (hasBos) return { label: 'BOS', color: '#7c4dff', bg: 'rgba(124,77,255,0.1)' };
-  
-  return { label: 'SMC', color: 'var(--text-secondary)', bg: 'rgba(100,100,100,0.1)' };
-};
 
 export default function AnalyticsJournal() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
