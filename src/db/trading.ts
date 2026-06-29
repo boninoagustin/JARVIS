@@ -2740,7 +2740,6 @@ export function startWatchdog() {
     setInterval(() => {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
-        const TRADE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 horas sin PINGs = cierre automático
         
         for (const [id, trade] of activeTrades) {
             const age = now - trade.timestamp;

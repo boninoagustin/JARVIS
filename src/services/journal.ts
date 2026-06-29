@@ -28,7 +28,7 @@ export const TradeRecordSchema = z.object({
     mixtureConsensus: z.string().optional(),
     timestamp: z.number(),
     date: z.string(),
-    result: z.enum(['WIN', 'LOSS', 'BREAKEVEN', 'PARTIAL_TP1', 'TIMEOUT']).optional(),
+    result: z.enum(['WIN', 'LOSS', 'BREAKEVEN', 'PARTIAL_TP1', 'TIMEOUT', 'REVERSAL']).optional(),
     pnl: z.number().optional(),
     durationMin: z.number().optional(),
     mode: z.enum(['live', 'backtesting']).optional(),
