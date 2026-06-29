@@ -126,6 +126,7 @@ interface ActiveTrade {
     slHalfwayHit?: boolean;   // 🆕 Indica si ya se movió el SL un 50% post-TP1
     timestamp: number;
     ctraderPositionId?: string; // 🆕 ID de la posición en cTrader para poder manejar Breakeven
+    score: number;            // 🆕 Puntaje de la señal para evaluación de Reversión (SAR)
 }
 
 const activeTrades = new Map<string, ActiveTrade>();
@@ -2380,6 +2381,50 @@ export async function processTradingAlert(alertText: string) {
                 }
 
             }
+            
+            // 🆕 Filtro Anti-Piramidación y Lógica SAR (Stop and Reverse)
+            let existingTradeForTicker: ActiveTrade | undefined;
+            for (const trade of activeTrades.values()) {
+                if (trade.ticker === ticker) {
+                    existingTradeForTicker = trade;
+                    break;
+                }
+            }
+
+            if (existingTradeForTicker) {
+                if (existingTradeForTicker.direction === oteData.direction) {
+                    // Mismo sentido -> Bloquear para evitar piramidación
+                    console.log(`[ANTI-PYRAMID] ⛔ Señal ${oteData.direction} ignorada para ${ticker}: ya hay una operación activa en la misma dirección.`);
+                    sendTelegramAlert(`⚠️ <b>SEÑAL IGNORADA</b> | ${ticker}\nSe detectó una nueva señal <b>${oteData.direction}</b>, pero ya hay una operación abierta en la misma dirección. (Anti-Piramidación)`).catch(() => {});
+                    return;
+                } else {
+                    // Dirección Opuesta -> SAR (Stop and Reverse)
+                    if (oteData.points > existingTradeForTicker.score) {
+                        console.log(`[SAR] 🔄 Reversión Activada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) supera a la activa (Score: ${existingTradeForTicker.score}).`);
+                        
+                        // Cerrar operación vieja
+                        activeTrades.delete(existingTradeForTicker.tradeId);
+                        if (db) db.collection('active_trades').doc(existingTradeForTicker.tradeId).delete().catch(() => {});
+                        
+                        if (existingTradeForTicker.journalId) {
+                            recordResult(existingTradeForTicker.journalId, 'REVERSAL').catch(() => {});
+                        }
+                        
+                        sendTelegramAlert(`🔄 <b>CIERRE POR REVERSIÓN (SAR)</b> | ${ticker}\n\nSe cerró la operación <b>${existingTradeForTicker.direction}</b> porque ingresó una nueva señal <b>${oteData.direction}</b> con mayor convicción (Puntaje: ${oteData.points} vs ${existingTradeForTicker.score}).`).catch(() => {});
+                        
+                        if (!isBacktest && existingTradeForTicker.ctraderPositionId) {
+                            import('../services/ctrader.js').then(async (ctrader) => {
+                                await ctrader.closePosition(existingTradeForTicker!.ctraderPositionId!);
+                            }).catch(() => {});
+                        }
+                    } else {
+                        // Puntaje menor o igual -> Ignorar la nueva señal
+                        console.log(`[SAR] ⛔ Reversión Denegada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) no supera a la activa (Score: ${existingTradeForTicker.score}).`);
+                        sendTelegramAlert(`⚠️ <b>SEÑAL DESCARTADA</b> | ${ticker}\n\nSe detectó una señal <b>${oteData.direction}</b> (Puntaje: ${oteData.points}), pero se mantiene la operación <b>${existingTradeForTicker.direction}</b> actual porque tiene mayor o igual convicción (Puntaje: ${existingTradeForTicker.score}).`).catch(() => {});
+                        return;
+                    }
+                }
+            }
 
             const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
             console.log(`[SNIPER] 🔍 Verificando duplicado: ${fingerprint}`);
@@ -2530,6 +2575,7 @@ export async function processTradingAlert(alertText: string) {
                         tp1Hit: false,
                         tp2Hit: false,
                         slHalfwayHit: false,
+                        score: oteData.points || 0,
                         timestamp: nowMs
                     };
                     activeTrades.set(oteData.tradeId, activeTrade);
@@ -2707,29 +2753,7 @@ export function startWatchdog() {
                 continue; // No cerrar trades hasta que llegue el primer PING real
             }
             
-            // Cierre por timeout: 6 horas sin actividad
-            if (inactivity > TRADE_TIMEOUT_MS) {
-                activeTrades.delete(id);
-                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
-                
-                const durationMin = Math.round(age / 60000);
-                const timeoutMsg = `⏰ <b>TRADE CERRADO POR TIMEOUT | ${trade.ticker} | ${trade.direction}</b>\n\n` +
-                    `🕒 Apertura: ${new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })}\n` +
-                    `📥 Entrada: ${trade.entryPrice}\n` +
-                    `🎯 TP1: ${trade.tp1Price} ${trade.tp1Hit ? '✅' : '⏭️'}\n` +
-                    `🛑 SL: ${trade.slPrice}\n` +
-                    `📊 Resultado: Indeterminado (sin datos de precio)\n` +
-                    `⏱️ Duración total: ${durationMin} min\n\n` +
-                    `⚠️ TradingView dejó de enviar alertas para ${trade.ticker}. Trade cerrado automáticamente.`;
-                sendTelegramAlert(timeoutMsg).catch(() => {});
-                console.log(`[JOURNAL] ⏰ Trade ${id} (${trade.ticker}) cerrado por timeout tras ${Math.round(inactivity / 60000)} min sin PINGs.`);
-                
-                // Registrar en journal como TIMEOUT
-                if (trade.journalId) {
-                    recordResult(trade.journalId, 'TIMEOUT').catch(() => {});
-                }
-                continue;
-            }
+            // Cierre por timeout: ELIMINADO SEGÚN SOLICITUD
             
             // Limpieza de trades huérfanos (7 días)
             if (age > SEVEN_DAYS) {
