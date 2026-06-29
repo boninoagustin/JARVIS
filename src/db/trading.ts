@@ -694,7 +694,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             }
 
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-            const tfFormatted = triggerTf.toUpperCase() || '3M';
+            const tfFormatted = triggerTf.toUpperCase() || '5M';
             const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
             
             if (!activeScore.events.includes(eventName)) {
@@ -731,7 +731,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     `${getIconStr(bias240)} 4H: ${bias240}\n` +
                     `${getIconStr(bias60)} 1H: ${bias60}\n` +
                     `${getIconStr(bias15)} 15M: ${bias15}\n\n` +
-                    `🎯 <b>Confluencia de Entrada:</b> Retroceso OTE 3M en nivel del 50% Fibo (Puntaje base: ${leg.chochPoints || 0} pts + OTE: +4 pts).`;
+                    `🎯 <b>Confluencia de Entrada:</b> Retroceso OTE 5M en nivel del 50% Fibo (Puntaje base: ${leg.chochPoints || 0} pts + OTE: +4 pts).`;
 
                 const oteData = {
                     tradeId, 
