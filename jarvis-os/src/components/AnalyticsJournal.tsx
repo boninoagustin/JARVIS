@@ -757,7 +757,7 @@ export default function AnalyticsJournal() {
             <tbody>
               {trades.slice(0, 15).map(t => (
                 <tr key={t.id} style={{ opacity: updating === t.id ? 0.5 : 1, transition: 'opacity 0.2s' }}>
-                  <td>{new Date(t.timestamp).toLocaleString()}</td>
+                  <td>{new Date(t.timestamp).toLocaleString(undefined, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
                   <td style={{ fontWeight: 700 }}>{t.ticker}</td>
                   <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -803,6 +803,12 @@ export default function AnalyticsJournal() {
                       <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                         <span title="Stop Loss" style={{ color: 'var(--accent-red)', opacity: t.slHit ? 0.4 : 0.7 }}>🛑{t.slPrice}</span>
                         <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                        {t.entryPrice !== undefined && (
+                          <>
+                            <span title="Entry" style={{ color: 'var(--text-primary)', opacity: 0.9 }}>📥{t.entryPrice}</span>
+                            <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                          </>
+                        )}
                         <span title="Take Profit 1" style={{ color: 'var(--accent-gold)', opacity: t.tp1Hit ? 0.4 : 0.7 }}>🎯{t.tp1Price}</span>
                         {t.tp2Price && t.tp2Price > 0 && (
                           <>
