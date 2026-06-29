@@ -276,9 +276,9 @@ export default function BacktestingPanel() {
   const [isOptimizingPortfolio, setIsOptimizingPortfolio] = useState(false);
   const [portfolioOptResults, setPortfolioOptResults] = useState<any[]>([]);
 
-  const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '3': 3 };
-  const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '3': '3M' };
-  const TF_COLOR: Record<string, string> = { '240': '#7c4dff', '60': '#0088ff', '15': 'var(--accent-gold)', '3': 'var(--accent-red)' };
+  const TF_ORDER: Record<string, number> = { '240': 0, '60': 1, '15': 2, '5': 3 };
+  const TF_LABEL: Record<string, string> = { '240': '4H', '60': '1H', '15': '15M', '5': '5M' };
+  const TF_COLOR: Record<string, string> = { '240': '#7c4dff', '60': '#0088ff', '15': 'var(--accent-gold)', '5': 'var(--accent-red)' };
 
   const getSessionForTimestamp = useCallback((ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' => {
     const d = new Date(ts);
@@ -1591,7 +1591,7 @@ export default function BacktestingPanel() {
                 Click o arrastrá los 4 CSV del Pine Editor
               </div>
               <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                Auto-detecta TF por contenido (3M, 15M, 1H, 4H)
+                Auto-detecta TF por contenido (5M, 15M, 1H, 4H)
               </div>
             </div>
             <input ref={fileInputRef} type="file" accept=".csv,.txt,.log" multiple onChange={handleFilesUpload} style={{ display: 'none' }} />

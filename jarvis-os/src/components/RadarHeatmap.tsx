@@ -131,7 +131,7 @@ const getEntryTypeBadge = (t: TradeLog) => {
   const events = t.events || [];
   const hasBos = events.some(e => e.includes('BOS🔨'));
   const hasChoch = events.some(e => e.includes('CHoCH🚀'));
-  const hasOte = events.includes('🎯_OTE_Retracement_3M');
+  const hasOte = events.includes('🎯_OTE_Retracement_5M');
 
   if (t.isChochEntry) {
     if (hasBos) return { label: 'BOS Directo', color: '#7c4dff', bg: 'rgba(124,77,255,0.1)' };
@@ -359,10 +359,10 @@ export default function RadarHeatmap() {
               const bias4H = asset.marketBias?.['240'];
               const bias1H = asset.marketBias?.['60'];
               const bias15M = asset.marketBias?.['15'];
-              const bias3M = asset.marketBias?.['3'];
-              
-              const isAlignedBuy = bias4H === 'BUY' && bias1H === 'BUY' && bias15M === 'BUY' && bias3M === 'BUY';
-              const isAlignedSell = bias4H === 'SELL' && bias1H === 'SELL' && bias15M === 'SELL' && bias3M === 'SELL';
+              const bias5M = asset.marketBias?.['5'];
+
+              const isAlignedBuy = bias4H === 'BUY' && bias1H === 'BUY' && bias15M === 'BUY' && bias5M === 'BUY';
+              const isAlignedSell = bias4H === 'SELL' && bias1H === 'SELL' && bias15M === 'SELL' && bias5M === 'SELL';
               const isPerfectlyAligned = isAlignedBuy || isAlignedSell;
 
               const rowClass = isAlignedBuy ? 'row-aligned-buy' : isAlignedSell ? 'row-aligned-sell' : '';
@@ -419,7 +419,7 @@ export default function RadarHeatmap() {
                   <td>{getIcon(bias4H)}</td>
                   <td>{getIcon(bias1H)}</td>
                   <td>{getIcon(bias15M)}</td>
-                  <td>{getIcon(bias3M)}</td>
+                  <td>{getIcon(bias5M)}</td>
 
                   {/* PUNTOS */}
                   <td>

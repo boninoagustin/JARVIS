@@ -125,7 +125,7 @@ export const parseTF = (tf: string) => {
   if (tf === '240') return '4H';
   if (tf === '60') return '1H';
   if (tf === '15') return '15M';
-  if (tf === '3') return '3M';
+  if (tf === '5') return '5M';
   return `${tf}M`;
 };
 
