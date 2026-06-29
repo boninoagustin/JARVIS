@@ -756,6 +756,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     slPrice: adjustedSL,
                     tp1Hit: false,
                     tp2Hit: false,
+                    score: oteData.points || 0,
                     timestamp: nowMs
                 };
 

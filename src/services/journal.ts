@@ -118,7 +118,7 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
  */
 export async function recordResult(
     tradeId: string,
-    result: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'TIMEOUT',
+    result: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'TIMEOUT' | 'REVERSAL',
     pnl?: number
 ): Promise<boolean> {
     if (!db) return false;
