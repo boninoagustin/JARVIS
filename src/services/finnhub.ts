@@ -2,7 +2,7 @@ import nodeFetch from 'node-fetch';
 import { db } from '../db/memory.js';
 import { generateResponse } from '../llm/client.js';
 
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
+
 
 async function fetchYahooPrice(symbol: string): Promise<number | null> {
     try {
@@ -50,7 +50,7 @@ export async function updateFundamentals() {
         }
 
         // 1. Obtener noticias de mercado general (Forex, Crypto, Stocks)
-        const res = await nodeFetch(`https://finnhub.io/api/v1/news?category=general&token=${FINNHUB_API_KEY}`);
+        const res = await nodeFetch(`https://finnhub.io/api/v1/news?category=general&token=${process.env.FINNHUB_API_KEY || ''}`);
         const newsData: any = await res.json();
         
         if (!Array.isArray(newsData) || newsData.length === 0) {
