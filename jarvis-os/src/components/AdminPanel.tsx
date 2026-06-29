@@ -10,7 +10,6 @@ export default function AdminPanel() {
   const { toast } = useToast();
   const [activeTicker, setActiveTicker] = useState<string>(TICKERS[0]);
   const [assetConfig, setAssetConfig] = useState<AssetConfig>(DEFAULT_ASSET_CONFIG);
-  const [autoTrading, setAutoTrading] = useState<boolean>(false);
   const [saving, setSaving] = useState(false);
 
   // Cargar config del activo seleccionado
@@ -55,24 +54,9 @@ export default function AdminPanel() {
       } catch (err) {
         console.error("Error fetching config:", err);
       }
-    };
-
-    const fetchBotConfig = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, 'app_settings', 'bot_config'));
-        if (docSnap.exists()) {
-          setAutoTrading(docSnap.data()?.autoTrading === true);
-        }
-      } catch (err) {
-        console.error("Error fetching bot config:", err);
-      }
-    };
-
     fetchConfig();
-    fetchBotConfig();
     const intervalId = setInterval(() => {
       fetchConfig();
-      fetchBotConfig();
     }, 60000); // 60s polling
 
     return () => clearInterval(intervalId);
@@ -102,18 +86,6 @@ export default function AdminPanel() {
       toast('❌ Error guardando configuración', 'error');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleToggleAutoTrading = async () => {
-    try {
-      const newValue = !autoTrading;
-      setAutoTrading(newValue);
-      await setDoc(doc(db, 'app_settings', 'bot_config'), { autoTrading: newValue }, { merge: true });
-      toast(`🤖 Modo Automático ${newValue ? 'ACTIVADO' : 'DESACTIVADO'}`, newValue ? 'success' : 'info');
-    } catch (e) {
-      console.error(e);
-      toast('❌ Error guardando Modo Automático', 'error');
     }
   };
 
@@ -163,26 +135,6 @@ export default function AdminPanel() {
             <p style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px' }}>Parámetros específicos por activo y sesión</p>
           </div>
           <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-            {/* Toggle Modo Automático */}
-            <div 
-              onClick={handleToggleAutoTrading}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
-                padding: '8px 12px', backgroundColor: autoTrading ? '#ffaa0020' : '#222',
-                border: `1px solid ${autoTrading ? '#ffaa00' : '#444'}`,
-                borderRadius: '6px', transition: 'all 0.2s'
-              }}
-            >
-              <div style={{
-                width: '12px', height: '12px', borderRadius: '50%',
-                backgroundColor: autoTrading ? '#ffaa00' : '#666',
-                boxShadow: autoTrading ? '0 0 8px #ffaa00' : 'none'
-              }} />
-              <span style={{ fontSize: '0.9rem', color: autoTrading ? '#ffaa00' : '#888', fontWeight: 600 }}>
-                AUTO TRADING
-              </span>
-            </div>
-
             <button
               onClick={handleSave}
               disabled={saving}

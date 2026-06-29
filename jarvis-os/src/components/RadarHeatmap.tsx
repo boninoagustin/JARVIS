@@ -121,8 +121,8 @@ const getSuggestedR = (t: TradeLog): number => {
 };
 
 const resultButtonStyle = (color: string, isActive: boolean) => ({
-  display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px',
-  fontSize: '0.75rem', fontWeight: 600, fontFamily: 'var(--font-mono)',
+  display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 6px',
+  fontSize: '0.65rem', fontWeight: 600, fontFamily: 'var(--font-mono)',
   border: `1px solid ${color}`, borderRadius: '4px', cursor: 'pointer', transition: 'all 0.2s ease',
   backgroundColor: isActive ? color : 'transparent', color: isActive ? 'var(--bg-base)' : color, opacity: isActive ? 1 : 0.7,
 });
@@ -577,7 +577,7 @@ export default function RadarHeatmap() {
                 <tr key={t.id} style={{ opacity: updating === t.id ? 0.5 : 1, transition: 'opacity 0.2s' }}>
                   <td>{new Date(t.timestamp).toLocaleString(undefined, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
                   <td style={{ fontWeight: 700 }}>{t.ticker}</td>
-                  <td className={t.direction === 'BUY' ? 'text-green' : 'text-red'} style={{ fontWeight: 700 }}>
+                  <td style={{ fontWeight: 700, color: t.direction === 'BUY' ? '#00e676' : '#ff3333' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {t.direction}
                       {t.tf && (
@@ -670,7 +670,7 @@ export default function RadarHeatmap() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'nowrap', alignItems: 'center' }}>
                         <button 
                           onClick={() => {
                             setSelectedTradeForModal(t);

@@ -34,28 +34,32 @@ function TriggerRow({ label, emoji, trigger, onToggle, onScoreChange, onEntryPer
   const score = trigger?.minScore ?? 8;
   const fib = trigger?.entryPercent ?? 50;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #1a1a1a' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '80px' }}>
-        <span>{emoji}</span>
-        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isEnabled ? '#e6e6e6' : '#555' }}>{label}</span>
+    <div style={{ padding: '8px 0', borderBottom: '1px solid #1a1a1a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span>{emoji}</span>
+          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isEnabled ? '#e6e6e6' : '#555' }}>{label}</span>
+        </div>
+        <button onClick={onToggle} style={toggleStyle(isEnabled)}>
+          <div style={dotStyle(isEnabled)} />
+        </button>
       </div>
-      <button onClick={onToggle} style={toggleStyle(isEnabled)}>
-        <div style={dotStyle(isEnabled)} />
-      </button>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-        <span style={{ fontSize: '0.65rem', color: '#666' }}>Min</span>
-        <input type="number" min={1} max={50} value={score}
-          onChange={e => onScoreChange(parseInt(e.target.value) || 1)}
-          disabled={!isEnabled} style={{ ...inputStyle, width: '40px', padding: '4px', opacity: isEnabled ? 1 : 0.4 }}
-        />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ fontSize: '0.65rem', color: '#666' }}>Min</span>
+          <input type="number" min={1} max={50} value={score}
+            onChange={e => onScoreChange(parseInt(e.target.value) || 1)}
+            disabled={!isEnabled} style={{ ...inputStyle, width: '40px', padding: '4px', opacity: isEnabled ? 1 : 0.4 }}
+          />
+        </div>
         {onEntryPercentChange && (
-          <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
             <span style={{ fontSize: '0.65rem', color: '#666' }}>Fib%</span>
             <input type="number" min={1} max={100} step="0.1" value={fib}
               onChange={e => onEntryPercentChange(parseFloat(e.target.value) || 50)}
               disabled={!isEnabled} style={{ ...inputStyle, width: '45px', padding: '4px', opacity: isEnabled ? 1 : 0.4 }}
             />
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -56,6 +56,7 @@ function Header({ time }: { time: Date }) {
   const { toast } = useToast();
   const [killswitches, setKillswitches] = useState<Record<string, boolean>>({});
   const [showModal, setShowModal] = useState(false);
+  const [autoTrading, setAutoTrading] = useState(false);
 
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval>;
@@ -66,6 +67,11 @@ function Header({ time }: { time: Date }) {
         if (docSnap.exists()) {
           const data = docSnap.data();
           setKillswitches(data?.killswitches || {});
+        }
+        
+        const botSnap = await getDoc(doc(db, 'app_settings', 'bot_config'));
+        if (botSnap.exists()) {
+          setAutoTrading(botSnap.data()?.autoTrading === true);
         }
       } catch (err) {
         console.error('[Header] Error fetching global settings:', err);
@@ -126,6 +132,18 @@ function Header({ time }: { time: Date }) {
     setShowModal(false);
   };
 
+  const handleToggleAutoTrading = async () => {
+    try {
+      const newValue = !autoTrading;
+      setAutoTrading(newValue);
+      await setDoc(doc(db, 'app_settings', 'bot_config'), { autoTrading: newValue }, { merge: true });
+      toast(`🤖 Modo Automático ${newValue ? 'ACTIVADO' : 'DESACTIVADO'}`, newValue ? 'success' : 'info');
+    } catch (e) {
+      console.error(e);
+      toast('❌ Error guardando Modo Automático', 'error');
+    }
+  };
+
   return (
     <>
       <header className="header">
@@ -134,6 +152,25 @@ function Header({ time }: { time: Date }) {
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <div 
+            onClick={handleToggleAutoTrading}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+              padding: '8px 12px', backgroundColor: autoTrading ? '#ffaa0020' : '#222',
+              border: `1px solid ${autoTrading ? '#ffaa00' : '#444'}`,
+              borderRadius: '6px', transition: 'all 0.2s'
+            }}
+          >
+            <div style={{
+              width: '12px', height: '12px', borderRadius: '50%',
+              backgroundColor: autoTrading ? '#ffaa00' : '#666',
+              boxShadow: autoTrading ? '0 0 8px #ffaa00' : 'none'
+            }} />
+            <span style={{ fontSize: '0.9rem', color: autoTrading ? '#ffaa00' : '#888', fontWeight: 600 }}>
+              AUTO TRADING
+            </span>
+          </div>
+
           <button
             onClick={() => isBotActive ? setShowModal(true) : handleTurnOn()}
             className={`master-bot-btn ${isBotActive ? 'active' : 'inactive'}`}
