@@ -1042,10 +1042,35 @@ async function countConsecutiveLosses(ticker: string, session: string, direction
 export async function processTradingAlert(alertText: string) {
     if (!db) return;
 
+    const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
+    const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
+
+    if (parts.length < 2) return;
+
+    const prefix = parts[0].toUpperCase();
+    const ticker = parts[1].replace(/"/g, '');
+    const upperText = alertText.toUpperCase();
+
     // 🕒 El Bypass Temporal (Bar Replay Histórico)
     const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
-    const isBacktest = tsMatch !== null && Math.abs(Date.now() - nowMs) > 300000;
+    
+    let tfToleranceMs = 300000; // 5 minutos por defecto
+    const tfPrefixMatch = prefix.match(/(1M|3M|5M|15M|30M|1H|4H|1D|1W)/);
+    if (tfPrefixMatch) {
+        const tf = tfPrefixMatch[1];
+        if (tf === '1M') tfToleranceMs = 1 * 60000 + 300000;
+        else if (tf === '3M') tfToleranceMs = 3 * 60000 + 300000;
+        else if (tf === '5M') tfToleranceMs = 5 * 60000 + 300000;
+        else if (tf === '15M') tfToleranceMs = 15 * 60000 + 300000;
+        else if (tf === '30M') tfToleranceMs = 30 * 60000 + 300000;
+        else if (tf === '1H') tfToleranceMs = 60 * 60000 + 300000;
+        else if (tf === '4H') tfToleranceMs = 240 * 60000 + 300000;
+        else if (tf === '1D') tfToleranceMs = 1440 * 60000 + 300000;
+        else if (tf === '1W') tfToleranceMs = 10080 * 60000 + 300000;
+    }
+
+    const isBacktest = tsMatch !== null && Math.abs(Date.now() - nowMs) > tfToleranceMs;
 
     let sessionThresholds: { buy: number; sell: number } | null = null;
     if (isBacktest) {
@@ -1061,15 +1086,6 @@ export async function processTradingAlert(alertText: string) {
             createdAt: new Date(nowMs).toISOString()
         }).catch(() => {});
     }
-
-    const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
-    const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
-
-    if (parts.length < 2) return;
-
-    const prefix = parts[0].toUpperCase();
-    const ticker = parts[1].replace(/"/g, '');
-    const upperText = alertText.toUpperCase();
 
     // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
     if (globalKillswitches['GLOBAL_SYSTEM']) {
