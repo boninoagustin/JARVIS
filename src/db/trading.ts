@@ -1055,10 +1055,18 @@ export async function processTradingAlert(alertText: string) {
     const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
     
+    // Intentar extraer TF del texto de la alerta (ej. 'TF: 5' o 'TF: 15')
+    const tfMatchForTolerance = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
+    const rawTf = tfMatchForTolerance ? tfMatchForTolerance[1] : '';
+    const parsedTf = rawTf ? parseTF(rawTf) : ''; // Ej: '5M', '15M', '1H', etc.
+    
     let tfToleranceMs = 300000; // 5 minutos por defecto
-    const tfPrefixMatch = prefix.match(/(1M|3M|5M|15M|30M|1H|4H|1D|1W)/);
+    // Buscar coincidencia en la temporalidad parseada o en el prefix
+    const tfStringToMatch = parsedTf || prefix;
+    const tfPrefixMatch = tfStringToMatch.match(/(1M|3M|5M|15M|30M|1H|4H|1D|1W)/i);
+    
     if (tfPrefixMatch) {
-        const tf = tfPrefixMatch[1];
+        const tf = tfPrefixMatch[1].toUpperCase();
         if (tf === '1M') tfToleranceMs = 1 * 60000 + 300000;
         else if (tf === '3M') tfToleranceMs = 3 * 60000 + 300000;
         else if (tf === '5M') tfToleranceMs = 5 * 60000 + 300000;
@@ -2417,7 +2425,7 @@ export async function processTradingAlert(alertText: string) {
                 if (existingTradeForTicker.direction === oteData.direction) {
                     // Mismo sentido -> Bloquear para evitar piramidación
                     console.log(`[ANTI-PYRAMID] ⛔ Señal ${oteData.direction} ignorada para ${ticker}: ya hay una operación activa en la misma dirección.`);
-                    sendTelegramAlert(`⚠️ <b>SEÑAL IGNORADA</b> | ${ticker}\nSe detectó una nueva señal <b>${oteData.direction}</b>, pero ya hay una operación abierta en la misma dirección. (Anti-Piramidación)`).catch(() => {});
+                    if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL IGNORADA</b> | ${ticker}\nSe detectó una nueva señal <b>${oteData.direction}</b>, pero ya hay una operación abierta en la misma dirección. (Anti-Piramidación)`).catch(() => {});
                     return;
                 } else {
                     // Dirección Opuesta -> SAR (Stop and Reverse)
@@ -2432,7 +2440,7 @@ export async function processTradingAlert(alertText: string) {
                             recordResult(existingTradeForTicker.journalId, 'REVERSAL').catch(() => {});
                         }
                         
-                        sendTelegramAlert(`🔄 <b>CIERRE POR REVERSIÓN (SAR)</b> | ${ticker}\n\nSe cerró la operación <b>${existingTradeForTicker.direction}</b> porque ingresó una nueva señal <b>${oteData.direction}</b> con mayor convicción (Puntaje: ${oteData.points} vs ${existingTradeForTicker.score}).`).catch(() => {});
+                        if (!isBacktest) sendTelegramAlert(`🔄 <b>CIERRE POR REVERSIÓN (SAR)</b> | ${ticker}\n\nSe cerró la operación <b>${existingTradeForTicker.direction}</b> porque ingresó una nueva señal <b>${oteData.direction}</b> con mayor convicción (Puntaje: ${oteData.points} vs ${existingTradeForTicker.score}).`).catch(() => {});
                         
                         if (!isBacktest && existingTradeForTicker.ctraderPositionId) {
                             import('../services/ctrader.js').then(async (ctrader) => {
@@ -2442,7 +2450,7 @@ export async function processTradingAlert(alertText: string) {
                     } else {
                         // Puntaje menor o igual -> Ignorar la nueva señal
                         console.log(`[SAR] ⛔ Reversión Denegada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) no supera a la activa (Score: ${existingTradeForTicker.score}).`);
-                        sendTelegramAlert(`⚠️ <b>SEÑAL DESCARTADA</b> | ${ticker}\n\nSe detectó una señal <b>${oteData.direction}</b> (Puntaje: ${oteData.points}), pero se mantiene la operación <b>${existingTradeForTicker.direction}</b> actual porque tiene mayor o igual convicción (Puntaje: ${existingTradeForTicker.score}).`).catch(() => {});
+                        if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL DESCARTADA</b> | ${ticker}\n\nSe detectó una señal <b>${oteData.direction}</b> (Puntaje: ${oteData.points}), pero se mantiene la operación <b>${existingTradeForTicker.direction}</b> actual porque tiene mayor o igual convicción (Puntaje: ${existingTradeForTicker.score}).`).catch(() => {});
                         return;
                     }
                 }
