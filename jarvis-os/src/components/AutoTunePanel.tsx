@@ -28,9 +28,16 @@ interface LossMetrics {
 interface AutoTuneReport {
   timestamp: number;
   ticker: string;
-  buy: OptimizeScoreResult;
-  sell: OptimizeScoreResult;
-  sessions?: Record<string, { buy: LossMetrics; sell: LossMetrics }>;
+  sessions?: Record<string, {
+    limits?: {
+      buyLosses: LossMetrics;
+      sellLosses: LossMetrics;
+    };
+    triggers?: Record<string, {
+      buy: OptimizeScoreResult;
+      sell: OptimizeScoreResult;
+    }>;
+  }>;
 }
 
 export default function AutoTunePanel() {
@@ -62,29 +69,43 @@ export default function AutoTunePanel() {
       const configRef = doc(db, 'asset_configs', report.ticker);
       
       const updateData: any = {
-        minPointsForBuy: report.buy.new.score,
-        minPointsForSell: report.sell.new.score,
         updatedAt: new Date().toISOString(),
         updatedBy: 'autotune'
       };
 
-      await setDoc(configRef, updateData, { merge: true });
-      
       if (report.sessions) {
+        // Leer config actual para preservar campos existentes (enabled, entryPercent, etc.)
+        const { getDoc } = await import('firebase/firestore');
+        const currentSnap = await getDoc(configRef);
+        const currentSessions = currentSnap.exists() ? (currentSnap.data().sessions || {}) : {};
+
+        updateData.sessions = {};
         for (const [session, data] of Object.entries(report.sessions)) {
+          const existingSession = currentSessions[session] || {};
           const sessionUpdate: any = {};
-          if (data.buy?.newLimit !== undefined) sessionUpdate.maxBuyLosses = data.buy.newLimit;
-          if (data.sell?.newLimit !== undefined) sessionUpdate.maxSellLosses = data.sell.newLimit;
+          
+          if (data.limits?.buyLosses?.newLimit !== undefined) sessionUpdate.maxBuyLosses = data.limits.buyLosses.newLimit;
+          if (data.limits?.sellLosses?.newLimit !== undefined) sessionUpdate.maxSellLosses = data.limits.sellLosses.newLimit;
+          
+          if (data.triggers) {
+             for (const [trigger, triggerData] of Object.entries(data.triggers)) {
+                 // Preservar campos existentes del trigger (enabled, entryPercent, minScore legacy)
+                 const existingTrigger = existingSession[trigger] || {};
+                 sessionUpdate[trigger] = {
+                     ...existingTrigger,
+                     minScoreBuy: triggerData.buy.new.score,
+                     minScoreSell: triggerData.sell.new.score
+                 };
+             }
+          }
           
           if (Object.keys(sessionUpdate).length > 0) {
-              await setDoc(configRef, {
-                  sessions: {
-                      [session]: sessionUpdate
-                  }
-              }, { merge: true });
+              updateData.sessions[session] = sessionUpdate;
           }
         }
       }
+
+      await setDoc(configRef, updateData, { merge: true });
 
       toast(`✅ Recomendación aplicada para ${report.ticker}`, 'success');
       fetchReports();
@@ -225,43 +246,52 @@ export default function AutoTunePanel() {
                 </button>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                {renderMetricsCard('LONG (BUY)', report.buy, 'BUY')}
-                {renderMetricsCard('SHORT (SELL)', report.sell, 'SELL')}
-              </div>
-
-              {/* SESSIONS LOSS LIMITS */}
+              {/* SESSIONS & TRIGGERS */}
               {report.sessions && Object.keys(report.sessions).length > 0 && (
                 <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                  <h5 style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                    <ShieldAlert size={14} /> Recomendaciones de Protección (Max Losses)
-                  </h5>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
-                    {Object.entries(report.sessions).map(([sessionName, data]) => {
-                      const showBuy = data.buy?.newLimit !== undefined && data.buy.newLimit !== data.buy.oldLimit;
-                      const showSell = data.sell?.newLimit !== undefined && data.sell.newLimit !== data.sell.oldLimit;
-                      
-                      if (!showBuy && !showSell) return null;
+                  {Object.entries(report.sessions).map(([sessionName, data]) => (
+                     <div key={sessionName} style={{ marginBottom: '32px' }}>
+                        <h4 style={{ color: 'var(--accent-gold)', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '16px' }}>
+                          <Clock size={16} style={{ display: 'inline', verticalAlign: 'text-bottom' }} /> Sesión: {sessionName}
+                        </h4>
+                        
+                        {/* Limits */}
+                        {data.limits && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '6px', border: '1px dashed var(--border-color)' }}>
+                               <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', color: 'var(--text-secondary)' }}>
+                                 <ShieldAlert size={14} /> Recomendaciones de Protección (Max Losses)
+                               </strong>
+                               {data.limits.buyLosses?.newLimit !== undefined && data.limits.buyLosses.newLimit !== data.limits.buyLosses.oldLimit && (
+                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                                   LONG Límite: {data.limits.buyLosses.oldLimit || '∞'} → <span style={{ color: 'var(--accent-gold)' }}>{data.limits.buyLosses.newLimit}</span>
+                                   <span style={{ fontSize: '0.75rem', opacity: 0.6, marginLeft: '8px' }}>(WR: {(data.limits.buyLosses.winRate * 100).toFixed(0)}%)</span>
+                                 </div>
+                               )}
+                               {data.limits.sellLosses?.newLimit !== undefined && data.limits.sellLosses.newLimit !== data.limits.sellLosses.oldLimit && (
+                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                   SHORT Límite: {data.limits.sellLosses.oldLimit || '∞'} → <span style={{ color: 'var(--accent-gold)' }}>{data.limits.sellLosses.newLimit}</span>
+                                   <span style={{ fontSize: '0.75rem', opacity: 0.6, marginLeft: '8px' }}>(WR: {(data.limits.sellLosses.winRate * 100).toFixed(0)}%)</span>
+                                 </div>
+                               )}
+                            </div>
+                          </div>
+                        )}
 
-                      return (
-                        <div key={sessionName} style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '6px', border: '1px dashed var(--border-color)' }}>
-                          <strong style={{ display: 'block', marginBottom: '8px', color: 'var(--text-primary)' }}>{sessionName}</strong>
-                          {showBuy && (
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                              LONG Límite: {data.buy.oldLimit || '∞'} → <span style={{ color: 'var(--accent-gold)' }}>{data.buy.newLimit}</span>
-                              <br/><span style={{ fontSize: '0.75rem', opacity: 0.6 }}>(WinRate histórico: {(data.buy.winRate * 100).toFixed(0)}%)</span>
-                            </div>
-                          )}
-                          {showSell && (
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                              SHORT Límite: {data.sell.oldLimit || '∞'} → <span style={{ color: 'var(--accent-gold)' }}>{data.sell.newLimit}</span>
-                              <br/><span style={{ fontSize: '0.75rem', opacity: 0.6 }}>(WinRate histórico: {(data.sell.winRate * 100).toFixed(0)}%)</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        {/* Triggers */}
+                        {data.triggers && Object.entries(data.triggers).map(([triggerName, triggerData]) => (
+                           <div key={triggerName} style={{ marginBottom: '24px' }}>
+                              <h5 style={{ color: 'var(--text-primary)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                 <Activity size={14} color="var(--accent-gold)" /> Gatillo: {triggerName.toUpperCase()}
+                              </h5>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                {renderMetricsCard('LONG (BUY)', triggerData.buy, 'BUY')}
+                                {renderMetricsCard('SHORT (SELL)', triggerData.sell, 'SELL')}
+                              </div>
+                           </div>
+                        ))}
+                     </div>
+                  ))}
                 </div>
               )}
 

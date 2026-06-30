@@ -33,6 +33,26 @@ interface OptimizeLossesResult {
     winRate: number;
 }
 
+function identifyTrigger(trade: any): string {
+    const isChoch = trade.isChochEntry || false;
+    const events = trade.events || [];
+    const tf = trade.tf ? trade.tf.toLowerCase() : '5m';
+    const isOte = events.some((e: string) => e.includes('OTE'));
+    const isBos = events.some((e: string) => e.includes('BOS'));
+    
+    if (!isChoch && !isBos) return 'unknown';
+
+    if (isOte) {
+        if (isChoch) return `oteChoch${tf}`;
+        if (isBos) return `oteBos${tf}`;
+    } else {
+        if (isChoch) return `choch${tf}`;
+        if (isBos) return `bos${tf}`;
+    }
+    
+    return 'unknown';
+}
+
 export async function runAutoTune() {
     console.log("=========================================");
     console.log("🤖 INICIANDO JARVIS AUTO-TUNE ENGINE");
@@ -83,52 +103,80 @@ export async function runAutoTune() {
         
         for (const [ticker, assetTrades] of Object.entries(tradesByTicker)) {
             console.log(`\n🔎 Analizando Activo: ${ticker} con ${assetTrades.length} operaciones`);
-            
             const currentConfig = currentConfigs[ticker] || {};
-            const oldBuyScore = currentConfig.minPointsForBuy || 5;
-            const oldSellScore = currentConfig.minPointsForSell || 5;
-
-            // Separar por dirección
-            const buys = assetTrades.filter(t => t.direction === 'BUY');
-            const sells = assetTrades.filter(t => t.direction === 'SELL');
             
-            const buyResult = optimizeMinScore(buys, oldBuyScore);
-            const sellResult = optimizeMinScore(sells, oldSellScore);
-            
-            console.log(`   🔸 Buy Score Rec: ${oldBuyScore} -> ${buyResult.new.score} (PnL: ${buyResult.old.pnl} -> ${buyResult.new.pnl})`);
-            console.log(`   🔸 Sell Score Rec: ${oldSellScore} -> ${sellResult.new.score} (PnL: ${sellResult.old.pnl} -> ${sellResult.new.pnl})`);
-            
-            // Analizar por sesión
             const sessionReports: Record<string, any> = {};
             const tradesBySession: Record<string, any[]> = {};
+            
+            // Agrupar por sesión
             assetTrades.forEach(t => {
                 const s = t.session || 'UNKNOWN';
+                if (s === 'UNKNOWN') return;
                 if (!tradesBySession[s]) tradesBySession[s] = [];
                 tradesBySession[s].push(t);
             });
 
             for (const [session, sessionTrades] of Object.entries(tradesBySession)) {
-                if (session === 'UNKNOWN') continue;
-                
                 const oldSessionConf = currentConfig.sessions?.[session] || {};
+                const sessionData: any = {};
                 
+                // 1. Optimizar Filtros Anti-Bias (Losses) a nivel sesión
                 const buyLossesResult = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'BUY'), oldSessionConf.maxBuyLosses);
                 const sellLossesResult = optimizeConsecutiveLosses(sessionTrades.filter(t => t.direction === 'SELL'), oldSessionConf.maxSellLosses);
                 
-                // Solo guardar si hay algo útil
                 if (buyLossesResult.newLimit !== undefined || sellLossesResult.newLimit !== undefined || oldSessionConf.maxBuyLosses || oldSessionConf.maxSellLosses) {
-                    sessionReports[session] = {
-                        buy: buyLossesResult,
-                        sell: sellLossesResult
+                    sessionData.limits = {
+                        buyLosses: buyLossesResult,
+                        sellLosses: sellLossesResult
                     };
+                }
+
+                // 2. Agrupar trades de la sesión por gatillo (setup)
+                const tradesByTrigger: Record<string, any[]> = {};
+                sessionTrades.forEach(t => {
+                    const triggerKey = identifyTrigger(t);
+                    if (triggerKey === 'unknown') return;
+                    if (!tradesByTrigger[triggerKey]) tradesByTrigger[triggerKey] = [];
+                    tradesByTrigger[triggerKey].push(t);
+                });
+
+                // 3. Optimizar Score Mínimo por gatillo y dirección
+                const triggersData: Record<string, any> = {};
+                for (const [trigger, triggerTrades] of Object.entries(tradesByTrigger)) {
+                    const triggerConf = oldSessionConf[trigger] || {};
+                    const oldBuyScore = triggerConf.minScoreBuy ?? triggerConf.minScore ?? currentConfig.minPointsForBuy ?? 5;
+                    const oldSellScore = triggerConf.minScoreSell ?? triggerConf.minScore ?? currentConfig.minPointsForSell ?? 5;
+
+                    const buys = triggerTrades.filter(t => t.direction === 'BUY');
+                    const sells = triggerTrades.filter(t => t.direction === 'SELL');
+                    
+                    const buyResult = optimizeMinScore(buys, oldBuyScore);
+                    const sellResult = optimizeMinScore(sells, oldSellScore);
+
+                    // Guardamos si hay datos relevantes (al menos se simuló algo válido)
+                    if (buyResult.new.tradeCount >= 3 || sellResult.new.tradeCount >= 3) {
+                        triggersData[trigger] = {
+                            buy: buyResult,
+                            sell: sellResult
+                        };
+                        
+                        console.log(`   🔸 [${session}][${trigger}] Buy Score: ${oldBuyScore} -> ${buyResult.new.score} (PnL: ${buyResult.new.pnl})`);
+                        console.log(`   🔸 [${session}][${trigger}] Sell Score: ${oldSellScore} -> ${sellResult.new.score} (PnL: ${sellResult.new.pnl})`);
+                    }
+                }
+
+                if (Object.keys(triggersData).length > 0) {
+                    sessionData.triggers = triggersData;
+                }
+
+                if (Object.keys(sessionData).length > 0) {
+                    sessionReports[session] = sessionData;
                 }
             }
             
             reports[ticker] = {
                 timestamp: Date.now(),
                 ticker: ticker,
-                buy: buyResult,
-                sell: sellResult,
                 sessions: Object.keys(sessionReports).length > 0 ? sessionReports : undefined
             };
         }

@@ -181,14 +181,14 @@ let dynamicBotConfig = {
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
 const SessionSchema = z.object({
-    choch5m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    choch15m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    bos5m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    bos15m: z.object({ enabled: z.boolean(), minScore: z.number() }).optional(),
-    oteChoch5m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
-    oteChoch15m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
-    oteBos5m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
-    oteBos15m: z.object({ enabled: z.boolean(), minScore: z.number(), entryPercent: z.number().optional() }).optional(),
+    choch5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
+    choch15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
+    bos5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
+    bos15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
+    oteChoch5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
+    oteChoch15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
+    oteBos5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
+    oteBos15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
     maxSellLosses: z.number().optional(),
     maxBuyLosses: z.number().optional(),
     slBufferPercent: z.number().optional(),
@@ -244,14 +244,14 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotCo
     maxBuysPerDay: number;
     buyScorePenalty: number;
     sessions?: Record<string, {
-      choch5m?: { enabled: boolean; minScore: number };
-      choch15m?: { enabled: boolean; minScore: number };
-      bos5m?: { enabled: boolean; minScore: number };
-      bos15m?: { enabled: boolean; minScore: number };
-      oteChoch5m?: { enabled: boolean; minScore: number; entryPercent?: number };
-      oteChoch15m?: { enabled: boolean; minScore: number; entryPercent?: number };
-      oteBos5m?: { enabled: boolean; minScore: number; entryPercent?: number };
-      oteBos15m?: { enabled: boolean; minScore: number; entryPercent?: number };
+      choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
+      choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
+      bos5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
+      bos15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
+      oteChoch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number; entryPercent?: number };
+      oteChoch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number; entryPercent?: number };
+      oteBos5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number; entryPercent?: number };
+      oteBos15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number; entryPercent?: number };
       // Legacy fallback keys
       choch?: { enabled: boolean; minScore: number };
       bos?: { enabled: boolean; minScore: number };
@@ -634,7 +634,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     const tfConfig = sessionConfig[tfKey] as any;
                     if (tfConfig) {
                         oteEnabled = tfConfig.enabled ?? false;
-                        oteMinScore = tfConfig.minScore ?? 8;
+                        oteMinScore = leg.dir === 'BUY' 
+                            ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
+                            : (tfConfig.minScoreSell ?? tfConfig.minScore ?? 8);
                     } else if ((sessionConfig as any).oteChoch) {
                         oteEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
                         oteMinScore = (sessionConfig as any).oteChoch.minScore ?? 8;
@@ -644,7 +646,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
                     const tfConfig = sessionConfig[tfKey] as any;
                     if (tfConfig) {
                         oteEnabled = tfConfig.enabled ?? false;
-                        oteMinScore = tfConfig.minScore ?? 8;
+                        oteMinScore = leg.dir === 'BUY' 
+                            ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
+                            : (tfConfig.minScoreSell ?? tfConfig.minScore ?? 8);
                     } else if ((sessionConfig as any).oteBos) {
                         oteEnabled = (sessionConfig as any).oteBos.enabled ?? false;
                         oteMinScore = (sessionConfig as any).oteBos.minScore ?? 8;
@@ -1981,19 +1985,23 @@ export async function processTradingAlert(alertText: string) {
                         const tfConfig = sessionConfig[tfKeyChoch] as any;
                         if (tfConfig) {
                             triggerEnabled = tfConfig.enabled ?? false;
-                            minPtsRequired = tfConfig.minScore ?? config.minPointsForBuy;
+                            minPtsRequired = currentDirection === 'BUY'
+                                ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
+                                : (tfConfig.minScoreSell ?? tfConfig.minScore ?? config.minPointsForSell);
                         } else if ((sessionConfig as any).choch) {
                             triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
-                            minPtsRequired = (sessionConfig as any).choch.minScore ?? config.minPointsForBuy;
+                            minPtsRequired = (sessionConfig as any).choch.minScore ?? (currentDirection === 'BUY' ? config.minPointsForBuy : config.minPointsForSell);
                         }
                     } else if (triggerType === 'BOS🔨') {
                         const tfConfig = sessionConfig[tfKeyBos] as any;
                         if (tfConfig) {
                             triggerEnabled = tfConfig.enabled ?? false;
-                            minPtsRequired = tfConfig.minScore ?? config.minPointsForBuy;
+                            minPtsRequired = currentDirection === 'BUY'
+                                ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
+                                : (tfConfig.minScoreSell ?? tfConfig.minScore ?? config.minPointsForSell);
                         } else if ((sessionConfig as any).bos) {
                             triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
-                            minPtsRequired = (sessionConfig as any).bos.minScore ?? config.minPointsForBuy;
+                            minPtsRequired = (sessionConfig as any).bos.minScore ?? (currentDirection === 'BUY' ? config.minPointsForBuy : config.minPointsForSell);
                         }
                     }
                 } else {
