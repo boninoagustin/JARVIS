@@ -236,16 +236,46 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         const ctraderSymbol = mapToCTraderSymbol(ticker);
         
         let info: any = null;
-        // Fix TRADING_BAD_VOLUME by rounding to valid stepVolume
+        // Fix TRADING_BAD_VOLUME by rounding to valid stepVolume and converting MT4 lots to cTrader volume (in cents)
         try {
             info = await ctClient.getSymbolInfo(ctraderSymbol);
-            if (info && info.stepVolume) {
-                const stepLots = info.stepVolume / 100000;
-                lots = Math.round(lots / stepLots) * stepLots;
-                lots = Math.max(stepLots, lots);
+            if (info) {
+                const actualLotSizeUnits = info.lotSize || 100000;
+                // 1. Calculate raw units (MT4 lots * actual symbol lotSize in units)
+                const rawUnits = lots * actualLotSizeUnits;
+                
+                // 2. Convert to cTrader Open API Cents (which is units * 100)
+                let correctVolumeCents = rawUnits * 100;
+                
+                // 3. Align with stepVolume (which the API returns in cents)
+                const stepVolumeCents = info.stepVolume || 100000;
+                correctVolumeCents = Math.round(correctVolumeCents / stepVolumeCents) * stepVolumeCents;
+                
+                // 4. Ensure min/max bounds (also in cents)
+                const minVolumeCents = info.minVolume || stepVolumeCents;
+                correctVolumeCents = Math.max(minVolumeCents, correctVolumeCents);
+                if (info.maxVolume) {
+                    correctVolumeCents = Math.min(info.maxVolume, correctVolumeCents);
+                }
+                
+                // 5. Convert back to ctrader-ts "lots" abstraction
+                // ctrader-ts will multiply this by 100,000 before sending to the API.
+                // We want the API to receive `correctVolumeCents`.
+                lots = correctVolumeCents / 100000;
             }
         } catch(e) {
             console.warn('[CTRADER] ⚠️ No se pudo obtener symbolInfo para ajustar lotaje');
+            // Fallback heuristics if info fails
+            const t = ctraderSymbol.toUpperCase();
+            let assumedLotSizeUnits = 100000;
+            if (t.includes('XAU') || t.includes('GOLD')) assumedLotSizeUnits = 100;
+            else if (t.includes('BTC')) assumedLotSizeUnits = 1;
+            else if (t.includes('US30') || t.includes('NAS') || t.includes('SPX') || t.includes('US100')) assumedLotSizeUnits = 1;
+            else if (t.includes('XAG') || t.includes('SILVER')) assumedLotSizeUnits = 5000;
+            
+            const rawUnits = lots * assumedLotSizeUnits;
+            const correctVolumeCents = rawUnits * 100;
+            lots = correctVolumeCents / 100000;
         }
 
         console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
