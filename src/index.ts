@@ -189,6 +189,17 @@ async function main() {
         // También revisar al iniciar
         setTimeout(runAutoTuneScheduler, 10_000);
 
+        // 💓 Heartbeat de Firebase (Evita desconexiones silenciosas de onSnapshot)
+        setInterval(() => {
+            if (db) {
+                db.collection('app_settings').doc('heartbeat').set({
+                    lastPing: Date.now(),
+                    status: 'online'
+                }).catch(() => {});
+            }
+        }, 120_000); // 2 minutos
+        console.log(`[FIREBASE] Heartbeat configurado cada 2 min.`);
+
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);
     }
