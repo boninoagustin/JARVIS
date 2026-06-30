@@ -225,8 +225,8 @@ rsi_ext      = input.int(30, 'Nivel Extremo (30)', group=grp_rsi)
 // 8. ⏳ HORARIOS Y SESIONES (KILLZONES)
 // =========================================================================
 grp_kz = "⏳ Killzones (Horario Argentina)"
-in_use_kz = input.bool(true, "Filtrar Entradas por Killzone", group=grp_kz) 
-use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : true)
+in_use_kz = input.bool(false, "Filtrar Entradas por Killzone", group=grp_kz) 
+use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : false)
 
 show_asia = input.bool(true, "Dibujar Rango Asiático", group=grp_kz)
 kz_asia = input.session("2000-0200", "Asia Rango (ART)", group=grp_kz)

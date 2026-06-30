@@ -265,10 +265,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotCo
 } {
     const session = getCurrentSession(nowMs);
     
-    // 💤 Si la sesión es OFF (17 a 21 hs o Fines de Semana), bloquear trading de forma absoluta
-    if (session === 'OFF') {
-        return { ...dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
-    }
+    // 💤 Si la sesión es OFF, ahora se ignora el bloqueo y se asume la configuración por defecto/ALL.
     
     // El nuevo AdminPanel guarda la configuración directamente bajo el ID del ticker (ej. NAS100)
     // y maneja las sesiones dentro del campo `sessions`.
