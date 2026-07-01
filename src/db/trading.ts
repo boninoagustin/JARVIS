@@ -25,6 +25,8 @@ interface RadarZone {
     mi?: number;     
     a?: number;      
     createdAt?: number;
+    mg?: number;
+    kz?: boolean;
 }
 
 function normalizeZone(raw: any): RadarZone {
@@ -37,6 +39,8 @@ function normalizeZone(raw: any): RadarZone {
     if (raw.sc !== undefined && raw.score === undefined) raw.score = raw.sc;
     if (raw.mi !== undefined && raw.mid === undefined) raw.mid = raw.mi;
     if (raw.a !== undefined && raw.atr === undefined) raw.atr = raw.a;
+    if (raw.mg !== undefined) raw.mg = raw.mg;
+    if (raw.kz !== undefined) raw.kz = raw.kz;
     return raw as RadarZone;
 }
 
@@ -72,6 +76,8 @@ interface RadarState {
     lastSniperAlert?: number;
     nextZones?: RadarZone[];     
     lastHeartbeat?: number;       
+    zUp?: number;
+    zDn?: number;
     activeImpulseBuy?: ImpulseLeg | null;  
     activeImpulseSell?: ImpulseLeg | null; 
     activeMacroImpulseBuy?: ImpulseLeg | null;  
@@ -1126,7 +1132,7 @@ export async function processTradingAlert(alertText: string) {
     // Los prefijos de eventos llegan porque TradingView usa el prefijo como "ticker" en algunas alertas.
     const FAKE_TICKERS = new Set(['HEARTBEAT', 'EVENTO_CHOCH', 'EVENTO_BOS', 'SWEEP_BROKEN', 
                                    'DIV_BROKEN', 'EVENTO_SMC_DIV', 'EVENTO_SWEEP', 'EVENTO_SWEEP_TL',
-                                   'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE']);
+                                   'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE', 'LIQ_GRAB']);
     if (!FAKE_TICKERS.has(ticker)) {
         tickerLastSeen.set(ticker, nowMs);
     }
@@ -1204,6 +1210,11 @@ export async function processTradingAlert(alertText: string) {
         else if (prefix === 'PING_PRICE') {
             const priceMatch = alertText.match(/Precio:\s*([0-9.,]+)/i);
             if (!priceMatch) return;
+
+            const zUpMatch = alertText.match(/Z-Up:\s*([\d.]+)/i);
+            const zDnMatch = alertText.match(/Z-Dn:\s*([\d.]+)/i);
+            if (zUpMatch) state.zUp = parseFloat(zUpMatch[1]);
+            if (zDnMatch) state.zDn = parseFloat(zDnMatch[1]);
 
             const currentPrice = parseTVPrice(priceMatch[1]);
             const highMatch = alertText.match(/High:\s*([0-9.,]+)/i);
@@ -1770,13 +1781,28 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
             else if (prefix === 'EVENTO_SMC_DIV') {
-                if (!activeScore.events.includes(`DIV_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`DIV_${readableTf}`); }
+                if (!activeScore.events.includes(`DIV_${readableTf}`)) {
+                    const dynamicScoreMatch = alertText.match(/(?:Score:|S:)\s*([0-9]+)/i);
+                    addedPoints = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1]) : 4;
+                    activeScore.events.push(`DIV_${readableTf}`); 
+                }
+            }
+            else if (prefix === 'LIQ_GRAB') {
+                const eventName = `🩸_LIQ_GRAB_${readableTf}`;
+                if (!activeScore.events.includes(eventName)) {
+                    addedPoints = 4 * (TF_WEIGHT[eventTf] || 1); // Falsa ruptura base score
+                    activeScore.events.push(eventName);
+                }
             }
             // NOTA: EVENTO_BOS ya se procesa en el bloque principal (líneas 1271-1360)
             // El bias y los puntos se asignan allí. Este bloque era redundante.
             else if (prefix === 'HEARTBEAT') {
                 // Watchdog: solo actualiza lastHeartbeat, no suma puntos
                 state.lastHeartbeat = nowMs;
+                const zUpMatch = alertText.match(/Z-Up:\s*([\d.]+)/i);
+                const zDnMatch = alertText.match(/Z-Dn:\s*([\d.]+)/i);
+                if (zUpMatch) state.zUp = parseFloat(zUpMatch[1]);
+                if (zDnMatch) state.zDn = parseFloat(zDnMatch[1]);
                 // Extraer conteo de zonas para diagnóstico
                 const zonesMatch = alertText.match(/Zones:\s*(\d+)/i);
                 const biasMatch = alertText.match(/Bias:\s*(BUY|SELL|NEUTRAL)/i);

@@ -1,0 +1,1889 @@
+// This work is licensed under Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+// SMC Master 5.2 [JARVIS v6.0] — Generado el 01/07/2026
+// 🆕 v6.0: 7 mejoras estructurales basadas en auditoría técnica
+//@version=5
+
+indicator("SMC Master 5.2 [JARVIS v6.0]", overlay=true, max_boxes_count=80, max_lines_count=50, max_labels_count=50, max_bars_back=300)
+
+// =========================================================================
+// 0. 🌟 PRESETS AUTOMÁTICOS (MATRIZ BIDIMENSIONAL INTELIGENTE)
+// =========================================================================
+grp_presets = "🌟 PERFIL DE ROL Y ADN DEL ACTIVO"
+
+preset_opt = input.string("Forex - 3. Balanceado", "Preset Estratégico", options=[
+  "Manual (Usar Configuración Abajo)", 
+  "Forex - 1. Ultra Conservador", "Forex - 2. Conservador", "Forex - 3. Balanceado", "Forex - 4. Agresivo", "Forex - 5. Ultra Agresivo",
+  "Índices - 1. Ultra Conservador", "Índices - 2. Conservador", "Índices - 3. Balanceado", "Índices - 4. Agresivo", "Índices - 5. Ultra Agresivo",
+  "Crypto - 1. Ultra Conservador", "Crypto - 2. Conservador", "Crypto - 3. Balanceado", "Crypto - 4. Agresivo", "Crypto - 5. Ultra Agresivo"], group=grp_presets)
+
+// 🤖 AUTO-DETECCIÓN DE TEMPORALIDAD
+bool auto_3m  = timeframe.isintraday and timeframe.multiplier <= 5
+bool auto_15m = timeframe.isintraday and timeframe.multiplier > 5 and timeframe.multiplier <= 30
+bool auto_1h  = timeframe.isintraday and timeframe.multiplier > 30 and timeframe.multiplier <= 120
+bool auto_4h  = (timeframe.isintraday and timeframe.multiplier > 120) or timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+
+// Determinar Activo según Preset
+bool preset_manual = preset_opt == "Manual (Usar Configuración Abajo)"
+bool is_fx = str.contains(preset_opt, "Forex")
+bool is_idx = str.contains(preset_opt, "Índices")
+bool is_crypto = str.contains(preset_opt, "Crypto")
+
+if preset_manual
+    is_crypto := syminfo.type == "crypto"
+    is_idx := syminfo.type == "index" or syminfo.type == "stock"
+    is_fx := syminfo.type == "forex" or (not is_crypto and not is_idx)
+
+// Niveles de Riesgo (1: Ultra Cons, 5: Ultra Agre)
+int risk_lvl = 3
+if str.contains(preset_opt, "1. Ultra Conservador")
+    risk_lvl := 1
+else if str.contains(preset_opt, "2. Conservador")
+    risk_lvl := 2
+else if str.contains(preset_opt, "3. Balanceado")
+    risk_lvl := 3
+else if str.contains(preset_opt, "4. Agresivo")
+    risk_lvl := 4
+else if str.contains(preset_opt, "5. Ultra Agresivo")
+    risk_lvl := 5
+
+// =========================================================================
+// 1. ⚖️ DIRECCIÓN Y SESGO MACRO (BIAS)
+// =========================================================================
+grp_htf = "⚖️ HUD Scalper (PO3 & Estructura)"
+bias_mode = input.string("Automático (Daily Open Direccional)", "Modo Bias de Sesión", options=["Automático (Daily Open Direccional)", "Manual Alcista 🟢", "Manual Bajista 🔴", "Desactivado (Mostrar Todos)"], group=grp_htf)
+
+bool override_choch = true
+bool filter_obs     = false
+bool use_scalp      = true
+
+// =========================================================================
+// 2. 👁️ VISIBILIDAD EN GRÁFICO (DASHBOARD)
+// =========================================================================
+grp_show = "👁️ Visibilidad de Zonas (Filtros)"
+in_min_score = input.int(3, "Score Mínimo para Mostrar", minval=0, maxval=10, group=grp_show)
+int base_sc = auto_3m ? 2 : auto_15m ? 3 : auto_1h ? 3 : 3
+int dyn_min_score = math.max(0, math.min(10, base_sc + (3 - risk_lvl)))
+min_score = preset_manual ? in_min_score : dyn_min_score
+
+show_platino = input.bool(true, "Mostrar 🟣 Platino (Score 9-10)", group=grp_show)
+show_oro     = input.bool(true, "Mostrar 🟡 Oro (Score 7-8)", group=grp_show)
+show_plata   = input.bool(true, "Mostrar ⚪ Plata (Score 5-6)", group=grp_show)
+
+in_show_bronce = input.bool(false,"Mostrar 🟤 Bronce (Score 3-4)", group=grp_show)
+show_bronce    = preset_manual ? in_show_bronce : risk_lvl >= 3
+
+show_choch   = input.bool(true, "Mostrar 🚀 CHoCH OB (Gatillo)", group=grp_show)
+show_god     = input.bool(true, "Mostrar 💎 GOD ZONE (Confluencia iFVG)", group=grp_show)
+show_breaker = input.bool(true, "Mostrar ♻️ Breakers", group=grp_show)
+show_divs    = input.bool(true, "Mostrar ⚡ Divergencias en SYNC", group=grp_show)
+
+// =========================================================================
+// 3. 🏛️ MOTORES DE ORDER BLOCKS (CORE)
+// =========================================================================
+grp_vis  = "🏛️ Order Blocks (SMC Purist)"
+refine   = input.bool(true, "Refinar Zonas (Jerarquía Institucional)", group=grp_vis)
+require_displacement = input.bool(true, "Exigir Desplazamiento + BOS posterior (SMC Purist)", group=grp_vis)
+
+in_require_fvg_after_ob = input.bool(true, "Exigir FVG en las 3 velas siguientes al OB", group=grp_vis)
+require_fvg_after_ob    = preset_manual ? in_require_fvg_after_ob : risk_lvl <= 2 
+
+strictBreaker = input.bool(true, "Breakers Estrictos (Exige Volumen)", group=grp_vis)
+
+in_strictSweep = input.bool(true, "Exigir Sweep previo estricto para OBs", group=grp_vis)
+strictSweep    = preset_manual ? in_strictSweep : risk_lvl <= 2 
+
+// 🆕 v6.0: MEJORA #5 — Confirmación de cierre para CHoCH/BOS (evita repainting)
+in_confirm_close = input.bool(true, "Confirmar CHoCH/BOS con cierre de vela (anti-repainting)", group=grp_vis)
+confirm_close    = preset_manual ? in_confirm_close : true
+
+// 🆕 v6.0: MEJORA #4 — Fusión inteligente de OBs adyacentes
+in_merge_obs = input.bool(true, "Fusionar OBs adyacentes en zonas compuestas", group=grp_vis)
+merge_obs    = preset_manual ? in_merge_obs : true
+merge_tolerance = input.float(0.3, "Tolerancia fusión OBs (x ATR)", step=0.05, minval=0.1, maxval=2.0, group=grp_vis)
+
+in_max_active_obs = input.int(20, "Máximo OBs Activos (Performance)", minval=10, maxval=100, group=grp_vis)
+int dyn_max_obs   = auto_3m ? 30 : auto_15m ? 12 : auto_1h ? 8 : 6
+max_active_obs    = preset_manual ? in_max_active_obs : dyn_max_obs 
+
+prox_atr    = input.float(0.5, "Distancia Mínima OBs (x ATR)", step=0.1, group=grp_vis)
+useBodyOB   = input.bool(true, 'Usar Cuerpo para la Zona (OB)', group=grp_vis)
+
+in_ob_min_body = input.float(0.4, "Mínimo Cuerpo en OB (%)", minval=0.0, maxval=1.0, step=0.05, group=grp_vis)
+float dyn_ob_min_body = is_idx ? 0.3 : is_crypto ? 0.4 : 0.2
+if not preset_manual
+    dyn_ob_min_body := dyn_ob_min_body + ((3 - risk_lvl) * 0.05)
+ob_min_body    = preset_manual ? in_ob_min_body : dyn_ob_min_body
+
+in_displ_atr_mult = input.float(1.0, "Tamaño Mínimo Vela Desplazamiento (x ATR)", step=0.1, group=grp_vis)
+float dyn_displ = is_idx ? 0.8 : is_crypto ? 0.7 : 0.5
+if not preset_manual
+    dyn_displ := dyn_displ + ((3 - risk_lvl) * 0.1)
+displ_atr_mult    = preset_manual ? in_displ_atr_mult : dyn_displ 
+
+vol_mult = input.float(1.2, "Mult. Volumen (Score)", step=0.1, group=grp_vis)
+
+in_max_touches = input.int(3, "Máximo Toques antes de Degradar OB", minval=1, maxval=10, group=grp_vis)
+int dyn_max_touches = auto_3m ? 3 : auto_15m ? 4 : auto_1h ? 3 : 2
+max_touches    = preset_manual ? in_max_touches : dyn_max_touches 
+
+grp_legacy = "🏃‍♂️ Motor Scalping (Legacy 4.7)"
+in_use_inv_motor = input.bool(true, "Activar Búsqueda Inversa (FVG Origin)", group=grp_legacy)
+// 🆕 v6.0: MEJORA #7 — Motor Legacy ahora requiere sweep de liquidez para crear OBs en TFs bajas
+use_inv_motor    = preset_manual ? in_use_inv_motor : (auto_3m or auto_15m)
+in_inv_req_sweep = input.bool(true, "🆕 Exigir Sweep en Motor Legacy (reduce falsos)", group=grp_legacy)
+inv_req_sweep    = preset_manual ? in_inv_req_sweep : (auto_3m or auto_15m)
+
+inv_lookback  = input.int(20, "Ventana Búsqueda Inversa (Velas)", group=grp_legacy)
+vwap_boost    = input.int(3, "Bonus Puntos por Toque VWAP", group=grp_legacy)
+
+// =========================================================================
+// 4. 🔨 ESTRUCTURA Y SWEEPS
+// =========================================================================
+grp_str = "🔨 Estructura y Sweeps"
+showBos         = input.bool(true, "Mostrar BOS / CHoCH", group=grp_str)
+
+in_str_bars = input.int(8, "Sensibilidad BOS (Micro)", group=grp_str)
+int dyn_str_bars = auto_3m ? 6 : auto_15m ? 6 : auto_1h ? 8 : 10
+if not preset_manual
+    dyn_str_bars := dyn_str_bars + (3 - risk_lvl)
+str_bars    = preset_manual ? in_str_bars : math.max(3, dyn_str_bars) 
+
+require_body_break = input.bool(true, "CHoCH/BOS exige cierre con cuerpo (no solo wick)", group=grp_str)
+
+in_choch_req_sweep = input.bool(false, "CHoCH Estricto: Exigir Sweep Previo (Manual)", group=grp_str)
+bool auto_sweep = not preset_manual ? (risk_lvl <= 2 or (auto_1h or auto_4h)) : (auto_1h or auto_4h)
+choch_req_sweep = preset_manual ? in_choch_req_sweep : auto_sweep
+
+in_choch_req_mom   = input.bool(false, "CHoCH Estricto: Exigir Volumen/Momentum", group=grp_str)
+choch_req_mom      = preset_manual ? in_choch_req_mom : (risk_lvl == 1 or auto_4h)
+
+showSweep       = input.bool(true, "Mostrar Etiquetas CRT / Sweeps", group=grp_str)
+
+// 🆕 v6.0: MEJORA #2 — Detección de Liquidity Grab (falsas rupturas con mecha)
+grp_liq_grab = "🩸 Liquidity Grab (Falsas Rupturas)"
+show_liq_grab = input.bool(true, "Mostrar 🩸 Liquidity Grab", group=grp_liq_grab)
+in_alert_liq_grab = input.bool(true, "Alerta: Liquidity Grab", group=grp_liq_grab)
+liq_grab_wick_pct = input.float(0.6, "% Mínimo de Mecha para Liq Grab", minval=0.3, maxval=0.9, step=0.05, group=grp_liq_grab)
+liq_grab_atr_min = input.float(0.5, "Tamaño mínimo vela Liq Grab (x ATR)", minval=0.3, maxval=2.0, step=0.1, group=grp_liq_grab)
+
+// =========================================================================
+// 5. 🕳️ IMBALANCES (FVG / iFVG)
+// =========================================================================
+grp_fvg = "🕳️ Filtros Pro FVG / iFVG"
+show_fvg     = input.bool(true, "Mostrar FVG Normales", group=grp_fvg)
+showIfvg     = input.bool(true, "Mostrar iFVG (Inversión)", group=grp_fvg)
+fvg_min_atr  = input.float(0.2, "Mínimo Tamaño FVG (x ATR)", step=0.1, group=grp_fvg)
+fvg_max_atr  = input.float(4.0, "Máximo Tamaño FVG (x ATR)", step=0.5, group=grp_fvg)
+
+in_fvg_exp_req = input.float(0.5, "Cuerpo Expansión FVG (%)", minval=0.0, maxval=1.0, group=grp_fvg)
+float dyn_fvg_exp = is_idx ? 0.3 : is_crypto ? 0.3 : 0.2
+if not preset_manual
+    dyn_fvg_exp := dyn_fvg_exp + ((3 - risk_lvl) * 0.05)
+fvg_exp_req    = preset_manual ? in_fvg_exp_req : dyn_fvg_exp
+
+in_ifvg_min_atr = input.float(0.6, "Tamaño Mínimo iFVG (x ATR)", step=0.1, group=grp_fvg)
+float dyn_ifvg_min = is_idx ? 0.3 : is_crypto ? 0.3 : 0.2
+if not preset_manual
+    dyn_ifvg_min := dyn_ifvg_min + ((3 - risk_lvl) * 0.05)
+ifvg_min_atr    = preset_manual ? in_ifvg_min_atr : dyn_ifvg_min
+
+in_ifvg_body_inv = input.float(0.5, "Cuerpo Mín. para Inversión iFVG (%)", minval=0.1, maxval=1.0, step=0.05, group=grp_fvg)
+float dyn_ifvg_body = is_idx ? 0.3 : is_crypto ? 0.4 : 0.3
+if not preset_manual
+    dyn_ifvg_body := dyn_ifvg_body + ((3 - risk_lvl) * 0.05)
+ifvg_body_inv    = preset_manual ? in_ifvg_body_inv : dyn_ifvg_body
+
+require_ifvg_retest = input.bool(true, "Requerir Retest del iFVG para Validar", group=grp_fvg)
+
+// =========================================================================
+// 6. 🎯 TRAMPAS INSTITUCIONALES (CRT)
+// =========================================================================
+grp_crt = "🎯 Filtros CRT 3-Velas (Alta Precisión)"
+crt_3candle_model = input.bool(true, "Usar modelo CRT 3-velas (Range/Sweep/Close)", group=grp_crt)
+crt_inst_only = input.bool(false,"Solo Killzones (LO + NYO + NYPM)", group=grp_crt)
+
+in_crt_min_atr = input.float(0.5, "Tamaño Mínimo de Vela CRT (x ATR)", step=0.1, group=grp_crt)
+float dyn_crt_min = is_idx ? 0.5 : is_crypto ? 0.4 : 0.3
+if not preset_manual
+    dyn_crt_min := dyn_crt_min + ((3 - risk_lvl) * 0.1)
+crt_min_atr    = preset_manual ? in_crt_min_atr : dyn_crt_min 
+
+crt_close_inside = input.bool(true, "Exigir cierre dentro del rango previo (Vela 1)", group=grp_crt)
+
+// =========================================================================
+// 7. 💧 LIQUIDEZ Y CONFLUENCIAS
+// =========================================================================
+grp_liq = "💧 Radar de Liquidez (Inducement / PEH-PEL)"
+show_liq        = input.bool(true, "Mostrar Piscinas de Liquidez ($$$)", group=grp_liq)
+liq_sens        = input.float(1.0, "Sensibilidad Liquidez (Multiplicador ATR)", step=0.1, group=grp_liq)
+peh_pel_tol     = input.float(0.15, "Tolerancia PEH/PEL (x ATR)", step=0.05, group=grp_liq)
+
+// 🆕 v6.0: MEJORA #3 — Detección de acumulación de liquidez (stops cluster)
+in_detect_stops = input.bool(true, "🆕 Detectar Acumulación de Stops (PEH/PEL Dobles)", group=grp_liq)
+detect_stops    = preset_manual ? in_detect_stops : true
+stops_cluster_tol = input.float(0.3, "Tolerancia Cluster de Stops (x ATR)", step=0.05, group=grp_liq)
+stops_cluster_min = input.int(2, "Mínimos Toques para Cluster de Stops", minval=2, maxval=5, group=grp_liq)
+
+grp_mom = "🚀 Momentum Z-Score (Desplazamiento Dinámico)"
+zLen = input.int(50, "Periodos Z-Score", group=grp_mom)
+
+in_zThresh = input.float(2.5, "Umbral Explosivo Normal", step=0.5, group=grp_mom)
+float dyn_zThresh = is_idx ? 2.0 : is_crypto ? 1.8 : 1.5
+if not preset_manual
+    dyn_zThresh := dyn_zThresh + ((3 - risk_lvl) * 0.2)
+zThresh    = preset_manual ? in_zThresh : dyn_zThresh 
+
+in_zThresh_NY = input.float(3.0, "Umbral Explosivo NY (Mayor ruido)", step=0.5, group=grp_mom)
+float dyn_zThresh_NY = is_idx ? 2.5 : is_crypto ? 2.0 : 1.8
+if not preset_manual
+    dyn_zThresh_NY := dyn_zThresh_NY + ((3 - risk_lvl) * 0.2)
+zThresh_NY    = preset_manual ? in_zThresh_NY : dyn_zThresh_NY 
+
+// 🆕 v6.0: MEJORA #1 — Z-Score con decaimiento exponencial (no reset binario)
+in_z_decay = input.float(0.85, "🆕 Factor Decaimiento Z-Score (0=binario, 1=infinito)", minval=0.0, maxval=0.99, step=0.05, group=grp_mom)
+float dyn_z_decay = auto_3m ? 0.80 : auto_15m ? 0.85 : auto_1h ? 0.90 : 0.92
+z_decay = preset_manual ? in_z_decay : dyn_z_decay
+
+grp_rsi = "⚡ RSI Divergencias (Agotamiento)"
+use_rsi      = input.bool(true, "Activar Motor RSI y Divergencias", group=grp_rsi) 
+show_div_lbl = input.bool(true, "Mostrar Etiquetas ⚠️ DIV", group=grp_rsi)
+rsi_len      = input.int(14, 'Longitud RSI', group=grp_rsi)
+rsi_ext      = input.int(30, 'Nivel Extremo (30)', group=grp_rsi)
+
+// 🆕 v6.0: MEJORA #3 — Scoring propio para divergencias (ya no es score fijo 4)
+// Se calcula dinámicamente según: fuerza RSI, cantidad de contactos, contexto de liquidez
+
+// =========================================================================
+// 8. ⏳ HORARIOS Y SESIONES (KILLZONES)
+// =========================================================================
+grp_kz = "⏳ Killzones (Horario Argentina)"
+in_use_kz = input.bool(false, "Filtrar Entradas por Killzone", group=grp_kz) 
+use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : false)
+
+show_asia = input.bool(true, "Dibujar Rango Asiático", group=grp_kz)
+kz_asia = input.session("2000-0200", "Asia Rango (ART)", group=grp_kz)
+kz_lon = input.session("0400-0600", "Londres (ART)", group=grp_kz)
+kz_ny  = input.session("1030-1230", "Nueva York (ART)", group=grp_kz)
+kz_nypm = input.session("1500-1700", "NY PM (ART)", group=grp_kz)
+tz     = "America/Argentina/Buenos_Aires"
+
+// =========================================================================
+// 9. 📡 INTEGRACIÓN Y ALERTAS (JARVIS BOT)
+// =========================================================================
+grp_alerts = "🔔 Alertas Sniper (Notificaciones IA)"
+in_alert_sweep  = input.bool(true, "1. Alerta: Trampa (CRT / Sweep)", group=grp_alerts)
+alert_sweep     = preset_manual ? in_alert_sweep : (auto_15m ? true : auto_1h ? true : auto_4h ? true : false)
+
+in_alert_choch  = input.bool(true, "2. Alerta: Gatillo (CHoCH 🚀)", group=grp_alerts)
+alert_choch     = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_choch     
+
+in_alert_zone_touch = input.bool(true, "3. Alerta: Toque Zona (ZONE_TOUCHED)", group=grp_alerts)
+alert_zone_touch    = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_zone_touch
+
+in_alert_div    = input.bool(true, "4. Alerta: Divergencia (SMC DIV)", group=grp_alerts)
+alert_div       = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_div 
+
+// 🆕 v6.0: Alerta Liquidity Grab
+in_alert_lg = input.bool(true, "🆕 5. Alerta: Liquidity Grab", group=grp_alerts)
+alert_lg     = preset_manual ? in_alert_lg : (auto_15m ? true : auto_1h ? true : false)
+
+grp_radar = "📡 Radar Biónico (Conexión JARVIS JSON)"
+in_sync_strict = input.bool(false, "Sincronización Estricta (Solo a favor de Macro)", group=grp_radar)
+sync_strict    = auto_3m ? false : auto_15m ? false : auto_1h ? false : auto_4h ? false : in_sync_strict
+
+in_use_sync = input.bool(true, "Sincronizar Zonas (cada killzone)", group=grp_radar)
+use_sync    = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_sync 
+
+in_use_ping = input.bool(true, "Enviar PING de Precio al cerrar vela", group=grp_radar)
+use_ping    = auto_3m ? true : auto_15m ? true : auto_1h ? false : auto_4h ? false : in_use_ping
+
+in_use_heartbeat = input.bool(true, "Enviar HEARTBEAT periódico (Watchdog)", group=grp_radar)
+use_heartbeat    = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_heartbeat
+
+// =========================================================================
+// 💾 EXPORTACIÓN DE LOGS (Backtest)
+// =========================================================================
+grp_logs = "💾 Exportación de Logs (Backtest)"
+export_logs = input.bool(false, "Generar Logs para Backtest", group=grp_logs)
+log_start = input.time(timestamp("2024-01-01T00:00:00"), "Fecha Inicio Exportación", group=grp_logs)
+log_end   = input.time(timestamp("2025-12-31T23:59:59"), "Fecha Fin Exportación", group=grp_logs)
+
+bool in_log_window = time >= log_start and time <= log_end
+
+// =========================================================================
+// 🆕 v6.0: FUNCIONES DE ALERTA CON EXPORTACIÓN DE LOGS
+// =========================================================================
+f_ia_alert(id, sym, msg) =>
+    string final_msg = msg + " | TS: " + str.tostring(time)
+    if barstate.isrealtime
+        alert(id + " | " + sym + " | " + final_msg, alert.freq_once_per_bar_close)
+    else if export_logs and in_log_window
+        log.info(id + " | " + final_msg)
+
+f_ia_alert_freq(id, sym, msg, freq) =>
+    string final_msg = msg + " | TS: " + str.tostring(time)
+    if barstate.isrealtime
+        alert(id + " | " + sym + " | " + final_msg, freq)
+    else if export_logs and in_log_window
+        log.info(id + " | " + final_msg)
+
+// Compact price formatting
+f_compact_price(float price) =>
+    str.tostring(math.round_to_mintick(price))
+
+// Short medal codes
+f_short_medal(string medal) =>
+    medal == "Platino" ? "PLAT" : medal == "Oro" ? "ORO" : medal == "Plata" ? "PLATA" : medal == "Bronce" ? "BRONCE" : medal == "CHoCH🚀" ? "CHoCH" : medal == "Breaker" ? "Breaker" : medal == "God Breaker" ? "God_Brk" : medal
+
+// Safe JSON float
+f_json_float(float val) =>
+    na(val) ? "null" : str.tostring(val)
+
+// Safe JSON int
+f_json_int(int val) =>
+    na(val) ? "null" : str.tostring(val)
+
+// =========================================================================
+// 3. 🧠 UDTs & FUNCIONES
+// =========================================================================
+type ob_data
+    float top
+    float btm
+    int   loc_time
+    bool  is_bull
+    int   score
+    string medal
+    bool  mitigated
+    bool  partial_mitigated
+    int   touch_count
+    bool  hidden
+    string level
+    bool  alerted_touch
+    bool  has_displacement
+    bool  has_fvg_after
+    bool  is_choch_ob
+    // 🆕 v6.0: Campo merged para OBs fusionados
+    bool  is_merged
+    int   merge_count
+
+type div_data
+    float top
+    float btm
+    bool  is_bull
+    int   bar_idx
+    // 🆕 v6.0: Campos de scoring dinámico para divergencias
+    int   div_score        // Score calculado (1-8)
+    int   contacts         // Puntos de contacto de la divergencia
+    float rsi_strength     // Fuerza de la divergencia RSI
+    bool  has_liq_context  // Coincide con nivel de liquidez
+    bool  in_killzone      // Detectada en killzone
+
+type fvg_zone
+    float top
+    float btm
+    int   idx_time
+    bool  is_bull
+    bool  is_inv
+    bool  inv_retested
+    box   bx
+    bool  alerted
+
+type liq_pool
+    float y_val
+    int x_start
+    bool is_bull
+    bool swept
+    bool is_peh_pel
+    // 🆕 v6.0: Campo de cluster de stops
+    int  cluster_count
+    line l
+    label lbl
+
+// =========================================================================
+// 🆕 v6.0: MEJORA #1 — Z-Score con decaimiento exponencial
+// Antes: reset binario (se pierde todo con una vela contraria)
+// Ahora: decaimiento gradual — una vela contraria reduce pero no aniquila
+// =========================================================================
+var float updist_smooth = 0.0
+var float downdist_smooth = 0.0
+
+updist_raw = close > open ? (close - open) : 0.0
+downdist_raw = close < open ? (open - close) : 0.0
+
+// Decaimiento exponencial: preserva momentum previo, reduce gradualmente
+updist_smooth   := updist_smooth * z_decay + updist_raw
+downdist_smooth := downdist_smooth * z_decay + downdist_raw
+
+upMean  = ta.sma(updist_smooth, zLen)
+upStdev = ta.stdev(updist_smooth, zLen)
+dnMean  = ta.sma(downdist_smooth, zLen)
+dnStdev = ta.stdev(downdist_smooth, zLen)
+
+zUp = upStdev == 0.0 ? 0.0 : (updist_smooth - upMean) / upStdev
+zDn = dnStdev == 0.0 ? 0.0 : (downdist_smooth - dnMean) / dnStdev
+
+active_zThresh = not na(time(timeframe.period, kz_ny, tz)) ? zThresh_NY : zThresh
+
+// =========================================================================
+// 🆕 v6.0: MEJORA #3 — Scoring dinámico de divergencias
+// =========================================================================
+f_div_score(bool is_bull, float div_price, float prev_price, float cur_rsi, float prev_rsi, bool has_sweep, bool in_kz_div) =>
+    int score = 0
+    
+    // Fuerza de la divergencia RSI (diferencia entre picos/valles)
+    float rsi_diff = math.abs(cur_rsi - prev_rsi)
+    if rsi_diff >= 15
+        score += 3
+    else if rsi_diff >= 10
+        score += 2
+    else
+        score += 1
+    
+    // Extremidad del RSI (qué tan sobrecomprado/sobrevendido)
+    if (not is_bull and cur_rsi > 70) or (is_bull and cur_rsi < 30)
+        score += 2
+    else if (not is_bull and cur_rsi > 60) or (is_bull and cur_rsi < 40)
+        score += 1
+    
+    // Coincidencia con sweep de liquidez (la más importante)
+    if has_sweep
+        score += 2
+    
+    // Contexto de killzone
+    if in_kz_div
+        score += 1
+    
+    math.min(8, score)
+
+// =========================================================================
+// 4. 🌊 VWAP INSTITUCIONAL & DELTA HTF
+// =========================================================================
+grp_vwap = "🌊 VWAP (Liquidez Promedio)"
+show_vwap = input.bool(true, "Mostrar VWAP", group=grp_vwap)
+
+bool vwap_anchor = timeframe.isdwm ? ta.change(time("M")) != 0 : (timeframe.period == "240" or timeframe.period == "60" ? ta.change(time("W")) != 0 : ta.change(time("D")) != 0)
+
+var float sumSrcVol = 0.0
+var float sumVol = 0.0
+float cur_vol = nz(volume)
+
+if vwap_anchor
+    sumSrcVol := hlc3 * cur_vol
+    sumVol := cur_vol
+else
+    sumSrcVol += hlc3 * cur_vol
+    sumVol += cur_vol
+
+vwap_val = sumVol == 0 ? hlc3 : sumSrcVol / sumVol
+plot(show_vwap ? vwap_val : na, color=color.new(#2962ff, 40), title="VWAP Adaptativo", linewidth=2)
+string vwap_status = close > vwap_val ? "OVER" : "UNDER"
+
+new_1h_delta = ta.change(time("60"))
+var float htf_delta = 0.0
+var float htf_open = na
+
+if new_1h_delta
+    htf_delta := (close > open ? volume : close < open ? -volume : 0)
+    htf_open := open
+else
+    htf_delta += (close > open ? volume : close < open ? -volume : 0)
+
+bull_absorb = (close < htf_open) and (htf_delta > 0) 
+bear_absorb = (close > htf_open) and (htf_delta < 0) 
+
+// =========================================================================
+// 4.5 🌙 RANGO ASIÁTICO
+// =========================================================================
+bool is_15m = timeframe.period == "15" or timeframe.period == "30"
+bool in_asia = not na(time(timeframe.period, kz_asia, tz))
+var float asia_h = na, var float asia_l = na
+var float active_asia_h = na, var float active_asia_l = na
+var line asia_line_h = na, var line asia_line_l = na, var label asia_lbl = na
+var int asia_start_idx = na
+
+if in_asia and not in_asia[1]
+    asia_h := high, asia_l := low
+    asia_start_idx := bar_index
+else if in_asia
+    asia_h := math.max(asia_h, high), asia_l := math.min(asia_l, low)
+else if not in_asia and in_asia[1]
+    active_asia_h := asia_h, active_asia_l := asia_l
+    if show_asia and is_15m
+        asia_line_h := line.new(asia_start_idx, active_asia_h, bar_index, active_asia_h, color=color.new(color.fuchsia, 40), style=line.style_dashed, width=2)
+        asia_line_l := line.new(asia_start_idx, active_asia_l, bar_index, active_asia_l, color=color.new(color.fuchsia, 40), style=line.style_dashed, width=2)
+        asia_lbl := label.new(math.round((asia_start_idx + bar_index)/2), active_asia_h, "Rango Asia", color=color(na), textcolor=color.fuchsia, style=label.style_label_down, size=size.tiny)
+
+if not in_asia and show_asia
+    if not na(asia_line_h)
+        line.set_x2(asia_line_h, bar_index)
+        line.set_x2(asia_line_l, bar_index)
+        label.set_x(asia_lbl, bar_index)
+
+// =========================================================================
+// 5. 🧠 LECTURA MACRO Y TENDENCIA ACTIVA
+// =========================================================================
+[d_open, d_h_raw, d_l_raw, d_c_raw] = request.security(syminfo.tickerid, "D", [open[1], high[1], low[1], close[1]])
+[m4h_h_raw, m4h_l_raw, m4h_c_raw] = request.security(syminfo.tickerid, "240", [high[1], low[1], close[1]])
+
+var float active_d_h = na
+var float active_d_l = na
+bool new_D = ta.change(time("D")) != 0
+
+if new_D or na(active_d_h)
+    if na(active_d_h)
+        active_d_h := d_h_raw
+        active_d_l := d_l_raw
+    else
+        bool body_broke_up = d_c_raw > active_d_h
+        bool body_broke_dn = d_c_raw < active_d_l
+        bool engulfed = d_h_raw > active_d_h and d_l_raw < active_d_l
+        if body_broke_up or body_broke_dn or engulfed
+            active_d_h := d_h_raw
+            active_d_l := d_l_raw
+
+var float active_m4h_h = na
+var float active_m4h_l = na
+bool new_4H = ta.change(time("240")) != 0
+
+if new_4H or na(active_m4h_h)
+    if na(active_m4h_h)
+        active_m4h_h := m4h_h_raw
+        active_m4h_l := m4h_l_raw
+    else
+        bool body_broke_up = m4h_c_raw > active_m4h_h
+        bool body_broke_dn = m4h_c_raw < active_m4h_l
+        bool engulfed = m4h_h_raw > active_m4h_h and m4h_l_raw < active_m4h_l
+        if body_broke_up or body_broke_dn or engulfed
+            active_m4h_h := m4h_h_raw
+            active_m4h_l := m4h_l_raw
+
+float d_h = active_d_h
+float d_l = active_d_l
+float m4h_h = active_m4h_h
+float m4h_l = active_m4h_l
+
+var int crt_bias = 0
+bool is_bias_off = bias_mode == "Desactivado (Mostrar Todos)"
+
+if bias_mode == "Automático (Daily Open Direccional)"
+    crt_bias := close > d_open ? 1 : (close < d_open ? -1 : 0)
+else if bias_mode == "Manual Alcista 🟢"
+    crt_bias := 1
+else if bias_mode == "Manual Bajista 🔴"
+    crt_bias := -1
+else
+    crt_bias := 0 
+
+// --- Función de scoring unificado ---
+f_score_zone(bool has_sweep, bool has_displacement, bool has_fvg, bool has_volume, bool has_vwap_align, bool has_htf_align, bool has_ifvg_overlap) =>
+    int score = 0
+    score += has_sweep         ? 2 : 0
+    score += has_displacement  ? 2 : 0
+    score += has_fvg           ? 1 : 0
+    score += has_volume        ? 1 : 0
+    score += has_vwap_align    ? 1 : 0
+    score += has_htf_align     ? 2 : 0
+    score += has_ifvg_overlap  ? 2 : 0
+    score
+
+f_score_to_medal(int score, bool is_choch) =>
+    is_choch ? "CHoCH🚀" : score >= 9 ? "Platino" : score >= 7 ? "Oro" : score >= 5 ? "Plata" : "Bronce"
+
+f_equal_levels(float lvl1, float lvl2, float tolerance_atr, float atr) =>
+    math.abs(lvl1 - lvl2) <= atr * tolerance_atr
+
+f_get_htf_trend() =>
+    var int trend = 0
+    var float last_h = na, var float last_l = na
+    ph = ta.pivothigh(high, 3, 3), pl = ta.pivotlow(low, 3, 3)
+    if not na(ph)
+        last_h := ph
+    if not na(pl)
+        last_l := pl
+    if not na(last_h) and close > last_h
+        trend := 1
+        last_h := na
+        last_l := na
+    if not na(last_l) and close < last_l
+        trend := -1
+        last_l := na
+        last_h := na
+    trend
+
+f_format_delta(val) =>
+    abs_val = math.abs(val)
+    res = abs_val >= 1000000 ? str.tostring(val / 1000000, "#.##") + "M" : abs_val >= 1000 ? str.tostring(val / 1000, "#.##") + "K" : str.tostring(val)
+    val > 0 ? "+" + res : res
+
+htf1_val = request.security(syminfo.tickerid, "5", f_get_htf_trend())
+htf2_val = request.security(syminfo.tickerid, "15", f_get_htf_trend())
+
+// Weekly bias para swing core
+[w_h_raw, w_l_raw, w_c_raw] = request.security(syminfo.tickerid, "W", [high[1], low[1], close[1]])
+bool weekly_bullish = not na(w_h_raw) and not na(w_l_raw) ? close > ((w_h_raw + w_l_raw) / 2) : na
+int weekly_bias = weekly_bullish ? 1 : (not na(weekly_bullish) ? -1 : 0)
+
+var int macro_trend = 0
+if barstate.isfirst or htf1_val != nz(htf1_val[1], htf1_val)
+    macro_trend := htf1_val
+
+float atr_global = ta.atr(14) 
+bool in_kz = not use_kz or not na(time(timeframe.period, kz_lon, tz)) or not na(time(timeframe.period, kz_ny, tz)) or not na(time(timeframe.period, kz_nypm, tz))
+
+var int micro_trend = 0
+int active_trend = override_choch ? (micro_trend != 0 ? micro_trend : macro_trend) : macro_trend
+
+// Sweeps con detección estructural extendida (PEH/PEL)
+var float last_swing_h = na, var float last_swing_l = na
+swing_ph = ta.pivothigh(high, 5, 5)
+swing_pl = ta.pivotlow(low, 5, 5)
+if not na(swing_ph)
+    last_swing_h := swing_ph
+if not na(swing_pl)
+    last_swing_l := swing_pl
+
+bool sweep_dl_15m = low < d_l and close > d_l
+bool sweep_dh_15m = high > d_h and close < d_h
+bool sweep_m4l_15m = low < m4h_l and close > m4h_l
+bool sweep_m4h_15m = high > m4h_h and close < m4h_h
+bool sweep_asia_l = not na(active_asia_l) and low < active_asia_l and close > active_asia_l
+bool sweep_asia_h = not na(active_asia_h) and high > active_asia_h and close < active_asia_h
+bool sweep_swing_l = not na(last_swing_l) and low < last_swing_l and close > last_swing_l
+bool sweep_swing_h = not na(last_swing_h) and high > last_swing_h and close < last_swing_h
+
+float current_sweep_l = sweep_dl_15m ? d_l : sweep_m4l_15m ? m4h_l : sweep_asia_l ? active_asia_l : sweep_swing_l ? last_swing_l : na
+float current_sweep_h = sweep_dh_15m ? d_h : sweep_m4h_15m ? m4h_h : sweep_asia_h ? active_asia_h : sweep_swing_h ? last_swing_h : na
+
+// =========================================================================
+// 5.5 🎯 ETIQUETAS CRT 3-VELAS (Modelo ICT Purist)
+// =========================================================================
+var float last_swept_h = na, var float last_swept_l = na
+var bool sweep_bull_active = false, var bool sweep_bear_active = false
+var float active_bear_sweep_high = na, var float active_bull_sweep_low = na
+
+bool is_crt_bull_raw = not na(current_sweep_l) and (na(last_swept_l) or last_swept_l != current_sweep_l)
+bool is_crt_bear_raw = not na(current_sweep_h) and (na(last_swept_h) or last_swept_h != current_sweep_h)
+
+float prev_high = high[1]
+float prev_low  = low[1]
+bool close_inside_prev_bull = close >= prev_low and close <= prev_high and close > open
+bool close_inside_prev_bear = close >= prev_low and close <= prev_high and close < open
+
+float v1_range = high[1] - low[1]
+float v1_body = math.abs(open[1] - close[1])
+bool valid_range_candle = v1_range > 0 ? (v1_body / v1_range) < 0.75 : false
+
+bool is_crt_bull = is_crt_bull_raw and (not crt_3candle_model or (valid_range_candle and (not crt_close_inside or close_inside_prev_bull)))
+bool is_crt_bear = is_crt_bear_raw and (not crt_3candle_model or (valid_range_candle and (not crt_close_inside or close_inside_prev_bear)))
+
+var line tp_line_4h = na, var label tp_lbl_4h = na
+var line tp_line_d = na, var label tp_lbl_d = na
+var float tp_val_4h = na, var float tp_val_d = na
+var int tp_dir = 0 
+
+float body_top = math.max(open, close)
+float body_btm = math.min(open, close)
+float bull_wick = body_btm - low
+float bear_wick = high - body_top
+float total_range = high - low == 0 ? 1 : high - low
+bool is_high_vol = volume > ta.sma(volume, 20) * vol_mult
+
+int ny_h = hour(time, "America/New_York")
+bool is_inst_kz = not na(time(timeframe.period, kz_lon, tz)) or not na(time(timeframe.period, kz_ny, tz)) or not na(time(timeframe.period, kz_nypm, tz))
+string inst_tag = is_inst_kz ? " ⏰KZ" : ""
+
+bool valid_bear_rej = close < open and (bear_wick / total_range >= 0.5)
+bool valid_bull_rej = close > open and (bull_wick / total_range >= 0.5)
+bool valid_crt_size = total_range >= (atr_global * crt_min_atr)
+bool valid_inst_time = not crt_inst_only or is_inst_kz
+
+var int last_crt_bear_bar = -100
+var int last_crt_bull_bar = -100
+int cooldown_bars = timeframe.isintraday and timeframe.multiplier <= 5 ? 3 : 8
+bool bear_cooldown = (bar_index - last_crt_bear_bar) > cooldown_bars 
+bool bull_cooldown = (bar_index - last_crt_bull_bar) > cooldown_bars
+
+if is_crt_bear and valid_bear_rej and valid_crt_size and valid_inst_time and bear_cooldown
+    last_crt_bear_bar := bar_index
+    if not sweep_bear_active 
+        int eval_bias = crt_bias != 0 ? crt_bias : active_trend
+        bool is_aligned = is_bias_off ? true : (eval_bias <= 0)
+        bool allowed_to_sell = is_aligned or use_scalp
+        bool bear_absorption = is_high_vol and (bear_wick / total_range > 0.5) 
+        
+        string final_lbl = bear_absorption ? "▼ CRT SELL + 🩸ABSORB" : "▼ CRT SELL"
+        if sweep_asia_h
+            final_lbl += " [ASIA]"
+        if sweep_swing_h
+            final_lbl += " [SWING]"
+        final_lbl += inst_tag
+        color lbl_col = is_aligned ? color.new(color.red, 40) : color.new(color.orange, 40)
+        
+        if showSweep and in_kz
+            label.new(bar_index, high, final_lbl, color=lbl_col, textcolor=color.black, style=label.style_label_down, size=size.small)
+            if allowed_to_sell
+                float eq_4h = (m4h_h + m4h_l) / 2
+                float eq_d = (d_h + d_l) / 2
+                
+                line.delete(tp_line_4h)
+                label.delete(tp_lbl_4h)
+                line.delete(tp_line_d)
+                label.delete(tp_lbl_d)
+                tp_line_4h := line.new(bar_index, eq_4h, bar_index + 60, eq_4h, color=color.new(color.green, 20), style=line.style_dashed, width=1)
+                tp_lbl_4h := label.new(bar_index + 60, eq_4h, "TP 50% 4H", color=color.new(color.black, 100), textcolor=color.green, style=label.style_label_left, size=size.tiny)
+                tp_val_4h := eq_4h
+                tp_line_d := line.new(bar_index, eq_d, bar_index + 60, eq_d, color=color.new(#2962ff, 20), style=line.style_dashed, width=1)
+                tp_lbl_d := label.new(bar_index + 60, eq_d, "TP 50% Diario", color=color.new(color.black, 100), textcolor=#2962ff, style=label.style_label_left, size=size.tiny)
+                tp_val_d := eq_d
+                tp_dir := -1
+
+        if alert_sweep and allowed_to_sell and in_kz
+            string abs_tag = bear_absorption ? " + ABSORCION" : ""
+            string asia_tag = sweep_asia_h ? " + ASIA_SWEEP" : ""
+            string swg_tag = sweep_swing_h ? " + SWING_SWEEP" : ""
+            f_ia_alert("EVENTO_SWEEP", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Nivel Reclamado" + abs_tag + asia_tag + swg_tag + inst_tag)
+            
+    sweep_bear_active := true
+    active_bear_sweep_high := high 
+    last_swept_h := current_sweep_h 
+
+if is_crt_bull and valid_bull_rej and valid_crt_size and valid_inst_time and bull_cooldown
+    last_crt_bull_bar := bar_index
+    if not sweep_bull_active 
+        int eval_bias = crt_bias != 0 ? crt_bias : active_trend
+        bool is_aligned = is_bias_off ? true : (eval_bias >= 0)
+        bool allowed_to_buy = is_aligned or use_scalp
+        bool bull_absorption = is_high_vol and (bull_wick / total_range > 0.5) 
+        
+        string final_lbl = bull_absorption ? "▲ CRT BUY + 🟢ABSORB" : "▲ CRT BUY"
+        if sweep_asia_l
+            final_lbl += " [ASIA]"
+        if sweep_swing_l
+            final_lbl += " [SWING]"
+        final_lbl += inst_tag
+        color lbl_col = is_aligned ? color.new(color.green, 40) : color.new(color.orange, 40)
+        
+        if showSweep and in_kz
+            label.new(bar_index, low, final_lbl, color=lbl_col, textcolor=color.black, style=label.style_label_up, size=size.small)
+            if allowed_to_buy
+                float eq_4h = (m4h_h + m4h_l) / 2
+                float eq_d = (d_h + d_l) / 2
+                
+                line.delete(tp_line_4h)
+                label.delete(tp_lbl_4h)
+                line.delete(tp_line_d)
+                label.delete(tp_lbl_d)
+                tp_line_4h := line.new(bar_index, eq_4h, bar_index + 60, eq_4h, color=color.new(color.red, 20), style=line.style_dashed, width=1)
+                tp_lbl_4h := label.new(bar_index + 60, eq_4h, "TP 50% 4H", color=color.new(color.black, 100), textcolor=color.red, style=label.style_label_left, size=size.tiny)
+                tp_val_4h := eq_4h
+                tp_line_d := line.new(bar_index, eq_d, bar_index + 60, eq_d, color=color.new(#2962ff, 20), style=line.style_dashed, width=1)
+                tp_lbl_d := label.new(bar_index + 60, eq_d, "TP 50% Diario", color=color.new(color.black, 100), textcolor=#2962ff, style=label.style_label_left, size=size.tiny)
+                tp_val_d := eq_d
+                tp_dir := 1 
+
+        if alert_sweep and allowed_to_buy and in_kz
+            string abs_tag = bull_absorption ? " + ABSORCION" : ""
+            string asia_tag = sweep_asia_l ? " + ASIA_SWEEP" : ""
+            string swg_tag = sweep_swing_l ? " + SWING_SWEEP" : ""
+            f_ia_alert("EVENTO_SWEEP", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Nivel Reclamado" + abs_tag + asia_tag + swg_tag + inst_tag)
+            
+    sweep_bull_active := true
+    active_bull_sweep_low := low
+    last_swept_l := current_sweep_l
+
+// Gestión de TP
+if tp_dir == 1 
+    if not na(tp_val_4h) and high >= tp_val_4h 
+        line.delete(tp_line_4h)
+        label.delete(tp_lbl_4h)
+        tp_val_4h := na
+    if not na(tp_val_d) and high >= tp_val_d 
+        line.delete(tp_line_d)
+        label.delete(tp_lbl_d)
+        tp_val_d := na
+if tp_dir == -1 
+    if not na(tp_val_4h) and low <= tp_val_4h 
+        line.delete(tp_line_4h)
+        label.delete(tp_lbl_4h)
+        tp_val_4h := na
+    if not na(tp_val_d) and low <= tp_val_d 
+        line.delete(tp_line_d)
+        label.delete(tp_lbl_d)
+        tp_val_d := na
+
+if sweep_bear_active
+    if close > active_bear_sweep_high 
+        sweep_bear_active := false
+        active_bear_sweep_high := na
+        f_ia_alert("SWEEP_BROKEN", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL")
+    else if high > active_bear_sweep_high 
+        active_bear_sweep_high := high 
+
+if sweep_bull_active
+    if close < active_bull_sweep_low 
+        sweep_bull_active := false
+        active_bull_sweep_low := na
+        f_ia_alert("SWEEP_BROKEN", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY")
+    else if low < active_bull_sweep_low 
+        active_bull_sweep_low := low
+
+// =========================================================================
+// 🆕 v6.0: MEJORA #2 — DETECCIÓN DE LIQUIDITY GRAB (Falsas Rupturas)
+// "Liquidity Grab": el precio rompe un nivel, saca stops con mecha larga,
+// y cierra del otro lado indicando que fue una trampa.
+// =========================================================================
+var line lg_line_daily_h = na, var label lg_lbl_daily_h = na
+var line lg_line_daily_l = na, var label lg_lbl_daily_l = na
+var line lg_line_4h_h = na, var label lg_lbl_4h_h = na
+var line lg_line_4h_l = na, var label lg_lbl_4h_l = na
+
+// Liquidity Grab Bajista (rompe resistencia, cierra abajo)
+bool liq_grab_bear = false
+string lg_bear_level = ""
+float lg_bear_price = na
+
+if high > d_h and close < d_h
+    float wick_pct = (high - math.max(open, close)) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bear := true
+        lg_bear_level := "Daily High"
+        lg_bear_price := d_h
+        lg_bear_level
+else if high > m4h_h and close < m4h_h
+    float wick_pct = (high - math.max(open, close)) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bear := true
+        lg_bear_level := "4H High"
+        lg_bear_price := m4h_h
+        lg_bear_level
+else if not na(active_asia_h) and high > active_asia_h and close < active_asia_h
+    float wick_pct = (high - math.max(open, close)) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bear := true
+        lg_bear_level := "ASIA High"
+        lg_bear_price := active_asia_h
+        lg_bear_level
+
+if liq_grab_bear and show_liq_grab and in_kz
+    label.new(bar_index, high, "🩸 LIQ GRAB " + lg_bear_level, color=color.new(color.red, 20), textcolor=color.new(color.red, 80), style=label.style_label_down, size=size.small)
+    if alert_lg
+        f_ia_alert("LIQ_GRAB", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Nivel: " + lg_bear_level + " | Wick%: " + str.tostring(math.round((high - math.max(open, close)) / math.max(total_range, syminfo.mintick) * 100, 0)))
+
+// Liquidity Grab Alcista (rompe soporte, cierra arriba)
+bool liq_grab_bull = false
+string lg_bull_level = ""
+float lg_bull_price = na
+
+if low < d_l and close > d_l
+    float wick_pct = (math.min(open, close) - low) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bull := true
+        lg_bull_level := "Daily Low"
+        lg_bull_price := d_l
+        lg_bull_level
+else if low < m4h_l and close > m4h_l
+    float wick_pct = (math.min(open, close) - low) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bull := true
+        lg_bull_level := "4H Low"
+        lg_bull_price := m4h_l
+        lg_bull_level
+else if not na(active_asia_l) and low < active_asia_l and close > active_asia_l
+    float wick_pct = (math.min(open, close) - low) / math.max(total_range, syminfo.mintick)
+    if wick_pct >= liq_grab_wick_pct and total_range >= (atr_global * liq_grab_atr_min)
+        liq_grab_bull := true
+        lg_bull_level := "ASIA Low"
+        lg_bull_price := active_asia_l
+        lg_bull_level
+
+if liq_grab_bull and show_liq_grab and in_kz
+    label.new(bar_index, low, "🩸 LIQ GRAB " + lg_bull_level, color=color.new(color.green, 20), textcolor=color.new(color.green, 80), style=label.style_label_up, size=size.small)
+    if alert_lg
+        f_ia_alert("LIQ_GRAB", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Nivel: " + lg_bull_level + " | Wick%: " + str.tostring(math.round((math.min(open, close) - low) / math.max(total_range, syminfo.mintick) * 100, 0)))
+
+// =========================================================================
+// 6. 🎯 MOTOR FVG / iFVG
+// =========================================================================
+var array<fvg_zone> fvgs = array.new<fvg_zone>()
+
+float fvg_body_pct = math.abs(open[1] - close[1]) / math.max(high[1] - low[1], syminfo.mintick)
+
+bool valid_bull_fvg = low[0] > high[2] and close[1] > open[1] and (low[0] - high[2]) > (atr_global * fvg_min_atr) and (low[0] - high[2]) <= (atr_global * fvg_max_atr) and fvg_body_pct >= fvg_exp_req
+bool valid_bear_fvg = high[0] < low[2] and close[1] < open[1] and (low[2] - high[0]) > (atr_global * fvg_min_atr) and (low[2] - high[0]) <= (atr_global * fvg_max_atr) and fvg_body_pct >= fvg_exp_req
+
+if valid_bull_fvg and barstate.isconfirmed
+    box bx = show_fvg ? box.new(time[2], low[0], time, high[2], xloc=xloc.bar_time, bgcolor=color.new(#089981, 85), border_color=color.new(#089981, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#089981, 50)) : box(na)
+    array.unshift(fvgs, fvg_zone.new(low[0], high[2], time[2], true, false, false, bx, false))
+
+if valid_bear_fvg and barstate.isconfirmed
+    box bx = show_fvg ? box.new(time[2], low[2], time, high[0], xloc=xloc.bar_time, bgcolor=color.new(#f23645, 85), border_color=color.new(#f23645, 50), border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(#f23645, 50)) : box(na)
+    array.unshift(fvgs, fvg_zone.new(low[2], high[0], time[2], false, false, false, bx, false))
+
+float curr_body = math.abs(close - open)
+float curr_range_safe = math.max(high - low, syminfo.mintick)
+bool body_strong = (curr_body / curr_range_safe) >= ifvg_body_inv
+
+if array.size(fvgs) > 0
+    for i = array.size(fvgs) - 1 to 0
+        fz = array.get(fvgs, i)
+        
+        if not na(fz.bx)
+            box.set_right(fz.bx, time)
+
+        if not fz.is_inv
+            if fz.is_bull
+                if close < fz.btm and body_strong
+                    float fvg_size = math.abs(fz.top - fz.btm)
+                    if fvg_size >= (atr_global * ifvg_min_atr)
+                        fz.is_inv := true
+                        bool is_aligned = is_bias_off ? true : (active_trend <= 0 or crt_bias <= 0)
+                        if showIfvg
+                            color c_bd = color.new(color.orange, 40)
+                            color bg_c = is_aligned ? color.new(color.orange, 90) : color.new(color.orange, 100)
+                            if na(fz.bx)
+                                fz.bx := box.new(fz.idx_time, fz.top, time, fz.btm, xloc=xloc.bar_time, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↘", text_color=c_bd, text_size=size.tiny)
+                            else
+                                box.set_bgcolor(fz.bx, bg_c)
+                                box.set_border_color(fz.bx, c_bd)
+                                box.set_text(fz.bx, "iFVG↘")
+                                box.set_text_color(fz.bx, c_bd)
+                        else
+                            if not na(fz.bx)
+                                box.delete(fz.bx)
+                                fz.bx := box(na)
+                    else
+                        if not na(fz.bx)
+                            box.delete(fz.bx)
+                        array.remove(fvgs, i)
+                else if low <= fz.btm 
+                    if not na(fz.bx)
+                        box.delete(fz.bx)
+                    array.remove(fvgs, i)
+                else if low < fz.top 
+                    fz.top := math.max(low, fz.btm) 
+                    if not na(fz.bx)
+                        box.set_top(fz.bx, fz.top)
+            else
+                if close > fz.top and body_strong
+                    float fvg_size = math.abs(fz.top - fz.btm)
+                    if fvg_size >= (atr_global * ifvg_min_atr) 
+                        fz.is_inv := true
+                        bool is_aligned = is_bias_off ? true : (active_trend >= 0 or crt_bias >= 0)
+                        if showIfvg
+                            color c_bd = color.new(#089981, 40)
+                            color bg_c = is_aligned ? color.new(#089981, 90) : color.new(#089981, 100)
+                            if na(fz.bx)
+                                fz.bx := box.new(fz.idx_time, fz.top, time, fz.btm, xloc=xloc.bar_time, bgcolor=bg_c, border_color=c_bd, border_style=line.style_dotted, text="iFVG↗", text_color=c_bd, text_size=size.tiny)
+                            else
+                                box.set_bgcolor(fz.bx, bg_c)
+                                box.set_border_color(fz.bx, c_bd)
+                                box.set_text(fz.bx, "iFVG↗")
+                                box.set_text_color(fz.bx, c_bd)
+                        else
+                            if not na(fz.bx)
+                                box.delete(fz.bx)
+                                fz.bx := box(na)
+                    else
+                        if not na(fz.bx)
+                            box.delete(fz.bx)
+                        array.remove(fvgs, i)
+                else if high >= fz.top 
+                    if not na(fz.bx)
+                        box.delete(fz.bx)
+                    array.remove(fvgs, i)
+                else if high > fz.btm 
+                    fz.btm := math.min(high, fz.top)
+                    if not na(fz.bx)
+                        box.set_bottom(fz.bx, fz.btm)
+        else
+            bool eff_bull_now = not fz.is_bull
+            bool touching = high >= fz.btm and low <= fz.top
+            if touching and not fz.inv_retested
+                fz.inv_retested := true
+            
+            bool fully_broken = (eff_bull_now and close < fz.btm and body_strong) or (not eff_bull_now and close > fz.top and body_strong)
+            if fully_broken
+                if not na(fz.bx)
+                    box.delete(fz.bx)
+                array.remove(fvgs, i)
+
+while array.size(fvgs) > 30
+    del = array.pop(fvgs)
+    if not na(del.bx)
+        box.delete(del.bx)
+
+f_ob_has_god_fvg(float ob_top, float ob_btm, bool ob_is_bull) =>
+    bool result = false
+    if array.size(fvgs) > 0
+        int max_scan = math.min(array.size(fvgs), 15)
+        for j = 0 to max_scan - 1
+            fz = array.get(fvgs, j)
+            if fz.is_inv
+                bool eff_bull = not fz.is_bull
+                bool retest_ok = not require_ifvg_retest or fz.inv_retested
+                if eff_bull == ob_is_bull and retest_ok and not (ob_top < fz.btm or ob_btm > fz.top)
+                    result := true
+                    break
+    result
+
+// =========================================================================
+// 7. ⚡ RSI DIVERGENCIAS (MEJORA #3 — Scoring dinámico)
+// =========================================================================
+var array<div_data> active_divs = array.new<div_data>()
+if use_rsi
+    rsi_val = ta.rsi(close, rsi_len)
+    ph_rsi = ta.pivothigh(high, 2, 2)
+    pl_rsi = ta.pivotlow(low, 2, 2)
+    var float last_ph_price = na, var float last_ph_rsi = na, var float last_pl_price = na, var float last_pl_rsi = na
+
+    if not na(ph_rsi)
+        if not na(last_ph_price) and high[2] > last_ph_price and rsi_val[2] < last_ph_rsi and rsi_val[2] > (100 - rsi_ext - 10)
+            bool has_liq_ctx = not na(current_sweep_h[2]) or high[2] >= d_h or high[2] >= m4h_h or high[2] >= active_asia_h
+            if has_liq_ctx
+                // 🆕 v6.0: Scoring dinámico en vez de score fijo 4
+                int div_sc = f_div_score(false, high[2], last_ph_price, rsi_val[2], last_ph_rsi, not na(current_sweep_h[2]), in_kz)
+                array.unshift(active_divs, div_data.new(high[2], math.min(open[2], close[2]), false, bar_index[2], div_sc, 0, math.abs(rsi_val[2] - last_ph_rsi), has_liq_ctx, in_kz))
+                if show_div_lbl
+                    label.new(bar_index[2], high[2], "💎 DIV SELL (S:" + str.tostring(div_sc) + ")", color=color.new(color.black, 100), textcolor=color.red, style=label.style_label_down, size=size.tiny)
+                if alert_div and in_kz
+                    f_ia_alert("EVENTO_SMC_DIV", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Score: " + str.tostring(div_sc) + " | RSI_Diff: " + str.tostring(math.round(math.abs(rsi_val[2] - last_ph_rsi), 1)))
+        last_ph_price := high[2]
+        last_ph_rsi := rsi_val[2]
+
+    if not na(pl_rsi)
+        if not na(last_pl_price) and low[2] < last_pl_price and rsi_val[2] > last_pl_rsi and rsi_val[2] < (rsi_ext + 10)
+            bool has_liq_ctx = not na(current_sweep_l[2]) or low[2] <= d_l or low[2] <= m4h_l or low[2] <= active_asia_l
+            if has_liq_ctx
+                // 🆕 v6.0: Scoring dinámico
+                int div_sc = f_div_score(true, low[2], last_pl_price, rsi_val[2], last_pl_rsi, not na(current_sweep_l[2]), in_kz)
+                array.unshift(active_divs, div_data.new(math.max(open[2], close[2]), low[2], true, bar_index[2], div_sc, 0, math.abs(rsi_val[2] - last_pl_rsi), has_liq_ctx, in_kz))
+                if show_div_lbl
+                    label.new(bar_index[2], low[2], "💎 DIV BUY (S:" + str.tostring(div_sc) + ")", color=color.new(color.black, 100), textcolor=color.green, style=label.style_label_up, size=size.tiny)
+                if alert_div and in_kz
+                    f_ia_alert("EVENTO_SMC_DIV", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Score: " + str.tostring(div_sc) + " | RSI_Diff: " + str.tostring(math.round(math.abs(rsi_val[2] - last_pl_rsi), 1)))
+        last_pl_price := low[2]
+        last_pl_rsi := rsi_val[2]
+
+    if array.size(active_divs) > 0
+        for i = array.size(active_divs) - 1 to 0
+            div = array.get(active_divs, i)
+            bool is_broken = false
+            if div.is_bull and close < div.btm
+                is_broken := true
+            else if not div.is_bull and close > div.top
+                is_broken := true
+            if is_broken
+                if in_kz
+                    f_ia_alert("DIV_BROKEN", syminfo.ticker, "TF: " + timeframe.period + " | Dir: " + (div.is_bull ? "BUY" : "SELL") + " | Score: " + str.tostring(div.div_score))
+                array.remove(active_divs, i)
+
+// =========================================================================
+// 8. 📐 ESTRUCTURA Y LIQUIDEZ (PEH/PEL detection — MEJORA #3)
+// =========================================================================
+smc_ph = ta.pivothigh(high, str_bars, str_bars)
+smc_pl = ta.pivotlow(low, str_bars, str_bars)
+var float curr_ph = na, var int curr_ph_idx = na
+var float curr_pl = na, var int curr_pl_idx = na
+
+var float last_liq_ph = na, var int last_liq_ph_idx = na
+var float last_liq_pl = na, var int last_liq_pl_idx = na
+var array<liq_pool> active_pools = array.new<liq_pool>()
+
+// 🆕 v6.0: Tracking de clusters de stops (MEJORA #3 — acumulación de liquidez)
+var float prev_liq_ph = na, var int prev_liq_ph_idx = na
+var float prev_liq_pl = na, var int prev_liq_pl_idx = na
+
+if not na(smc_ph)
+    curr_ph := smc_ph, curr_ph_idx := bar_index[str_bars]
+    if not na(last_liq_ph) and math.abs(curr_ph - last_liq_ph) <= (atr_global * liq_sens)
+        bool is_peh = f_equal_levels(curr_ph, last_liq_ph, peh_pel_tol, atr_global)
+        
+        // 🆕 v6.0: Detectar si es cluster (3+ toques)
+        int cluster_count = 1
+        if not na(prev_liq_ph) and math.abs(curr_ph - prev_liq_ph) <= (atr_global * stops_cluster_tol)
+            cluster_count := 2
+            // Buscar clusters previos en el array
+            if array.size(active_pools) > 0
+                for pi = array.size(active_pools) - 1 to 0
+                    pool = array.get(active_pools, pi)
+                    if not pool.is_bull and math.abs(curr_ph - pool.y_val) <= (atr_global * stops_cluster_tol)
+                        cluster_count := pool.cluster_count + 1
+                        pool.cluster_count := cluster_count
+                        break
+        
+        if show_liq
+            color liq_col = is_peh ? color.new(color.fuchsia, 20) : color.new(color.red, 30)
+            string liq_txt = is_peh ? "$$$ PEH" : "$$$ LIQ"
+            if cluster_count >= stops_cluster_min and detect_stops
+                liq_txt := "🩸 STOPS " + str.tostring(cluster_count) + "x"
+                liq_col := color.new(color.maroon, 40)
+            line l = line.new(last_liq_ph_idx, math.max(curr_ph, last_liq_ph), curr_ph_idx, math.max(curr_ph, last_liq_ph), color=liq_col, style=line.style_dashed, width=1)
+            label lbl = label.new(curr_ph_idx, math.max(curr_ph, last_liq_ph), liq_txt, color=color(na), textcolor=cluster_count >= stops_cluster_min ? color.maroon : is_peh ? color.fuchsia : color.red, style=label.style_label_down, size=size.tiny)
+            array.push(active_pools, liq_pool.new(math.max(curr_ph, last_liq_ph), curr_ph_idx, false, false, is_peh, cluster_count, l, lbl))
+    prev_liq_ph := last_liq_ph
+    prev_liq_ph_idx := last_liq_ph_idx
+    last_liq_ph := curr_ph
+    last_liq_ph_idx := curr_ph_idx
+
+if not na(smc_pl)
+    curr_pl := smc_pl, curr_pl_idx := bar_index[str_bars]
+    if not na(last_liq_pl) and math.abs(curr_pl - last_liq_pl) <= (atr_global * liq_sens)
+        bool is_pel = f_equal_levels(curr_pl, last_liq_pl, peh_pel_tol, atr_global)
+        
+        // 🆕 v6.0: Detectar si es cluster (3+ toques)
+        int cluster_count = 1
+        if not na(prev_liq_pl) and math.abs(curr_pl - prev_liq_pl) <= (atr_global * stops_cluster_tol)
+            cluster_count := 2
+            if array.size(active_pools) > 0
+                for pi = array.size(active_pools) - 1 to 0
+                    pool = array.get(active_pools, pi)
+                    if pool.is_bull and math.abs(curr_pl - pool.y_val) <= (atr_global * stops_cluster_tol)
+                        cluster_count := pool.cluster_count + 1
+                        pool.cluster_count := cluster_count
+                        break
+        
+        if show_liq
+            color liq_col = is_pel ? color.new(color.fuchsia, 20) : color.new(color.blue, 30)
+            string liq_txt = is_pel ? "$$$ PEL" : "$$$ LIQ"
+            if cluster_count >= stops_cluster_min and detect_stops
+                liq_txt := "🩸 STOPS " + str.tostring(cluster_count) + "x"
+                liq_col := color.new(color.navy, 40)
+            line l = line.new(last_liq_pl_idx, math.min(curr_pl, last_liq_pl), curr_pl_idx, math.min(curr_pl, last_liq_pl), color=liq_col, style=line.style_dashed, width=1)
+            label lbl = label.new(curr_pl_idx, math.min(curr_pl, last_liq_pl), liq_txt, color=color(na), textcolor=cluster_count >= stops_cluster_min ? color.navy : is_pel ? color.fuchsia : color.blue, style=label.style_label_up, size=size.tiny)
+            array.push(active_pools, liq_pool.new(math.min(curr_pl, last_liq_pl), curr_pl_idx, true, false, is_pel, cluster_count, l, lbl))
+    prev_liq_pl := last_liq_pl
+    prev_liq_pl_idx := last_liq_pl_idx
+    last_liq_pl := curr_pl
+    last_liq_pl_idx := curr_pl_idx
+
+if array.size(active_pools) > 0
+    for i = array.size(active_pools) - 1 to 0
+        pool = array.get(active_pools, i)
+        line.set_x2(pool.l, bar_index)
+        label.set_x(pool.lbl, bar_index)
+        if (pool.is_bull and low < pool.y_val) or (not pool.is_bull and high > pool.y_val)
+            line.delete(pool.l)
+            label.delete(pool.lbl)
+            array.remove(active_pools, i)
+        else
+            if bar_index - pool.x_start > 200
+                line.delete(pool.l)
+                label.delete(pool.lbl)
+                array.remove(active_pools, i)
+
+// =========================================================================
+// 8.5 📉 TRENDLINE LIQUIDITY (TRAMPAS RETAIL)
+// =========================================================================
+type tl_data
+    bool is_bull
+    line l
+    label lbl
+    float m
+    float b
+    int end_idx
+    bool swept
+
+grp_tl = "📉 Trendline Liquidity ($$$)"
+show_tl = input.bool(true, "Mostrar Líneas de Tendencia (Retail Liq)", group=grp_tl)
+tl_tol = input.float(0.4, "Tolerancia Rectitud (x ATR)", step=0.1, group=grp_tl)
+in_alert_tl = input.bool(true, "Alerta: Sweep de Trendline", group=grp_tl)
+tl_require_kz = input.bool(false, "Solo en Killzones (TL Swp)", group=grp_tl)
+alert_tl = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? false : in_alert_tl
+
+int tl_max_bars = auto_3m ? 300 : auto_15m ? 200 : auto_1h ? 150 : auto_4h ? 100 : 150
+
+var float pl1 = na, var int pl1_idx = na
+var float pl2 = na, var int pl2_idx = na
+var float pl3 = na, var int pl3_idx = na
+
+var float ph1 = na, var int ph1_idx = na
+var float ph2 = na, var int ph2_idx = na
+var float ph3 = na, var int ph3_idx = na
+
+var array<tl_data> active_tls = array.new<tl_data>()
+
+// --- DETECCIÓN DE RESISTENCIA RETAIL ---
+if not na(smc_ph)
+    ph3 := ph2, ph3_idx := ph2_idx
+    ph2 := ph1, ph2_idx := ph1_idx
+    ph1 := curr_ph, ph1_idx := curr_ph_idx
+
+    if not na(ph3) and show_tl
+        if ph1 < ph2 and ph2 < ph3
+            float m1 = (ph2 - ph3) / math.max(1, ph2_idx - ph3_idx)
+            float proj_ph1 = ph2 + m1 * (ph1_idx - ph2_idx)
+            
+            if math.abs(ph1 - proj_ph1) <= (atr_global * tl_tol)
+                float m_avg = (ph1 - ph3) / math.max(1, ph1_idx - ph3_idx)
+                float b_y = ph1 - m_avg * ph1_idx
+                line l = line.new(ph3_idx, ph3, bar_index, m_avg * bar_index + b_y, color=color.new(color.red, 30), style=line.style_dashed, width=1)
+                label lbl = label.new(ph1_idx, ph1, "$$$ TL LIQ", color=color(na), textcolor=color.red, style=label.style_label_down, size=size.tiny)
+                array.push(active_tls, tl_data.new(false, l, lbl, m_avg, b_y, bar_index, false))
+        
+        else if math.abs(ph1 - ph2) <= (atr_global * tl_tol) and ph2 < ph3
+            float m_avg = (ph1 - ph3) / math.max(1, ph1_idx - ph3_idx)
+            float b_y = ph1 - m_avg * ph1_idx
+            float top_level = math.max(ph1, ph2)
+            line l = line.new(ph3_idx, ph3, bar_index, m_avg * bar_index + b_y, color=color.new(color.red, 40), style=line.style_dashed, width=1)
+            label lbl = label.new(ph1_idx, top_level, "$$$ DBL TOP", color=color(na), textcolor=color.maroon, style=label.style_label_down, size=size.tiny)
+            array.push(active_tls, tl_data.new(false, l, lbl, m_avg, b_y, bar_index, false))
+
+// --- DETECCIÓN DE SOPORTE RETAIL ---
+if not na(smc_pl)
+    pl3 := pl2, pl3_idx := pl2_idx
+    pl2 := pl1, pl2_idx := pl1_idx
+    pl1 := curr_pl, pl1_idx := curr_pl_idx
+
+    if not na(pl3) and show_tl
+        if pl1 > pl2 and pl2 > pl3
+            float m1 = (pl2 - pl3) / math.max(1, pl2_idx - pl3_idx)
+            float proj_pl1 = pl2 + m1 * (pl1_idx - pl2_idx)
+            
+            if math.abs(pl1 - proj_pl1) <= (atr_global * tl_tol)
+                float m_avg = (pl1 - pl3) / math.max(1, pl1_idx - pl3_idx)
+                float b_y = pl1 - m_avg * pl1_idx
+                line l = line.new(pl3_idx, pl3, bar_index, m_avg * bar_index + b_y, color=color.new(#089981, 30), style=line.style_dashed, width=1)
+                label lbl = label.new(pl1_idx, pl1, "$$$ TL LIQ", color=color(na), textcolor=#089981, style=label.style_label_up, size=size.tiny)
+                array.push(active_tls, tl_data.new(true, l, lbl, m_avg, b_y, bar_index, false))
+        
+        else if math.abs(pl1 - pl2) <= (atr_global * tl_tol) and pl2 > pl3
+            float m_avg = (pl1 - pl3) / math.max(1, pl1_idx - pl3_idx)
+            float b_y = pl1 - m_avg * pl1_idx
+            float bot_level = math.min(pl1, pl2)
+            line l = line.new(pl3_idx, pl3, bar_index, m_avg * bar_index + b_y, color=color.new(#056656, 40), style=line.style_dashed, width=1)
+            label lbl = label.new(pl1_idx, bot_level, "$$$ DBL BOT", color=color(na), textcolor=#056656, style=label.style_label_up, size=size.tiny)
+            array.push(active_tls, tl_data.new(true, l, lbl, m_avg, b_y, bar_index, false))
+
+// --- GESTIÓN DE TRAMPAS ---
+if array.size(active_tls) > 0
+    for i = array.size(active_tls) - 1 to 0
+        t = array.get(active_tls, i)
+        float current_tl_price = t.m * bar_index + t.b
+        
+        line.set_x2(t.l, bar_index)
+        line.set_y2(t.l, current_tl_price)
+
+        bool is_broken = false
+        if t.is_bull and low < current_tl_price
+            is_broken := true
+        else if not t.is_bull and high > current_tl_price
+            is_broken := true
+
+        if is_broken
+            if not t.swept
+                bool has_break_vol = volume > ta.sma(volume, 20) * vol_mult or (t.is_bull ? zDn >= active_zThresh : zUp >= active_zThresh)
+                bool kz_ok = not tl_require_kz or in_kz
+                if alert_tl and kz_ok and has_break_vol
+                    f_ia_alert("EVENTO_SWEEP_TL", syminfo.ticker, "TF: " + timeframe.period + " | Dir: " + (t.is_bull ? "SELL" : "BUY") + " | Tipo: Trendline Sweep")
+                
+                label.set_text(t.lbl, "🩸 TL SWEPT")
+                label.set_textcolor(t.lbl, color.new(color.gray, 40))
+                line.set_color(t.l, color.new(color.gray, 70))
+                t.swept := true
+            
+        if bar_index - t.end_idx > tl_max_bars
+            line.delete(t.l)
+            label.delete(t.lbl)
+            array.remove(active_tls, i)
+
+// =========================================================================
+// 9. 🏛️ MOTOR SMC PURISTA (BOS / CHOCH Y SCORING MATEMÁTICO)
+// 🆕 v6.0: MEJORA #5 — Confirmación con cierre de vela para CHoCH/BOS
+// =========================================================================
+var all_obs = array.new<ob_data>(0)
+var breaker_obs = array.new<ob_data>(0)
+var box[] ob_boxes_drawn = array.new_box()
+
+var float trend_extreme = na
+if micro_trend == 1
+    trend_extreme := na(trend_extreme) ? high : math.max(trend_extreme, high)
+else if micro_trend == -1
+    trend_extreme := na(trend_extreme) ? low : math.min(trend_extreme, low)
+
+if showBos
+    // 🆕 v6.0 MEJORA #5: La confirmación de cierre usa el cierre de la vela ANTERIOR
+    // si confirm_close está activado, evitando repainting.
+    // En tiempo real (barstate.isrealtime), si la vela aún no cerró, usamos close actual
+    // pero alertamos solo con barstate.isconfirmed.
+    float confirm_close_price = confirm_close ? close[1] : close
+
+    // =====================================================================
+    // 🟢 ESTRUCTURA ALCISTA (BOS / CHoCH BUY)
+    // =====================================================================
+    if not na(curr_ph) and confirm_close_price > curr_ph 
+        bool is_choch = (micro_trend == -1 or micro_trend == 0) 
+        bool has_mom = zUp >= active_zThresh 
+        
+        int bars_since_pivot = nz(bar_index - curr_ph_idx, 1)
+        int lookback = math.min(math.max(1, bars_since_pivot), 100)
+        int origin_idx = 1
+        float min_low = low[1]
+        for i = 1 to lookback
+            if low[i] <= min_low
+                min_low := low[i]
+                origin_idx := i
+
+        bool swept_extreme = na(trend_extreme) or (min_low <= trend_extreme)
+        bool swept_liq = swept_extreme or sweep_bull_active
+        bool pass_sweep = not is_choch or not choch_req_sweep or swept_liq
+        bool pass_mom   = not is_choch or not choch_req_mom or has_mom
+
+        if pass_sweep and pass_mom
+            micro_trend := 1 
+            trend_extreme := high 
+            
+            string event_prefix = is_choch ? "EVENTO_CHOCH" : "EVENTO_BOS"
+            string lbl_txt = is_choch ? (has_mom ? "CHoCH 🚀+MOM" : "CHoCH 🚀") : (has_mom ? "BOS +MOM" : "BOS")
+            if confirm_close
+                lbl_txt := lbl_txt + " ✓"
+            line.new(curr_ph_idx, curr_ph, bar_index, curr_ph, color=color.new(#089981, 0), style=line.style_dotted, width=1)
+            label.new(bar_index, curr_ph, lbl_txt, color=color.new(color.black, 100), textcolor=#089981, style=label.style_label_lower_right, size=size.tiny)
+            
+            if alert_choch
+                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(min_low) + (confirm_close ? " | CONFIRMED" : ""))
+            
+            // OB candidato por volumen
+            int ob_cand_idx = origin_idx
+            float max_ob_vol = 0
+            for i = origin_idx to math.min(origin_idx + 5, 300)
+                if close[i] < open[i]
+                    float cand_vol = nz(volume[i])
+                    if cand_vol > max_ob_vol
+                        max_ob_vol := cand_vol
+                        ob_cand_idx := i
+            
+            bool has_fvg_near = false
+            int limit_idx_bull = math.max(1, ob_cand_idx - 3)
+            if (ob_cand_idx - 1) >= limit_idx_bull
+                for i = limit_idx_bull to (ob_cand_idx - 1)
+                    if low[i-1] > high[i+1] and (low[i-1] - high[i+1]) > (atr_global * fvg_min_atr)
+                        has_fvg_near := true
+                        break
+            
+            float ob_range = high[ob_cand_idx] - low[ob_cand_idx]
+            float ob_body  = math.abs(open[ob_cand_idx] - close[ob_cand_idx])
+            bool valid_body = (ob_body / math.max(ob_range, syminfo.mintick)) >= ob_min_body
+            
+            bool swp = low[origin_idx] < low[origin_idx+1] and low[origin_idx] < low[origin_idx+2]
+            bool passes_strict_sweep = not strictSweep or swp
+            bool valid_bos_break = (high - low) > (atr_global * displ_atr_mult) or has_mom
+
+            if passes_strict_sweep and valid_bos_break and (not require_fvg_after_ob or has_fvg_near) and valid_body
+                float ob_top = useBodyOB ? math.max(open[ob_cand_idx], close[ob_cand_idx]) : high[ob_cand_idx]
+                float ob_btm = low[ob_cand_idx]
+                
+                bool is_discount = (hl2[1] < vwap_val[1])
+                bool htf_aligned = (auto_1h or auto_4h) ? (weekly_bias == 1 or htf2_val == 1) : (htf2_val == 1)
+                bool has_vol = zUp >= active_zThresh or (volume[ob_cand_idx] > ta.sma(volume, 20)[ob_cand_idx] * vol_mult)
+                bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, true)
+                
+                int ob_score = f_score_zone(swp, true, has_fvg_near, has_vol, is_discount, htf_aligned, god_overlap)
+                string ob_medal = f_score_to_medal(ob_score, is_choch)
+                
+                all_obs.unshift(ob_data.new(ob_top, ob_btm, time[ob_cand_idx], true, ob_score, ob_medal, false, false, 0, false, str.tostring(math.round(ob_top, 5)), false, true, has_fvg_near, is_choch, false, 1))
+
+        curr_ph := na
+
+    // =====================================================================
+    // 🔴 ESTRUCTURA BAJISTA (BOS / CHoCH SELL)
+    // =====================================================================
+    if not na(curr_pl) and confirm_close_price < curr_pl 
+        bool is_choch = (micro_trend == 1 or micro_trend == 0) 
+        bool has_mom = zDn >= active_zThresh 
+        
+        int bars_since_pivot = nz(bar_index - curr_pl_idx, 1)
+        int lookback = math.min(math.max(1, bars_since_pivot), 100)
+        int origin_idx = 1
+        float max_high = high[1]
+        for i = 1 to lookback
+            if high[i] >= max_high
+                max_high := high[i]
+                origin_idx := i
+
+        bool swept_extreme = na(trend_extreme) or (max_high >= trend_extreme)
+        bool swept_liq = swept_extreme or sweep_bear_active
+        bool pass_sweep = not is_choch or not choch_req_sweep or swept_liq
+        bool pass_mom   = not is_choch or not choch_req_mom or has_mom
+
+        if pass_sweep and pass_mom
+            micro_trend := -1 
+            trend_extreme := low 
+            
+            string event_prefix = is_choch ? "EVENTO_CHOCH" : "EVENTO_BOS"
+            string lbl_txt = is_choch ? (has_mom ? "CHoCH 🚀+MOM" : "CHoCH 🚀") : (has_mom ? "BOS +MOM" : "BOS")
+            if confirm_close
+                lbl_txt := lbl_txt + " ✓"
+            line.new(curr_pl_idx, curr_pl, bar_index, curr_pl, color=color.new(#f23645, 0), style=line.style_dotted, width=1)
+            label.new(bar_index, curr_pl, lbl_txt, color=color.new(color.black, 100), textcolor=#f23645, style=label.style_label_upper_right, size=size.tiny)
+            
+            if alert_choch
+                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(max_high) + (confirm_close ? " | CONFIRMED" : ""))
+            
+            // OB candidato por volumen
+            int ob_cand_idx = origin_idx
+            float max_ob_vol = 0
+            for i = origin_idx to math.min(origin_idx + 5, 300)
+                if close[i] > open[i]
+                    float cand_vol = nz(volume[i])
+                    if cand_vol > max_ob_vol
+                        max_ob_vol := cand_vol
+                        ob_cand_idx := i
+            
+            bool has_fvg_near = false
+            int limit_idx_bear = math.max(1, ob_cand_idx - 3)
+            if (ob_cand_idx - 1) >= limit_idx_bear
+                for i = limit_idx_bear to (ob_cand_idx - 1)
+                    if high[i-1] < low[i+1] and (low[i+1] - high[i-1]) > (atr_global * fvg_min_atr)
+                        has_fvg_near := true
+                        break
+                    
+            float ob_range = high[ob_cand_idx] - low[ob_cand_idx]
+            float ob_body  = math.abs(open[ob_cand_idx] - close[ob_cand_idx])
+            bool valid_body = (ob_body / math.max(ob_range, syminfo.mintick)) >= ob_min_body
+            
+            bool swp = high[origin_idx] > high[origin_idx+1] and high[origin_idx] > high[origin_idx+2]
+            bool passes_strict_sweep = not strictSweep or swp
+            bool valid_bos_break = (high - low) > (atr_global * displ_atr_mult) or has_mom
+
+            if passes_strict_sweep and valid_bos_break and (not require_fvg_after_ob or has_fvg_near) and valid_body
+                float ob_top = high[ob_cand_idx]
+                float ob_btm = useBodyOB ? math.min(open[ob_cand_idx], close[ob_cand_idx]) : low[ob_cand_idx]
+                
+                bool is_premium = (hl2[1] > vwap_val[1])
+                bool htf_aligned = (auto_1h or auto_4h) ? (weekly_bias == -1 or htf2_val == -1) : (htf2_val == -1)
+                bool has_vol = zDn >= active_zThresh or (volume[ob_cand_idx] > ta.sma(volume, 20)[ob_cand_idx] * vol_mult)
+                bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, false)
+                
+                int ob_score = f_score_zone(swp, true, has_fvg_near, has_vol, is_premium, htf_aligned, god_overlap)
+                string ob_medal = f_score_to_medal(ob_score, is_choch)
+                    
+                all_obs.unshift(ob_data.new(ob_top, ob_btm, time[ob_cand_idx], false, ob_score, ob_medal, false, false, 0, false, str.tostring(math.round(ob_btm, 5)), false, true, has_fvg_near, is_choch, false, 1))
+
+        curr_pl := na
+
+// =========================================================================
+// 🚀 INYECCIÓN: MOTOR SCALPING LEGACY 4.7 (MEJORA #7 — Requiere sweep)
+// =========================================================================
+if use_inv_motor and barstate.isconfirmed
+    // --- BÚSQUEDA INVERSA ALCISTA ---
+    if low[0] > high[2] and close[1] > open[1] and (low[0] - high[2]) > (atr_global * fvg_min_atr)
+        // 🆕 v6.0 MEJORA #7: Motor Legacy exige sweep de liquidez para evitar falsos
+        bool has_liq_sweep = sweep_bull_active or low[2] < d_l or low[2] < m4h_l or (not na(active_asia_l) and low[2] < active_asia_l)
+        bool pass_legacy = not inv_req_sweep or has_liq_sweep
+        
+        if pass_legacy
+            bool has_mom = zUp[1] >= active_zThresh[1] or nz(volume[1]) > nz(ta.sma(volume, 20)[1]) * vol_mult
+            int ext_idx = 2
+            float min_l = low[2]
+            
+            for i = 2 to inv_lookback
+                if low[i] <= min_l
+                    min_l := low[i]
+                    ext_idx := i
+                if high[i] > high[1]
+                    break
+                    
+            bool swp = false
+            if ext_idx + 3 <= bar_index
+                for j = 1 to 3
+                    if low[ext_idx + j] > low[ext_idx]
+                        swp := true
+                        break
+            
+            float ob_top = useBodyOB ? math.max(open[ext_idx], close[ext_idx]) : high[ext_idx]
+            float ob_btm = low[ext_idx]
+            
+            bool htf_aligned = (htf2_val == 1)
+            bool has_vol = has_mom
+            bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, true)
+            bool is_discount = (hl2[1] < vwap_val[1])
+
+            int ob_score = f_score_zone(swp, false, true, has_vol, is_discount, htf_aligned, god_overlap)
+            // 🆕 v6.0: Bonus por sweep en motor legacy
+            if has_liq_sweep
+                ob_score += 1
+            string ob_medal = f_score_to_medal(ob_score, false)
+            
+            string legacy_tag = has_liq_sweep ? " | Legacy+SWP" : " | Legacy"
+            all_obs.unshift(ob_data.new(ob_top, ob_btm, time[ext_idx], true, ob_score, ob_medal + legacy_tag, false, false, 0, false, str.tostring(math.round(ob_top, 5)), false, false, true, false, false, 1))
+
+    // --- BÚSQUEDA INVERSA BAJISTA ---
+    if high[0] < low[2] and close[1] < open[1] and (low[2] - high[0]) > (atr_global * fvg_min_atr)
+        // 🆕 v6.0 MEJORA #7: Motor Legacy exige sweep de liquidez
+        bool has_liq_sweep = sweep_bear_active or high[2] > d_h or high[2] > m4h_h or (not na(active_asia_h) and high[2] > active_asia_h)
+        bool pass_legacy = not inv_req_sweep or has_liq_sweep
+        
+        if pass_legacy
+            bool has_mom = zDn[1] >= active_zThresh[1] or nz(volume[1]) > nz(ta.sma(volume, 20)[1]) * vol_mult
+            int ext_idx = 2
+            float max_h = high[2]
+            
+            for i = 2 to inv_lookback
+                if high[i] >= max_h
+                    max_h := high[i]
+                    ext_idx := i
+                if low[i] < low[1]
+                    break
+                    
+            bool swp = false
+            if ext_idx + 3 <= bar_index
+                for j = 1 to 3
+                    if high[ext_idx + j] < high[ext_idx]
+                        swp := true
+                        break
+            
+            float ob_top = high[ext_idx]
+            float ob_btm = useBodyOB ? math.min(open[ext_idx], close[ext_idx]) : low[ext_idx]
+            
+            bool htf_aligned = (htf2_val == -1)
+            bool has_vol = has_mom
+            bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, false)
+            bool is_premium = (hl2[1] > vwap_val[1])
+
+            int ob_score = f_score_zone(swp, false, true, has_vol, is_premium, htf_aligned, god_overlap)
+            // 🆕 v6.0: Bonus por sweep
+            if has_liq_sweep
+                ob_score += 1
+            string ob_medal = f_score_to_medal(ob_score, false)
+            
+            string legacy_tag = has_liq_sweep ? " | Legacy+SWP" : " | Legacy"
+            all_obs.unshift(ob_data.new(ob_top, ob_btm, time[ext_idx], false, ob_score, ob_medal + legacy_tag, false, false, 0, false, str.tostring(math.round(ob_btm, 5)), false, false, true, false, false, 1))
+
+// =========================================================================
+// 10. MITIGACIONES Y BREAKERS
+// =========================================================================
+int ob_max_age_bars = auto_3m ? 500 : auto_15m ? 400 : auto_1h ? 250 : 150
+if array.size(all_obs) > 0
+    for i = array.size(all_obs) - 1 to 0 
+        ob = array.get(all_obs, i)
+
+        // Expirar OBs por antigüedad
+        int ob_age = (time - ob.loc_time) / math.max(time - time[1], 1)
+        if ob_age > ob_max_age_bars and not ob.is_choch_ob
+            ob.mitigated := true
+            continue
+
+        if ob.is_bull
+            if close < ob.btm and body_strong
+                if not ob.mitigated and (ob.score >= min_score or ob.is_choch_ob)
+                    bool is_aligned = is_bias_off ? true : (active_trend <= 0 or crt_bias <= 0)
+                    bool has_mom = zDn >= active_zThresh
+                    if not strictBreaker or has_mom
+                        breaker_obs.unshift(ob_data.new(ob.top, ob.btm, ob.loc_time, not ob.is_bull, ob.score, "Breaker", false, false, 0, false, ob.level, false, true, true, false, false, ob.merge_count))
+
+                        if alert_zone_touch and in_kz
+                            f_ia_alert("ZONE_BROKEN", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Medal: " + f_short_medal(ob.medal) + " | Score: " + f_json_int(ob.score))
+                
+                array.remove(all_obs, i)
+            else if low < ob.btm
+                if not ob.partial_mitigated
+                    ob.partial_mitigated := true
+            else if low <= ob.top
+                if not ob.mitigated and (ob.score >= min_score or ob.is_choch_ob)
+                    ob.touch_count += 1
+                    
+                    if not ob.alerted_touch and ob.touch_count == 1 and alert_zone_touch and in_kz
+                        ob.alerted_touch := true
+                        bool is_premium = hl2 > vwap_val
+                        string vwap_tag = (ob.is_bull and not is_premium) ? " | VWAP: DISCOUNT" : (not ob.is_bull and is_premium) ? " | VWAP: PREMIUM" : ""
+                        string merge_tag = ob.is_merged ? " | MERGED:" + str.tostring(ob.merge_count) : ""
+                        f_ia_alert("ZONE_TOUCHED", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Medal: " + f_short_medal(ob.medal) + " | Score: " + f_json_int(ob.score) + vwap_tag + merge_tag)
+                    
+                    if ob.touch_count >= max_touches
+                        ob.mitigated := true
+        else
+            if close > ob.top and body_strong
+                if not ob.mitigated and (ob.score >= min_score or ob.is_choch_ob)
+                    bool is_aligned = is_bias_off ? true : (active_trend >= 0 or crt_bias >= 0)
+                    bool has_mom = zUp >= active_zThresh
+                    if not strictBreaker or has_mom
+                        breaker_obs.unshift(ob_data.new(ob.top, ob.btm, ob.loc_time, not ob.is_bull, ob.score, "Breaker", false, false, 0, false, ob.level, false, true, true, false, false, ob.merge_count))
+
+                        if alert_zone_touch and in_kz
+                            f_ia_alert("ZONE_BROKEN", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Medal: " + f_short_medal(ob.medal) + " | Score: " + f_json_int(ob.score))
+                
+                array.remove(all_obs, i)
+            else if high > ob.top
+                if not ob.partial_mitigated
+                    ob.partial_mitigated := true
+            else if high >= ob.btm
+                if not ob.mitigated and (ob.score >= min_score or ob.is_choch_ob)
+                    ob.touch_count += 1
+                    
+                    if not ob.alerted_touch and ob.touch_count == 1 and alert_zone_touch and in_kz
+                        ob.alerted_touch := true
+                        bool is_premium = hl2 > vwap_val
+                        string vwap_tag = (ob.is_bull and not is_premium) ? " | VWAP: DISCOUNT" : (not ob.is_bull and is_premium) ? " | VWAP: PREMIUM" : ""
+                        string merge_tag = ob.is_merged ? " | MERGED:" + str.tostring(ob.merge_count) : ""
+                        f_ia_alert("ZONE_TOUCHED", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Medal: " + f_short_medal(ob.medal) + " | Score: " + f_json_int(ob.score) + vwap_tag + merge_tag)
+                    
+                    if ob.touch_count >= max_touches
+                        ob.mitigated := true
+
+// Eliminador de Breakers mitigados
+if array.size(breaker_obs) > 0
+    for i = array.size(breaker_obs) - 1 to 0
+        brk = array.get(breaker_obs, i)
+        if (brk.is_bull and close < brk.btm) or (not brk.is_bull and close > brk.top)
+            array.remove(breaker_obs, i)
+
+// =========================================================================
+// 11. LIMPIEZA Y REFINAMIENTO (MEJORA #4 — Fusión inteligente de OBs)
+// =========================================================================
+if array.size(all_obs) > max_active_obs
+    removed = array.pop(all_obs)
+
+if refine
+    // 🆕 v6.0 MEJORA #4: Fusión inteligente de OBs adyacentes
+    // En vez de simplemente ocultar el de menor score, fusionamos OBs cercanos
+    // creando una zona compuesta (más fuerte que las partes individuales)
+    if merge_obs and array.size(all_obs) > 1
+        for i = array.size(all_obs) - 1 to 1
+            a = array.get(all_obs, i)
+            if a.hidden or a.mitigated
+                continue
+            for j = i - 1 to 0
+                b = array.get(all_obs, j)
+                if b.hidden or b.mitigated or a.is_bull != b.is_bull
+                    continue
+                
+                // Verificar que estén cerca (dentro de merge_tolerance ATRs)
+                float dist = a.is_bull ? math.abs(a.btm - b.btm) : math.abs(a.top - b.top)
+                if dist <= (atr_global * merge_tolerance)
+                    // Fusionar: la zona compuesta toma el top del más alto y el btm del más bajo
+                    float merged_top = a.is_bull ? math.max(a.top, b.top) : math.max(a.top, b.top)
+                    float merged_btm = a.is_bull ? math.min(a.btm, b.btm) : math.min(a.btm, b.btm)
+                    int merged_score = math.max(a.score, b.score)
+                    int merged_count = a.merge_count + b.merge_count
+                    
+                    // Bonus de score por fusión (+1 por cada OB extra fusionado, máx +3)
+                    int fusion_bonus = math.min(merged_count - 1, 3)
+                    merged_score := math.min(10, merged_score + fusion_bonus)
+                    
+                    // Usar el tiempo del OB más reciente
+                    int merged_time = a.loc_time > b.loc_time ? a.loc_time : b.loc_time
+                    
+                    // El OB con mayor score absorbe al otro
+                    if a.score >= b.score
+                        a.top := merged_top
+                        a.btm := merged_btm
+                        a.score := merged_score
+                        a.medal := f_score_to_medal(merged_score, a.is_choch_ob)
+                        a.level := str.tostring(math.round(a.is_bull ? merged_top : merged_btm, 5))
+                        a.is_merged := true
+                        a.merge_count := merged_count
+                        b.hidden := true
+                    else
+                        b.top := merged_top
+                        b.btm := merged_btm
+                        b.score := merged_score
+                        b.medal := f_score_to_medal(merged_score, b.is_choch_ob)
+                        b.level := str.tostring(math.round(b.is_bull ? merged_top : merged_btm, 5))
+                        b.is_merged := true
+                        b.merge_count := merged_count
+                        a.hidden := true
+
+    // 2. Unificar Breaker vs OB (Creación del Super Bloque)
+    if array.size(breaker_obs) > 0 and array.size(all_obs) > 0
+        for i = 0 to array.size(breaker_obs) - 1
+            brk = array.get(breaker_obs, i)
+            if brk.hidden
+                continue
+            for j = 0 to array.size(all_obs) - 1
+                ob = array.get(all_obs, j)
+                if ob.hidden or ob.is_bull != brk.is_bull
+                    continue
+                
+                if not (brk.top < ob.btm or brk.btm > ob.top)
+                    if ob.score > brk.score
+                        brk.hidden := true
+                    else
+                        ob.hidden := true
+                        brk.medal := "God Breaker"
+
+while array.size(all_obs) > max_active_obs
+    removed = array.pop(all_obs)
+
+while array.size(breaker_obs) > 8
+    array.pop(breaker_obs)
+
+// =========================================================================
+// 12. 🧮 RENDERIZADO Y DASHBOARD
+// =========================================================================
+
+bool is_replay = not barstate.isrealtime and barstate.isconfirmed
+int max_boxes_replay = is_replay ? (timeframe.multiplier <= 15 ? 30 : 10) : 80
+
+// Limpiar arrays masivos en modo replay
+if is_replay
+    int replay_limit = timeframe.multiplier <= 15 ? 20 : timeframe.multiplier <= 60 ? 6 : 4
+    while array.size(all_obs) > replay_limit
+        array.pop(all_obs)
+    while array.size(fvgs) > replay_limit
+        del = array.pop(fvgs)
+    while array.size(active_pools) > replay_limit
+        pool = array.pop(active_pools)
+        line.delete(pool.l)
+        label.delete(pool.lbl)
+    while array.size(active_tls) > replay_limit
+        tl = array.pop(active_tls)
+        line.delete(tl.l)
+        label.delete(tl.lbl)
+    while array.size(active_divs) > replay_limit
+        array.pop(active_divs)
+
+if barstate.islast
+    if array.size(ob_boxes_drawn) > 0
+        for bx in ob_boxes_drawn
+            box.delete(bx)
+        array.clear(ob_boxes_drawn)
+
+    f_t = time + ((time - time[1]) * 15)
+
+    color col_bull_border = color.new(#089981, 30)
+    color col_bear_border = color.new(#f23645, 30)
+    color col_bull_text   = color.new(#089981, 0)
+    color col_bear_text   = color.new(#f23645, 0)
+
+    // 🟢 Dibujo de Zonas Normales
+    int drawn_count = 0
+    if array.size(all_obs) > 0
+        for i = 0 to array.size(all_obs) - 1
+            ob = array.get(all_obs, i)
+            if ob.hidden or ob.mitigated or ob.score < min_score
+                continue
+            
+            if drawn_count >= max_boxes_replay
+                break
+            drawn_count += 1
+            bool should_show = (ob.medal == "Platino" and show_platino) or (str.contains(ob.medal, "Oro") and show_oro) or (ob.medal == "Plata" and show_plata) or (ob.medal == "Bronce" and show_bronce) or (str.contains(ob.medal, "CHoCH") and show_choch)
+            if not should_show
+                continue
+
+            bool god_overlap = f_ob_has_god_fvg(ob.top, ob.btm, ob.is_bull)
+            // 🆕 v6.0: Mostrar tag de fusión si es zona compuesta
+            string display_text = god_overlap ? "💎 GOD ZONE" : ob.medal
+            if ob.is_merged and ob.merge_count >= 2
+                display_text := "🔗 " + display_text + " x" + str.tostring(ob.merge_count)
+            
+            color medal_c = god_overlap ? color.new(#2962ff, 90) : str.contains(ob.medal, "Platino") ? color.new(#8e24aa, 90) : str.contains(ob.medal, "Oro") ? color.new(#f57f17, 90) : ob.medal == "Plata" ? color.new(#64748b, 90) : str.contains(ob.medal, "CHoCH") ? color.new(#d81b60, 90) : color.new(#8d6e63, 90)
+            
+            color border_c = ob.is_bull ? col_bull_border : col_bear_border
+            color text_c   = ob.is_bull ? col_bull_text : col_bear_text
+
+            box bx = box.new(ob.loc_time, ob.top, f_t, ob.btm, xloc=xloc.bar_time, bgcolor=medal_c, border_color=border_c, border_style=line.style_dashed, text=display_text, text_size=size.tiny, text_color=text_c, text_halign=text.align_right)
+            array.push(ob_boxes_drawn, bx)
+
+    // 🟠 Dibujo de Breakers
+    if array.size(breaker_obs) > 0
+        for i = 0 to array.size(breaker_obs) - 1
+            ob = array.get(breaker_obs, i)
+            if ob.hidden
+                continue
+            
+            if drawn_count >= max_boxes_replay
+                break
+            drawn_count += 1
+            
+            bool god_brk = ob.medal == "God Breaker"
+            string brk_text = god_brk ? "💎 God Breaker" : "♻️ Breaker"
+            if ob.is_merged and ob.merge_count >= 2
+                brk_text := "🔗 " + brk_text + " x" + str.tostring(ob.merge_count)
+            
+            color brk_bg = god_brk ? color.new(#2962ff, 90) : color.new(#e65100, 90) 
+            color brk_border = ob.is_bull ? col_bull_border : col_bear_border
+            color brk_txt    = ob.is_bull ? col_bull_text : col_bear_text
+
+            box bx = box.new(ob.loc_time, ob.top, f_t, ob.btm, xloc=xloc.bar_time, bgcolor=brk_bg, border_color=brk_border, border_style=line.style_dashed, text=brk_text, text_size=size.tiny, text_color=brk_txt, text_halign=text.align_right)
+            array.push(ob_boxes_drawn, bx)
+
+// =========================================================================
+// 13. 📡 SISTEMA DE ALERTAS PARA JARVIS (PING PRICE + SYNC + HEARTBEAT)
+// =========================================================================
+
+// --- HEARTBEAT ---
+var int hb_counter = 0
+hb_counter += 1
+if use_heartbeat and barstate.isconfirmed and hb_counter >= 20
+    hb_counter := 0
+    int zone_count = 0
+    int merged_count = 0
+    
+    if array.size(all_obs) > 0
+        for i = 0 to array.size(all_obs) - 1
+            ob = array.get(all_obs, i)
+            if not ob.mitigated and not ob.hidden
+                zone_count += 1
+                if ob.is_merged
+                    merged_count += 1
+    
+    string merge_info = merged_count > 0 ? " | Merged: " + str.tostring(merged_count) : ""
+    f_ia_alert("HEARTBEAT", syminfo.ticker, "TF: " + timeframe.period + " | Bias: " + (crt_bias > 0 ? "BUY" : crt_bias < 0 ? "SELL" : "NEUTRAL") + " | Zones: " + str.tostring(zone_count) + merge_info + " | VWAP: " + vwap_status + " | Z-Up: " + str.tostring(math.round(zUp, 1)) + " | Z-Dn: " + str.tostring(math.round(zDn, 1)))
+
+// --- PING ---
+if use_ping and barstate.isconfirmed
+    f_ia_alert("PING_PRICE", syminfo.ticker, "TF: " + timeframe.period + " | Precio: " + f_compact_price(close) + " | High: " + f_compact_price(high) + " | Low: " + f_compact_price(low) + " | VWAP: " + vwap_status + " | Z-Up: " + str.tostring(math.round(zUp, 1)) + " | Z-Dn: " + str.tostring(math.round(zDn, 1)))
+    
+// --- SYNC ZONES ---
+if use_sync and barstate.isconfirmed and in_kz
+    string ob_json = ""
+    int ob_count = 0
+    int MAX_JSON_CHARS = 2800
+    
+    if array.size(all_obs) > 0
+        for i = 0 to array.size(all_obs) - 1
+            ob_res = array.get(all_obs, i)
+            if ob_res.hidden or ob_res.mitigated
+                continue
+            
+            if str.length(ob_json) > MAX_JSON_CHARS
+                break
+            
+            if ob_count > 0
+                ob_json += ","
+            
+            // 🆕 v6.0: Incluir merge_count en el JSON para que JARVIS lo use
+            string merge_field = ob_res.is_merged ? ',"mg":' + f_json_int(ob_res.merge_count) : ""
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (ob_res.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(ob_res.top) + ',"b":' + f_json_float(ob_res.btm) + ',"lv":"' + ob_res.level + '","md":"' + f_short_medal(ob_res.medal) + '","sc":' + f_json_int(ob_res.score) + ',"a":' + f_json_float(atr_global) + merge_field + '}'
+            
+            ob_count += 1
+    
+    if array.size(breaker_obs) > 0 and str.length(ob_json) <= MAX_JSON_CHARS
+        for bi = 0 to array.size(breaker_obs) - 1
+            brk = array.get(breaker_obs, bi)
+            if brk.hidden or str.length(ob_json) > MAX_JSON_CHARS
+                continue
+                
+            if ob_count > 0
+                ob_json += ","
+            
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (brk.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(brk.top) + ',"b":' + f_json_float(brk.btm) + ',"lv":"' + brk.level + '","md":"' + (brk.medal == "God Breaker" ? "GOD_BRK" : "BRK") + '","sc":' + f_json_int(brk.score) + ',"a":' + f_json_float(atr_global) + '}'
+            
+            ob_count += 1
+
+    // 🆕 v6.0: Divergencias con scoring dinámico en SYNC
+    if show_divs and array.size(active_divs) > 0 and str.length(ob_json) <= MAX_JSON_CHARS
+        for di = 0 to array.size(active_divs) - 1
+            div = array.get(active_divs, di)
+            
+            if str.length(ob_json) > MAX_JSON_CHARS
+                break
+                
+            if ob_count > 0
+                ob_json += ","
+            
+            float div_top = div.is_bull ? div.top : div.top
+            float div_btm = div.is_bull ? div.btm : div.btm
+            float div_mid = (div_top + div_btm) / 2.0
+            
+            // 🆕 v6.0: Score dinámico para divergencias en SYNC
+            string div_kz = div.in_killzone ? ',"kz":true' : ''
+            ob_json += '{"t":"' + timeframe.period + '","d":"' + (div.is_bull ? 'BUY' : 'SELL') + '","p":' + f_json_float(div_top) + ',"b":' + f_json_float(div_btm) + ',"lv":"DIV","md":"SMC_DIV","sc":' + f_json_int(div.div_score) + ',"a":' + f_json_float(atr_global) + div_kz + '}'
+            
+            ob_count += 1
+    
+    if ob_count > 0
+        string trend_str = active_trend > 0 ? "BUY" : active_trend < 0 ? "SELL" : "NEUTRAL"
+        string wb_str = weekly_bias > 0 ? "BUY" : weekly_bias < 0 ? "SELL" : "NEUTRAL"
+        string sync_msg = "TF: " + timeframe.period + " | Trend: " + trend_str + " | WBias: " + wb_str + " | Payload: [" + ob_json + "]"
+        f_ia_alert("SYNC_ZONES", syminfo.ticker, sync_msg)
