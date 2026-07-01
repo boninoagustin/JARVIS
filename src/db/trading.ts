@@ -2473,11 +2473,19 @@ export async function processTradingAlert(alertText: string) {
                     const { getCurrentSessionId } = await import('../services/backtesting.js');
                     sessionId = getCurrentSessionId() || undefined;
                 } else {
+                        let kronosRawDetails = '';
                     // Kronos AI local (LSTM, sin quota externa)
                     try {
                         const { evaluateWithKronos } = await import('../services/kronos.js');
-                        const kRes = await evaluateWithKronos(ticker, oteData.direction as 'BUY' | 'SELL');
+                        const kRes = await evaluateWithKronos(
+                            ticker, 
+                            oteData.direction as 'BUY' | 'SELL',
+                            Number(oteData.entryPrice),
+                            Number(oteData.stopLoss),
+                            Number(oteData.tp1)
+                        );
                         kronosVerdict = (kRes as any).isConfirmed ? 'CONFIRMED' : 'DIVERGENCE';
+                        kronosRawDetails = (kRes as any).rawDetails || (kRes as any).details || '';
                         kronosAnnotation = (kRes as any).trend === null 
                             ? `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).details}`
                             : `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kRes as any).details}`;
@@ -2502,7 +2510,9 @@ export async function processTradingAlert(alertText: string) {
                                     confluenceReport: oteData.confluenceReport || '',
                                     marketBias: oteData.marketBias || {},
                                     consecutiveLosses,
-                                    winRate: 0
+                                    winRate: 0,
+                                    kronosVerdict: kronosVerdict,
+                                    kronosDetails: kronosRawDetails
                                 }),
                                 signal: AbortSignal.timeout(8000) // ⚡ Reducido de 15s a 8s para scalping
                             });

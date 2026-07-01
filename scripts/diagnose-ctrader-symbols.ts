@@ -23,7 +23,7 @@ async function main() {
 
         console.log('✅ Conectado. Obteniendo información de símbolos...\n');
 
-        const symbolsToTest = ['BTCUSD', 'XAUUSD', 'EURUSD'];
+        const symbolsToTest = ['US TECH 100', 'NAS100'];
 
         for (const sym of symbolsToTest) {
             console.log(`\n======================================`);
@@ -31,7 +31,7 @@ async function main() {
             console.log(`======================================`);
             try {
                 const info = await ctClient.getSymbolInfo(sym);
-                console.log(`✅ ¡Encontrado! lotSize: ${info.lotSize}, stepVolume: ${info.stepVolume}`);
+                console.log(JSON.stringify(info, null, 2));
             } catch (e: any) {
                 console.log(`❌ Error: ${e.message}`);
             }

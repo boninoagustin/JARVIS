@@ -1,8 +1,14 @@
 import { db } from './src/db/memory.js';
 
-async function test() {
-    const snap = await db.collection('app_settings').doc('bot_config').get();
-    console.log(snap.data());
-    process.exit(0);
+async function run() {
+  if (!db) return;
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  const snap = await db.collection('asset_configs').get();
+  snap.forEach((doc: any) => {
+    console.log(doc.id, "=>", doc.data());
+  });
+  
+  setTimeout(() => process.exit(0), 1000);
 }
-test();
+run();

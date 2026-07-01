@@ -35,6 +35,8 @@ class TradeAlert(BaseModel):
     consecutiveLosses: int = 0
     totalTrades: int = 0
     winRate: float = 0.0
+    kronosVerdict: str = "SKIP"
+    kronosDetails: str = ""
 
 class AgentVerdict(BaseModel):
     """Respuesta de un agente individual."""
@@ -106,20 +108,31 @@ REGLAS:
 
 Responde con "APROBADO" o "RECHAZADO" y especifica el porcentaje de riesgo sugerido (ej. 1% o 0.5%).""",
 
+    "quant": """Eres un Analista Cuantitativo. Tu trabajo es interpretar los modelos matemáticos y de Machine Learning (Kronos LSTM).
+Recibirás el veredicto crudo del modelo predictivo y sus estimaciones de máximos y mínimos para las próximas 20 velas.
+
+REGLAS:
+1. Si el modelo predictivo advierte expresamente que la proyección "perfora el SL" (Stop Loss), debes RECHAZAR de inmediato.
+2. Si el modelo predictivo tiene un fallo técnico (Offline, Error), responde "APROBADO" (no detengas el trade por un fallo del sistema).
+3. Si el modelo predictivo está de acuerdo y aprueba el trade, responde "APROBADO".
+
+Responde con "APROBADO" o "RECHAZADO" justificando con los datos matemáticos que te entreguen.""",
+
     "juez": """Eres el Portfolio Manager. Debes tomar la decisión final sobre ejecutar o no una orden en el mercado.
-Te entregaré los reportes del Analista Técnico, el Analista Fundamental y el Gestor de Riesgo.
+Te entregaré los reportes del Analista Técnico, el Analista Fundamental, el Gestor de Riesgo y el Analista Cuantitativo (Quant).
 
 REGLAS DE CONSENSO:
-1. El Analista Fundamental tiene VETO ABSOLUTO. Si él rechaza por noticias, la decisión final es RECHAZAR, sin importar lo bueno que sea el setup técnico.
-2. El Gestor de Riesgo tiene VETO ABSOLUTO por R:R malo.
-3. Si Fundamental y Riesgo aprueban, pero el Técnico tiene dudas, tú decides si el contexto compensa el riesgo.
+1. El Analista Fundamental tiene VETO ABSOLUTO por noticias.
+2. El Gestor de Riesgo tiene VETO ABSOLUTO por mal R:R.
+3. El Analista Cuantitativo tiene VETO FUERTE. Si advierte que la matemática estadística romperá el Stop Loss, dale prioridad.
+4. Si Fundamental y Riesgo aprueban, decide en base al Técnico y al Quant.
 
 SALIDA OBLIGATORIA:
 No escribas texto libre. Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura:
 {
   "decision": "EJECUTAR" o "RECHAZAR",
   "risk_pct": 1.0,
-  "summary": "Breve resumen de 1 línea del porqué de la decisión combinando las 3 opiniones."
+  "summary": "Breve resumen de 1 línea del porqué de la decisión combinando las opiniones."
 }"""
 }
 
@@ -207,6 +220,17 @@ Racha de Pérdidas: {alert.consecutiveLosses} consecutivas
 Win Rate Global: {alert.winRate:.0%}
 
 Evalúa la gestión de riesgo."""
+
+def build_quant_prompt(alert: TradeAlert) -> str:
+    """Construye el prompt para el analista cuantitativo (Kronos ML)."""
+    return f"""🤖 ANALISIS CUANTITATIVO (MACHINE LEARNING)
+
+Modelo Predictivo: Kronos LSTM (20 velas proyección)
+Veredicto del Modelo: {alert.kronosVerdict}
+Detalles Matemáticos:
+{alert.kronosDetails or 'Sin datos de Kronos disponibles (Timeout/Error).'}
+
+Evalúa la probabilidad matemática del setup."""
 
 async def run_analyst(prompt: str, role: str) -> AgentVerdict:
     """Ejecuta un agente individual y devuelve su veredicto."""
@@ -352,16 +376,18 @@ async def analyze_trade(alert: TradeAlert):
         t_prompt = build_tecnico_prompt(alert)
         f_prompt = build_fundamental_prompt(macro)
         r_prompt = build_riesgo_prompt(alert)
+        q_prompt = build_quant_prompt(alert)
 
-        # 3. Ejecutar los 3 agentes en paralelo
-        tecnico, fundamental, riesgo = await asyncio.gather(
+        # 3. Ejecutar los 4 agentes en paralelo
+        tecnico, fundamental, riesgo, quant = await asyncio.gather(
             run_analyst(t_prompt, "tecnico"),
             run_analyst(f_prompt, "fundamental"),
             run_analyst(r_prompt, "riesgo"),
+            run_analyst(q_prompt, "quant"),
         )
 
         # 4. Juez decide
-        result = await run_judge([tecnico, fundamental, riesgo], alert)
+        result = await run_judge([tecnico, fundamental, riesgo, quant], alert)
 
         return result
 

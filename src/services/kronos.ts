@@ -120,27 +120,78 @@ function getYahooSymbol(ticker: string): string | null {
     return null;
 }
 
+import { getCTraderTrendbars } from './ctrader.js';
+import { TrendbarPeriod } from 'ctrader-ts';
+
+/**
+ * Fetches the most recent klines (OHLCV) from cTrader for a given symbol.
+ */
+async function fetchCTraderOHLCV(ticker: string, count: number = 400) {
+    try {
+        const trendbars = await getCTraderTrendbars(ticker, TrendbarPeriod.M5, count);
+        return trendbars.map((kline: any) => {
+            const ts = kline.timestamp || (kline.utcTimestampInMinutes * 60000);
+            const open = kline.open !== undefined ? kline.open : 0;
+            const high = kline.high !== undefined ? kline.high : (open + (kline.deltaHigh || 0));
+            const low = kline.low !== undefined ? kline.low : (open - (kline.deltaLow || 0));
+            const close = kline.close !== undefined ? kline.close : (open + (kline.deltaClose || 0));
+            
+            // Si el precio viene en cents (por ejemplo 5800000 en vez de 58000), podemos ajustar.
+            // Por simplicidad, asumimos que viene escalado por 100000 como suele ser cTrader para proveer floats enteros.
+            // Si es así, se dividirá por 100000, pero esto depende del asset.
+            // Para ser 100% compatibles con Kronos, Kronos aprende de la serie relativa, así que la escala no romperá la red neuronal mientras sea consistente.
+            const scale = 100000;
+            return {
+                timestamp: new Date(ts).toISOString(),
+                open: open / scale,
+                high: high / scale,
+                low: low / scale,
+                close: close / scale,
+                volume: kline.volume || 0,
+                amount: kline.volume || 0
+            };
+        });
+    } catch (error: any) {
+        console.error(`[KRONOS] Error fetching cTrader OHLCV for ${ticker}:`, error.message);
+        return null;
+    }
+}
+
 /**
  * Evaluates the setup with the Kronos AI model.
  * Returns the expected trend or null if the API is down/errors out.
  */
-export async function evaluateWithKronos(ticker: string, originalDirection: 'BUY' | 'SELL'): Promise<{
+export async function evaluateWithKronos(
+    ticker: string, 
+    originalDirection: 'BUY' | 'SELL',
+    entryPrice: number,
+    slPrice: number,
+    tpPrice: number
+): Promise<{
     trend: 'BULLISH' | 'BEARISH' | null,
     isConfirmed: boolean,
-    details: string
+    details: string,
+    rawDetails?: string
 }> {
     
-    // 1. Try to fetch historical data from Yahoo Finance if it's a known Forex/Index pair
-    const yahooSymbol = getYahooSymbol(ticker);
     let klines;
-    let dataProvider = 'Binance';
+    let dataProvider = 'cTrader';
     
-    if (yahooSymbol) {
-        klines = await fetchYahooOHLCV(yahooSymbol);
-        dataProvider = 'Yahoo Finance';
-    } else {
-        klines = await fetchBinanceOHLCV(ticker);
+    // Intenta descargar de cTrader
+    klines = await fetchCTraderOHLCV(ticker, 400);
+
+    /* FALLBACK COMENTADO (Binance / Yahoo)
+    if (!klines || klines.length === 0) {
+        const yahooSymbol = getYahooSymbol(ticker);
+        if (yahooSymbol) {
+            klines = await fetchYahooOHLCV(yahooSymbol);
+            dataProvider = 'Yahoo Finance';
+        } else {
+            klines = await fetchBinanceOHLCV(ticker);
+            dataProvider = 'Binance';
+        }
     }
+    */
     
     if (!klines || klines.length === 0) {
         return { trend: null, isConfirmed: false, details: `🔴 ${dataProvider} Data Error` };
@@ -151,12 +202,16 @@ export async function evaluateWithKronos(ticker: string, originalDirection: 'BUY
         const response = await axios.post(KRONOS_API_URL, {
             ticker: ticker,
             klines: klines,
-            pred_len: 20 // Predict the next 20 candles
+            pred_len: 20, // Predict the next 20 candles
+            direction: originalDirection,
+            entry_price: entryPrice,
+            stop_loss: slPrice,
+            take_profit: tpPrice
         }, {
             timeout: 15000 // 15 seconds timeout to not block too long
         });
 
-        const data: KronosResponse = response.data;
+        const data = response.data;
         
         if (data.status === 'success') {
             const isConfirmed = 
@@ -166,7 +221,8 @@ export async function evaluateWithKronos(ticker: string, originalDirection: 'BUY
             return {
                 trend: data.trend,
                 isConfirmed: isConfirmed,
-                details: `🔮 Predicción promedio a 20 velas: ${data.future_close_avg.toFixed(2)} (${data.trend})`
+                details: `🔮 Predicción Kronos: ${data.details}`,
+                rawDetails: data.details
             };
         }
         

@@ -190,6 +190,16 @@ async function main() {
         setTimeout(runAutoTuneScheduler, 10_000);
 
         // 💓 Heartbeat de Firebase (Evita desconexiones silenciosas de onSnapshot)
+        let lastSnapshotReceivedAt = Date.now();
+        
+        unsubscribers.push(
+            db.collection('app_settings').doc('heartbeat').onSnapshot(() => {
+                lastSnapshotReceivedAt = Date.now();
+            }, (err: any) => {
+                console.error('[FIREBASE] Heartbeat snapshot error:', err);
+            })
+        );
+
         setInterval(() => {
             if (db) {
                 db.collection('app_settings').doc('heartbeat').set({
@@ -197,8 +207,14 @@ async function main() {
                     status: 'online'
                 }).catch(() => {});
             }
+            
+            // Watchdog: si no recibimos el snapshot del heartbeat en 5 minutos, la conexión gRPC es un zombie.
+            if (Date.now() - lastSnapshotReceivedAt > 300_000) {
+                console.error('[FIREBASE] 🚨 Zombie connection detected (no heartbeat snapshot in 5m)! Restarting process...');
+                process.exit(1); // PM2 lo reiniciará automáticamente
+            }
         }, 120_000); // 2 minutos
-        console.log(`[FIREBASE] Heartbeat configurado cada 2 min.`);
+        console.log(`[FIREBASE] Heartbeat y Watchdog configurados cada 2 min.`);
 
     } catch (err: any) {
         console.warn(`[TELEGRAM/TRADING] Failed to start listener: ${err.message}`);

@@ -36,6 +36,10 @@ class PredictRequest(BaseModel):
     ticker: str
     klines: List[KlineData]
     pred_len: int = 10
+    direction: Optional[str] = None # "BUY" o "SELL"
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -107,10 +111,34 @@ async def predict(req: PredictRequest):
             sample_count=1
         )
         
-        # Determine the trend based on 'close' prediction
-        last_close_val = df['close'].iloc[-1]
-        future_close_avg = pred_df['close'].mean()
-        pred_trend = "BULLISH" if future_close_avg > last_close_val else "BEARISH"
+        last_close_val = float(df['close'].iloc[-1])
+        
+        # Lógica Cuantitativa de Riesgo
+        if req.direction and req.stop_loss and req.take_profit:
+            pred_min_low = float(pred_df['low'].min())
+            pred_max_high = float(pred_df['high'].max())
+            
+            if req.direction.upper() == "BUY":
+                if pred_min_low <= req.stop_loss:
+                    pred_trend = "BEARISH" # Rechazar trade (toca el SL)
+                    details = f"El modelo predice una caída hasta {pred_min_low:.5f}, perforando el SL ({req.stop_loss:.5f})."
+                else:
+                    pred_trend = "BULLISH"
+                    details = f"Modelo estima soporte en {pred_min_low:.5f} (SL a salvo). TP proyectado en radar."
+            else: # SELL
+                if pred_max_high >= req.stop_loss:
+                    pred_trend = "BULLISH" # Rechazar trade (toca el SL)
+                    details = f"El modelo predice un pico hasta {pred_max_high:.5f}, perforando el SL ({req.stop_loss:.5f})."
+                else:
+                    pred_trend = "BEARISH"
+                    details = f"Modelo estima techo en {pred_max_high:.5f} (SL a salvo). TP proyectado en radar."
+            
+            future_close_avg = float(pred_df['close'].mean())
+        else:
+            # Fallback a lógica clásica si no envían datos de ejecución
+            future_close_avg = float(pred_df['close'].mean())
+            pred_trend = "BULLISH" if future_close_avg > last_close_val else "BEARISH"
+            details = f"Promedio estimado: {future_close_avg:.5f}"
         
         # Reset index to dump to json easily
         pred_df = pred_df.reset_index().rename(columns={"index": "timestamp"})
@@ -121,6 +149,7 @@ async def predict(req: PredictRequest):
             "status": "success",
             "ticker": req.ticker,
             "trend": pred_trend,
+            "details": details,
             "last_close": float(last_close_val),
             "future_close_avg": float(future_close_avg),
             "predictions": pred_df.to_dict(orient="records")

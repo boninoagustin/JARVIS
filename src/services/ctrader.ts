@@ -13,6 +13,7 @@
  */
 
 import { config } from '../config.js';
+import { TrendbarPeriod } from 'ctrader-ts';
 
 // ─── Types ───
 
@@ -287,7 +288,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
 
         let pipPosition = 4; // Default forex
-        if (info && info.pipPosition) {
+        if (info && info.pipPosition !== undefined) {
             pipPosition = info.pipPosition;
         } else if (ctraderSymbol.includes('JPY') || ctraderSymbol.includes('BTC') || ctraderSymbol.includes('XAU') || ctraderSymbol.includes('US30')) {
             pipPosition = 2;
@@ -522,4 +523,18 @@ export function getCTraderStatus(): {
         demo: config.CTRADER_DEMO,
         configured: !!(config.CTRADER_CLIENT_ID && config.CTRADER_ACCESS_TOKEN),
     };
+}
+
+export async function getCTraderTrendbars(ticker: string, period: TrendbarPeriod, count: number) {
+    if (!isConnected || !ctClient) {
+        throw new Error("cTrader no está conectado.");
+    }
+    const ctraderSymbol = mapToCTraderSymbol(ticker);
+    try {
+        const result = await ctClient.getTrendbars(ctraderSymbol, { period, count });
+        return result.trendbars;
+    } catch (e: any) {
+        console.error(`[CTRADER] Error fetching trendbars for ${ticker}:`, e.message);
+        throw e;
+    }
 }
