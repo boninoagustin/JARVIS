@@ -69,8 +69,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # Modelos: flash para agentes, pro para el juez
-MODEL_ANALYST = "deepseek-chat"          # deepseek-v4-flash
-MODEL_JUDGE = "deepseek-chat"            # deepseek-v4-pro
+MODEL_ANALYST = "deepseek-v4-flash"
+MODEL_JUDGE = "deepseek-v4-pro"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SYSTEM PROMPTS (específicos para cada rol)
