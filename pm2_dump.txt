@@ -1,0 +1,2580 @@
+[TAILING] Tailing last 2000 lines for [JARVIS] process (change the value with --lines option)
+/home/bon/.pm2/logs/JARVIS-error.log last 2000 lines:
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 592 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 504 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 204 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 204 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 221 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 386 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 146 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 373 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 28 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 510 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 561 min. Alerta Silenciosa.
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 193 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [CLEANUP] Error en limpieza: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 106 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [CLEANUP] Error en limpieza: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 36 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 116 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [CLEANUP] Error en limpieza: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [SCREENSHOT WORKER] Error en polling: 14 UNAVAILABLE: Name resolution failed for target dns:firestore.googleapis.com:443
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 429 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^VIX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for DX-Y.NYB: request to https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: getaddrinfo EAI_AGAIN query1.finance.yahoo.com
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 270 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 466 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^VIX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for DX-Y.NYB: request to https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [YAHOO] Error fetching price for ^VIX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for ^TNX: request to https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [YAHOO] Error fetching price for DX-Y.NYB: request to https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d failed, reason: 
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] Error en updateFundamentals: request to https://finnhub.io/api/v1/news?category=general&token= failed, reason: Client network socket disconnected before secure TLS connection was established
+0|JARVIS   | [FIREBASE] Error guardando estado NAS100: 4 DEADLINE_EXCEEDED: Deadline exceeded after 159.098s,name resolution: 5.495s,metadata filters: 14.118s,time to current attempt start: 0.225s,LB pick: 60.206s,remote_addr=142.251.129.170:443
+0|JARVIS   | [FIREBASE] Error guardando gatillo NAS100: 4 DEADLINE_EXCEEDED: Deadline exceeded after 209.687s,name resolution: 0.586s,metadata filters: 2.546s,time to current attempt start: 0.220s,LB pick: 71.461s,remote_addr=142.251.129.170:443
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [FINNHUB] Error en updateFundamentals: 4 DEADLINE_EXCEEDED: Deadline exceeded after 192.772s,name resolution: 0.016s,metadata filters: 0.091s,time to current attempt start: 0.008s,LB pick: 0.024s,remote_addr=142.251.129.170:443
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 90 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 176 min. Alerta Silenciosa.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.
+0|JARVIS   | [FINNHUB] No se obtuvieron noticias validas.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+0|JARVIS   | [LLM] Gemini 3 Flash Preview failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+0|JARVIS   | [LLM] Gemini 2.5 Pro fallback failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\nPlease retry in 8.799726351s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerDay-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-pro","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"8s"}]}}
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 NAS100: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 61 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [FINNHUB] Error parseando respuesta del LLM: {
+0|JARVIS   |   "translations": {
+0|JARVIS   |     "0": "Así es como las "Cuentas Trump" podrían afectar la brecha de ahorro para la jubilación de las mujeres.",
+0|JARVIS   |     "1": "Por qué nuestras acciones de ciberseguridad se están disparando, y cómo las grandes tecnológicas intentan recuperarse.",
+0|JARVIS   |     "2": "Los índices de Wall Street suben mientras EE. UU. e Irán detienen los ataques; Comcast se dispara por plan de escisión.",
+0|JARVIS   |     "3": "Los traders de Kalshi esperan que el informe de empleo de esta semana decepcione las expectativas de Wall Street.",
+0|JARVIS   |     "4": "Mediadores establecen canales de desescalada antes de las conversaciones entre EE. UU. e Irán, según fuente.",
+0|JARVIS   |     "5": "Alto funcionario libanés critica acuerdo mediado por EE. UU. con Israel, advierte sobre divisiones.",
+0|JARVIS   |     "6": "Las 10 principales cosas a tener en cuenta en el mercado de valores el lunes, según "The Club".",
+0|JARVIS   |     "7": "EE. UU. dice que los enviados de Trump, Kushner y Witkoff, viajarán a Doha para reunirse con Irán.",
+0|JARVIS   |     "8": "Productores de Oriente Medio continúan con las cargas de petróleo y GNL a pesar de los ataques a barcos.",
+0|JARVIS   |     "9": "'Esta ganga se está erosionando': La visión de las generaciones más jóvenes sobre el Sueño Americano."
+0|JARVIS   |   },
+0|JARVIS   |   "sentiment": {
+0|JARVIS   |     "BTCUSD": {
+0|JARVIS   |       "score": "70% BULLISH",
+0|JARVIS   |       "reason": "La desescalada en las tensiones entre EE. UU. e Irán y el repunte de las acciones tecnológicas generan un ambiente de riesgo positivo, favorable para Bitcoin. La expectativa de un informe de empleo débil (NFP) podría impulsar la especulación sobre una política monetaria más laxa, lo que también suele beneficiar a BTC.",
+0|JARVIS   |       "status": "status-buy"
+0|JARVIS   |     },
+0|JARVIS   |     "EURUSD": {
+0|JARVIS   |       "score": "65% BULLISH",
+0|JARVIS   |       "reason": "La expectativa de un informe de empleo (NFP) débil en EE. UU. (ID 3) podría debilitar al dólar, lo que favorecería al EURUSD. La disminución de las tensiones geopolíticas (ID 2) también podría reducir la demanda de refugio del USD.",
+0|JARVIS   |       "status": "status-buy"
+0|JARVIS   |     },
+0|JARVIS   |     "US100": {
+0|JARVIS   |       "score": "75% BULLISH",
+0|JARVIS   |       "reason": "El titular que menciona el intento de rebote de las grandes tecnológicas y el auge de las acciones de ciberseguridad (ID 1) es directamente positivo. La reducción de las tensiones geopolíticas (ID 2) y la expectativa de un informe de empleo débil (ID 3), que podría sugerir una Fed menos restrictiva, benefician a los activos de riesgo y al sector tecnológico.",
+0|JARVIS   |       "status": "status-buy"
+0|JARVIS   |     },
+0|JARVIS   |     "XAUUSD": {
+0|JARVIS   |       "score": "NEUTRAL / MIXED",
+0|JARVIS   |       "reason": "La desescalada de las tensiones entre EE. UU. e Irán (ID 2, ID 4) es un factor bajista para el oro como activo de refugio. Sin embargo, la expectativa de un informe de empleo (NFP) decepcionante en EE. UU. (ID 3) podría presionar al dólar a la baja y fomentar la demanda de oro como cobertura contra la debilidad monetaria y tasas más bajas. Los conflictos políticos persistentes en Medio Oriente (ID 5) también mantienen un cierto nivel de incertidumbre.",
+0|JARVIS   |       "status": "status-neutral"
+0|JARVIS   |     }
+0|JARVIS   |   }
+0|JARVIS   | }
+0|JARVIS   | [STREAK LIMIT] Error contando pérdidas consecutivas: 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/jarvis-67f66/firestore/indexes?create_composite=ClJwcm9qZWN0cy9qYXJ2aXMtNjdmNjYvZGF0YWJhc2VzLyhkZWZhdWx0KS9jb2xsZWN0aW9uR3JvdXBzL3RyYWRlX2pvdXJuYWwvaW5kZXhlcy9fEAEaDQoJZGlyZWN0aW9uEAEaDQoJdGltZXN0YW1wEAEaDAoIX19uYW1lX18QAQ
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 61 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 10 min. Alerta Silenciosa.
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 8.679313649s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"8s"}]}}
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 13.306217606s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"13s"}]}}
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [WATCHDOG] 🔌 EURUSD: DESCONECTADO hace 11 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 11 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 XAUUSD: DESCONECTADO hace 18 min. Alerta Silenciosa.
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.191516195s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.828722043s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.832494389s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.004385034s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 GBPUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 56.095006235s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"56s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.005078598s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 17 min. Alerta Silenciosa.
+0|JARVIS   | [WATCHDOG] 🔌 BTCUSD: DESCONECTADO hace 16 min. Alerta Silenciosa.
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 57.261426025s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"57s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 57.65185371s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"57s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.255236363s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.608339014s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 54.917372177s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"54s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 54.435008017s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"54s"}]}}
+0|JARVIS   | ⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.
+0|JARVIS   |    Ensure your usage complies with TradingView's Terms of Use.
+0|JARVIS   | 
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 57.916479144s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"57s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.684019293s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 58.16415067s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Flash failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\nPlease retry in 52.98574024s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash","location":"global"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"52s"}]}}
+0|JARVIS   | [LLM] Gemini 3 Flash Preview failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3-flash\nPlease retry in 52.593764547s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-3-flash"},"quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"52s"}]}}
+0|JARVIS   | [LLM] Gemini 2.5 Pro fallback failed: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\nPlease retry in 51.899994562s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerDay-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-pro"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"51s"}]}}
+
+/home/bon/.pm2/logs/JARVIS-out.log last 2000 lines:
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [MCL LIMIT] ✅ EURUSD BUY permitido: 0/2 pérdidas consecutivas de tipo BUY.
+0|JARVIS   | [BUY LIMIT] ✅ EURUSD BUY permitido: 0/2 BUYs usados hoy.
+0|JARVIS   | [SNIPER] 🔍 Verificando duplicado: OTE_EURUSD_BUY_1.14061
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [SNIPER] 📨 Mensaje FRANCOTIRADOR construido para EURUSD (826 chars). isBacktest=true
+0|JARVIS   | [JOURNAL] Trade #02ROWQ logged: EURUSD BUY B (6.75 pts) | SL:1.13813 TP1:1.14061 TP2:1.14123
+0|JARVIS   | [SNIPER] 💾 Registrado trade activo DIRECTO para EURUSD #NXON78
+0|JARVIS   | [SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 3 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en GBPUSD con 0 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.298, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [HEARTBEAT] BTCUSD 15: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.301, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FIBO] ⚠️ Leg BUY en BTCUSD ANULADO por presión contraria: score opuesto 9 pts (mín 9) vs propio 0 pts (hace 0min).
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [HEARTBEAT] NAS100 5: 1 zonas activas, bias SELL
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.283, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.246, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [JOURNAL] 🟡 TP1 alcanzado: EURUSD BUY #NXON78 — Toma parcial ejecutada, SL ajustado a Breakeven
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [HEARTBEAT] EURUSD 15: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [JOURNAL] 🟢 TP2 alcanzado (WIN): EURUSD BUY #NXON78
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [JOURNAL] Trade #02ROWQ recorded as WIN (+0.14%)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: leg no validado y solo -0.25 pts (< 10)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.19, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [RADAR] ✅ Leg BUY en NAS100 VALIDADO tardíamente con confluencia: 3 pts de ZONE_TOUCHED
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.219, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.53, DXY=101.209, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 15: 3 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.52, DXY=101.191, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FIBO] 🎯 RETROCESO 50% CONFIRMADO para XAUUSD SELL. Despertando IA...
+0|JARVIS   | [SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para XAUUSD
+0|JARVIS   | [TRADE] ⏭️ XAUUSD #X63ZTO: omitiendo eval TP/SL (antigüedad 0ms < 5s)
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para XAUUSD SELL. Puntos: 17.75. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [MCL LIMIT] ✅ XAUUSD SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SELL LIMIT] ✅ XAUUSD SELL permitido: 0/2 SELLs usados hoy.
+0|JARVIS   | [SNIPER] 🔍 Verificando duplicado: OTE_XAUUSD_SELL_4039.32
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [SNIPER] 📨 Mensaje FRANCOTIRADOR construido para XAUUSD (818 chars). isBacktest=true
+0|JARVIS   | [JOURNAL] Trade #EGJ8JR logged: XAUUSD SELL A+ (17.75 pts) | SL:4077.01 TP1:4039.32 TP2:4029.42
+0|JARVIS   | [SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [TRADE] ⏭️ XAUUSD #X63ZTO: omitiendo eval TP/SL (antigüedad -300000ms < 5s)
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.49, DXY=101.243, US10Y=4.372
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para NAS100 BUY. Puntos: 10.75. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.35, DXY=101.238, US10Y=4.372
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.29, DXY=101.273, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.32, DXY=101.286, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.4, DXY=101.324, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.43, DXY=101.29, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.29, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.286, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.43, DXY=101.268, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.4, DXY=101.252, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.44, DXY=101.273, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.41, DXY=101.269, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.4, DXY=101.234, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.2, DXY=101.226, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.34, DXY=101.245, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.26, DXY=101.257, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.27, DXY=101.205, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.31, DXY=101.229, US10Y=4.372
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.28, DXY=101.248, US10Y=4.378
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.25, DXY=101.251, US10Y=4.382
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.32, DXY=101.267, US10Y=4.378
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.23, DXY=101.243, US10Y=4.374
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.23, DXY=101.247, US10Y=4.378
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.29, DXY=101.256, US10Y=4.374
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.14, DXY=101.222, US10Y=4.376
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.64, DXY=101.196, US10Y=4.371
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=19.22, DXY=101.161, US10Y=4.374
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.43, DXY=101.164, US10Y=4.374
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.39, DXY=101.14, US10Y=4.376
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.33, DXY=101.17, US10Y=4.378
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (21) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 2 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.18, DXY=101.159, US10Y=4.374
+0|JARVIS   | [FINNHUB] Solo macrodatos guardados en Firebase debido a falta de noticias.
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 12.1 días.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FIBO] 🚫 Leg SELL en XAUUSD INALCANZABLE: precio 4023.395 ya superó el extreme 4039.325 en más de 1 ATR.
+0|JARVIS   | [JOURNAL] 🟡 TP1 alcanzado: XAUUSD SELL #X63ZTO — Toma parcial ejecutada, SL ajustado a Breakeven
+0|JARVIS   | [JOURNAL] 🟢 TP2 alcanzado (WIN): XAUUSD SELL #X63ZTO
+0|JARVIS   | [JOURNAL] Trade #EGJ8JR recorded as WIN (+0.75%)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] 🚫 Leg BUY en NAS100 INALCANZABLE: precio 29486.6 ya superó el extreme 29401.7 en más de 1 ATR.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] 🚫 Leg BUY en GBPUSD INALCANZABLE: precio 1.32479 ya superó el extreme 1.32279 en más de 1 ATR.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 1 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=18.17, DXY=101.134, US10Y=4.378
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 12.1 días.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.96, DXY=101.131, US10Y=4.38
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [RADAR] ⚡ Leg BUY en NAS100 VALIDADO por PUNTAJE ALTO (7 pts ≥ 7) sin zonas en memoria.
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para NAS100 BUY. Puntos: 7. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [MCL LIMIT] ✅ NAS100 BUY permitido: 0/2 pérdidas consecutivas de tipo BUY.
+0|JARVIS   | [BUY LIMIT] ✅ NAS100 BUY permitido: 0/2 BUYs usados hoy.
+0|JARVIS   | [SNIPER] 🔍 Verificando duplicado: OTE_NAS100_BUY_30089.40
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [SNIPER] 📨 Mensaje FRANCOTIRADOR construido para NAS100 (831 chars). isBacktest=true
+0|JARVIS   | [JOURNAL] Trade #NJQI28 logged: NAS100 BUY B (7 pts) | SL:28988.6 TP1:30089.4 TP2:30364.6
+0|JARVIS   | [SNIPER] 💾 Registrado trade activo DIRECTO para NAS100 #99WJ6V
+0|JARVIS   | [SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [TRADE] ⏭️ NAS100 #99WJ6V: omitiendo eval TP/SL (antigüedad 0ms < 5s)
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en NAS100 con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Pro (Fallback)...
+0|JARVIS   | [LLM] Attempting Groq Fallback (Llama 3.3 70B)...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [TELEGRAM] Enviando alerta (289 chars) a 1 usuario(s): [1348898450]
+0|JARVIS   | [JOURNAL] ⏰ Trade Y4Q7U9 (BTCUSD) cerrado por timeout tras 783 min sin PINGs.
+0|JARVIS   | [JOURNAL] Trade #WNHKVX recorded as TIMEOUT
+0|JARVIS   | [TELEGRAM] ✅ Mensaje enviado exitosamente a userId=1348898450
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FIBO-MACRO] 🧹 Leg MACRO SELL expirado por antigüedad.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 4 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.87, DXY=101.109, US10Y=4.376
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 15: 2 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.87, DXY=101.109, US10Y=4.378
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] NAS100 5: 1 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.85, DXY=101.121, US10Y=4.382
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en EURUSD con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en GBPUSD con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.9, DXY=101.083, US10Y=4.378
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 3 zonas activas, bias SELL
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 7 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.86, DXY=101.104, US10Y=4.378
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg SELL en GBPUSD con 8.25 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.76, DXY=101.124, US10Y=4.376
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 7 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.81, DXY=101.125, US10Y=4.38
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 15: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 4 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEARTBEAT] EURUSD 15: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.76, DXY=101.118, US10Y=4.372
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD SELL ignorado: leg no validado y solo 8.25 pts (< 13)
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en GBPUSD con 6.25 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.74, DXY=101.088, US10Y=4.376
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] NAS100 5: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.69, DXY=101.084, US10Y=4.376
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en NAS100 con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 3 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.73, DXY=101.091, US10Y=4.382
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [RADAR] ⚡ Leg SELL en XAUUSD VALIDADO por PUNTAJE ALTO (11.75 pts ≥ 8) sin zonas en memoria.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.62, DXY=101.084, US10Y=4.378
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FIBO] 🎯 RETROCESO 50% CONFIRMADO para XAUUSD SELL. Despertando IA...
+0|JARVIS   | [SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para XAUUSD
+0|JARVIS   | [TRADE] ⏭️ XAUUSD #DQC1CB: omitiendo eval TP/SL (antigüedad 0ms < 5s)
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para XAUUSD SELL. Puntos: 15.75. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [MCL LIMIT] ✅ XAUUSD SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SELL LIMIT] ✅ XAUUSD SELL permitido: 0/2 SELLs usados hoy.
+0|JARVIS   | [SNIPER] 🔍 Verificando duplicado: OTE_XAUUSD_SELL_4012.02
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [SNIPER] 📨 Mensaje FRANCOTIRADOR construido para XAUUSD (640 chars). isBacktest=true
+0|JARVIS   | [JOURNAL] Trade #LLO1YF logged: XAUUSD SELL A+ (15.75 pts) | SL:4026.41 TP1:4012.02 TP2:3994.34
+0|JARVIS   | [SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [JOURNAL] 🟡 TP1 alcanzado: XAUUSD SELL #DQC1CB — Toma parcial ejecutada, SL ajustado a Breakeven
+0|JARVIS   | [JOURNAL] ⚠️ SL Post-Parcial (BREAKEVEN): XAUUSD #DQC1CB
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [JOURNAL] Trade #LLO1YF recorded as BREAKEVEN (+0.02%)
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.61, DXY=101.102, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 7 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.6, DXY=101.114, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 4 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 15: 6 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.55, DXY=101.103, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg BUY en GBPUSD con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] ⚠️ OTE NAS100 BUY ignorado: OTE deshabilitado o puntaje 8.75 < requerido 4 de base
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] NAS100 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.62, DXY=101.091, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 60: 4 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.54, DXY=101.098, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [HEARTBEAT] NAS100 15: 2 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 5 zonas activas, bias BUY
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 1 trades activos cargados.
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.67, DXY=101.093, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 11.9 días.
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 1 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.094, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 11.9 días.
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.104, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 1 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.114, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 11.9 días.
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 1 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.117, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 8 zonas activas, bias BUY
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 11.9 días.
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] GBPUSD 60: 2 zonas activas, bias BUY
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 7 zonas activas, bias BUY
+0|JARVIS   | [JOURNAL] 📊 Resumen diario enviado: 0W/0L/0BE | PnL: +0.00%
+0|JARVIS   | [DAILY] 📊 Resumen diario enviado via journal.ts
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.12, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] BTCUSD 15: 1 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.116, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.105, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] NAS100 5: 3 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.102, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] EURUSD 15: 1 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.106, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 6 zonas activas, bias SELL
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 6 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] GBPUSD 15: 5 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] EURUSD 60: 4 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [RADAR] 🚫 Trading desactivado para NAS100 en esta sesión
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] NAS100 5: 3 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [RADAR] 🚫 Trading desactivado para BTCUSD en esta sesión
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [FIBO] ⚠️ EVENTO_BOS SELL ignorado en BTCUSD: leg anterior tiene -300s (cooldown 3 min)
+0|JARVIS   | [RADAR] 🚫 Trading desactivado para BTCUSD en esta sesión
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 5 zonas activas, bias BUY
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 7 zonas activas, bias SELL
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.111, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FIBO] ⚠️ OTE GBPUSD BUY ignorado: leg no validado y solo 4.75 pts (< 12)
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] 🚫 Leg BUY en NAS100 INALCANZABLE: precio 29772.8 ya superó el extreme 29757.1 en más de 1 ATR.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [RADAR] ⚡ Leg SELL en XAUUSD VALIDADO por PUNTAJE ALTO (11.75 pts ≥ 6) sin zonas en memoria.
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para XAUUSD SELL. Puntos: 11.75. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [MCL LIMIT] ✅ XAUUSD SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SELL LIMIT] ⛔ Setup XAUUSD SELL BLOQUEADO: 2/2 SELLs diarios alcanzados.
+0|JARVIS   | [TELEGRAM] Enviando alerta (189 chars) a 1 usuario(s): [1348898450]
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [TELEGRAM] ✅ Mensaje enviado exitosamente a userId=1348898450
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.146, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 5 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 7 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.158, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FIBO] 🚫 Leg SELL en BTCUSD INALCANZABLE: precio 59843.27 ya superó el extreme 59994.23 en más de 1 ATR.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.184, US10Y=4.374
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [RADAR] ⚡ Leg SELL en XAUUSD VALIDADO por PUNTAJE ALTO (5 pts ≥ 5) sin zonas en memoria.
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para XAUUSD SELL. Puntos: 5. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [MCL LIMIT] ✅ XAUUSD SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SELL LIMIT] ⛔ Setup XAUUSD SELL BLOQUEADO: 2/2 SELLs diarios alcanzados.
+0|JARVIS   | [TELEGRAM] Enviando alerta (189 chars) a 1 usuario(s): [1348898450]
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FIBO] ⚠️ EVENTO_CHOCH SELL ignorado en NAS100: leg anterior tiene 0s (cooldown 3 min)
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [RADAR] CHoCH🚀 ignorado por Cooldown en NAS100 (score preservado: 3 pts).
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [TELEGRAM] ✅ Mensaje enviado exitosamente a userId=1348898450
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.193, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚠️ Leg SELL en GBPUSD con 4.75 pts pero SIN confluencia de zona ni respaldo espacial. OTE en espera.
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [FIBO-MACRO] 🗺️ Creado nuevo ImpulseLeg MACRO (60M) SELL en XAUUSD: origin=4035.62, extreme=3987.34
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] NAS100 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.193, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [HEARTBEAT] NAS100 15: 2 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ⚡ Leg SELL en GBPUSD VALIDADO por PUNTAJE ALTO (7 pts ≥ 7) sin zonas en memoria.
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para GBPUSD SELL. Puntos: 7. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [MCL LIMIT] ✅ GBPUSD SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SNIPER] 🔍 Verificando duplicado: OTE_GBPUSD_SELL_1.32153
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [SNIPER] 📨 Mensaje FRANCOTIRADOR construido para GBPUSD (831 chars). isBacktest=true
+0|JARVIS   | [JOURNAL] Trade #MOPHY6 logged: GBPUSD SELL B (7 pts) | SL:1.32611 TP1:1.32153 TP2:1.32039
+0|JARVIS   | [SNIPER] 💾 Registrado trade activo DIRECTO para GBPUSD #MSPCW1
+0|JARVIS   | [SNIPER] ⏭️ Modo backtest — alerta FRANCOTIRADOR NO enviada a Telegram
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [TRADE] ⏭️ GBPUSD #MSPCW1: omitiendo eval TP/SL (antigüedad 0ms < 5s)
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 5 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.276, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 15: 5 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [HEARTBEAT] XAUUSD 5: 5 zonas activas, bias SELL
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FIBO] 🎯 RETROCESO 50% CONFIRMADO para NAS100 SELL. Despertando IA...
+0|JARVIS   | [SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para NAS100
+0|JARVIS   | [TRADE] ⏭️ NAS100 #NIXY0G: omitiendo eval TP/SL (antigüedad 0ms < 5s)
+0|JARVIS   | [SNIPER] 🎯 triggerOte=true para NAS100 SELL. Puntos: 15.25. Evaluando killswitches...
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [MCL LIMIT] ✅ NAS100 SELL permitido: 0/2 pérdidas consecutivas de tipo SELL.
+0|JARVIS   | [SELL LIMIT] ✅ NAS100 SELL permitido: 0/2 SELLs usados hoy.
+0|JARVIS   | [SAR] ⛔ Reversión Denegada para NAS100: Nueva señal SELL (Score: 15.25) no supera a la activa (Score: undefined).
+0|JARVIS   | [TELEGRAM] Enviando alerta (195 chars) a 1 usuario(s): [1348898450]
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [TELEGRAM] ✅ Mensaje enviado exitosamente a userId=1348898450
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [SHUTDOWN] Limpiando listeners de index.ts...
+0|JARVIS   | [dotenv@17.3.1] injecting env (22) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+0|JARVIS   | [MCP Router] Registered server: tradingview
+0|JARVIS   | [MCP Router] Initializing tradingview...
+0|JARVIS   | [DATABASE] Firebase Cloud Memory initialized.
+0|JARVIS   | [SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---
+0|JARVIS   | [DEBUG] Memory check (Firebase)...
+0|JARVIS   | [SCREENSHOT WORKER] Iniciado. Polling cada 5s...
+0|JARVIS   | [CLEANUP] Timer de limpieza iniciado (cada 1 hora).
+0|JARVIS   | [TELEGRAM] Fetching bot info via Vercel proxy...
+0|JARVIS   | [MCP Router] tradingview connected — 78 tools discovered.
+0|JARVIS   | [MCP Router] All servers initialized. Total tools: 78
+0|JARVIS   | [SYSTEM] JARVIS is online as @agus_fx_bot
+0|JARVIS   | [TELEGRAM] Starting Firebase Queue Listener...
+0|JARVIS   | [SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---
+0|JARVIS   | [TRADING] Starting Firebase Queue Listener...
+0|JARVIS   | [APP] Resetting backtesting status...
+0|JARVIS   | [RADAR] 🧠 Memoria restaurada: 3 trades activos cargados.
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [APP] Starting Command Listener...
+0|JARVIS   | [JOURNAL] Daily summary is handled by trading.ts watchdog at 18:00 ART.
+0|JARVIS   | [FINNHUB] Fundamentals update scheduled every 15 minutes.
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [HEALTH] HTTP server on port 3691
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.231, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [AUTO-TUNE] Próxima optimización automática programada en 11.7 días.
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.184, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] GBPUSD 5: 4 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [HEARTBEAT] EURUSD 5: 6 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [RADAR] ✅ Leg BUY en EURUSD VALIDADO tardíamente con confluencia: 2 pts de ZONE_TOUCHED
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.26, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 🧠 5 configs por activo+sesión cargadas: BTCUSD, EURUSD, GBPUSD, NAS100, XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 15: 1 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.281, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [CONFIG] 📋 Usando config de: NAS100
+0|JARVIS   | [FINNHUB] Actualizando datos fundamentales...
+0|JARVIS   | [YAHOO] Obteniendo macrodatos (VIX, DXY, US10Y)...
+0|JARVIS   | [YAHOO] Macrodatos obtenidos: VIX=17.65, DXY=101.28, US10Y=4.374
+0|JARVIS   | [LLM] Attempting Gemini Native...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Flash...
+0|JARVIS   | [LLM] Attempting Gemini 3 Flash Preview...
+0|JARVIS   | [LLM] Attempting Gemini 2.5 Pro (Fallback)...
+0|JARVIS   | [LLM] Attempting Groq Fallback (Llama 3.3 70B)...
+0|JARVIS   | [FINNHUB] Datos fundamentales guardados en Firebase.
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: EURUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: BTCUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: GBPUSD
+0|JARVIS   | [HEARTBEAT] BTCUSD 5: 6 zonas activas, bias BUY
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+0|JARVIS   | [CONFIG] 📋 Usando config de: XAUUSD
+
