@@ -257,7 +257,7 @@ export default function FundamentalTerminal() {
         }
         setLoadingFundamentals(false);
 
-        const assets = radarSnap.docs.map(doc => doc.id);
+        const assets = radarSnap.docs.map(doc => doc.id).filter(id => isNaN(Number(id)));
         setTradedAssets(assets.sort());
       } catch (err) {
         console.error('[FundTerm] Error fetching Firestore data:', err);

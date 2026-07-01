@@ -177,7 +177,9 @@ export default function RadarHeatmap() {
       try {
         const q = query(collection(db, 'radar_states'));
         const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as RadarState));
+        const data = snapshot.docs
+          .filter(doc => isNaN(Number(doc.id)))
+          .map(doc => ({ id: doc.id, ...doc.data() } as RadarState));
         setStates(data);
         setLoading(false);
         setError(null);
