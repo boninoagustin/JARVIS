@@ -1145,6 +1145,8 @@ export async function processTradingAlert(alertText: string) {
     if (upperText.includes('BUY') || upperText.includes('BULLISH') || upperText.includes('COMPRA')) currentDirection = 'BUY';
     else if (upperText.includes('SELL') || upperText.includes('BEARISH') || upperText.includes('VENTA')) currentDirection = 'SELL';
 
+    const isClimaxCandle = alertText.includes('Vol: CLIMAX');
+
     const docRef = db.collection('radar_states').doc(ticker);
     const todayStr = new Date(nowMs).toISOString().split('T')[0];
 
@@ -2199,7 +2201,11 @@ export async function processTradingAlert(alertText: string) {
                                 const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5; // ej: si min es 8, 13 es extremo
                                 const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
 
-                                if (rrChoch >= 1.5 || hasExtremeMomentum) {
+                                if (isClimaxCandle) {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Vela de quiebre (CHoCH/BOS) con VOLUMEN EXTREMO detectada. Posible agotamiento. Se fuerza espera a retroceso OTE.`;
+                                    takeChoch = false;
+                                    disableOte = false;
+                                } else if (rrChoch >= 1.5 || hasExtremeMomentum) {
                                     if (rrChoch < 1.5) {
                                         smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Obstáculo detectado, pero ignorado por MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
                                     } else {

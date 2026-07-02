@@ -120,7 +120,7 @@ if not preset_manual
     dyn_displ := dyn_displ + ((3 - risk_lvl) * 0.1)
 displ_atr_mult    = preset_manual ? in_displ_atr_mult : dyn_displ 
 
-vol_mult = input.float(1.2, "Mult. Volumen (Score)", step=0.1, group=grp_vis)
+vol_mult = input.float(2.5, "Mult. Volumen (Score)", step=0.1, group=grp_vis)
 
 in_max_touches = input.int(3, "Máximo Toques antes de Degradar OB", minval=1, maxval=10, group=grp_vis)
 int dyn_max_touches = auto_3m ? 3 : auto_15m ? 4 : auto_1h ? 3 : 2
@@ -1339,8 +1339,9 @@ if showBos
             line.new(curr_ph_idx, curr_ph, bar_index, curr_ph, color=color.new(#089981, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_ph, lbl_txt, color=color.new(color.black, 100), textcolor=#089981, style=label.style_label_lower_right, size=size.tiny)
             
+            string vol_tag = (volume > ta.sma(volume, 20) * vol_mult) ? " | Vol: CLIMAX" : ""
             if alert_choch
-                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(min_low) + (confirm_close ? " | CONFIRMED" : ""))
+                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(min_low) + (confirm_close ? " | CONFIRMED" : "") + vol_tag)
             
             // OB candidato por volumen
             int ob_cand_idx = origin_idx
@@ -1416,8 +1417,9 @@ if showBos
             line.new(curr_pl_idx, curr_pl, bar_index, curr_pl, color=color.new(#f23645, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_pl, lbl_txt, color=color.new(color.black, 100), textcolor=#f23645, style=label.style_label_upper_right, size=size.tiny)
             
+            string vol_tag = (volume > ta.sma(volume, 20) * vol_mult) ? " | Vol: CLIMAX" : ""
             if alert_choch
-                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(max_high) + (confirm_close ? " | CONFIRMED" : ""))
+                f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(max_high) + (confirm_close ? " | CONFIRMED" : "") + vol_tag)
             
             // OB candidato por volumen
             int ob_cand_idx = origin_idx
