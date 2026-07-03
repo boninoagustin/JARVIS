@@ -2475,9 +2475,12 @@ export async function processTradingAlert(alertText: string) {
                         if (!isBacktest) sendTelegramAlert(`🔄 <b>CIERRE POR REVERSIÓN (SAR)</b> | ${ticker}\n\nSe cerró la operación <b>${existingTradeForTicker.direction}</b> porque ingresó una nueva señal <b>${oteData.direction}</b> con mayor convicción (Puntaje: ${oteData.points} vs ${existingTradeForTicker.score}).`).catch(() => {});
                         
                         if (!isBacktest && existingTradeForTicker.ctraderPositionId) {
-                            import('../services/ctrader.js').then(async (ctrader) => {
+                            try {
+                                const ctrader = await import('../services/ctrader.js');
                                 await ctrader.closePosition(existingTradeForTicker!.ctraderPositionId!);
-                            }).catch(() => {});
+                            } catch (e) {
+                                console.error("[SAR] Error al cerrar posición cTrader:", e);
+                            }
                         }
                     } else {
                         // Puntaje menor o igual -> Ignorar la nueva señal
