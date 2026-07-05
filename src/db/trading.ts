@@ -1213,8 +1213,8 @@ export async function processTradingAlert(alertText: string) {
             const priceMatch = alertText.match(/Precio:\s*([0-9.,]+)/i);
             if (!priceMatch) return;
 
-            const zUpMatch = alertText.match(/Z-Up:\s*([\d.]+)/i);
-            const zDnMatch = alertText.match(/Z-Dn:\s*([\d.]+)/i);
+            const zUpMatch = alertText.match(/Z-Up:\s*(-?[\d.]+)/i);
+            const zDnMatch = alertText.match(/Z-Dn:\s*(-?[\d.]+)/i);
             if (zUpMatch) state.zUp = parseFloat(zUpMatch[1]);
             if (zDnMatch) state.zDn = parseFloat(zDnMatch[1]);
 
@@ -1801,8 +1801,8 @@ export async function processTradingAlert(alertText: string) {
             else if (prefix === 'HEARTBEAT') {
                 // Watchdog: solo actualiza lastHeartbeat, no suma puntos
                 state.lastHeartbeat = nowMs;
-                const zUpMatch = alertText.match(/Z-Up:\s*([\d.]+)/i);
-                const zDnMatch = alertText.match(/Z-Dn:\s*([\d.]+)/i);
+                const zUpMatch = alertText.match(/Z-Up:\s*(-?[\d.]+)/i);
+                const zDnMatch = alertText.match(/Z-Dn:\s*(-?[\d.]+)/i);
                 if (zUpMatch) state.zUp = parseFloat(zUpMatch[1]);
                 if (zDnMatch) state.zDn = parseFloat(zDnMatch[1]);
                 // Extraer conteo de zonas para diagnóstico
