@@ -91,8 +91,23 @@ export interface BacktestResult {
   startDate: string; endDate: string;
 }
 
+export interface ParsedAlert {
+  prefix: string;
+  eventTf: string;
+  readableTf: number;
+  currentDirection: 'BUY' | 'SELL' | null;
+  trendMatch?: string | null;
+  rawZones?: Record<string, unknown>[];
+  currentPrice?: number;
+  highPrice?: number;
+  lowPrice?: number;
+  origin?: number;
+  vwapUnder?: boolean;
+  vwapOver?: boolean;
+}
+
 export interface LogEntry {
-  ts: number; line: string; tf: string;
+  ts: number; line: string; tf: string; parsed?: ParsedAlert;
 }
 
 export function emptyState(): RadarState {
@@ -100,7 +115,7 @@ export function emptyState(): RadarState {
     zones: [], lastPrice: null, previousPrice: null,
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '5': 'NEUTRAL' },
+    marketBias: { 'D': 'NEUTRAL', '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '5': 'NEUTRAL' },
     lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
     activeImpulseBuy: null, activeImpulseSell: null,
     activeMacroImpulseBuy: null, activeMacroImpulseSell: null,
@@ -122,6 +137,7 @@ export function normalizeZone(raw: Record<string, unknown>): RadarZone {
 }
 
 export const parseTF = (tf: string) => {
+  if (tf === 'D') return 'D';
   if (tf === '240') return '4H';
   if (tf === '60') return '1H';
   if (tf === '15') return '15M';

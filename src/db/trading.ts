@@ -94,7 +94,7 @@ const emptyState = (): RadarState => ({
     lastPrice: null,
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "3": 'NEUTRAL' },
+    marketBias: { "D": 'NEUTRAL', "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' },
     lastApproachAlert: 0,
     lastSniperAlert: 0,
     activeImpulseBuy: null,
@@ -388,7 +388,7 @@ if (db) {
 const recentAlertCache = new Map<string, number>();
 const DEDUP_WINDOW_MS = 60000; 
 const lastSyncTime = new Map<string, number>();
-const SYNC_THROTTLE_MS: Record<string, number> = { '3': 0, '15': 120000, '60': 300000, '240': 600000 };
+const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 120000, '60': 300000, '240': 600000, 'D': 900000 };
 const tickerLastSeen = new Map<string, number>();
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -405,10 +405,11 @@ function isDuplicate(fingerprint: string, nowMs: number): boolean {
 }
 
 const parseTF = (tf: string) => {
+    if (tf === 'D') return 'D';
     if (tf === '240') return '4H';
     if (tf === '60') return '1H';
     if (tf === '15') return '15M';
-    if (tf === '3') return '3M';
+    if (tf === '5') return '5M';
     return `${tf}M`;
 };
 
@@ -1069,7 +1070,7 @@ export async function processTradingAlert(alertText: string) {
     let tfToleranceMs = 300000; // 5 minutos por defecto
     // Buscar coincidencia en la temporalidad parseada o en el prefix
     const tfStringToMatch = parsedTf || prefix;
-    const tfPrefixMatch = tfStringToMatch.match(/(1M|3M|5M|15M|30M|1H|4H|1D|1W)/i);
+    const tfPrefixMatch = tfStringToMatch.match(/(1M|3M|5M|15M|30M|1H|4H|D|1D|1W)/i);
     
     if (tfPrefixMatch) {
         const tf = tfPrefixMatch[1].toUpperCase();
@@ -1081,6 +1082,7 @@ export async function processTradingAlert(alertText: string) {
         else if (tf === '1H') tfToleranceMs = 60 * 60000 + 300000;
         else if (tf === '4H') tfToleranceMs = 240 * 60000 + 300000;
         else if (tf === '1D') tfToleranceMs = 1440 * 60000 + 300000;
+        else if (tf === 'D') tfToleranceMs = 1440 * 60000 + 300000;
         else if (tf === '1W') tfToleranceMs = 10080 * 60000 + 300000;
     }
 
@@ -1610,7 +1612,7 @@ export async function processTradingAlert(alertText: string) {
                     
                     let confluenceBonus = tfCount === 4 ? 10 : tfCount === 3 ? 7 : 4;
                     const tfList = [...uniqueTFs].map(t => parseTF(t || '')).sort((a, b) => {
-                        const order: Record<string, number> = { '3M': 0, '15M': 1, '1H': 2, '4H': 3 };
+                        const order: Record<string, number> = { '5M': 0, '15M': 1, '1H': 2, '4H': 3, 'D': 4 };
                         return (order[b] || 0) - (order[a] || 0);
                     }).join('+');
                     
@@ -1693,7 +1695,7 @@ export async function processTradingAlert(alertText: string) {
                             else state.activeImpulseSell = newLeg;
                         }
                     }
-                } else if (eventTf === '15' || eventTf === '60' || eventTf === '240') {
+                } else if (eventTf === '15' || eventTf === '60' || eventTf === '240' || eventTf === 'D') {
                     const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
                     const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
                     const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
@@ -1933,7 +1935,7 @@ export async function processTradingAlert(alertText: string) {
                 if (caseC_TrapZone > 0) console.log(`[RADAR] ⚠️ Caso C | ${caseC_TrapZone} zona(s) contraria(s) dentro del CHoCH → posible trampa.`);
                 
                 const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
-                const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+                const isMacroAligned = (state.marketBias['D'] === currentDirection) || (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
                 const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                 const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
                 
@@ -1987,6 +1989,7 @@ export async function processTradingAlert(alertText: string) {
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
 
                 let confluenceReport = `🗺️ <b>Contexto Macro:</b>\n`;
+                confluenceReport += `${getIcon("D")} D: ${state.marketBias["D"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("240")} 4H: ${state.marketBias["240"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("60")} 1H: ${state.marketBias["60"] || 'NEUTRAL'}\n`;
                 confluenceReport += `${getIcon("15")} 15M: ${state.marketBias["15"] || 'NEUTRAL'}\n`;
@@ -2067,8 +2070,6 @@ export async function processTradingAlert(alertText: string) {
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
                 if (isCrypto) minPtsRequired = Math.max(minPtsRequired - 1, 3); // Crypto: 1 punto menos
                 
-                if (consecutiveLosses >= 2) minPtsRequired += 2;
-
                 const bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
                 if (true) {
@@ -2257,7 +2258,7 @@ export async function processTradingAlert(alertText: string) {
 
         // 🔧 FIX v5.4: 15M zones now live 6h (antes 2h) para cubrir el gap entre killzones
         // London 4-6 ART → NY 10:30-12:30 ART = 4.5h sin sync. Con 6h las zonas sobreviven.
-        const MAX_ZONE_AGE_MS: Record<string, number> = { '3': 1800000, '15': 21600000, '60': 28800000, '240': 86400000 };
+        const MAX_ZONE_AGE_MS: Record<string, number> = { '5': 1800000, '15': 21600000, '60': 28800000, '240': 86400000, 'D': 604800000 };
         state.zones = state.zones.filter(z => {
             if (!z.createdAt) return true; 
             return (nowMs - z.createdAt) < (MAX_ZONE_AGE_MS[z.tf || '60'] || 14400000);

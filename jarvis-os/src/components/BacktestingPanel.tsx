@@ -364,10 +364,30 @@ export default function BacktestingPanel() {
         const content = ev.target?.result as string;
         const { lines, detectedTF } = parseCSV(content);
         if (lines.length === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
+        
         setUploadedFiles(prev => {
           const filtered = prev.filter(f => f.tf !== detectedTF);
-          return [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
+          const newFiles = [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
             .sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
+            
+          // Auto-detect 5m presence and update triggers
+          const has5m = newFiles.some(f => f.tf === '5' || f.tf === '5M');
+          
+          setSessionTriggers(prevSessions => {
+            const updated = { ...prevSessions };
+            Object.keys(updated).forEach(sessionKey => {
+              if (updated[sessionKey]) {
+                if (updated[sessionKey].choch5m) updated[sessionKey].choch5m.enabled = has5m;
+                if (updated[sessionKey].bos5m) updated[sessionKey].bos5m.enabled = has5m;
+                if (updated[sessionKey].oteChoch5m) updated[sessionKey].oteChoch5m.enabled = has5m;
+                if (updated[sessionKey].oteBos5m) updated[sessionKey].oteBos5m.enabled = has5m;
+              }
+            });
+            localStorage.setItem('bt_session_triggers', JSON.stringify(updated));
+            return updated;
+          });
+          
+          return newFiles;
         });
         toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lines.length} eventos cargados`, 'success');
       };

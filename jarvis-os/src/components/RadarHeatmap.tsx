@@ -335,6 +335,7 @@ export default function RadarHeatmap() {
             <tr>
               <th style={{ paddingLeft: '16px' }}>ACTIVO</th>
               <th>PRECIO</th>
+              <th>D</th>
               <th>4H</th>
               <th>1H</th>
               <th>15M</th>
@@ -358,13 +359,14 @@ export default function RadarHeatmap() {
               const decimals = getDecimals(asset.id);
 
               // ─── ALINEACIÓN TEMPORAL PERFECTA ───
+              const biasD = asset.marketBias?.['D'];
               const bias4H = asset.marketBias?.['240'];
               const bias1H = asset.marketBias?.['60'];
               const bias15M = asset.marketBias?.['15'];
               const bias5M = asset.marketBias?.['5'];
 
-              const isAlignedBuy = bias4H === 'BUY' && bias1H === 'BUY' && bias15M === 'BUY' && bias5M === 'BUY';
-              const isAlignedSell = bias4H === 'SELL' && bias1H === 'SELL' && bias15M === 'SELL' && bias5M === 'SELL';
+              const isAlignedBuy = biasD === 'BUY' && bias4H === 'BUY' && bias1H === 'BUY' && bias15M === 'BUY' && bias5M === 'BUY';
+              const isAlignedSell = biasD === 'SELL' && bias4H === 'SELL' && bias1H === 'SELL' && bias15M === 'SELL' && bias5M === 'SELL';
               const isPerfectlyAligned = isAlignedBuy || isAlignedSell;
 
               const rowClass = isAlignedBuy ? 'row-aligned-buy' : isAlignedSell ? 'row-aligned-sell' : '';
@@ -418,6 +420,7 @@ export default function RadarHeatmap() {
                   </td>
 
                   {/* TEMPORALIDADES */}
+                  <td>{getIcon(biasD)}</td>
                   <td>{getIcon(bias4H)}</td>
                   <td>{getIcon(bias1H)}</td>
                   <td>{getIcon(bias15M)}</td>

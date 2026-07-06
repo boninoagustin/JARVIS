@@ -17,10 +17,11 @@ preset_opt = input.string("Forex - 3. Balanceado", "Preset Estratégico", option
   "Crypto - 1. Ultra Conservador", "Crypto - 2. Conservador", "Crypto - 3. Balanceado", "Crypto - 4. Agresivo", "Crypto - 5. Ultra Agresivo"], group=grp_presets)
 
 // 🤖 AUTO-DETECCIÓN DE TEMPORALIDAD
-bool auto_3m  = timeframe.isintraday and timeframe.multiplier <= 5
+bool auto_5m  = timeframe.isintraday and timeframe.multiplier <= 5
 bool auto_15m = timeframe.isintraday and timeframe.multiplier > 5 and timeframe.multiplier <= 30
 bool auto_1h  = timeframe.isintraday and timeframe.multiplier > 30 and timeframe.multiplier <= 120
-bool auto_4h  = (timeframe.isintraday and timeframe.multiplier > 120) or timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+bool auto_4h  = timeframe.isintraday and timeframe.multiplier > 120
+bool auto_D   = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
 
 // Determinar Activo según Preset
 bool preset_manual = preset_opt == "Manual (Usar Configuración Abajo)"
@@ -61,7 +62,7 @@ bool use_scalp      = true
 // =========================================================================
 grp_show = "👁️ Visibilidad de Zonas (Filtros)"
 in_min_score = input.int(3, "Score Mínimo para Mostrar", minval=0, maxval=10, group=grp_show)
-int base_sc = auto_3m ? 2 : auto_15m ? 3 : auto_1h ? 3 : 3
+int base_sc = auto_5m ? 2 : auto_15m ? 3 : auto_1h ? 3 : auto_4h ? 3 : 3
 int dyn_min_score = math.max(0, math.min(10, base_sc + (3 - risk_lvl)))
 min_score = preset_manual ? in_min_score : dyn_min_score
 
@@ -102,7 +103,7 @@ merge_obs    = preset_manual ? in_merge_obs : true
 merge_tolerance = input.float(0.3, "Tolerancia fusión OBs (x ATR)", step=0.05, minval=0.1, maxval=2.0, group=grp_vis)
 
 in_max_active_obs = input.int(20, "Máximo OBs Activos (Performance)", minval=10, maxval=100, group=grp_vis)
-int dyn_max_obs   = auto_3m ? 30 : auto_15m ? 12 : auto_1h ? 8 : 6
+int dyn_max_obs   = auto_5m ? 30 : auto_15m ? 12 : auto_1h ? 8 : auto_4h ? 6 : 4
 max_active_obs    = preset_manual ? in_max_active_obs : dyn_max_obs 
 
 prox_atr    = input.float(0.5, "Distancia Mínima OBs (x ATR)", step=0.1, group=grp_vis)
@@ -123,15 +124,15 @@ displ_atr_mult    = preset_manual ? in_displ_atr_mult : dyn_displ
 vol_mult = input.float(2.5, "Mult. Volumen (Score)", step=0.1, group=grp_vis)
 
 in_max_touches = input.int(3, "Máximo Toques antes de Degradar OB", minval=1, maxval=10, group=grp_vis)
-int dyn_max_touches = auto_3m ? 3 : auto_15m ? 4 : auto_1h ? 3 : 2
+int dyn_max_touches = auto_5m ? 3 : auto_15m ? 4 : auto_1h ? 3 : auto_4h ? 2 : 2
 max_touches    = preset_manual ? in_max_touches : dyn_max_touches 
 
 grp_legacy = "🏃‍♂️ Motor Scalping (Legacy 4.7)"
 in_use_inv_motor = input.bool(true, "Activar Búsqueda Inversa (FVG Origin)", group=grp_legacy)
 // 🆕 v6.0: MEJORA #7 — Motor Legacy ahora requiere sweep de liquidez para crear OBs en TFs bajas
-use_inv_motor    = preset_manual ? in_use_inv_motor : (auto_3m or auto_15m)
+use_inv_motor    = preset_manual ? in_use_inv_motor : (auto_5m or auto_15m)
 in_inv_req_sweep = input.bool(true, "🆕 Exigir Sweep en Motor Legacy (reduce falsos)", group=grp_legacy)
-inv_req_sweep    = preset_manual ? in_inv_req_sweep : (auto_3m or auto_15m)
+inv_req_sweep    = preset_manual ? in_inv_req_sweep : (auto_5m or auto_15m)
 
 inv_lookback  = input.int(20, "Ventana Búsqueda Inversa (Velas)", group=grp_legacy)
 vwap_boost    = input.int(3, "Bonus Puntos por Toque VWAP", group=grp_legacy)
@@ -143,7 +144,7 @@ grp_str = "🔨 Estructura y Sweeps"
 showBos         = input.bool(true, "Mostrar BOS / CHoCH", group=grp_str)
 
 in_str_bars = input.int(8, "Sensibilidad BOS (Micro)", group=grp_str)
-int dyn_str_bars = auto_3m ? 6 : auto_15m ? 6 : auto_1h ? 8 : 10
+int dyn_str_bars = auto_5m ? 6 : auto_15m ? 6 : auto_1h ? 8 : auto_4h ? 10 : 12
 if not preset_manual
     dyn_str_bars := dyn_str_bars + (3 - risk_lvl)
 str_bars    = preset_manual ? in_str_bars : math.max(3, dyn_str_bars) 
@@ -151,11 +152,11 @@ str_bars    = preset_manual ? in_str_bars : math.max(3, dyn_str_bars)
 require_body_break = input.bool(true, "CHoCH/BOS exige cierre con cuerpo (no solo wick)", group=grp_str)
 
 in_choch_req_sweep = input.bool(false, "CHoCH Estricto: Exigir Sweep Previo (Manual)", group=grp_str)
-bool auto_sweep = not preset_manual ? (risk_lvl <= 2 or (auto_1h or auto_4h)) : (auto_1h or auto_4h)
+bool auto_sweep = not preset_manual ? (risk_lvl <= 2 or (auto_1h or auto_4h or auto_D)) : (auto_1h or auto_4h or auto_D)
 choch_req_sweep = preset_manual ? in_choch_req_sweep : auto_sweep
 
 in_choch_req_mom   = input.bool(false, "CHoCH Estricto: Exigir Volumen/Momentum", group=grp_str)
-choch_req_mom      = preset_manual ? in_choch_req_mom : (risk_lvl == 1 or auto_4h)
+choch_req_mom      = preset_manual ? in_choch_req_mom : (risk_lvl == 1 or auto_4h or auto_D)
 
 showSweep       = input.bool(true, "Mostrar Etiquetas CRT / Sweeps", group=grp_str)
 
@@ -241,7 +242,7 @@ zThresh_NY    = preset_manual ? in_zThresh_NY : dyn_zThresh_NY
 
 // 🆕 v6.0: MEJORA #1 — Z-Score con decaimiento exponencial (no reset binario)
 in_z_decay = input.float(0.85, "🆕 Factor Decaimiento Z-Score (0=binario, 1=infinito)", minval=0.0, maxval=0.99, step=0.05, group=grp_mom)
-float dyn_z_decay = auto_3m ? 0.80 : auto_15m ? 0.85 : auto_1h ? 0.90 : 0.92
+float dyn_z_decay = auto_5m ? 0.80 : auto_15m ? 0.85 : auto_1h ? 0.90 : auto_4h ? 0.92 : 0.95
 z_decay = preset_manual ? in_z_decay : dyn_z_decay
 
 grp_rsi = "⚡ RSI Divergencias (Agotamiento)"
@@ -258,7 +259,7 @@ rsi_ext      = input.int(30, 'Nivel Extremo (30)', group=grp_rsi)
 // =========================================================================
 grp_kz = "⏳ Killzones (Horario Argentina)"
 in_use_kz = input.bool(false, "Filtrar Entradas por Killzone", group=grp_kz) 
-use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : false)
+use_kz    = preset_manual ? in_use_kz : (is_crypto ? false : auto_4h ? false : auto_D ? false : false)
 
 show_asia = input.bool(true, "Dibujar Rango Asiático", group=grp_kz)
 kz_asia = input.session("2000-0200", "Asia Rango (ART)", group=grp_kz)
@@ -272,16 +273,16 @@ tz     = "America/Argentina/Buenos_Aires"
 // =========================================================================
 grp_alerts = "🔔 Alertas Sniper (Notificaciones IA)"
 in_alert_sweep  = input.bool(true, "1. Alerta: Trampa (CRT / Sweep)", group=grp_alerts)
-alert_sweep     = preset_manual ? in_alert_sweep : (auto_15m ? true : auto_1h ? true : auto_4h ? true : false)
+alert_sweep     = preset_manual ? in_alert_sweep : (auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : false)
 
 in_alert_choch  = input.bool(true, "2. Alerta: Gatillo (CHoCH 🚀)", group=grp_alerts)
-alert_choch     = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_choch     
+alert_choch     = auto_5m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : in_alert_choch     
 
 in_alert_zone_touch = input.bool(true, "3. Alerta: Toque Zona (ZONE_TOUCHED)", group=grp_alerts)
-alert_zone_touch    = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_zone_touch
+alert_zone_touch    = auto_5m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : in_alert_zone_touch
 
 in_alert_div    = input.bool(true, "4. Alerta: Divergencia (SMC DIV)", group=grp_alerts)
-alert_div       = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_alert_div 
+alert_div       = auto_5m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : in_alert_div 
 
 // 🆕 v6.0: Alerta Liquidity Grab
 in_alert_lg = input.bool(true, "🆕 5. Alerta: Liquidity Grab", group=grp_alerts)
@@ -289,16 +290,16 @@ alert_lg     = preset_manual ? in_alert_lg : (auto_15m ? true : auto_1h ? true :
 
 grp_radar = "📡 Radar Biónico (Conexión JARVIS JSON)"
 in_sync_strict = input.bool(false, "Sincronización Estricta (Solo a favor de Macro)", group=grp_radar)
-sync_strict    = auto_3m ? false : auto_15m ? false : auto_1h ? false : auto_4h ? false : in_sync_strict
+sync_strict    = auto_5m ? false : auto_15m ? false : auto_1h ? false : auto_4h ? false : auto_D ? false : in_sync_strict
 
 in_use_sync = input.bool(true, "Sincronizar Zonas (cada killzone)", group=grp_radar)
-use_sync    = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_sync 
+use_sync    = auto_5m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : in_use_sync 
 
 in_use_ping = input.bool(true, "Enviar PING de Precio al cerrar vela", group=grp_radar)
-use_ping    = auto_3m ? true : auto_15m ? true : auto_1h ? false : auto_4h ? false : in_use_ping
+use_ping    = auto_5m ? true : auto_15m ? true : auto_1h ? false : auto_4h ? false : auto_D ? false : in_use_ping
 
 in_use_heartbeat = input.bool(true, "Enviar HEARTBEAT periódico (Watchdog)", group=grp_radar)
-use_heartbeat    = auto_3m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : in_use_heartbeat
+use_heartbeat    = auto_5m ? true : auto_15m ? true : auto_1h ? true : auto_4h ? true : auto_D ? true : in_use_heartbeat
 
 // =========================================================================
 // 💾 EXPORTACIÓN DE LOGS (Backtest)
@@ -717,10 +718,10 @@ if is_crt_bear and valid_bear_rej and valid_crt_size and valid_inst_time and bea
         if sweep_swing_h
             final_lbl += " [SWING]"
         final_lbl += inst_tag
-        color lbl_col = is_aligned ? color.new(color.red, 40) : color.new(color.orange, 40)
+        color lbl_col = is_aligned ? color.red : color.orange
         
         if showSweep and in_kz
-            label.new(bar_index, high, final_lbl, color=lbl_col, textcolor=color.black, style=label.style_label_down, size=size.small)
+            label.new(bar_index, high, final_lbl, color=color.new(color.black, 100), textcolor=lbl_col, style=label.style_label_down, size=size.small)
             if allowed_to_sell
                 float eq_4h = (m4h_h + m4h_l) / 2
                 float eq_d = (d_h + d_l) / 2
@@ -761,10 +762,10 @@ if is_crt_bull and valid_bull_rej and valid_crt_size and valid_inst_time and bul
         if sweep_swing_l
             final_lbl += " [SWING]"
         final_lbl += inst_tag
-        color lbl_col = is_aligned ? color.new(color.green, 40) : color.new(color.orange, 40)
+        color lbl_col = is_aligned ? color.green : color.orange
         
         if showSweep and in_kz
-            label.new(bar_index, low, final_lbl, color=lbl_col, textcolor=color.black, style=label.style_label_up, size=size.small)
+            label.new(bar_index, low, final_lbl, color=color.new(color.black, 100), textcolor=lbl_col, style=label.style_label_up, size=size.small)
             if allowed_to_buy
                 float eq_4h = (m4h_h + m4h_l) / 2
                 float eq_d = (d_h + d_l) / 2
@@ -865,7 +866,7 @@ else if not na(active_asia_h) and high > active_asia_h and close < active_asia_h
         lg_bear_level
 
 if liq_grab_bear and show_liq_grab and in_kz
-    label.new(bar_index, high, "🩸 LIQ GRAB " + lg_bear_level, color=color.new(color.red, 20), textcolor=color.new(color.red, 80), style=label.style_label_down, size=size.small)
+    label.new(bar_index, high, "🩸 LIQ GRAB " + lg_bear_level, color=color.new(color.black, 100), textcolor=color.red, style=label.style_label_down, size=size.small)
     if alert_lg
         f_ia_alert("LIQ_GRAB", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Nivel: " + lg_bear_level + " | Wick%: " + str.tostring(math.round((high - math.max(open, close)) / math.max(total_range, syminfo.mintick) * 100, 0)))
 
@@ -897,7 +898,7 @@ else if not na(active_asia_l) and low < active_asia_l and close > active_asia_l
         lg_bull_level
 
 if liq_grab_bull and show_liq_grab and in_kz
-    label.new(bar_index, low, "🩸 LIQ GRAB " + lg_bull_level, color=color.new(color.green, 20), textcolor=color.new(color.green, 80), style=label.style_label_up, size=size.small)
+    label.new(bar_index, low, "💧 LIQ GRAB " + lg_bull_level, color=color.new(color.black, 100), textcolor=color.green, style=label.style_label_up, size=size.small)
     if alert_lg
         f_ia_alert("LIQ_GRAB", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Nivel: " + lg_bull_level + " | Wick%: " + str.tostring(math.round((math.min(open, close) - low) / math.max(total_range, syminfo.mintick) * 100, 0)))
 
@@ -1188,9 +1189,9 @@ show_tl = input.bool(true, "Mostrar Líneas de Tendencia (Retail Liq)", group=gr
 tl_tol = input.float(0.4, "Tolerancia Rectitud (x ATR)", step=0.1, group=grp_tl)
 in_alert_tl = input.bool(true, "Alerta: Sweep de Trendline", group=grp_tl)
 tl_require_kz = input.bool(false, "Solo en Killzones (TL Swp)", group=grp_tl)
-alert_tl = auto_3m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? false : in_alert_tl
+alert_tl = auto_5m ? false : auto_15m ? true : auto_1h ? true : auto_4h ? false : auto_D ? false : in_alert_tl
 
-int tl_max_bars = auto_3m ? 300 : auto_15m ? 200 : auto_1h ? 150 : auto_4h ? 100 : 150
+int tl_max_bars = auto_5m ? 300 : auto_15m ? 200 : auto_1h ? 150 : auto_4h ? 100 : auto_D ? 80 : 150
 
 var float pl1 = na, var int pl1_idx = na
 var float pl2 = na, var int pl2_idx = na
@@ -1374,7 +1375,7 @@ if showBos
                 float ob_btm = low[ob_cand_idx]
                 
                 bool is_discount = (hl2[1] < vwap_val[1])
-                bool htf_aligned = (auto_1h or auto_4h) ? (weekly_bias == 1 or htf2_val == 1) : (htf2_val == 1)
+                bool htf_aligned = (auto_1h or auto_4h or auto_D) ? (weekly_bias == 1 or htf2_val == 1) : (htf2_val == 1)
                 bool has_vol = zUp >= active_zThresh or (volume[ob_cand_idx] > ta.sma(volume, 20)[ob_cand_idx] * vol_mult)
                 bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, true)
                 
@@ -1452,7 +1453,7 @@ if showBos
                 float ob_btm = useBodyOB ? math.min(open[ob_cand_idx], close[ob_cand_idx]) : low[ob_cand_idx]
                 
                 bool is_premium = (hl2[1] > vwap_val[1])
-                bool htf_aligned = (auto_1h or auto_4h) ? (weekly_bias == -1 or htf2_val == -1) : (htf2_val == -1)
+                bool htf_aligned = (auto_1h or auto_4h or auto_D) ? (weekly_bias == -1 or htf2_val == -1) : (htf2_val == -1)
                 bool has_vol = zDn >= active_zThresh or (volume[ob_cand_idx] > ta.sma(volume, 20)[ob_cand_idx] * vol_mult)
                 bool god_overlap = f_ob_has_god_fvg(ob_top, ob_btm, false)
                 
@@ -1554,7 +1555,7 @@ if use_inv_motor and barstate.isconfirmed
 // =========================================================================
 // 10. MITIGACIONES Y BREAKERS
 // =========================================================================
-int ob_max_age_bars = auto_3m ? 500 : auto_15m ? 400 : auto_1h ? 250 : 150
+int ob_max_age_bars = auto_5m ? 500 : auto_15m ? 400 : auto_1h ? 250 : auto_4h ? 150 : 100
 if array.size(all_obs) > 0
     for i = array.size(all_obs) - 1 to 0 
         ob = array.get(all_obs, i)

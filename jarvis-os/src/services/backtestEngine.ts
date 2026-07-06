@@ -56,8 +56,8 @@ export function parseCSV(content: string): { lines: string[]; detectedTF: string
   });
   let tf = '3';
   for (const l of lines.slice(0, 10)) {
-    const m = l.match(/TF:\s*(\d+)/i);
-    if (m) { tf = m[1]; break; }
+    const m = l.match(/TF:\s*([a-zA-Z0-9]+)/i);
+    if (m) { tf = m[1].toUpperCase(); break; }
   }
   return { lines, detectedTF: tf };
 }
@@ -312,33 +312,38 @@ export function runBacktest(
   };
 
   // 1. Parse all entries with timestamps
-  const allEntries: LogEntry[] = [];
-  for (const [tf, lines] of logs.entries()) {
-    for (const line of lines) {
-      const tsMatch = line.match(/TS:\s*(\d+)/i);
-      allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf });
+  let validEntries = (globalThis as any)._cachedValidEntries;
+  if (!validEntries) {
+    const allEntries: LogEntry[] = [];
+    for (const [tf, lines] of logs.entries()) {
+      for (const line of lines) {
+        const tsMatch = line.match(/TS:\s*(\d+)/i);
+        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+      }
     }
+    // 2. Sort chronologically
+    validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
+    (globalThis as any)._cachedValidEntries = validEntries;
   }
-
-  // 2. Sort chronologically
-  const validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
-  if (validEntries.length === 0) {
-    return { trades: [], totalEvents: 0, processedEvents: 0, startDate: 'N/A', endDate: 'N/A' };
-  }
-
   // 3. Pre-sync: process SYNC_ZONES first
-  const syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
-  const restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
-
+  let syncEntries = (globalThis as any)._cachedSyncEntries;
+  let restEntries = (globalThis as any)._cachedRestEntries;
+  if (!syncEntries || !restEntries) {
+      syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
+      restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
+      (globalThis as any)._cachedSyncEntries = syncEntries;
+      (globalThis as any)._cachedRestEntries = restEntries;
+  }
+  
   for (const entry of syncEntries) {
-    processAlert(entry.line, entry.ts, state, config, trades, activeTrades, dailyStats);
+    processAlert(entry, entry.ts, state, config, trades, activeTrades, dailyStats);
   }
 
   // 4. Process rest chronologically
   const total = restEntries.length;
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
-    processAlert(restEntries[i].line, restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
+    processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
@@ -364,23 +369,71 @@ export function runBacktest(
 }
 
 // --- PROCESS SINGLE ALERT (ported from backend processTradingAlert) ---
-function processAlert(
-  alertText: string, nowMs: number, state: RadarState,
-  config: BacktestConfig, trades: BacktestTrade[],
-  activeTrades: Map<string, BacktestTrade>,
-  dailyStats: DailyStats
-) {
+
+function preParseAlert(alertText: string): any {
   const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
   const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
-  if (parts.length < 2) return;
+  if (parts.length < 2) return undefined;
 
   const prefix = parts[0].toUpperCase();
-  const ticker = config.ticker;
   const upperText = alertText.toUpperCase();
 
   const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
   const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
   const readableTf = parseTF(eventTf);
+
+
+  let currentDirection: 'BUY' | 'SELL' | null = null;
+  if (upperText.includes('BUY') || upperText.includes('BULLISH')) currentDirection = 'BUY';
+  else if (upperText.includes('SELL') || upperText.includes('BEARISH')) currentDirection = 'SELL';
+
+  const parsed: any = { prefix, eventTf, readableTf, currentDirection };
+
+  if (prefix === 'SYNC_ZONES') {
+    const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
+    if (trendMatch) parsed.trendMatch = trendMatch[1].toUpperCase();
+    if (alertText.includes('Payload:')) {
+      const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
+      try {
+        parsed.rawZones = JSON.parse(payloadStr);
+      } catch { /* ignore */ }
+    }
+  }
+
+  if (prefix === 'PING_PRICE') {
+    const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
+    if (priceMatch) parsed.currentPrice = parseFloat(priceMatch[1]);
+    const highMatch = alertText.match(/High:\s*([0-9.]+)/i);
+    const lowMatch = alertText.match(/Low:\s*([0-9.]+)/i);
+    if (highMatch) parsed.highPrice = parseFloat(highMatch[1]);
+    if (lowMatch) parsed.lowPrice = parseFloat(lowMatch[1]);
+  }
+  
+  if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS' || prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
+    const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
+    if (originMatch) parsed.origin = parseFloat(originMatch[1]);
+    const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
+    if (priceMatch) parsed.currentPrice = parseFloat(priceMatch[1]);
+  }
+  
+  if (upperText.includes('VWAP UNDER')) parsed.vwapUnder = true;
+  if (upperText.includes('VWAP OVER')) parsed.vwapOver = true;
+
+  return parsed;
+}
+
+function processAlert(
+  entry: LogEntry, nowMs: number, state: RadarState,
+  config: BacktestConfig, trades: BacktestTrade[],
+  activeTrades: Map<string, BacktestTrade>,
+  dailyStats: DailyStats
+) {
+  const p = entry.parsed;
+  if (!p) return;
+  const { prefix, eventTf, readableTf, currentDirection } = p;
+  const alertText = entry.line;
+  const upperText = alertText.toUpperCase();
+  const ticker = config.ticker;
   const todayStr = new Date(nowMs).toISOString().split('T')[0];
   const currentSession = getSessionForTimestamp(nowMs);
   const sessionId = `${todayStr}-${currentSession}`;
@@ -400,9 +453,6 @@ function processAlert(
     dailyStats.buyLossCount = 0;
   }
 
-  let currentDirection: 'BUY' | 'SELL' | null = null;
-  if (upperText.includes('BUY') || upperText.includes('BULLISH')) currentDirection = 'BUY';
-  else if (upperText.includes('SELL') || upperText.includes('BEARISH')) currentDirection = 'SELL';
 
   if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
   if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
@@ -413,12 +463,12 @@ function processAlert(
   if (prefix === 'SYNC_ZONES') {
     if (!alertText.includes('Payload:')) return;
     const sourceTf = eventTf;
-    const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
-    const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
-    if (trendMatch) state.marketBias[sourceTf] = trendMatch[1].toUpperCase();
+
+    if (p.trendMatch) state.marketBias[sourceTf] = p.trendMatch;
 
     try {
-      const rawZones = JSON.parse(payloadStr) as Record<string, unknown>[];
+      const rawZones = p.rawZones as Record<string, unknown>[];
+      if (!rawZones) return;
       const parsedZones: RadarZone[] = rawZones.map(normalizeZone).filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
       parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
 
@@ -434,13 +484,10 @@ function processAlert(
 
   // --- PING_PRICE ---
   if (prefix === 'PING_PRICE') {
-    const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
-    if (!priceMatch) return;
-    const currentPrice = parseFloat(priceMatch[1]);
-    const highMatch = alertText.match(/High:\s*([0-9.]+)/i);
-    const lowMatch = alertText.match(/Low:\s*([0-9.]+)/i);
-    const highPrice = highMatch ? parseFloat(highMatch[1]) : currentPrice;
-    const lowPrice = lowMatch ? parseFloat(lowMatch[1]) : currentPrice;
+    if (p.currentPrice === undefined) return;
+    const currentPrice = p.currentPrice;
+    const highPrice = p.highPrice !== undefined ? p.highPrice : currentPrice;
+    const lowPrice = p.lowPrice !== undefined ? p.lowPrice : currentPrice;
 
     const previousPrice = state.lastPrice;
     state.lastPrice = currentPrice;
