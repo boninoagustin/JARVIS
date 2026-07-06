@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase, Zap } from 'lucide-react';
+import { Upload, BarChart2, TrendingUp, BookOpen, Play, Trash2, FileText, Wand2, Download, ShieldAlert, Briefcase, Zap, RotateCcw } from 'lucide-react';
 import { useToast } from './Toast';
 import { parseCSV } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
@@ -395,6 +395,30 @@ export default function BacktestingPanel() {
     });
     e.target.value = '';
   }, [toast]);
+
+  const handleResetConfig = useCallback(() => {
+    setMinBuyPoints(4);
+    setMinSellPoints(4);
+    
+    setSessionTriggers(prev => {
+      const next = { ...prev };
+      for (const s of Object.keys(next)) {
+        next[s] = {
+          ...next[s],
+          choch5m: { enabled: true, minScore: 4 },
+          choch15m: { enabled: true, minScore: 4 },
+          bos5m: { enabled: true, minScore: 4 },
+          bos15m: { enabled: true, minScore: 4 },
+          oteChoch5m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch5m?.entryPercent ?? 62 },
+          oteChoch15m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch15m?.entryPercent ?? 62 },
+          oteBos5m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos5m?.entryPercent ?? 62 },
+          oteBos15m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos15m?.entryPercent ?? 62 },
+        };
+      }
+      localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>, isAutoRun: boolean = false) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -1642,6 +1666,11 @@ export default function BacktestingPanel() {
               <button type="button" onClick={handleOptimize} disabled={uploadedFiles.length === 0 || isRunning}
                 style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? 'var(--accent-gold)' : 'var(--bg-secondary)', color: 'black', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Wand2 size={14} /> OPTIMIZAR
+              </button>
+              <button type="button" onClick={handleResetConfig}
+                title="Resetear Configuración a Valores por Defecto (Score 4)"
+                style={{ padding: '10px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <RotateCcw size={14} />
               </button>
             </div>
             

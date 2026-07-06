@@ -765,6 +765,7 @@ function processAlert(
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
 
     const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+    const isDAgainst = state.marketBias['D'] !== currentDirection && state.marketBias['D'] !== 'NEUTRAL';
     const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
     const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
     const baseBiasPoints = isMacroAligned ? 5 : 0;
@@ -883,6 +884,7 @@ function processAlert(
         }
       }
     }
+    if (isDAgainst) totalPoints -= 2;
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
 
     // Crypto: reduce minPtsRequired by 1 (ported from live)

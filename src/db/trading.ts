@@ -1936,6 +1936,7 @@ export async function processTradingAlert(alertText: string) {
                 
                 const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
                 const isMacroAligned = (state.marketBias['D'] === currentDirection) || (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+                const isDAgainst = state.marketBias['D'] !== currentDirection && state.marketBias['D'] !== 'NEUTRAL';
                 const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                 const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
                 
@@ -1980,6 +1981,7 @@ export async function processTradingAlert(alertText: string) {
                     }
                     if (orphanPenalty > 0) totalPoints -= orphanPenalty;
                 }
+                if (isDAgainst) totalPoints -= 2;
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
                 // Penalización por zona trampa (Caso C)
                 const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
