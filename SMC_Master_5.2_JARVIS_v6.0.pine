@@ -1302,11 +1302,10 @@ else if micro_trend == -1
     trend_extreme := na(trend_extreme) ? low : math.min(trend_extreme, low)
 
 if showBos
-    // 🆕 v6.0 MEJORA #5: La confirmación de cierre usa el cierre de la vela ANTERIOR
-    // si confirm_close está activado, evitando repainting.
-    // En tiempo real (barstate.isrealtime), si la vela aún no cerró, usamos close actual
-    // pero alertamos solo con barstate.isconfirmed.
-    float confirm_close_price = confirm_close ? close[1] : close
+    // 🆕 FIX JARVIS: Se cambia close[1] por (barstate.isconfirmed ? close : na).
+    // Usar close[1] causaba un retraso de 1 vela (off-by-one) en las alertas y en la bitácora.
+    // Con esta corrección, evalúa el cierre de la vela actual EXACTAMENTE en el milisegundo de su cierre.
+    float confirm_close_price = confirm_close ? (barstate.isconfirmed ? close : na) : close
 
     // =====================================================================
     // 🟢 ESTRUCTURA ALCISTA (BOS / CHoCH BUY)

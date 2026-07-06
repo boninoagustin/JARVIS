@@ -335,15 +335,14 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
  * Modify stop loss of an existing position (e.g., move to breakeven).
  */
 export async function modifyStopLoss(positionId: string, newSlPrice: number, currentPrice?: number): Promise<boolean> {
-    if (!isCTraderReady()) return false;
+    if (!isCTraderReady()) {
+        const connected = await connectCTrader();
+        if (!connected) return false;
+    }
 
     try {
-        let modifyParams: any = { sl: { absolutePrice: newSlPrice } }; // fallback
-        
-        // If we can get position details, we can send absolute price or relative pips
-        // However ctrader-ts modify() supports { absolutePrice: ... }? Wait, maybe not.
-        // Let's pass the raw price since modify might support absolutePrice, or we can just pass { price: newSlPrice }
-        await ctClient.modify(positionId, { sl: { price: newSlPrice } });
+        // Usar la API de bajo nivel de ctrader-ts para forzar el absolutePrice
+        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), { stopLoss: newSlPrice });
         console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${newSlPrice}`);
         return true;
     } catch (err: any) {
@@ -356,7 +355,10 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, cur
  * Close a position completely.
  */
 export async function closePosition(positionId: string): Promise<boolean> {
-    if (!isCTraderReady()) return false;
+    if (!isCTraderReady()) {
+        const connected = await connectCTrader();
+        if (!connected) return false;
+    }
 
     try {
         await ctClient.close(positionId);
@@ -372,7 +374,10 @@ export async function closePosition(positionId: string): Promise<boolean> {
  * Close a partial volume of a position (e.g., 50% at TP1).
  */
 export async function closePartial(positionId: string, percentToClose: number = 50): Promise<boolean> {
-    if (!isCTraderReady()) return false;
+    if (!isCTraderReady()) {
+        const connected = await connectCTrader();
+        if (!connected) return false;
+    }
 
     try {
         // Get current position volume
@@ -380,20 +385,27 @@ export async function closePartial(positionId: string, percentToClose: number = 
         const positions = state?.positions || [];
         const pos = positions?.find((p: any) => String(p.positionId || p.id) === positionId);
         
-        if (!pos) {
-            console.warn(`[CTRADER] ⚠️ Posición ${positionId} no encontrada.`);
+        if (!pos || !pos.tradeData || !pos.tradeData.volume) {
+            console.warn(`[CTRADER] ⚠️ Posición ${positionId} no encontrada o sin volumen.`);
             return false;
         }
 
-        const volumeToClose = Math.floor((pos.volume || pos.lots) * (percentToClose / 100));
+        const totalVolume = pos.tradeData.volume;
+        
+        // Deducir el step (min granularity) basado en el volumen total (e.g. 2000 -> 1000)
+        let step = 1;
+        while (totalVolume % (step * 10) === 0 && step < 100000) step *= 10;
+        
+        const volumeToClose = Math.floor((totalVolume * (percentToClose / 100)) / step) * step;
         
         if (volumeToClose <= 0) {
             console.warn(`[CTRADER] ⚠️ Volumen a cerrar es 0 para posición ${positionId}.`);
             return false;
         }
 
-        await ctClient.close(positionId, { volume: volumeToClose });
-        console.log(`[CTRADER] 🟡 Posición ${positionId}: ${percentToClose}% cerrado (${volumeToClose} volumen).`);
+        // Llamada a bajo nivel para cerrar exactamente el volumen deseado
+        await (ctClient as any).raw.trading.closePosition(Number(positionId), volumeToClose);
+        console.log(`[CTRADER] 🟡 Posición ${positionId}: ${percentToClose}% cerrado (${volumeToClose} unidades).`);
         return true;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error cerrando parcial de ${positionId}:`, err.message);
@@ -427,6 +439,31 @@ export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
     }
 }
 
+/**
+ * Get open positions from cTrader.
+ * @param ticker Optional ticker to filter by.
+ */
+export async function getOpenPositions(ticker?: string): Promise<any[]> {
+    if (!isCTraderReady()) {
+        return [];
+    }
+    try {
+        const state = await ctClient.getState();
+        let positions = state?.positions || [];
+        if (ticker) {
+            const mappedTicker = mapToCTraderSymbol(ticker).toUpperCase();
+            positions = positions.filter((p: any) => {
+                const sym = (p.symbolName || p.tradeData?.symbolName || '').toUpperCase();
+                return sym === mappedTicker || sym.includes(mappedTicker) || mappedTicker.includes(sym);
+            });
+        }
+        return positions;
+    } catch (err: any) {
+        console.error('[CTRADER] ❌ Error obteniendo posiciones:', err.message);
+        return [];
+    }
+}
+
 // ─── Emergency Close All ───
 
 /**
@@ -435,7 +472,8 @@ export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
  */
 export async function closeAllPositions(): Promise<{ closed: number; failed: number }> {
     if (!isCTraderReady()) {
-        return { closed: 0, failed: 0 };
+        const connected = await connectCTrader();
+        if (!connected) return { closed: 0, failed: 0 };
     }
 
     try {

@@ -2450,9 +2450,39 @@ export async function processTradingAlert(alertText: string) {
             // 🆕 Filtro Anti-Piramidación y Lógica SAR (Stop and Reverse)
             let existingTradeForTicker: ActiveTrade | undefined;
             for (const trade of activeTrades.values()) {
-                if (trade.ticker === ticker) {
+                if (trade.ticker === ticker && trade.tradeId !== oteData.tradeId) {
                     existingTradeForTicker = trade;
                     break;
+                }
+            }
+
+            // 🛡️ Extra check: Si no hay en RAM, revisemos cTrader real para evitar duplicados huérfanos
+            let cTraderPos: any;
+            if (!isBacktest && !existingTradeForTicker) {
+                try {
+                    const ctrader = await import('../services/ctrader.js');
+                    if (ctrader.isCTraderReady()) {
+                        const openPositions = await ctrader.getOpenPositions(ticker);
+                        if (openPositions && openPositions.length > 0) {
+                            cTraderPos = openPositions[0];
+                            const cTraderDir = (cTraderPos.tradeData?.tradeSide || cTraderPos.tradeSide || '').toString().toUpperCase();
+                            // Crear un mock de ActiveTrade para aplicar la misma lógica
+                            existingTradeForTicker = {
+                                tradeId: String(cTraderPos.positionId || cTraderPos.id || 'CTRADER_MOCK'),
+                                ticker: ticker,
+                                direction: cTraderDir.includes('BUY') ? 'BUY' : 'SELL',
+                                entryPrice: cTraderPos.entryPrice || cTraderPos.price || 0,
+                                tp1Price: 0, tp2Price: 0, slPrice: 0,
+                                tp1Hit: false, tp2Hit: false,
+                                score: 0, // Score 0 significa que cualquier señal nueva le ganará en SAR
+                                timestamp: Date.now(),
+                                ctraderPositionId: String(cTraderPos.positionId || cTraderPos.id)
+                            };
+                            console.log(`[ANTI-PYRAMID] ⚠️ Trade encontrado en cTrader (huérfano en RAM): ${existingTradeForTicker.direction} posID: ${existingTradeForTicker.ctraderPositionId}`);
+                        }
+                    }
+                } catch (e) {
+                    console.error("[ANTI-PYRAMID] Error verificando posiciones cTrader:", e);
                 }
             }
 
