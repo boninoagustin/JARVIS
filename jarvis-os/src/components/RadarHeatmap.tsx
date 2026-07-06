@@ -14,7 +14,7 @@ interface ImpulseLeg {
 
 interface RadarState {
   id: string;
-  marketBias: { '240': string, '60': string, '15': string, '5': string };
+  marketBias: { 'D'?: string, '240': string, '60': string, '15': string, '5': string };
   scoreBuy: { points: number };
   scoreSell: { points: number };
   zones: any[];
@@ -420,7 +420,7 @@ export default function RadarHeatmap() {
                   </td>
 
                   {/* TEMPORALIDADES */}
-                  <td>{getIcon(biasD)}</td>
+                  <td>{getIcon(biasD || '')}</td>
                   <td>{getIcon(bias4H)}</td>
                   <td>{getIcon(bias1H)}</td>
                   <td>{getIcon(bias15M)}</td>

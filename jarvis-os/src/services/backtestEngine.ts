@@ -329,8 +329,8 @@ export function runBacktest(
   let syncEntries = (globalThis as any)._cachedSyncEntries;
   let restEntries = (globalThis as any)._cachedRestEntries;
   if (!syncEntries || !restEntries) {
-      syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
-      restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
+      syncEntries = validEntries.filter((e: any) => e.line.includes('SYNC_ZONES'));
+      restEntries = validEntries.filter((e: any) => !e.line.includes('SYNC_ZONES'));
       (globalThis as any)._cachedSyncEntries = syncEntries;
       (globalThis as any)._cachedRestEntries = restEntries;
   }
