@@ -4,6 +4,11 @@ self.onmessage = (e: MessageEvent) => {
   const { type, id, payload } = e.data;
 
   try {
+    // Clear cache to prevent stale logs between runs
+    (globalThis as any)._cachedValidEntries = null;
+    (globalThis as any)._cachedSyncEntries = null;
+    (globalThis as any)._cachedRestEntries = null;
+
     if (type === 'RUN_BACKTEST') {
       const { logsArray, config } = payload;
       const logs = new Map<string, string[]>(logsArray);
