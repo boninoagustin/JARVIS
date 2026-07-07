@@ -302,8 +302,8 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         let position: any;
         const orderParams: any = {
             lots,
-            sl: { pips: Math.round(slPips * 10) / 10 },
-            tp: { pips: Math.round(tpPips * 10) / 10 }, 
+            sl: { pips: Math.round(slPips) },
+            tp: { pips: Math.round(tpPips) }, 
         };
 
         if (direction === 'BUY') {
