@@ -1622,10 +1622,13 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
                 state.marketBias[eventTf] = currentDirection;
                 
+                const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
+                const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
+                // 🔧 FIX: Actualizar lastPrice con el precio del CHoCH para que el entry use precio actualizado
+                if (priceMatchChoch && actualPrice) state.lastPrice = actualPrice;
+
                 if (eventTf === '5' || eventTf === '15') {
                     const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
-                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
-                    const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
 
                     if (originMatch && actualPrice) {
                         const newOrigin = parseTVPrice(originMatch[1]);
@@ -1686,8 +1689,6 @@ export async function processTradingAlert(alertText: string) {
                     }
                 } else if (eventTf === '15' || eventTf === '60' || eventTf === '240') {
                     const originMatch = alertText.match(/ORIGIN:\s*([0-9.,]+)/i);
-                    const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
-                    const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
 
                     if (originMatch && actualPrice) {
                         const newOrigin = parseTVPrice(originMatch[1]);
@@ -1824,6 +1825,61 @@ export async function processTradingAlert(alertText: string) {
                             pendingLeg.isValidated = true;
                             pendingLeg.chochEvents = [...activeScore.events, `CHoCH_${readableTf}`];
                             console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO tardíamente con confluencia: ${addedPoints} pts de ${prefix}`);
+
+                            // 🔧 FIX: Disparar trade INMEDIATAMENTE si el leg tiene puntos suficientes
+                            const lateConfig = getConfigForTicker(ticker, nowMs);
+                            const canFireChoch = lateConfig.entryTrigger === 'CHOCH' || lateConfig.entryTrigger === 'BOTH' || lateConfig.entryTrigger === 'SMART';
+                            const lateMinPts = currentDirection === 'BUY' ? lateConfig.minPointsForBuy : lateConfig.minPointsForSell;
+                            const lateTotalPts = pendingLeg.chochPoints!;
+                            const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= lateConfig.sniperCooldownMs;
+
+                            if (canFireChoch && lateConfig.sessionEnabled && cooldownOk && lateTotalPts >= lateMinPts) {
+                                const dec = getDecimals(ticker);
+                                const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
+                                const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
+                                const curPrice = state.lastPrice ?? pendingLeg.extreme;
+                                const rDist = Math.abs(curPrice - adjSL);
+
+                                let fireNow = true;
+                                if (lateConfig.entryTrigger === 'SMART') {
+                                    const maxRisk = lateConfig.maxSmartRiskPercent !== undefined ? lateConfig.maxSmartRiskPercent : 0.15;
+                                    const pctLimit = curPrice * (maxRisk / 100);
+                                    let atr = 0;
+                                    for (let i = state.zones.length - 1; i >= 0; i--) { if (state.zones[i].atr) { atr = state.zones[i].atr!; break; } }
+                                    if (rDist > (atr > 0 ? atr * 1.5 : pctLimit)) {
+                                        fireNow = false;
+                                        console.log(`[RADAR] 🧠 Re-val tardía ${ticker}: distancia excesiva, esperando OTE.`);
+                                    }
+                                }
+
+                                if (fireNow) {
+                                    const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
+                                    const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * lateConfig.fixedRR) : curPrice - (rDist * lateConfig.fixedRR);
+                                    const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
+                                    const legTfMatch = (pendingLeg.chochEvents || []).find((e: string) => e.includes('CHoCH') || e.includes('BOS'));
+                                    const legTf = legTfMatch ? (legTfMatch.match(/(\\d+M)/)?.[1] || readableTf) : readableTf;
+
+                                    oteData = {
+                                        tradeId: tId, direction: currentDirection,
+                                        dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
+                                        stopLoss: adjSL.toFixed(dec), tp1: fTP1.toFixed(dec), tp2: fTP2.toFixed(dec),
+                                        entryPrice: curPrice,
+                                        points: lateTotalPts, events: pendingLeg.chochEvents || [...activeScore.events],
+                                        confluenceReport: (pendingLeg.chochReport || '') + `\n🔄 <b>Re-validación Tardía:</b> Leg validado por ${prefix} (+${addedPoints} pts).`,
+                                        bestZone: pendingLeg.bestZone || null,
+                                        marketBias: { ...state.marketBias },
+                                        isChochEntry: true,
+                                        tf: legTf
+                                    };
+                                    triggerOte = true;
+                                    state.lastSniperAlert = nowMs;
+                                    activeScore.points = 0; activeScore.events = [];
+                                    const oppScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+                                    oppScore.points = 0; oppScore.events = [];
+                                    if (lateConfig.entryTrigger === 'CHOCH' || lateConfig.entryTrigger === 'SMART') pendingLeg.oteScored = true;
+                                    console.log(`[RADAR] 🎯 Re-validación tardía: trade INMEDIATO ${ticker} ${currentDirection} (${lateTotalPts} pts)`);
+                                }
+                            }
                         }
                     }
                 }
