@@ -176,7 +176,8 @@ let dynamicBotConfig = {
     fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
     oteEntryPercent: 50,           // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
     entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART',
-    autoTrading: false             // 🆕 Modo Automático (bypass confirmación de Telegram)
+    autoTrading: false,            // 🆕 Modo Automático (bypass confirmación de Telegram)
+    maxSmartRiskPercent: 0.15      // 🔧 Límite de distancia al SL para forzar OTE en SMART mode
 };
 
 // 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
@@ -192,7 +193,8 @@ const SessionSchema = z.object({
     maxSellLosses: z.number().optional(),
     maxBuyLosses: z.number().optional(),
     slBufferPercent: z.number().optional(),
-    fixedRR: z.number().optional()
+    fixedRR: z.number().optional(),
+    maxSmartRiskPercent: z.number().optional()
 });
 
 const AssetSessionConfigSchema = z.object({
@@ -202,6 +204,7 @@ const AssetSessionConfigSchema = z.object({
     fixedRR: z.coerce.number().optional(),
     oteEntryPercent: z.coerce.number().optional(),
     entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH', 'SMART']).optional(),
+    maxSmartRiskPercent: z.coerce.number().optional(),
     enabled: z.boolean().optional(),
     maxSellsPerDay: z.coerce.number().optional(),
     sellScorePenalty: z.coerce.number().optional(),
@@ -322,7 +325,8 @@ if (db) {
                     fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
                     entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger,
-                    autoTrading: data.autoTrading !== undefined ? data.autoTrading : dynamicBotConfig.autoTrading
+                    autoTrading: data.autoTrading !== undefined ? data.autoTrading : dynamicBotConfig.autoTrading,
+                    maxSmartRiskPercent: data.maxSmartRiskPercent !== undefined ? Number(data.maxSmartRiskPercent) : dynamicBotConfig.maxSmartRiskPercent
                 };
             }
         }));
@@ -2173,7 +2177,23 @@ export async function processTradingAlert(alertText: string) {
                                 const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5; // ej: si min es 8, 13 es extremo
                                 const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
 
-                                if (rrChoch >= 1.5 || hasExtremeMomentum) {
+                                // 🔧 MEJORA 3: Límite de distancia al origen (Forzar OTE si el SL queda demasiado lejos)
+                                const maxSmartRisk = config.maxSmartRiskPercent !== undefined ? config.maxSmartRiskPercent : 0.15;
+                                const limitByPercent = currentPrice * (maxSmartRisk / 100);
+                                
+                                let latestAtr = 0;
+                                for (let i = state.zones.length - 1; i >= 0; i--) {
+                                    if (state.zones[i].atr) { latestAtr = state.zones[i].atr!; break; }
+                                }
+                                
+                                const maxAllowedRiskDist = latestAtr > 0 ? latestAtr * 1.5 : limitByPercent;
+
+                                if (riskDist > maxAllowedRiskDist) {
+                                    const limitType = latestAtr > 0 ? '1.5x ATR' : `${maxSmartRisk}%`;
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Distancia al origen excesiva (${riskDist.toFixed(decimals)} > ${maxAllowedRiskDist.toFixed(decimals)} [${limitType}]). Vela demasiado extendida. Se fuerza retroceso OTE.`;
+                                    takeChoch = false;
+                                    disableOte = false;
+                                } else if (rrChoch >= 1.5 || hasExtremeMomentum) {
                                     if (rrChoch < 1.5) {
                                         smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Obstáculo detectado, pero ignorado por MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
                                     } else {
