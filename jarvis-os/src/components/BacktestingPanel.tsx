@@ -833,6 +833,7 @@ export default function BacktestingPanel() {
     let dailyKillReason = '';
 
     let totalPnLR = 0;
+    let worstDailyLoss = 0; // El peor día (más negativo)
 
     allTrades.forEach(t => {
       // Calcular el día de Argentina correspondiente (ART es UTC-3)
@@ -840,6 +841,10 @@ export default function BacktestingPanel() {
       const dateStr = date.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); // YYYY-MM-DD
 
       if (dateStr !== currentDayStr) {
+        // Antes de resetear, registrar el peor día
+        if (dailyPnLR < worstDailyLoss) {
+          worstDailyLoss = dailyPnLR;
+        }
         currentDayStr = dateStr;
         dailyPnLR = 0;
         dailyTradesCount = 0;
@@ -903,6 +908,11 @@ export default function BacktestingPanel() {
       }
     });
 
+    // Capturar el último día en curso
+    if (dailyPnLR < worstDailyLoss) {
+      worstDailyLoss = dailyPnLR;
+    }
+
     // Métricas finales
     const activeTrades = simulatedTrades.filter(t => !t.blockedByGlobalKillswitch);
     const totalTradesCount = activeTrades.length;
@@ -954,7 +964,8 @@ export default function BacktestingPanel() {
         wins,
         losses,
         be,
-        maxDDR: maxDD.toFixed(2)
+        maxDDR: maxDD.toFixed(2),
+        worstDailyLoss: worstDailyLoss.toFixed(2)
       }
     };
   }, []);
@@ -966,7 +977,8 @@ export default function BacktestingPanel() {
 
     setTimeout(() => {
       // Opciones adaptadas para Funding Pips Standard 5k
-      const mdlOptions = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]; // Max límite diario 5%, dejamos margen (4.5R max)
+      // Daily Loss limit = 5% (5R). Incluimos hasta 5.0R para comparar, pero recomendamos ≤4.5R como margen.
+      const mdlOptions = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
       const dptOptions = [0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]; 
       const mtdOptions = [0, 2, 3, 4, 5, 6];
       
@@ -992,8 +1004,14 @@ export default function BacktestingPanel() {
 
         if (sim) {
           const mdd = parseFloat(sim.metrics.maxDDR);
+          const worstDay = parseFloat(sim.metrics.worstDailyLoss);
+          
           // REGLA DE ORO STANDARD: Max Drawdown global es 10%. Rechazar combinaciones mayores a 9.0% (9R)
           if (mdd > 9.0) return;
+          
+          // REGLA CRÍTICA: Pérdida diaria máxima es 5% (5R). Si ALGÚN día superó -5R, esta 
+          // combinación habría quemado la cuenta. Rechazar de inmediato.
+          if (worstDay < -5.0) return;
 
           results.push({
             config: c,
@@ -1001,13 +1019,24 @@ export default function BacktestingPanel() {
             wr: parseFloat(sim.metrics.wr),
             blocked: sim.metrics.blockedTradesCount,
             active: sim.metrics.activeTradesCount,
-            mdd: mdd
+            mdd: mdd,
+            worstDay: worstDay,
+            // Calmar Ratio: Retorno / Max Drawdown (mayor es mejor)
+            calmar: mdd > 0 ? parseFloat(sim.metrics.totalPnLR) / mdd : parseFloat(sim.metrics.totalPnLR)
           });
         }
       });
 
-      // Ordenar por rendimiento PnL R neto consolidado de forma descendente
-      results.sort((a, b) => b.pnlR - a.pnlR);
+      // Ordenar por Calmar Ratio (mejor ratio retorno/riesgo) descendente.
+      // Para cuentas de fondeo, priorizar combinaciones que maximicen ganancia
+      // sin acercarse al límite de drawdown.
+      results.sort((a, b) => {
+        // Filtrar combinaciones con PnL negativo al fondo
+        if (a.pnlR <= 0 && b.pnlR > 0) return 1;
+        if (a.pnlR > 0 && b.pnlR <= 0) return -1;
+        // Ambos positivos: ordenar por Calmar Ratio
+        return b.calmar - a.calmar;
+      });
 
       setPortfolioOptResults(results.slice(0, 5));
       setIsOptimizingPortfolio(false);
@@ -2717,12 +2746,17 @@ export default function BacktestingPanel() {
                             MDL: <span style={{ color: 'var(--accent-red)' }}>{opt.config.mdl}</span> | DPT: <span style={{ color: 'var(--accent-green)' }}>{opt.config.dpt}</span> | MTD: <span style={{ color: 'var(--accent-gold)' }}>{opt.config.mtd}</span>
                           </span>
                           <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>
-                            Trades: {opt.active} ({opt.blocked} bloqueados)
+                            Trades: {opt.active} ({opt.blocked} bloq) · WR: {opt.wr}% · MDD: <span style={{ color: opt.mdd > 7 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>{opt.mdd.toFixed(1)}R</span> · Peor día: <span style={{ color: opt.worstDay < -4 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>{opt.worstDay?.toFixed(1) || '0'}R</span>
                           </span>
                         </div>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                          +{opt.pnlR.toFixed(1)}R
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-green)' }}>
+                            +{opt.pnlR.toFixed(1)}R
+                          </span>
+                          <span style={{ fontSize: '0.5rem', color: 'var(--text-tertiary)' }}>
+                            Calmar: {opt.calmar?.toFixed(2) || '-'}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>

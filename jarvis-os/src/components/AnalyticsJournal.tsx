@@ -40,11 +40,18 @@ interface TradeLog {
   isChochEntry?: boolean;
   rMultiple?: number;
   tf?: string;
+  ctraderStatus?: string;
+  ctrader_real_pnl?: number;
 }
 
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
 
 const getTradeRR = (t: TradeLog): number => {
+  // 1. Usar el PnL Real de cTrader (si existe). Asumimos riesgo de $50 por R (cuenta de 5k al 1%).
+  if (t.ctrader_real_pnl !== undefined && t.ctrader_real_pnl !== null) {
+    return Number((t.ctrader_real_pnl / 50).toFixed(2));
+  }
+
   if (t.result === 'LOSS') {
     return t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple < 0 ? t.rMultiple : -1;
   }
@@ -95,7 +102,9 @@ export default function AnalyticsJournal() {
       try {
         const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
         const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TradeLog));
+        const data = snapshot.docs
+          .map(d => ({ id: d.id, ...d.data() } as TradeLog))
+          .filter(t => t.ctraderStatus === 'EXECUTED');
         setTrades(data);
       } catch (err) {
         console.error('Error fetching trade journal:', err);

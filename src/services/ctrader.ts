@@ -14,6 +14,7 @@
 
 import { config } from '../config.js';
 import { TrendbarPeriod } from 'ctrader-ts';
+import { db } from '../db/memory.js';
 
 // ─── Types ───
 
@@ -84,6 +85,9 @@ export async function connectCTrader(): Promise<boolean> {
         isConnected = true;
         connectionAttempts = 0;
         console.log('[CTRADER] ✅ Conectado exitosamente a cTrader.');
+        
+        setupCTraderEvents(ctClient);
+        
         return true;
     } catch (err: any) {
         isConnected = false;
@@ -107,6 +111,81 @@ export async function connectCTrader(): Promise<boolean> {
  */
 export function isCTraderReady(): boolean {
     return isConnected && ctClient !== null;
+}
+
+// ─── Event Listeners ───
+
+function setupCTraderEvents(client: any) {
+    client.on('PROTO_OA_EXECUTION_EVENT', async (event: any) => {
+        try {
+            if (!event.position || !event.position.positionId) return;
+            
+            const positionId = event.position.positionId.toString();
+            const executionType = event.executionType;
+            
+            // executionType 2 = ORDER_FILLED (Apertura, Modificación, Parcial o Cierre Total)
+            if (executionType !== 2) return;
+            
+            console.log(`[CTRADER-EVENT] ExecutionEvent recibido para Position ID: ${positionId}`);
+            
+            if (!db) return;
+            const tradesRef = db.collection('trade_journal');
+            const snapshot = await tradesRef.where('ctraderPositionId', '==', positionId).limit(1).get();
+            
+            if (snapshot.empty) return;
+            
+            const tradeDoc = snapshot.docs[0];
+            const trade = tradeDoc.data();
+            
+            // ─── Extraer PnL del deal ───
+            // El grossProfit en cTrader Open API viene en centavos (moneyDigits=2),
+            // pero para ser robustos, usamos moneyDigits si está disponible.
+            let dealPnl = 0;
+            if (event.deal && event.deal.closePositionDetail) {
+                const rawProfit = Number(event.deal.closePositionDetail.grossProfit || 0);
+                const moneyDigits = event.deal.moneyDigits || 2;
+                dealPnl = rawProfit / Math.pow(10, moneyDigits);
+            } else if (event.deal && event.deal.grossProfit) {
+                const rawProfit = Number(event.deal.grossProfit);
+                const moneyDigits = event.deal.moneyDigits || 2;
+                dealPnl = rawProfit / Math.pow(10, moneyDigits);
+            }
+            
+            const positionStatus = event.position.positionStatus; // 3 = CLOSED, 2 = OPEN, 1 = CREATED
+            
+            // Acumular PnL de deals parciales (no sobreescribir)
+            const previousPnl = trade.ctrader_real_pnl || 0;
+            const accumulatedPnl = Number((previousPnl + dealPnl).toFixed(2));
+            
+            // Posición cerrada completamente (Hit SL o Hit TP final)
+            if (positionStatus === 3) {
+                let resultStatus: string;
+                if (accumulatedPnl > 1) resultStatus = 'WIN';
+                else if (accumulatedPnl < -1) resultStatus = 'LOSS';
+                else resultStatus = 'BREAKEVEN';
+                
+                await tradeDoc.ref.update({
+                    result: resultStatus,
+                    ctrader_real_pnl: accumulatedPnl,
+                    status: 'CLOSED'
+                });
+                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL Acumulado: $${accumulatedPnl} -> ${resultStatus}`);
+            } 
+            // Posición aún abierta pero hubo un deal (cierre parcial)
+            else if (positionStatus === 2 && event.deal && dealPnl !== 0) {
+                await tradeDoc.ref.update({
+                    result: 'PARTIAL_TP1',
+                    ctrader_real_pnl: accumulatedPnl,
+                    tp1Hit: true
+                });
+                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cierre parcial. Deal PnL: $${dealPnl}, Acumulado: $${accumulatedPnl}`);
+            }
+        } catch (err: any) {
+            console.error('[CTRADER-EVENT] Error procesando ExecutionEvent:', err.message);
+        }
+    });
+    
+    console.log('[CTRADER-EVENT] ✅ Listener de ExecutionEvent registrado.');
 }
 
 // ─── Lot Size Calculator ───
