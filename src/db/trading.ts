@@ -542,10 +542,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
 
-    // 🔧 FIX 1: Stale leg cleaner — legs de más de 24 horas se invalidan automáticamente (Swing)
-    const MAX_LEG_AGE_MS = 24 * 60 * 60 * 1000;
+    // 🔧 FIX 1: Stale leg cleaner — legs de más de 8 horas se invalidan automáticamente (Intradia)
+    const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
-        console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 240 min).`);
+        console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
         return { updatedLeg: null };
     }
 
@@ -556,6 +556,13 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     
     if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
         console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+        return { updatedLeg: null };
+    }
+
+    // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
+    const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
+    if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
+        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
         return { updatedLeg: null };
     }
 
@@ -1514,11 +1521,11 @@ export async function processTradingAlert(alertText: string) {
                         const protectionMsg = consecutiveLosses >= 5 
                             ? '🔴 ALERTA: 5 pérdidas consecutivas. KILLSWITCH ACTIVADO por 30 min.'
                             : consecutiveLosses === 4
-                                ? '⚠️ 4 pérdidas consecutivas. Subiendo minPts +5.'
+                                ? '⚠️ 4 pérdidas consecutivas.'
                                 : consecutiveLosses === 3 
-                                    ? '⚠️ 3 pérdidas consecutivas. Subiendo minPts +3.'
+                                    ? '⚠️ 3 pérdidas consecutivas.'
                                     : consecutiveLosses === 2 
-                                        ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
+                                        ? '⚠️ 2 pérdidas consecutivas.'
                                         : '';
                         const slMsg = isPartialClose 
                             ? `⚠️ <b>STOP LOSS POST-PARCIAL (BREAKEVEN) | ${ticker} | ${trade.direction}</b>\n\n` +

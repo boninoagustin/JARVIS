@@ -128,12 +128,16 @@ function evaluateImpulse(
 ): { updatedLeg: ImpulseLeg | null; triggerOte?: boolean; oteData?: any } {
   if (!leg) return { updatedLeg: null };
 
-  const MAX_LEG_AGE_MS = 4 * 60 * 60 * 1000;
+  const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
   if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) return { updatedLeg: null };
 
   const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
   const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
   if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= 9 && (nowMs - oppositeScore.lastUpdate) < 900000)
+    return { updatedLeg: null };
+
+  const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
+  if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt)
     return { updatedLeg: null };
 
   const range = Math.abs(leg.extreme - leg.origin);

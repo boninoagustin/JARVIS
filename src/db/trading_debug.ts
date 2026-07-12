@@ -551,6 +551,13 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
         return { updatedLeg: null };
     }
 
+    // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
+    const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
+    if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
+        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
+        return { updatedLeg: null };
+    }
+
     // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
     const range = Math.abs(leg.extreme - leg.origin);
     const atrEstimate = range * 0.3;
@@ -1498,11 +1505,11 @@ export async function processTradingAlert(alertText: string) {
                         const protectionMsg = consecutiveLosses >= 5 
                             ? '🔴 ALERTA: 5 pérdidas consecutivas. KILLSWITCH ACTIVADO por 30 min.'
                             : consecutiveLosses === 4
-                                ? '⚠️ 4 pérdidas consecutivas. Subiendo minPts +5.'
+                                ? '⚠️ 4 pérdidas consecutivas.'
                                 : consecutiveLosses === 3 
-                                    ? '⚠️ 3 pérdidas consecutivas. Subiendo minPts +3.'
+                                    ? '⚠️ 3 pérdidas consecutivas.'
                                     : consecutiveLosses === 2 
-                                        ? '⚠️ 2 pérdidas consecutivas. Subiendo minPts +2.'
+                                        ? '⚠️ 2 pérdidas consecutivas.'
                                         : '';
                         const slMsg = isPartialClose 
                             ? `⚠️ <b>STOP LOSS POST-PARCIAL (BREAKEVEN) | ${ticker} | ${trade.direction}</b>\n\n` +
