@@ -965,8 +965,9 @@ export default function BacktestingPanel() {
     setIsOptimizingPortfolio(true);
 
     setTimeout(() => {
-      const mdlOptions = [0, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
-      const dptOptions = [0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0];
+      // Opciones adaptadas para Funding Pips Standard 5k
+      const mdlOptions = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]; // Max límite diario 5%, dejamos margen (4.5R max)
+      const dptOptions = [0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]; 
       const mtdOptions = [0, 2, 3, 4, 5, 6];
       
       let combinations: { mdl: number, dpt: number, mtd: number }[] = [];
@@ -990,12 +991,17 @@ export default function BacktestingPanel() {
         });
 
         if (sim) {
+          const mdd = parseFloat(sim.metrics.maxDDR);
+          // REGLA DE ORO STANDARD: Max Drawdown global es 10%. Rechazar combinaciones mayores a 9.0% (9R)
+          if (mdd > 9.0) return;
+
           results.push({
             config: c,
             pnlR: parseFloat(sim.metrics.totalPnLR),
             wr: parseFloat(sim.metrics.wr),
             blocked: sim.metrics.blockedTradesCount,
-            active: sim.metrics.activeTradesCount
+            active: sim.metrics.activeTradesCount,
+            mdd: mdd
           });
         }
       });
