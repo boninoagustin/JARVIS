@@ -72,18 +72,25 @@ export interface BacktestConfig {
   minSellPoints: number;
   slBufferPercent: number;
   fixedRR: number;
+  minRR?: number; // Minimum RR required to take a trade
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
   
   // Session-specific triggers and scores
   sessions?: Record<string, SessionConfig>;
+  sessionFilter?: string[]; // Array of allowed sessions (e.g. ['LONDON', 'NY'])
   
   // Killswitches
   maxDailyLossR?: number;
   dailyProfitTargetR?: number;
   maxConsecutiveLosses?: number;
   maxTradesPerDay?: number;
+  maxTradesPerSession?: number;
   trailingDrawdownR?: number;
+  
+  // Realism (Spread & Commissions)
+  spreadPips?: number;
+  commissionPerLot?: number;
 }
 
 export interface BacktestResult {

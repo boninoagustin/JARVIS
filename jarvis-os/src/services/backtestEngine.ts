@@ -18,6 +18,7 @@ export interface DailyStats {
   isKilled: boolean;
   sellLossCount: number;
   buyLossCount: number;
+  sessionTradeCount: number;
 }
 
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
@@ -228,7 +229,32 @@ function evaluateImpulse(
         oteMinScore = 8;
       }
 
-      const totalPoints = (leg.chochPoints || 0) + 4;
+      const basePoints = (leg.chochPoints || 0) + 4;
+
+      // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
+      let scoreMultiplier = 1.0;
+      const tradeDir = leg.dir;
+      const biasD = state.marketBias['D'] || state.marketBias['1D'];
+      const bias4H = state.marketBias['4H'] || state.marketBias['240'];
+      const bias1H = state.marketBias['1H'] || state.marketBias['60'];
+      
+      let alignedTfs = 0;
+      let againstTfs = 0;
+      
+      if (biasD === tradeDir) alignedTfs++;
+      else if (biasD && biasD !== tradeDir) againstTfs++;
+      
+      if (bias4H === tradeDir) alignedTfs++;
+      else if (bias4H && bias4H !== tradeDir) againstTfs++;
+      
+      if (bias1H === tradeDir) alignedTfs++;
+      else if (bias1H && bias1H !== tradeDir) againstTfs++;
+
+      if (alignedTfs >= 3) scoreMultiplier = 1.3;
+      else if (againstTfs >= 2) scoreMultiplier = 0.6;
+      else if (biasD && biasD !== tradeDir) scoreMultiplier = 0.8;
+      
+      const totalPoints = Math.floor(basePoints * scoreMultiplier);
 
       if (sessionConfig) {
         if (!oteEnabled || totalPoints < oteMinScore) {
@@ -312,7 +338,8 @@ export function runBacktest(
     tradeCount: 0,
     isKilled: false,
     sellLossCount: 0,
-    buyLossCount: 0
+    buyLossCount: 0,
+    sessionTradeCount: 0
   };
 
   // 1. Parse all entries with timestamps
@@ -455,6 +482,7 @@ function processAlert(
     dailyStats.currentSessionStr = sessionId;
     dailyStats.sellLossCount = 0;
     dailyStats.buyLossCount = 0;
+    dailyStats.sessionTradeCount = 0;
   }
 
 
@@ -565,7 +593,15 @@ function processAlert(
           trade.pnlTp2 = finalPnl;
           const originalSl = trade.originalSlPrice ?? trade.slPrice;
           const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultiple = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
+          
+          // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
+          const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
+          const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+          const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
+          
+          const grossR = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
+          trade.rMultiple = grossR - transactionCostR;
+          
           trade.rMultipleTp2 = initialSlLossPct > 0 ? (pnlTp2 / initialSlLossPct) * 0.5 : 0.75;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
@@ -591,7 +627,14 @@ function processAlert(
         
         const originalSl = trade.originalSlPrice ?? trade.slPrice;
         const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-        trade.rMultiple = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
+        
+        // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
+        const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
+        const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+        const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
+        
+        const grossR = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
+        trade.rMultiple = grossR - transactionCostR;
         
         if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
@@ -680,8 +723,27 @@ function processAlert(
             dir: currentDirection, origin: newOrigin, extreme: actualPrice,
             createdAt: nowMs, tp2: macroTarget, oteScored: false,
           };
-          if (isBuy) state.activeImpulseBuy = newLeg;
-          else state.activeImpulseSell = newLeg;
+          if (isBuy) {
+            state.activeImpulseBuy = newLeg;
+            // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
+            for (const [, trade] of activeTrades) {
+              if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
+                if (newOrigin > trade.slPrice) {
+                  trade.slPrice = newOrigin;
+                }
+              }
+            }
+          } else {
+            state.activeImpulseSell = newLeg;
+            // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
+            for (const [, trade] of activeTrades) {
+              if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
+                if (newOrigin < trade.slPrice) {
+                  trade.slPrice = newOrigin;
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -994,8 +1056,8 @@ function processAlert(
         
             const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5;
             const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
-
-            if (rrChoch >= 1.5 || hasExtremeMomentum) {
+            const minRR = config.minRR ?? 1.5;
+            if (rrChoch >= minRR || hasExtremeMomentum) {
                 takeChoch = true;
                 disableOte = true;
             } else {
@@ -1042,6 +1104,14 @@ function processAlert(
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig) {
   if (dailyStats.isKilled) return;
 
+  const currentSession = getSessionForTimestamp(nowMs);
+  if (config.sessionFilter && config.sessionFilter.length > 0) {
+      if (!config.sessionFilter.includes(currentSession)) return;
+  }
+  if (config.maxTradesPerSession && dailyStats.sessionTradeCount >= config.maxTradesPerSession) {
+      return;
+  }
+
   // 🛡️ ANTI-PYRAMIDACIÓN & SAR
   let existingTradeForTicker: BacktestTrade | undefined;
   for (const t of activeTrades.values()) {
@@ -1087,6 +1157,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   activeTrades.set(trade.id, trade);
 
   dailyStats.tradeCount++;
+  dailyStats.sessionTradeCount++;
 
   if (config.maxTradesPerDay && dailyStats.tradeCount >= config.maxTradesPerDay) {
     dailyStats.isKilled = true;

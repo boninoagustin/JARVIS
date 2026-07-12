@@ -31,6 +31,11 @@ interface SessionHistory {
     fixedRR: number;
     oteEntryPercent: number;
     entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
+    minRR?: number;
+    sessionFilter?: string[];
+    maxTradesPerSession?: number;
+    spreadPips?: number;
+    commissionPerLot?: number;
     maxDailyLossR?: number;
     dailyProfitTargetR?: number;
     maxConsecutiveLosses?: number;
@@ -194,6 +199,11 @@ export default function BacktestingPanel() {
   const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState(0);
   const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
   const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
+  const [minRR, setMinRR] = useState(2.0);
+  const [spreadPips, setSpreadPips] = useState(0.0);
+  const [commissionPerLot, setCommissionPerLot] = useState(0.0);
+  const [activeSessions, setActiveSessions] = useState<string[]>(['LONDON', 'NY']);
+  const [maxTradesPerSession, setMaxTradesPerSession] = useState(0);
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -434,10 +444,12 @@ export default function BacktestingPanel() {
     setTimeout(async () => {
       const baseParams = {
         ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
+        minRR, sessionFilter: activeSessions, spreadPips, commissionPerLot,
         maxDailyLossR: maxDailyLossR || undefined,
         dailyProfitTargetR: dailyProfitTargetR || undefined,
         maxConsecutiveLosses: maxConsecutiveLosses || undefined,
         maxTradesPerDay: maxTradesPerDay || undefined,
+        maxTradesPerSession: maxTradesPerSession || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
       };
 
@@ -469,7 +481,7 @@ export default function BacktestingPanel() {
           tradeData: res.trades,
           config: { 
             minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
-            sessions: finalSessions,
+            sessions: finalSessions, minRR, sessionFilter: activeSessions, maxTradesPerSession, spreadPips, commissionPerLot
           }
         };
         setSessions(prev => {
@@ -488,7 +500,7 @@ export default function BacktestingPanel() {
         setIsRunning(false);
       }
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, minRR, activeSessions, maxTradesPerSession, spreadPips, commissionPerLot]);
 
   handleRunRef.current = handleRun;
 
@@ -1250,6 +1262,37 @@ export default function BacktestingPanel() {
           beCount++;
       }
     });
+    
+    // Worst daily loss & Sharpe
+    const dailyPnls = new Map<string, number>();
+    const dailyPnlsR = new Map<string, number>();
+    closed.forEach(t => {
+      const dateStr = new Date(t.timestamp).toISOString().split('T')[0];
+      const profitUsd = (t.rMultiple || 0) * riskUsd;
+      dailyPnls.set(dateStr, (dailyPnls.get(dateStr) || 0) + profitUsd);
+      dailyPnlsR.set(dateStr, (dailyPnlsR.get(dateStr) || 0) + (t.rMultiple || 0));
+    });
+    
+    let worstDayUsd = 0;
+    let worstDayR = 0;
+    let sumPnlsR = 0;
+    
+    dailyPnls.forEach((pnl) => { if (pnl < worstDayUsd) worstDayUsd = pnl; });
+    dailyPnlsR.forEach((pnlR) => { 
+      if (pnlR < worstDayR) worstDayR = pnlR; 
+      sumPnlsR += pnlR;
+    });
+
+    let sharpeRatio = '0.00';
+    if (dailyPnlsR.size > 1) {
+      const avgDailyR = sumPnlsR / dailyPnlsR.size;
+      let sumSqPnlsR = 0;
+      dailyPnlsR.forEach((pnlR) => { sumSqPnlsR += Math.pow(pnlR - avgDailyR, 2); });
+      const stdDevR = Math.sqrt(sumSqPnlsR / (dailyPnlsR.size - 1));
+      if (stdDevR > 0) {
+        sharpeRatio = (avgDailyR / stdDevR * Math.sqrt(252)).toFixed(2);
+      }
+    }
 
     const profitFactor = grossLossUsd > 0 ? (grossProfitUsd / grossLossUsd).toFixed(2) : (grossProfitUsd > 0 ? '∞' : '0.00');
     const expectancyR = closed.length > 0 ? (pnlTotalR / closed.length).toFixed(2) : '0.00';
@@ -1291,7 +1334,7 @@ export default function BacktestingPanel() {
         count: closed.length, total: tripleFilteredTrades.length, 
         maxDDUsd: maxDD.toFixed(2), closed,
         profitFactor, expectancyR, maxConsLosses, maxConsWins, avgDuration: formatDuration(avgDurationMin),
-        tp1OnlyCount, tp2Count, slCount, beCount,
+        tp1OnlyCount, tp2Count, slCount, beCount, worstDayUsd: worstDayUsd.toFixed(2), worstDayR: worstDayR.toFixed(2), sharpeRatio,
         avgWinR, avgLossR, tradesPerWeek, kellyFormatted
     };
   })();
@@ -1428,7 +1471,7 @@ export default function BacktestingPanel() {
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast('✅ Archivo JSON descargado con éxito (historial completo de trades)', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast]);
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast, spreadPips, commissionPerLot]);
 
   return (
     <div className="animate-fadeIn">
@@ -1543,30 +1586,38 @@ export default function BacktestingPanel() {
                     <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-red)' }}>-${metrics.maxDDUsd.replace('-', '')}</div>
                   </div>
                   <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>RACHA G / P</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}><span style={{ color: 'var(--accent-green)' }}>{metrics.maxConsWins}</span> / <span style={{ color: 'var(--accent-red)' }}>{metrics.maxConsLosses}</span></div>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PEOR DÍA</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-red)' }}>{metrics.worstDayR}R</div>
                   </div>
                   <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>KELLY CRIT.</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.kellyFormatted) > 0 ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{metrics.kellyFormatted}</div>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>SHARPE RATIO</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.sharpeRatio) > 1.5 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{metrics.sharpeRatio}</div>
                   </div>
                 </div>
 
                 {/* ROW 3: Extra Stats */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 1fr 1fr', gap: '8px' }}>
                   <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>AVG WIN vs AVG LOSS</div>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      <span style={{ color: 'var(--accent-green)' }}>+{metrics.avgWinR}R</span> <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>vs</span> <span style={{ color: 'var(--accent-red)' }}>-{metrics.avgLossR}R</span>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>RACHA G/P</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}><span style={{ color: 'var(--accent-green)' }}>{metrics.maxConsWins}</span> / <span style={{ color: 'var(--accent-red)' }}>{metrics.maxConsLosses}</span></div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>KELLY</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: parseFloat(metrics.kellyFormatted) > 0 ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{metrics.kellyFormatted}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>W vs L</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      <span style={{ color: 'var(--accent-green)' }}>+{metrics.avgWinR}</span> <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>vs</span> <span style={{ color: 'var(--accent-red)' }}>-{metrics.avgLossR}</span>
                     </div>
                   </div>
                   <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRADES / SEM</div>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.tradesPerWeek}</div>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRDS/SEM</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.tradesPerWeek}</div>
                   </div>
                   <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>DURACIÓN PROM.</div>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>DUR. PROM.</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
                   </div>
                 </div>
 
@@ -1641,10 +1692,23 @@ export default function BacktestingPanel() {
 
 
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
               <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
               <input type="number" min="1" step="1" value={riskUsd} onChange={e => setRiskUsd(parseFloat(e.target.value) || 0)}
                 style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>SPREAD PIPS</label>
+                <input type="number" min="0" step="0.1" value={spreadPips} onChange={e => setSpreadPips(parseFloat(e.target.value) || 0)}
+                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+              </div>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>COMISIÓN/LOTE</label>
+                <input type="number" min="0" step="1" value={commissionPerLot} onChange={e => setCommissionPerLot(parseFloat(e.target.value) || 0)}
+                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+              </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(124,77,255,0.05)', borderRadius: '4px', border: '1px solid rgba(124,77,255,0.15)' }}>
