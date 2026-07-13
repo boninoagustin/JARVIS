@@ -1555,21 +1555,21 @@ export default function BacktestingPanel() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', justifyContent: 'center' }}>
                 {/* ROW 1: Principales */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 0.8fr', gap: '10px' }}>
-                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Win Rate: Porcentaje de operaciones ganadoras.&#10;✅ Bueno: > 45% (con RR 1:2) o > 60% (con RR 1:1)." style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>WIN RATE</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{metrics.wr}%</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Profit Factor: Relación entre ganancias brutas y pérdidas brutas.&#10;✅ Bueno: > 1.2 es rentable, > 1.5 es excelente." style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PROFIT FACTOR</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 700, color: parseFloat(metrics.profitFactor) >= 1.5 ? 'var(--accent-green)' : parseFloat(metrics.profitFactor) >= 1.0 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>{metrics.profitFactor}</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="PnL Total: Ganancia/Pérdida neta total en múltiplos de Riesgo (R) y Dólares.&#10;✅ Bueno: Cualquier valor positivo sostenido." style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PNL TOTAL</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 700, color: parseFloat(metrics.pnlR) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                       {parseFloat(metrics.pnlR) > 0 ? '+' : ''}{metrics.pnlR}R <span style={{ fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ ${metrics.pnlUsd}</span>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Trades: Cantidad de operaciones cerradas en el periodo.&#10;✅ Bueno: Mínimo 100 operaciones para dar validez estadística." style={{ textAlign: 'center', padding: '14px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRADES</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.count}</div>
                   </div>
@@ -1577,19 +1577,19 @@ export default function BacktestingPanel() {
 
                 {/* ROW 2: Analíticas */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px' }}>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Esperanza Matemática: Cuánto ganas en promedio por CADA trade ejecutado (ganador o perdedor).&#10;✅ Bueno: > 0.15 R." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>ESPERANZA MAT.</div>
                     <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.expectancyR) > 0 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{parseFloat(metrics.expectancyR) > 0 ? '+' : ''}{metrics.expectancyR}R</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Max Drawdown: Peor racha de pérdidas o caída máxima desde un pico de balance.&#10;✅ Bueno: Que no supere el 5% de tu cuenta (depende de tu firma)." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>MAX DRAWDOWN</div>
                     <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-red)' }}>-${metrics.maxDDUsd.replace('-', '')}</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Peor Día: El día con la mayor pérdida monetaria.&#10;✅ Bueno: Nunca debe exceder el Límite Diario de Pérdida de tu cuenta fondeada." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>PEOR DÍA</div>
                     <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-red)' }}>{metrics.worstDayR}R</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Sharpe Ratio: Rendimiento de la estrategia ajustado a su nivel de riesgo/volatilidad.&#10;✅ Bueno: > 1.0 es aceptable, > 1.5 es muy bueno, > 2.0 es excelente." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>SHARPE RATIO</div>
                     <div style={{ fontSize: '1rem', fontWeight: 700, color: parseFloat(metrics.sharpeRatio) > 1.5 ? 'var(--accent-green)' : 'var(--text-primary)' }}>{metrics.sharpeRatio}</div>
                   </div>
@@ -1597,25 +1597,25 @@ export default function BacktestingPanel() {
 
                 {/* ROW 3: Extra Stats */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 1fr 1fr', gap: '8px' }}>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Racha Ganadora / Perdedora: Máximo de aciertos y fallos consecutivos.&#10;✅ Bueno: Úsalo para afinar tus frenos diarios (Daily Limits)." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>RACHA G/P</div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}><span style={{ color: 'var(--accent-green)' }}>{metrics.maxConsWins}</span> / <span style={{ color: 'var(--accent-red)' }}>{metrics.maxConsLosses}</span></div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Criterio de Kelly: Porcentaje matemático ideal para arriesgar por trade.&#10;✅ Bueno: Es solo orientativo, ¡nunca arriesgues más del 1-2% en firmas de fondeo!" style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>KELLY</div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 700, color: parseFloat(metrics.kellyFormatted) > 0 ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{metrics.kellyFormatted}</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Win Promedio vs Loss Promedio: Cuánto ganas al acertar vs cuánto pierdes al fallar.&#10;✅ Bueno: Que el Avg Win sea considerablemente mayor al Avg Loss (> 1.5R)." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>W vs L</div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                       <span style={{ color: 'var(--accent-green)' }}>+{metrics.avgWinR}</span> <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>vs</span> <span style={{ color: 'var(--accent-red)' }}>-{metrics.avgLossR}</span>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Trades por Semana: Frecuencia operativa promedio.&#10;✅ Bueno: No hay un número ideal, depende si eres Scalper (alto) o Swing (bajo)." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>TRDS/SEM</div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.tradesPerWeek}</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                  <div title="Duración Promedio: Tiempo promedio que un trade se mantiene abierto.&#10;✅ Bueno: Sirve para entender cuánta paciencia psicológica requiere tu estrategia." style={{ textAlign: 'center', padding: '12px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
                     <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginBottom: '4px' }}>DUR. PROM.</div>
                     <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>{metrics.avgDuration}</div>
                   </div>
