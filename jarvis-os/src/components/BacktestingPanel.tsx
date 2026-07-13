@@ -208,6 +208,7 @@ export default function BacktestingPanel() {
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [isAutoTuningSession, setIsAutoTuningSession] = useState(false);
   const [progress, setProgress] = useState(0);
   const [trades, setTrades] = useState<BacktestTrade[]>([]);
 
@@ -501,6 +502,94 @@ export default function BacktestingPanel() {
       }
     }, 50);
   }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, minRR, activeSessions, maxTradesPerSession, spreadPips, commissionPerLot]);
+
+  const handleAutoTuneSession = useCallback(async (sessionName: string) => {
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    setIsAutoTuningSession(true);
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+
+    const slBufferOptions = [0.05, 0.1, 0.15, 0.2, 0.25];
+    const fixedRROptions = [1.5, 2.0, 2.5, 3.0, 4.0];
+    const maxLossesOptions = [0, 1, 2];
+
+    const configsToTest: any[] = [];
+    const baseParams = {
+        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger,
+        minRR, sessionFilter: activeSessions, spreadPips, commissionPerLot,
+        maxDailyLossR: maxDailyLossR || undefined,
+        dailyProfitTargetR: dailyProfitTargetR || undefined,
+        maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+        maxTradesPerDay: maxTradesPerDay || undefined,
+        maxTradesPerSession: maxTradesPerSession || undefined,
+        trailingDrawdownR: trailingDrawdownR || undefined,
+    };
+
+    for (const sl of slBufferOptions) {
+        for (const rr of fixedRROptions) {
+            for (const lossLimit of maxLossesOptions) {
+                const testSessions = JSON.parse(JSON.stringify(sessionTriggers));
+                if (!testSessions[sessionName]) testSessions[sessionName] = {};
+                testSessions[sessionName].slBufferPercent = sl;
+                testSessions[sessionName].fixedRR = rr;
+                testSessions[sessionName].maxSellLosses = lossLimit;
+                testSessions[sessionName].maxBuyLosses = lossLimit;
+
+                configsToTest.push({
+                    ...baseParams,
+                    oteEntryPercent,
+                    sessions: testSessions,
+                    _meta: { sl, rr, lossLimit }
+                });
+            }
+        }
+    }
+
+    try {
+        const batchResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: configsToTest });
+        
+        let bestScore = -Infinity;
+        let bestWinRate = -1;
+        let bestMeta: any = null;
+
+        for (let i = 0; i < batchResults.length; i++) {
+            const res = batchResults[i];
+            const meta = configsToTest[i]._meta;
+            const closed = res.trades.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
+            const pnl = closed.reduce((acc: number, t: BacktestTrade) => acc + (t.rMultiple || 0), 0);
+            const wins = closed.filter((t: BacktestTrade) => t.result === 'WIN').length;
+            const winRate = closed.length > 0 ? (wins / closed.length) : 0;
+
+            if (pnl > bestScore || (pnl === bestScore && winRate > bestWinRate)) {
+                bestScore = pnl;
+                bestWinRate = winRate;
+                bestMeta = meta;
+            }
+        }
+
+        if (bestMeta) {
+            setSessionTriggers(prev => {
+                const next = { ...prev };
+                if (!next[sessionName]) next[sessionName] = {} as any;
+                next[sessionName] = {
+                    ...next[sessionName],
+                    slBufferPercent: bestMeta.sl,
+                    fixedRR: bestMeta.rr,
+                    maxSellLosses: bestMeta.lossLimit,
+                    maxBuyLosses: bestMeta.lossLimit
+                };
+                localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+                return next;
+            });
+            toast(`✨ Auto-Tune [${sessionName}]: SL BUF ${bestMeta.sl}, TP2 ${bestMeta.rr}x, Max Loss ${bestMeta.lossLimit}`, 'success');
+            setTimeout(() => handleRunRef.current?.(undefined, undefined, true), 100);
+        }
+    } catch (err: any) {
+        toast(`❌ Error en Auto-Tune: ${err}`, 'error');
+    } finally {
+        setIsAutoTuningSession(false);
+    }
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger, minRR, activeSessions, spreadPips, commissionPerLot, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, maxTradesPerSession, trailingDrawdownR, sessionTriggers, oteEntryPercent, toast, runWorkerTask]);
 
   handleRunRef.current = handleRun;
 
@@ -2287,8 +2376,18 @@ export default function BacktestingPanel() {
 
             {/* Gestión de Riesgo por Sesión */}
             <div style={{ marginTop: '14px', padding: '12px', backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent-gold)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                🛡️ RIESGO Y TP PERSONALIZADO ({sessionFilter})
+              <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent-gold)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>🛡️ RIESGO Y TP PERSONALIZADO ({sessionFilter})</span>
+                <button 
+                  onClick={() => handleAutoTuneSession(sessionFilter)}
+                  disabled={isAutoTuningSession}
+                  style={{ 
+                    fontSize: '0.6rem', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--accent-gold)', 
+                    backgroundColor: 'rgba(255, 215, 0, 0.1)', color: 'var(--accent-gold)', cursor: isAutoTuningSession ? 'not-allowed' : 'pointer',
+                    fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px'
+                  }}>
+                  {isAutoTuningSession ? '...' : 'Auto ✨'}
+                </button>
               </div>
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '6px 8px', backgroundColor: 'rgba(255,51,51,0.03)', borderRadius: '4px', border: '1px solid rgba(255,51,51,0.08)' }}>
