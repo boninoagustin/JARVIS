@@ -199,11 +199,11 @@ export default function BacktestingPanel() {
   const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState(0);
   const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
   const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
-  const [minRR, setMinRR] = useState(2.0);
+  const [minRR] = useState(2.0);
   const [spreadPips, setSpreadPips] = useState(0.0);
   const [commissionPerLot, setCommissionPerLot] = useState(0.0);
-  const [activeSessions, setActiveSessions] = useState<string[]>(['LONDON', 'NY']);
-  const [maxTradesPerSession, setMaxTradesPerSession] = useState(0);
+  const [activeSessions] = useState<string[]>(['LONDON', 'NY']);
+  const [maxTradesPerSession] = useState(0);
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
