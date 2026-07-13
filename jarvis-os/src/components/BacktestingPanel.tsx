@@ -202,7 +202,7 @@ export default function BacktestingPanel() {
   const [minRR] = useState(2.0);
   const [spreadPips, setSpreadPips] = useState(0.0);
   const [commissionPerLot, setCommissionPerLot] = useState(0.0);
-  const [activeSessions] = useState<string[]>(['LONDON', 'NY']);
+  const [activeSessions] = useState<string[]>(['LONDON', 'NY', 'ASIA', 'OFF']);
   const [maxTradesPerSession] = useState(0);
 
 
