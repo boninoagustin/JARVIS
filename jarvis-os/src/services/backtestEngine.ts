@@ -79,9 +79,10 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
 
 // --- GET SESSION FOR TIMESTAMP ---
 export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
-  const d = new Date(ts);
-  const arHour = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
-  const arMin = parseInt(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', minute: 'numeric' }));
+  // Argentina is UTC-3 all year round
+  const d = new Date(ts - 3 * 3600 * 1000);
+  const arHour = d.getUTCHours();
+  const arMin = d.getUTCMinutes();
   const timeDecimal = arHour + arMin / 60;
   
   if (timeDecimal >= 21 || timeDecimal < 4) return 'ASIA';
