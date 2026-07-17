@@ -326,6 +326,29 @@ function evaluateImpulse(
 }
 
 // --- MAIN BACKTEST RUNNER ---
+// --- ASYNC PRE-PARSE ---
+export async function preParseLogsAsync(logs: Map<string, string[]>): Promise<void> {
+  const allEntries: LogEntry[] = [];
+  
+  for (const [tf, lines] of logs.entries()) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const tsMatch = line.match(/TS:\s*(\d+)/i);
+      allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+      
+      // Yield to event loop every 5000 lines to prevent worker thread lockup
+      if (i % 5000 === 0 && i > 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+  }
+  
+  const validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
+  (globalThis as any)._cachedValidEntries = validEntries;
+  (globalThis as any)._cachedSyncEntries = validEntries.filter((e: any) => e.line.includes('SYNC_ZONES'));
+  (globalThis as any)._cachedRestEntries = validEntries.filter((e: any) => !e.line.includes('SYNC_ZONES'));
+}
+
 export function runBacktest(
   logs: Map<string, string[]>,
   config: BacktestConfig,

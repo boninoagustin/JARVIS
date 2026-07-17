@@ -1,4 +1,4 @@
-import { runBacktest } from './backtestEngine';
+import { runBacktest, preParseLogsAsync } from './backtestEngine';
 
 let cachedLogs: Map<string, string[]> | null = null;
 
@@ -10,10 +10,11 @@ self.onmessage = async (e: MessageEvent) => {
       const { logsArray } = payload;
       cachedLogs = new Map<string, string[]>(logsArray);
       
-      // Clear parse caches so it forces a re-parse for the new logs
       (globalThis as any)._cachedValidEntries = null;
       (globalThis as any)._cachedSyncEntries = null;
       (globalThis as any)._cachedRestEntries = null;
+
+      await preParseLogsAsync(cachedLogs);
       
       self.postMessage({ type: 'DONE', id, result: 'OK' });
     }
@@ -23,7 +24,6 @@ self.onmessage = async (e: MessageEvent) => {
       
       if (logsArray) {
           logsToUse = new Map<string, string[]>(logsArray);
-          // Clear parse cache because it's a one-off run with new logs
           (globalThis as any)._cachedValidEntries = null;
           (globalThis as any)._cachedSyncEntries = null;
           (globalThis as any)._cachedRestEntries = null;
@@ -39,7 +39,6 @@ self.onmessage = async (e: MessageEvent) => {
       if (!cachedLogs) throw new Error("Logs not initialized in worker");
       
       const results = [];
-      // Execute all configs in the batch sequentially, yielding to prevent worker lockup
       for (let i = 0; i < configs.length; i++) {
           const config = configs[i];
           const res = runBacktest(cachedLogs!, config);
@@ -62,7 +61,6 @@ self.onmessage = async (e: MessageEvent) => {
           });
           
           results.push({ pnlBySession });
-          // Yield to event loop to prevent "slowing down Firefox" warning for long batches
           await new Promise(r => setTimeout(r, 0));
       }
       
