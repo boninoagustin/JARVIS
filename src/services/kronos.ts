@@ -130,23 +130,28 @@ async function fetchCTraderOHLCV(ticker: string, count: number = 400) {
     try {
         const trendbars = await getCTraderTrendbars(ticker, TrendbarPeriod.M5, count);
         return trendbars.map((kline: any) => {
-            const ts = kline.timestamp || (kline.utcTimestampInMinutes * 60000);
-            const open = kline.open !== undefined ? kline.open : 0;
-            const high = kline.high !== undefined ? kline.high : (open + (kline.deltaHigh || 0));
-            const low = kline.low !== undefined ? kline.low : (open - (kline.deltaLow || 0));
-            const close = kline.close !== undefined ? kline.close : (open + (kline.deltaClose || 0));
+            const ts = kline.timestamp || (kline.utcTimestampInMinutes ? kline.utcTimestampInMinutes * 60000 : 0);
             
-            // Si el precio viene en cents (por ejemplo 5800000 en vez de 58000), podemos ajustar.
-            // Por simplicidad, asumimos que viene escalado por 100000 como suele ser cTrader para proveer floats enteros.
-            // Si es así, se dividirá por 100000, pero esto depende del asset.
-            // Para ser 100% compatibles con Kronos, Kronos aprende de la serie relativa, así que la escala no romperá la red neuronal mientras sea consistente.
-            const scale = 100000;
+            // cTrader Trendbar format uses `low` as base price with deltas:
+            //   open  = low + deltaOpen
+            //   high  = low + deltaHigh  
+            //   close = low + deltaClose
+            // The `open`, `high`, `close` fields don't exist on the raw Trendbar type.
+            const low = kline.low || 0;
+            const open = low + (kline.deltaOpen || 0);
+            const high = low + (kline.deltaHigh || 0);
+            const close = low + (kline.deltaClose || 0);
+
+            // The high-level ctrader-ts getTrendbars() API already handles price scaling
+            // internally (divides by 10^pipPosition), so no manual scale division is needed.
+            // If raw protocol values leak through, they'd be in pipPosition-scaled integers,
+            // but Kronos learns from relative series, so consistency matters more than absolute scale.
             return {
                 timestamp: new Date(ts).toISOString(),
-                open: open / scale,
-                high: high / scale,
-                low: low / scale,
-                close: close / scale,
+                open,
+                high,
+                low,
+                close,
                 volume: kline.volume || 0,
                 amount: kline.volume || 0
             };

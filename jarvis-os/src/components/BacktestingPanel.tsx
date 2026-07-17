@@ -522,6 +522,7 @@ export default function BacktestingPanel() {
   const [globalMCL, setGlobalMCL] = useState(3);
   const [globalMTD, setGlobalMTD] = useState(4);
   const [globalTDD, setGlobalTDD] = useState(3.0);
+  const [globalDisabledSessions, setGlobalDisabledSessions] = useState<string[]>([]);
   const [portfolioResults, setPortfolioResults] = useState<{
     trades: any[];
     metrics: any;
@@ -1146,6 +1147,7 @@ export default function BacktestingPanel() {
       mcl: number;
       mtd: number;
       tdd: number;
+      disabledSessions?: string[];
     }
   ) => {
     if (files.length === 0) return null;
@@ -1199,6 +1201,17 @@ export default function BacktestingPanel() {
       }
 
       const r = Number(t.rMultiple) || 0;
+      const tSession = getSessionForTimestamp(t.timestamp);
+
+      if (config.disabledSessions && config.disabledSessions.includes(tSession)) {
+        simulatedTrades.push({
+          ...t,
+          blockedByGlobalKillswitch: true,
+          blockReason: `Sesión ${tSession} Deshabilitada`,
+          cumulativePnLR: totalPnLR
+        });
+        return; // skip daily logic
+      }
 
       if (isDailyKilled) {
         simulatedTrades.push({
@@ -1325,12 +1338,15 @@ export default function BacktestingPanel() {
       const mdlOptions = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
       const dptOptions = [0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]; 
       const mtdOptions = [0, 2, 3, 4, 5, 6];
+      const disabledSessionsOptions = [[], ['ASIA'], ['NY'], ['LONDON']];
       
-      let combinations: { mdl: number, dpt: number, mtd: number }[] = [];
+      let combinations: { mdl: number, dpt: number, mtd: number, disabledSessions: string[] }[] = [];
       for (const mdl of mdlOptions) {
         for (const dpt of dptOptions) {
           for (const mtd of mtdOptions) {
-            combinations.push({ mdl, dpt, mtd });
+            for (const ds of disabledSessionsOptions) {
+              combinations.push({ mdl, dpt, mtd, disabledSessions: ds });
+            }
           }
         }
       }
@@ -1343,7 +1359,8 @@ export default function BacktestingPanel() {
           dpt: c.dpt,
           mtd: c.mtd,
           mcl: globalMCL,
-          tdd: globalTDD
+          tdd: globalTDD,
+          disabledSessions: c.disabledSessions
         });
 
         if (sim) {
@@ -1398,6 +1415,7 @@ export default function BacktestingPanel() {
         maxConsecutiveLosses: globalMCL,
         maxTradesPerDay: globalMTD,
         trailingDrawdownR: globalTDD,
+        disabledSessions: globalDisabledSessions,
         updatedAt: new Date().toISOString()
       }, { merge: true });
       toast(`✅ Configuración Global subida a JARVIS con éxito!`, 'success');
@@ -1440,7 +1458,8 @@ export default function BacktestingPanel() {
                 dpt: globalDPT,
                 mcl: globalMCL,
                 mtd: globalMTD,
-                tdd: globalTDD
+                tdd: globalTDD,
+                disabledSessions: globalDisabledSessions
               });
               setPortfolioResults(res);
             }, 50);
@@ -1459,25 +1478,26 @@ export default function BacktestingPanel() {
   }, [toast, globalMDL, globalDPT, globalMCL, globalMTD, globalTDD, runPortfolioSimulation]);
 
   // 🎛️ ACTUALIZACIÓN DINÁMICA DE PARÁMETROS
-  const handleGlobalParamChange = (param: string, val: number) => {
+  const handleGlobalParamChange = (param: string, val: number | string[]) => {
     let newMdl = globalMDL;
     let newDpt = globalDPT;
     let newMcl = globalMCL;
     let newMtd = globalMTD;
     let newTdd = globalTDD;
 
-    if (param === 'mdl') { setGlobalMDL(val); newMdl = val; }
-    else if (param === 'dpt') { setGlobalDPT(val); newDpt = val; }
-    else if (param === 'mcl') { setGlobalMCL(val); newMcl = val; }
-    else if (param === 'mtd') { setGlobalMTD(val); newMtd = val; }
-    else if (param === 'tdd') { setGlobalTDD(val); newTdd = val; }
+    if (param === 'mdl') { setGlobalMDL(val as number); newMdl = val as number; }
+    else if (param === 'dpt') { setGlobalDPT(val as number); newDpt = val as number; }
+    else if (param === 'mcl') { setGlobalMCL(val as number); newMcl = val as number; }
+    else if (param === 'mtd') { setGlobalMTD(val as number); newMtd = val as number; }
+    else if (param === 'tdd') { setGlobalTDD(val as number); newTdd = val as number; }
 
     const res = runPortfolioSimulation(portfolioFiles, {
       mdl: newMdl,
       dpt: newDpt,
       mcl: newMcl,
       mtd: newMtd,
-      tdd: newTdd
+      tdd: newTdd,
+      disabledSessions: param === 'disabledSessions' ? (val as string[]) : globalDisabledSessions
     });
     setPortfolioResults(res);
   };
@@ -2701,7 +2721,8 @@ export default function BacktestingPanel() {
                                     dpt: globalDPT,
                                     mcl: globalMCL,
                                     mtd: globalMTD,
-                                    tdd: globalTDD
+                                    tdd: globalTDD,
+                                    disabledSessions: globalDisabledSessions
                                   });
                                   setPortfolioResults(res);
                                 }, 50);
@@ -2822,6 +2843,40 @@ export default function BacktestingPanel() {
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Pérdida máxima admitida desde el punto más alto del PnL consolidado del día.</span>
               </div>
 
+              {/* SESIONES DESHABILITADAS GLOBALES */}
+              <div style={{ marginBottom: '20px' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+                  Sesiones Apagadas (Killswitch Global de Sesión)
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {['ASIA', 'LONDON', 'NY'].map(s => {
+                    const isOff = globalDisabledSessions.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => {
+                          const newVal = isOff ? globalDisabledSessions.filter(x => x !== s) : [...globalDisabledSessions, s];
+                          setGlobalDisabledSessions(newVal);
+                          handleGlobalParamChange('disabledSessions', newVal);
+                        }}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '4px', border: '1px solid',
+                          borderColor: isOff ? 'var(--accent-red)' : 'var(--border-color)',
+                          backgroundColor: isOff ? 'rgba(255, 51, 51, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                          color: isOff ? 'var(--accent-red)' : 'var(--text-secondary)',
+                          fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s'
+                        }}
+                      >
+                        {isOff ? `🚫 ${s} OFF` : `✅ ${s}`}
+                      </button>
+                    );
+                  })}
+                </div>
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginTop: '4px', display: 'block' }}>
+                  Ignora por completo las operaciones que ocurran en estas sesiones para todos los activos.
+                </span>
+              </div>
+
               {/* BOTONES ACCION GLOBAL */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <button
@@ -2900,12 +2955,14 @@ export default function BacktestingPanel() {
                           setGlobalMDL(opt.config.mdl);
                           setGlobalDPT(opt.config.dpt);
                           setGlobalMTD(opt.config.mtd);
+                          setGlobalDisabledSessions(opt.config.disabledSessions);
                           const res = runPortfolioSimulation(portfolioFiles, {
                             mdl: opt.config.mdl,
                             dpt: opt.config.dpt,
                             mcl: globalMCL,
                             mtd: opt.config.mtd,
-                            tdd: globalTDD
+                            tdd: globalTDD,
+                            disabledSessions: opt.config.disabledSessions
                           });
                           setPortfolioResults(res);
                           toast(`Aplicada configuración Top ${index + 1}`, 'success');
@@ -2927,6 +2984,11 @@ export default function BacktestingPanel() {
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                           <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#fff' }}>
                             MDL: <span style={{ color: 'var(--accent-red)' }}>{opt.config.mdl}</span> | DPT: <span style={{ color: 'var(--accent-green)' }}>{opt.config.dpt}</span> | MTD: <span style={{ color: 'var(--accent-gold)' }}>{opt.config.mtd}</span>
+                            {opt.config.disabledSessions && opt.config.disabledSessions.length > 0 && (
+                              <span style={{ color: 'var(--accent-red)', marginLeft: '6px' }}>
+                                (🚫 {opt.config.disabledSessions.join(', ')})
+                              </span>
+                            )}
                           </span>
                           <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>
                             Trades: {opt.active} ({opt.blocked} bloq) · WR: {opt.wr}% · MDD: <span style={{ color: opt.mdd > 7 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>{opt.mdd.toFixed(1)}R</span> · Peor día: <span style={{ color: opt.worstDay < -4 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>{opt.worstDay?.toFixed(1) || '0'}R</span>

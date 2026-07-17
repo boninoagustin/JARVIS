@@ -74,6 +74,21 @@ async function main() {
         
         // 🆕 v5.1: Iniciar watchdog de desconexión TradingView
         tradingModule.startWatchdog();
+
+        // 🔌 Pre-conectar a cTrader para eliminar latencia en la primera operación
+        import('./services/ctrader.js').then(async ({ connectCTrader, getCTraderStatus }) => {
+            const connected = await connectCTrader();
+            const status = getCTraderStatus();
+            if (connected) {
+                console.log(`[CTRADER] 🟢 Pre-conectado al inicio. Modo: ${status.demo ? 'DEMO' : 'LIVE'}`);
+            } else if (status.configured) {
+                console.warn(`[CTRADER] ⚠️ Configurado pero no se pudo conectar al inicio. Se reintentará en la primera operación.`);
+            } else {
+                console.log(`[CTRADER] ⏭️ No configurado. Servicio deshabilitado.`);
+            }
+        }).catch(err => {
+            console.warn(`[CTRADER] ⚠️ Error en pre-conexión (no crítico):`, err.message);
+        });
         
         console.log('[TRADING] Starting Firebase Queue Listener...');
         let isProcessingTrading = false;

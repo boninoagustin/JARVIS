@@ -116,7 +116,7 @@ export function isCTraderReady(): boolean {
 // ─── Event Listeners ───
 
 function setupCTraderEvents(client: any) {
-    client.on('PROTO_OA_EXECUTION_EVENT', async (event: any) => {
+    client.onExecution(async (event: any) => {
         try {
             if (!event.position || !event.position.positionId) return;
             
@@ -440,7 +440,7 @@ export async function closePosition(positionId: string): Promise<boolean> {
     }
 
     try {
-        await ctClient.close(positionId);
+        await ctClient.close(Number(positionId));
         console.log(`[CTRADER] 🔴 Posición ${positionId} cerrada completamente.`);
         return true;
     } catch (err: any) {
@@ -462,7 +462,7 @@ export async function closePartial(positionId: string, percentToClose: number = 
         // Get current position volume
         const state = await ctClient.getState();
         const positions = state?.positions || [];
-        const pos = positions?.find((p: any) => String(p.positionId || p.id) === positionId);
+        const pos = positions?.find((p: any) => Number(p.positionId || p.id) === Number(positionId));
         
         if (!pos || !pos.tradeData || !pos.tradeData.volume) {
             console.warn(`[CTRADER] ⚠️ Posición ${positionId} no encontrada o sin volumen.`);
@@ -569,7 +569,7 @@ export async function closeAllPositions(): Promise<{ closed: number; failed: num
         for (const pos of positions) {
             const id = String(pos.positionId || pos.id);
             try {
-                await ctClient.close(id);
+                await ctClient.close(Number(id));
                 closed++;
                 console.log(`[CTRADER] 🔴 Posición ${id} cerrada (killswitch).`);
             } catch {

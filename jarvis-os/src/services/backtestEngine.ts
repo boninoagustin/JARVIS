@@ -544,6 +544,9 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
+      // 🆕 COSTOS DE TRANSACCIÓN / SPREAD (Mejora 6)
+      const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
+
       // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
       if (trade.tp1Hit && !trade.slHalfwayHit) {
         const distEntryToTp1 = Math.abs(trade.tp1Price - trade.entryPrice);
@@ -596,7 +599,6 @@ function processAlert(
           const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
           
           // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
-          const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
           const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
           const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
           
@@ -613,7 +615,8 @@ function processAlert(
       }
 
       // SL
-      const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
+      const spreadAdjustmentPrice = (config.spreadPips || 0) * pipSize;
+      const slHit = trade.direction === 'BUY' ? lowPrice <= (trade.slPrice + spreadAdjustmentPrice) : highPrice >= (trade.slPrice - spreadAdjustmentPrice);
       if (slHit) {
         const isPartialClose = trade.tp1Hit;
         const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
@@ -630,7 +633,6 @@ function processAlert(
         const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
         
         // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
-        const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
         const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
         const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
         

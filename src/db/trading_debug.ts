@@ -153,6 +153,7 @@ interface GlobalPortfolioConfig {
     maxConsecutiveLosses: number;// MCL: Máximo de pérdidas consecutivas diarias
     trailingDrawdownR: number;   // TDD: Drawdown dinámico máximo diario en R
     enabled: boolean;
+    disabledSessions?: string[]; // 🚫 Killswitch global de sesión
 }
 
 let globalPortfolioConfig: GlobalPortfolioConfig = {
@@ -161,7 +162,8 @@ let globalPortfolioConfig: GlobalPortfolioConfig = {
     maxTradesPerDay: 0,
     maxConsecutiveLosses: 0,
     trailingDrawdownR: 0,
-    enabled: false
+    enabled: false,
+    disabledSessions: []
 };
 
 let globalPortfolioKillswitchUntil = 0;
@@ -342,7 +344,8 @@ if (db) {
                         maxTradesPerDay: Number(data.maxTradesPerDay) || 0,
                         maxConsecutiveLosses: Number(data.maxConsecutiveLosses) || 0,
                         trailingDrawdownR: Number(data.trailingDrawdownR) || 0,
-                        enabled: data.enabled === true
+                        enabled: data.enabled === true,
+                        disabledSessions: Array.isArray(data.disabledSessions) ? data.disabledSessions : []
                     };
                     console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalPortfolioConfig);
                     return;
@@ -791,6 +794,12 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
     if (!globalPortfolioConfig.enabled) {
         return false;
+    }
+
+    const currentSession = getCurrentSession(nowMs);
+    if (globalPortfolioConfig.disabledSessions && globalPortfolioConfig.disabledSessions.includes(currentSession)) {
+        console.log(`[GLOBAL KILLSWITCH] ⛔ Sesión actual (${currentSession}) está deshabilitada globalmente.`);
+        return true;
     }
 
     if (nowMs < globalPortfolioKillswitchUntil) {

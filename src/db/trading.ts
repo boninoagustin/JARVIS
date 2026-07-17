@@ -127,6 +127,9 @@ interface ActiveTrade {
     tp2Price: number;         
     slPrice: number;
     originalSlPrice?: number; // 🆕 Precio del Stop Loss original antes de ser movido a Breakeven
+    targetSlPrice?: number;   // 🆕 Precio objetivo al que intentamos mover el SL en el broker
+    targetSlPending?: boolean; // 🆕 Indica si hay una orden de mover el SL pendiente
+    targetSlRetries?: number;  // 🆕 Contador de reintentos
     tp1Hit: boolean;          
     tp2Hit: boolean;          
     slHalfwayHit?: boolean;   // 🆕 Indica si ya se movió el SL un 50% post-TP1
@@ -159,6 +162,7 @@ interface GlobalPortfolioConfig {
     maxConsecutiveLosses: number;// MCL: Máximo de pérdidas consecutivas diarias
     trailingDrawdownR: number;   // TDD: Drawdown dinámico máximo diario en R
     enabled: boolean;
+    disabledSessions?: string[]; // 🚫 Killswitch global de sesión
 }
 
 let globalPortfolioConfig: GlobalPortfolioConfig = {
@@ -167,7 +171,8 @@ let globalPortfolioConfig: GlobalPortfolioConfig = {
     maxTradesPerDay: 0,
     maxConsecutiveLosses: 0,
     trailingDrawdownR: 0,
-    enabled: false
+    enabled: false,
+    disabledSessions: []
 };
 
 let globalPortfolioKillswitchUntil = 0;
@@ -349,7 +354,8 @@ if (db) {
                         maxTradesPerDay: Number(data.maxTradesPerDay) || 0,
                         maxConsecutiveLosses: Number(data.maxConsecutiveLosses) || 0,
                         trailingDrawdownR: Number(data.trailingDrawdownR) || 0,
-                        enabled: data.enabled === true
+                        enabled: data.enabled === true,
+                        disabledSessions: Array.isArray(data.disabledSessions) ? data.disabledSessions : []
                     };
                     console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalPortfolioConfig);
                     return;
@@ -799,6 +805,12 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
     if (!globalPortfolioConfig.enabled) {
         return false;
+    }
+
+    const currentSession = getCurrentSession(nowMs);
+    if (globalPortfolioConfig.disabledSessions && globalPortfolioConfig.disabledSessions.includes(currentSession)) {
+        console.log(`[GLOBAL KILLSWITCH] ⛔ Sesión actual (${currentSession}) está deshabilitada globalmente.`);
+        return true;
     }
 
     if (nowMs < globalPortfolioKillswitchUntil) {
@@ -1285,6 +1297,29 @@ export async function processTradingAlert(alertText: string) {
                         continue;
                     }
                     
+                    // 🔄 REINTENTO DE MODIFICACIÓN DE SL (Si quedó pendiente de un tick anterior)
+                    if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId) {
+                        trade.targetSlRetries = (trade.targetSlRetries || 0) + 1;
+                        console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${trade.targetSlPrice} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
+                        import('../services/ctrader.js').then(async (ctrader) => {
+                            const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                            if (success) {
+                                console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice} en reintento.`);
+                                trade.slPrice = trade.targetSlPrice!;
+                                trade.targetSlPending = false;
+                                trade.targetSlRetries = 0;
+                                if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
+                                    slPrice: trade.slPrice,
+                                    targetSlPending: false
+                                }).catch(() => {});
+                            } else {
+                                console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice} en reintento, se seguirá intentando.`);
+                            }
+                        }).catch(err => {
+                            console.error(`[CTRADER] ❌ Error importando módulo para reintento de Breakeven: ${err.message}`);
+                        });
+                    }
+                    
                     const openTimeStr = new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' }); 
                     
                     // 🎯 EVALUACIÓN DE TP1
@@ -1303,15 +1338,25 @@ export async function processTradingAlert(alertText: string) {
                             // 🆕 RISK REDUCTION: Mover el SL al 50% del riesgo inicial
                             const distanceToEntry = trade.entryPrice - trade.originalSlPrice;
                             const slHalfway = trade.originalSlPrice + (distanceToEntry * 0.5);
-                            trade.slPrice = parseFloat(slHalfway.toFixed(5));
+                            const targetSl = parseFloat(slHalfway.toFixed(5));
+                            
+                            if (isBacktest) {
+                                trade.slPrice = targetSl;
+                            } else {
+                                trade.targetSlPrice = targetSl;
+                                trade.targetSlPending = true;
+                                trade.targetSlRetries = 0;
+                            }
                             
                             const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
                             const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
                             
-                            // 💾 Sincronizar actualización de TP1 (SL cambia al 50%)
+                            // 💾 Sincronizar actualización de TP1 (SL no cambia internamente hasta que el broker lo acepte en Real)
                             if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
                                 tp1Hit: true,
                                 slPrice: trade.slPrice,
+                                targetSlPrice: trade.targetSlPrice || null,
+                                targetSlPending: trade.targetSlPending || false,
                                 originalSlPrice: trade.originalSlPrice
                             }).catch(() => {});
                             
@@ -1343,7 +1388,15 @@ export async function processTradingAlert(alertText: string) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
                                     await ctrader.closePartial(trade.ctraderPositionId!, 50);
-                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.slPrice);
+                                    const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                                    if (success) {
+                                        console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
+                                        trade.slPrice = trade.targetSlPrice!;
+                                        trade.targetSlPending = false;
+                                        if (db) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
+                                    } else {
+                                        console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
+                                    }
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
                                 });
@@ -1364,12 +1417,20 @@ export async function processTradingAlert(alertText: string) {
                             if (isDuplicate(`BE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             trade.slHalfwayHit = true;
-                            trade.slPrice = trade.entryPrice;
+                            if (isBacktest) {
+                                trade.slPrice = trade.entryPrice;
+                            } else {
+                                trade.targetSlPrice = trade.entryPrice;
+                                trade.targetSlPending = true;
+                                trade.targetSlRetries = 0;
+                            }
 
                             // Actualizar Firebase
                             if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
                                 slHalfwayHit: true,
-                                slPrice: trade.entryPrice 
+                                slPrice: trade.slPrice,
+                                targetSlPrice: trade.targetSlPrice || null,
+                                targetSlPending: trade.targetSlPending || false
                             }).catch(() => {});
                             
                             if (trade.journalId) {
@@ -1393,7 +1454,15 @@ export async function processTradingAlert(alertText: string) {
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Breakeven Definitivo para posID: ${trade.ctraderPositionId}`);
-                                    await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.entryPrice);
+                                    const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                                    if (success) {
+                                        console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
+                                        trade.slPrice = trade.targetSlPrice!;
+                                        trade.targetSlPending = false;
+                                        if (db) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
+                                    } else {
+                                        console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
+                                    }
                                 }).catch(err => {});
                             }
                         }
@@ -1460,9 +1529,24 @@ export async function processTradingAlert(alertText: string) {
                     }
                     
                     // 🛑 EVALUACIÓN DE STOP LOSS (O BREAK EVEN)
-                    const slHit = trade.direction === 'BUY' 
-                        ? lowPrice <= trade.slPrice 
-                        : highPrice >= trade.slPrice;
+                    let slHit = false;
+                    if (isBacktest) {
+                        // Castigo de realidad: añadir spread simulado en el backtest
+                        let spreadAdjustment = 0;
+                        const upperTicker = ticker.toUpperCase();
+                        if (upperTicker.includes('NAS100') || upperTicker.includes('TECH 100')) spreadAdjustment = 0.5; // 0.5 puntos
+                        else if (upperTicker.includes('JPY')) spreadAdjustment = 0.005; // 0.5 pips
+                        else if (upperTicker.includes('XAU')) spreadAdjustment = 0.1; // 10 centavos
+                        else spreadAdjustment = 0.00005; // 0.5 pips standard para forex (EURUSD, GBPUSD)
+                        
+                        slHit = trade.direction === 'BUY' 
+                            ? lowPrice <= (trade.slPrice + spreadAdjustment) 
+                            : highPrice >= (trade.slPrice - spreadAdjustment);
+                    } else {
+                        slHit = trade.direction === 'BUY' 
+                            ? lowPrice <= trade.slPrice 
+                            : highPrice >= trade.slPrice;
+                    }
 
                     if (slHit) {
                     // 🛡️ FILTRO ANTI-DUPLICADOS
