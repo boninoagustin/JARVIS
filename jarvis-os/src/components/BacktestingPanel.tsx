@@ -853,7 +853,7 @@ export default function BacktestingPanel() {
   }, [sessionTriggers]);
 
   const isOptimizingRef = useRef(false);
-  const handleOptimize = useCallback(() => {
+  const handleOptimize = useCallback(async () => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     isOptimizingRef.current = true;
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
@@ -861,6 +861,16 @@ export default function BacktestingPanel() {
 
     const logs = new Map<string, string[]>();
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+
+    toast('Iniciando optimización (Enviando datos al Worker)...', 'info');
+    try {
+        await runWorkerTask('INIT_LOGS', { logsArray: Array.from(logs.entries()) });
+    } catch (e) {
+        toast('❌ Error inicializando Worker: ' + e, 'error');
+        setIsRunning(false);
+        isOptimizingRef.current = false;
+        return;
+    }
 
     const slOptions = [0, 0.05, 0.1, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
@@ -1025,7 +1035,7 @@ export default function BacktestingPanel() {
 
             if (chunkConfigs.length > 0) {
                 try {
-                    const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
+                    const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
 
                     for (let j = 0; j < chunkResults.length; j++) {
                         const task = validTasks[j];
@@ -1094,7 +1104,7 @@ export default function BacktestingPanel() {
         }
         
         try {
-            const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
+            const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
             
             for (let i = 0; i < chunkResults.length; i++) {
                 const config = chunkConfigs[i];
