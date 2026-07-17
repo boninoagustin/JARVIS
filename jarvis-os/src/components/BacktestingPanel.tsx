@@ -1689,6 +1689,25 @@ export default function BacktestingPanel() {
     toast('✅ Archivo JSON descargado con éxito (historial completo de trades)', 'success');
   }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast, spreadPips, commissionPerLot]);
 
+  const handleTickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.toUpperCase();
+    setTicker(val);
+    
+    if (val === 'XAUUSD' || val === 'GOLD') {
+      setSpreadPips(2.0);
+      setCommissionPerLot(6.0);
+    } else if (val === 'BTCUSD') {
+      setSpreadPips(15.0);
+      setCommissionPerLot(6.0);
+    } else if (val === 'US30' || val === 'NAS' || val === 'NDX' || val === 'SPX' || val === 'US500') {
+      setSpreadPips(1.5);
+      setCommissionPerLot(0); // Índices suelen ser commission-free con spread ligeramente más alto en prop firms
+    } else if (val === 'EURUSD' || val === 'GBPUSD' || val === 'USDJPY') {
+      setSpreadPips(0.5);
+      setCommissionPerLot(6.0);
+    }
+  };
+
   return (
     <div className="animate-fadeIn">
       <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
@@ -1815,7 +1834,7 @@ export default function BacktestingPanel() {
 
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>ACTIVO</label>
-              <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} className="mono" placeholder="BTCUSD"
+              <input type="text" value={ticker} onChange={handleTickerChange} className="mono" placeholder="BTCUSD"
                 style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
             </div>
 
