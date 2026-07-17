@@ -2868,7 +2868,7 @@ export default function BacktestingPanel() {
                   Sesiones Apagadas (Killswitch Global de Sesión)
                 </span>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  {['ASIA', 'LONDON', 'NY'].map(s => {
+                  {['ASIA', 'LONDON', 'NY', 'OFF'].map(s => {
                     const isOff = globalDisabledSessions.includes(s);
                     return (
                       <button
