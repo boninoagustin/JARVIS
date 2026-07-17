@@ -2,9 +2,9 @@ import { runBacktest } from './backtestEngine';
 
 let cachedLogs: Map<string, string[]> | null = null;
 
-self.onmessage = (e: MessageEvent) => {
+self.onmessage = async (e: MessageEvent) => {
   const { type, id, payload } = e.data;
-
+  
   try {
     if (type === 'INIT_LOGS') {
       const { logsArray } = payload;
@@ -38,8 +38,10 @@ self.onmessage = (e: MessageEvent) => {
       const { configs } = payload;
       if (!cachedLogs) throw new Error("Logs not initialized in worker");
       
-      // Execute all configs in the batch and ONLY return PnL to save memory/CPU cloning trades
-      const results = configs.map((config: any) => {
+      const results = [];
+      // Execute all configs in the batch sequentially, yielding to prevent worker lockup
+      for (let i = 0; i < configs.length; i++) {
+          const config = configs[i];
           const res = runBacktest(cachedLogs!, config);
           const pnlBySession: Record<string, number> = { OFF: 0, LONDON: 0, NY: 0, ASIA: 0 };
           
@@ -59,8 +61,10 @@ self.onmessage = (e: MessageEvent) => {
               }
           });
           
-          return { pnlBySession };
-      });
+          results.push({ pnlBySession });
+          // Yield to event loop to prevent "slowing down Firefox" warning for long batches
+          await new Promise(r => setTimeout(r, 0));
+      }
       
       self.postMessage({ type: 'DONE', id, result: results });
     }
