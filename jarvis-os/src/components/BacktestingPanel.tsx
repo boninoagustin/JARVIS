@@ -1164,7 +1164,7 @@ export default function BacktestingPanel() {
 
   // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
   const runPortfolioSimulation = useCallback((
-    allTrades: any[],
+    files: PortfolioAssetFile[],
     config: {
       mdl: number;
       dpt: number;
@@ -1172,8 +1172,27 @@ export default function BacktestingPanel() {
       mtd: number;
       tdd: number;
       disabledSessions?: string[];
+      _precomputedTrades?: any[];
     }
   ) => {
+    let allTrades = config._precomputedTrades;
+    if (!allTrades) {
+      if (files.length === 0) return null;
+      allTrades = [];
+      files.forEach(f => {
+        f.trades.forEach(t => {
+          const date = new Date(t.timestamp);
+          allTrades!.push({
+            ...t,
+            ticker: f.ticker,
+            _dateStr: date.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }),
+            _session: getSessionForTimestamp(t.timestamp)
+          });
+        });
+      });
+      allTrades.sort((a, b) => a.timestamp - b.timestamp);
+    }
+
     if (allTrades.length === 0) return null;
 
     // Simulación día a día en huso horario de Argentina
@@ -1385,13 +1404,14 @@ export default function BacktestingPanel() {
           await new Promise(r => setTimeout(r, 0));
         }
 
-        const sim = runPortfolioSimulation(allTrades, {
+        const sim = runPortfolioSimulation(portfolioFiles, {
           mdl: c.mdl,
           dpt: c.dpt,
           mtd: c.mtd,
           mcl: globalMCL,
           tdd: globalTDD,
-          disabledSessions: c.disabledSessions
+          disabledSessions: c.disabledSessions,
+          _precomputedTrades: allTrades
         });
 
         if (sim) {
