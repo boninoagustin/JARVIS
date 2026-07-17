@@ -31,7 +31,7 @@ self.onmessage = async (e: MessageEvent) => {
       
       if (!logsToUse) throw new Error("No logs available");
       
-      const res = runBacktest(logsToUse, config);
+      const res = await runBacktest(logsToUse, config);
       self.postMessage({ type: 'DONE', id, result: res });
     }
     else if (type === 'RUN_BATCH') {
@@ -41,7 +41,7 @@ self.onmessage = async (e: MessageEvent) => {
       const results = [];
       for (let i = 0; i < configs.length; i++) {
           const config = configs[i];
-          const res = runBacktest(cachedLogs!, config);
+          const res = await runBacktest(cachedLogs!, config);
           const pnlBySession: Record<string, number> = { OFF: 0, LONDON: 0, NY: 0, ASIA: 0 };
           
           res.trades.forEach((t: any) => {

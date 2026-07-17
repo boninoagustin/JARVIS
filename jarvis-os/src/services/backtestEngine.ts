@@ -349,11 +349,11 @@ export async function preParseLogsAsync(logs: Map<string, string[]>): Promise<vo
   (globalThis as any)._cachedRestEntries = validEntries.filter((e: any) => !e.line.includes('SYNC_ZONES'));
 }
 
-export function runBacktest(
+export async function runBacktest(
   logs: Map<string, string[]>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void
-): BacktestResult {
+): Promise<BacktestResult> {
   const state = emptyState();
   const trades: BacktestTrade[] = [];
   const activeTrades = new Map<string, BacktestTrade>();
@@ -375,9 +375,13 @@ export function runBacktest(
   if (!validEntries) {
     const allEntries: LogEntry[] = [];
     for (const [tf, lines] of logs.entries()) {
-      for (const line of lines) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const tsMatch = line.match(/TS:\s*(\d+)/i);
         allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+        if (i % 5000 === 0 && i > 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
       }
     }
     // 2. Sort chronologically
@@ -403,6 +407,12 @@ export function runBacktest(
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
     processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
+    
+    // YIELD TO PREVENT BROWSER FREEZE WARNINGS DURING LONG SIMULATIONS
+    if (i % 5000 === 0 && i > 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
