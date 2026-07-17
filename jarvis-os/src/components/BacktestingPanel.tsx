@@ -1164,7 +1164,7 @@ export default function BacktestingPanel() {
 
   // 📊 MOTOR DE SIMULACIÓN DE PORTAFOLIO GLOBAL
   const runPortfolioSimulation = useCallback((
-    files: PortfolioAssetFile[],
+    allTrades: any[],
     config: {
       mdl: number;
       dpt: number;
@@ -1174,21 +1174,7 @@ export default function BacktestingPanel() {
       disabledSessions?: string[];
     }
   ) => {
-    if (files.length === 0) return null;
-
-    // Unificar todos los trades
-    let allTrades: any[] = [];
-    files.forEach(f => {
-      f.trades.forEach(t => {
-        allTrades.push({
-          ...t,
-          ticker: f.ticker
-        });
-      });
-    });
-
-    // Ordenar cronológicamente por timestamp de apertura
-    allTrades.sort((a, b) => a.timestamp - b.timestamp);
+    if (allTrades.length === 0) return null;
 
     // Simulación día a día en huso horario de Argentina
     let simulatedTrades: any[] = [];
@@ -1206,9 +1192,8 @@ export default function BacktestingPanel() {
     let worstDailyLoss = 0; // El peor día (más negativo)
 
     allTrades.forEach(t => {
-      // Calcular el día de Argentina correspondiente (ART es UTC-3)
-      const date = new Date(t.timestamp);
-      const dateStr = date.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); // YYYY-MM-DD
+      // Usar los valores precalculados
+      const dateStr = t._dateStr;
 
       if (dateStr !== currentDayStr) {
         // Antes de resetear, registrar el peor día
@@ -1225,7 +1210,7 @@ export default function BacktestingPanel() {
       }
 
       const r = Number(t.rMultiple) || 0;
-      const tSession = getSessionForTimestamp(t.timestamp);
+      const tSession = t._session;
 
       if (config.disabledSessions && config.disabledSessions.includes(tSession)) {
         simulatedTrades.push({
@@ -1356,9 +1341,23 @@ export default function BacktestingPanel() {
     if (portfolioFiles.length === 0) return;
     setIsOptimizingPortfolio(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
+      // 1. PRE-CALCULAR TRADES (hacerlo solo 1 vez en lugar de 1300 veces)
+      let allTrades: any[] = [];
+      portfolioFiles.forEach(f => {
+        f.trades.forEach(t => {
+          const date = new Date(t.timestamp);
+          allTrades.push({
+            ...t,
+            ticker: f.ticker,
+            _dateStr: date.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }),
+            _session: getSessionForTimestamp(t.timestamp)
+          });
+        });
+      });
+      allTrades.sort((a, b) => a.timestamp - b.timestamp);
+
       // Opciones adaptadas para Funding Pips Standard 5k
-      // Daily Loss limit = 5% (5R). Incluimos hasta 5.0R para comparar, pero recomendamos ≤4.5R como margen.
       const mdlOptions = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
       const dptOptions = [0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]; 
       const mtdOptions = [0, 2, 3, 4, 5, 6];
@@ -1377,8 +1376,16 @@ export default function BacktestingPanel() {
 
       let results: any[] = [];
 
-      combinations.forEach(c => {
-        const sim = runPortfolioSimulation(portfolioFiles, {
+      // Bucle asincrónico para procesar el Grid sin trabar la UI
+      for (let i = 0; i < combinations.length; i++) {
+        const c = combinations[i];
+        
+        // Evitar bloqueo del hilo principal (yield)
+        if (i % 50 === 0 && i > 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+
+        const sim = runPortfolioSimulation(allTrades, {
           mdl: c.mdl,
           dpt: c.dpt,
           mtd: c.mtd,
@@ -1392,11 +1399,11 @@ export default function BacktestingPanel() {
           const worstDay = parseFloat(sim.metrics.worstDailyLoss);
           
           // REGLA DE ORO STANDARD: Max Drawdown global es 10%. Rechazar combinaciones mayores a 9.0% (9R)
-          if (mdd > 9.0) return;
+          if (mdd > 9.0) continue;
           
           // REGLA CRÍTICA: Pérdida diaria máxima es 5% (5R). Si ALGÚN día superó -5R, esta 
           // combinación habría quemado la cuenta. Rechazar de inmediato.
-          if (worstDay < -5.0) return;
+          if (worstDay < -5.0) continue;
 
           results.push({
             config: c,
@@ -1410,8 +1417,7 @@ export default function BacktestingPanel() {
             calmar: mdd > 0 ? parseFloat(sim.metrics.totalPnLR) / mdd : parseFloat(sim.metrics.totalPnLR)
           });
         }
-      });
-
+      } // Fin for combinations
       // Ordenar por Calmar Ratio (mejor ratio retorno/riesgo) descendente.
       // Para cuentas de fondeo, priorizar combinaciones que maximicen ganancia
       // sin acercarse al límite de drawdown.
