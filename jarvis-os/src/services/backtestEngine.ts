@@ -55,12 +55,16 @@ export function parseCSV(content: string): { lines: string[]; detectedTF: string
     const firstComma = r.indexOf(',');
     return firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
   });
+  
+  // 🆕 DEDUPLICACIÓN DE LOGS: Elimina líneas idénticas (repetidas) del mismo archivo
+  const uniqueLines = Array.from(new Set(lines));
+
   let tf = '3';
-  for (const l of lines.slice(0, 10)) {
+  for (const l of uniqueLines.slice(0, 10)) {
     const m = l.match(/TF:\s*([a-zA-Z0-9]+)/i);
     if (m) { tf = m[1].toUpperCase(); break; }
   }
-  return { lines, detectedTF: tf };
+  return { lines: uniqueLines, detectedTF: tf };
 }
 
 // --- Dynamic SL Buffer Calculator ---
