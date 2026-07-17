@@ -1062,6 +1062,8 @@ export default function BacktestingPanel() {
             setProgress(stage2Progress);
 
             if (endIndex < stage2Tasks.length) {
+                // Yield to the event loop so the browser can render the progress bar
+                await new Promise(r => setTimeout(r, 10));
                 processStage2Chunk(endIndex);
             } else {
                 for (const s of Object.keys(bestStage2Data)) {
@@ -1128,6 +1130,8 @@ export default function BacktestingPanel() {
             setProgress(optimizeSwitches ? Math.floor(baseProgress / 2) : baseProgress);
             
             if (endIndex < combinations.length) {
+                // Yield to the event loop so the browser can render the progress bar
+                await new Promise(r => setTimeout(r, 10));
                 processStage1Chunk(endIndex);
             } else {
                 if (optimizeSwitches && Object.keys(bestData).length > 0) {
