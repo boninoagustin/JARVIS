@@ -1042,14 +1042,11 @@ export default function BacktestingPanel() {
                         const testConfig = chunkConfigs[j];
                         const res = chunkResults[j];
 
-                        const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === task.session);
-                        
-                        const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
-                        const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
+                        const pnl = res.pnlBySession ? res.pnlBySession[task.session] : -Infinity;
 
                         if (pnl > bestStage2Pnl[task.session]) {
                             bestStage2Pnl[task.session] = pnl;
-                            bestStage2Data[task.session] = { config: testConfig, result: res };
+                            bestStage2Data[task.session] = { config: testConfig, result: undefined as any };
                         }
                     }
                 } catch(err) {
@@ -1066,9 +1063,14 @@ export default function BacktestingPanel() {
             if (endIndex < stage2Tasks.length) {
                 processStage2Chunk(endIndex);
             } else {
-                Object.keys(bestStage2Data).forEach(s => {
-                    bestData[s] = bestStage2Data[s];
-                });
+                for (const s of Object.keys(bestStage2Data)) {
+                    if (bestStage2Data[s] && bestStage2Data[s].config) {
+                        toast(`Obteniendo trades finales para ${s}...`, 'info');
+                        const finalRes = await runWorkerTask('RUN_BACKTEST', { config: bestStage2Data[s].config });
+                        bestStage2Data[s].result = finalRes;
+                        bestData[s] = bestStage2Data[s];
+                    }
+                }
                 finalizeOptimization();
             }
         };
@@ -1112,14 +1114,11 @@ export default function BacktestingPanel() {
                 
                 const sessionsToEval = ['OFF', 'LONDON', 'NY', 'ASIA'] as const;
                 sessionsToEval.forEach(s => {
-                    const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
-                    
-                    const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
-                    const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
+                    const pnl = res.pnlBySession ? res.pnlBySession[s] : -Infinity;
                     
                     if (pnl > bestPnl[s]) {
                         bestPnl[s] = pnl;
-                        bestData[s] = { config, result: res };
+                        bestData[s] = { config, result: undefined as any };
                     }
                 });
             }
@@ -1133,6 +1132,13 @@ export default function BacktestingPanel() {
                 if (optimizeSwitches && Object.keys(bestData).length > 0) {
                     startStage2();
                 } else {
+                    for (const s of Object.keys(bestData)) {
+                        if (bestData[s] && bestData[s].config) {
+                            toast(`Obteniendo trades finales para ${s}...`, 'info');
+                            const finalRes = await runWorkerTask('RUN_BACKTEST', { config: bestData[s].config });
+                            bestData[s].result = finalRes;
+                        }
+                    }
                     finalizeOptimization();
                 }
             }
