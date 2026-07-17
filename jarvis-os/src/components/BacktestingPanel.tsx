@@ -966,11 +966,12 @@ export default function BacktestingPanel() {
     };
 
     const startStage2 = () => {
-        const ksMaxDailyLoss = [0, 1.0, 1.5, 2.0, 3.0];
-        const ksDailyProfit = [0, 2.0, 3.0, 4.0, 6.0];
-        const ksMaxConsLosses = [0, 2, 3, 4];
-        const ksMaxTrades = [0, 2, 3, 5];
-        const ksTrailDD = [0, 1.5, 2.5, 4.0];
+        // Reducimos las combinaciones de KS para que la optimización tarde segundos en lugar de horas.
+        const ksMaxDailyLoss = [0, 2.0, 3.0];
+        const ksDailyProfit = [0, 3.0, 5.0];
+        const ksMaxConsLosses = [0, 2, 3];
+        const ksMaxTrades = [0, 3];
+        const ksTrailDD = [0, 2.5];
 
         const ksCombinations: {
             maxDailyLossR?: number,
