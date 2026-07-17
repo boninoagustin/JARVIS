@@ -549,7 +549,11 @@ function processAlert(
       if (tradeAge < 5000) continue;
 
       // 🆕 COSTOS DE TRANSACCIÓN / SPREAD (Mejora 6)
-      const pipSize = ticker.includes('JPY') ? 0.01 : (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 1.0 : 0.0001;
+      let pipSize = 0.0001;
+      const tUpper = ticker.toUpperCase();
+      if (tUpper.includes('JPY')) pipSize = 0.01;
+      else if (tUpper.includes('XAU') || tUpper.includes('GOLD')) pipSize = 0.1;
+      else if (tUpper.includes('BTC') || tUpper.includes('ETH') || tUpper.includes('US30') || tUpper.includes('NAS') || tUpper.includes('NDX') || tUpper.includes('SPX') || tUpper.includes('US500') || tUpper.includes('DJI')) pipSize = 1.0;
 
       // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
       if (trade.tp1Hit && !trade.slHalfwayHit) {
