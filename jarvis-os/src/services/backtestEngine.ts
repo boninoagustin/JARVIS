@@ -327,19 +327,42 @@ function evaluateImpulse(
 
 // --- MAIN BACKTEST RUNNER ---
 // --- ASYNC PRE-PARSE ---
-export async function preParseLogsAsync(logs: Map<string, string[]>): Promise<void> {
+export async function preParseLogsAsync(logs: Map<string, string>): Promise<void> {
   const allEntries: LogEntry[] = [];
   
-  for (const [tf, lines] of logs.entries()) {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const tsMatch = line.match(/TS:\s*(\d+)/i);
-      allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+  for (const [tf, content] of logs.entries()) {
+    let lineStart = 0;
+    let lineEnd = content.indexOf('\n');
+    let i = 0;
+    const uniqueLines = new Set<string>();
+
+    const processLine = (row: string) => {
+        if (row.length > 0 && row.includes(' | TS: ')) {
+            const firstComma = row.indexOf(',');
+            const line = firstComma > 0 ? row.substring(firstComma + 1).replace(/^"|"$/g, '') : row;
+            
+            if (!uniqueLines.has(line)) {
+                uniqueLines.add(line);
+                const tsMatch = line.match(/TS:\s*(\d+)/i);
+                allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+            }
+        }
+    };
+
+    while (lineEnd !== -1) {
+      processLine(content.substring(lineStart, lineEnd).trim());
       
-      // Yield to event loop every 5000 lines to prevent worker thread lockup
-      if (i % 5000 === 0 && i > 0) {
+      lineStart = lineEnd + 1;
+      lineEnd = content.indexOf('\n', lineStart);
+      i++;
+      
+      if (i % 5000 === 0) {
         await new Promise(r => setTimeout(r, 0));
       }
+    }
+    
+    if (lineStart < content.length) {
+      processLine(content.substring(lineStart).trim());
     }
   }
   
@@ -350,7 +373,7 @@ export async function preParseLogsAsync(logs: Map<string, string[]>): Promise<vo
 }
 
 export async function runBacktest(
-  logs: Map<string, string[]>,
+  logs: Map<string, string>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void
 ): Promise<BacktestResult> {

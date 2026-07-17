@@ -1,6 +1,6 @@
 import { runBacktest, preParseLogsAsync } from './backtestEngine';
 
-let cachedLogs: Map<string, string[]> | null = null;
+let cachedLogs: Map<string, string> | null = null;
 
 self.onmessage = async (e: MessageEvent) => {
   const { type, id, payload } = e.data;
@@ -8,7 +8,7 @@ self.onmessage = async (e: MessageEvent) => {
   try {
     if (type === 'INIT_LOGS') {
       const { logsArray } = payload;
-      cachedLogs = new Map<string, string[]>(logsArray);
+      cachedLogs = new Map<string, string>(logsArray);
       
       (globalThis as any)._cachedValidEntries = null;
       (globalThis as any)._cachedSyncEntries = null;
@@ -23,7 +23,7 @@ self.onmessage = async (e: MessageEvent) => {
       let logsToUse = cachedLogs;
       
       if (logsArray) {
-          logsToUse = new Map<string, string[]>(logsArray);
+          logsToUse = new Map<string, string>(logsArray);
           (globalThis as any)._cachedValidEntries = null;
           (globalThis as any)._cachedSyncEntries = null;
           (globalThis as any)._cachedRestEntries = null;

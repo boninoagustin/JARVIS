@@ -244,7 +244,6 @@ function calculateAdvancedMetrics(trades: any[], riskUsd: number) {
 
 
 import { useToast } from './Toast';
-import { parseCSV } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -254,8 +253,8 @@ import { doc, setDoc } from 'firebase/firestore';
 interface UploadedFile {
   name: string;
   tf: string;
-  lines: string[];
-  lineCount: number;
+  content: string;
+  lineCount?: number;
 }
 
 interface SessionHistory {
@@ -617,12 +616,16 @@ export default function BacktestingPanel() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
-        const { lines, detectedTF } = parseCSV(content);
-        if (lines.length === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
+        let detectedTF = "1m";
+        const tfMatch = content.substring(0, 2000).match(/TF:\s*([a-zA-Z0-9]+)/i);
+        if (tfMatch) detectedTF = tfMatch[1].toLowerCase();
+        
+        const lineCount = content.length > 0 ? content.split('\n').length : 0;
+        if (lineCount === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
         
         setUploadedFiles(prev => {
           const filtered = prev.filter(f => f.tf !== detectedTF);
-          const newFiles = [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
+          const newFiles = [...filtered, { name: file.name, tf: detectedTF, content, lineCount }]
             .sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
             
           // Auto-detect 5m presence and update triggers
@@ -644,7 +647,7 @@ export default function BacktestingPanel() {
           
           return newFiles;
         });
-        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lines.length} eventos cargados`, 'success');
+        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lineCount} eventos cargados`, 'success');
       };
       reader.readAsText(file);
     });
@@ -680,8 +683,8 @@ export default function BacktestingPanel() {
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
 
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+    const logs = new Map<string, string>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
 
     const finalOte = overrideOte !== undefined ? overrideOte : oteEntryPercent;
     const finalSessions = overrideSessions !== undefined ? overrideSessions : sessionTriggers;
@@ -750,8 +753,8 @@ export default function BacktestingPanel() {
   const handleAutoTuneSession = useCallback(async (sessionName: string) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsAutoTuningSession(true);
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+    const logs = new Map<string, string>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
 
     const slBufferOptions = [0.05, 0.1, 0.15, 0.2, 0.25];
     const fixedRROptions = [1.5, 2.0, 2.5, 3.0, 4.0];
@@ -859,8 +862,8 @@ export default function BacktestingPanel() {
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
 
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+    const logs = new Map<string, string>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
 
     toast('Iniciando optimización (Enviando datos al Worker)...', 'info');
     try {
@@ -2616,8 +2619,8 @@ export default function BacktestingPanel() {
                           }
 
                           if (uploadedFiles.length > 0) {
-                            const logs = new Map<string, string[]>();
-                            uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+                            const logs = new Map<string, string>();
+                            uploadedFiles.forEach(f => logs.set(f.tf, f.content));
                             
                             // @ts-ignore
                             const finalSessions = s.config.sessions || sessionTriggers;
