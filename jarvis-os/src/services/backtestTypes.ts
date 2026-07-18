@@ -20,6 +20,7 @@ export interface RadarState {
   zones: RadarZone[]; lastPrice: number | null; previousPrice?: number | null;
   scoreBuy: ScoreState; scoreSell: ScoreState;
   marketBias: Record<string, string>;
+  vwapStatus: Record<string, string>;
   lastSyncDate: string | null; lastSniperAlert?: number; lastHeartbeat?: number;
   activeImpulseBuy?: ImpulseLeg | null; activeImpulseSell?: ImpulseLeg | null;
   activeMacroImpulseBuy?: ImpulseLeg | null; activeMacroImpulseSell?: ImpulseLeg | null;
@@ -37,6 +38,8 @@ export interface BacktestTrade {
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number;
   oteEntryUsed?: number;
   tf?: string;
+  marketBias?: Record<string, string>;
+  vwapStatus?: Record<string, string>;
 }
 
 export interface TriggerConfig {
@@ -123,6 +126,7 @@ export function emptyState(): RadarState {
     scoreBuy: { points: 0, lastUpdate: 0, events: [] },
     scoreSell: { points: 0, lastUpdate: 0, events: [] },
     marketBias: { 'D': 'NEUTRAL', '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '5': 'NEUTRAL' },
+    vwapStatus: {},
     lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
     activeImpulseBuy: null, activeImpulseSell: null,
     activeMacroImpulseBuy: null, activeMacroImpulseSell: null,

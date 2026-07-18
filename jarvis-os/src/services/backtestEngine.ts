@@ -315,6 +315,7 @@ function evaluateImpulse(
             events: [...(leg.chochEvents || []), eventName],
             bestZone: leg.bestZone || null,
             marketBias: { ...state.marketBias },
+            vwapStatus: { ...(state.vwapStatus || {}) },
             oteEntryUsed: activeOteEntryPercent,
             tf: tfFormatted
           }
@@ -525,6 +526,13 @@ function processAlert(
   const { prefix, eventTf, readableTf, currentDirection } = p;
   const alertText = entry.line;
   const upperText = alertText.toUpperCase();
+
+  // Extract VWAP status globally for the event timeframe
+  const vwapMatch = upperText.match(/VWAP:\s*(UNDER|OVER)/);
+  if (vwapMatch && eventTf) {
+    if (!state.vwapStatus) state.vwapStatus = {};
+    state.vwapStatus[eventTf] = vwapMatch[1];
+  }
   const ticker = config.ticker;
   const todayStr = new Date(nowMs).toISOString().split('T')[0];
   const currentSession = getSessionForTimestamp(nowMs);
@@ -904,8 +912,24 @@ function processAlert(
     const baseBiasPoints = isMacroAligned ? 5 : 0;
 
     let vwapBonus = 0;
-    if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') vwapBonus = 2;
-    else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') vwapBonus = 2;
+    let vwapPenalty = 0;
+
+    state.vwapStatus = state.vwapStatus || {};
+    const vwap15m = state.vwapStatus['15'] || (upperText.match(/VWAP:\s*(UNDER|OVER)/)?.[1]);
+    const vwap1H = state.vwapStatus['60'];
+    const vwap4H = state.vwapStatus['240'];
+
+    if (currentDirection === 'BUY') {
+      if (vwap15m === 'UNDER') vwapBonus += 2;
+      if (vwap1H === 'UNDER') vwapBonus += 3;
+      if (vwap4H === 'UNDER') vwapBonus += 4;
+      if (vwap1H === 'OVER' && vwap4H === 'OVER') vwapPenalty += 5;
+    } else if (currentDirection === 'SELL') {
+      if (vwap15m === 'OVER') vwapBonus += 2;
+      if (vwap1H === 'OVER') vwapBonus += 3;
+      if (vwap4H === 'OVER') vwapBonus += 4;
+      if (vwap1H === 'UNDER' && vwap4H === 'UNDER') vwapPenalty += 5;
+    }
 
     // Apply Anti-Bias Filters
     const session = getSessionForTimestamp(nowMs);
@@ -989,7 +1013,7 @@ function processAlert(
       macroOteBonus = 6;
     }
 
-    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus + macroOteBonus;
+    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus - vwapPenalty + macroOteBonus;
 
     // Trap Zone penalty (Caso C - ported from live)
     if (chOrigin && chExtreme) {

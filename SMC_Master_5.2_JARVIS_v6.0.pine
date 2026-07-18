@@ -461,8 +461,10 @@ f_div_score(bool is_bull, float div_price, float prev_price, float cur_rsi, floa
 // =========================================================================
 grp_vwap = "🌊 VWAP (Liquidez Promedio)"
 show_vwap = input.bool(true, "Mostrar VWAP", group=grp_vwap)
+vwap_mode = input.string("Estructura (BOS/CHoCH)", "Modo de Anclaje VWAP", options=["Estructura (BOS/CHoCH)", "Tiempo (Clásico)"], group=grp_vwap)
 
-bool vwap_anchor = timeframe.isdwm ? ta.change(time("M")) != 0 : (timeframe.period == "240" or timeframe.period == "60" ? ta.change(time("W")) != 0 : ta.change(time("D")) != 0)
+bool time_anchor = timeframe.isdwm ? ta.change(time("M")) != 0 : (timeframe.period == "240" or timeframe.period == "60" ? ta.change(time("W")) != 0 : ta.change(time("D")) != 0)
+bool vwap_anchor = (vwap_mode == "Tiempo (Clásico)") and time_anchor
 
 var float sumSrcVol = 0.0
 var float sumVol = 0.0
@@ -475,7 +477,7 @@ else
     sumSrcVol += hlc3 * cur_vol
     sumVol += cur_vol
 
-vwap_val = sumVol == 0 ? hlc3 : sumSrcVol / sumVol
+float vwap_val = sumVol == 0 ? hlc3 : sumSrcVol / sumVol
 plot(show_vwap ? vwap_val : na, color=color.new(#2962ff, 40), title="VWAP Adaptativo", linewidth=2)
 string vwap_status = close > vwap_val ? "OVER" : "UNDER"
 
@@ -1339,6 +1341,19 @@ if showBos
             line.new(curr_ph_idx, curr_ph, bar_index, curr_ph, color=color.new(#089981, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_ph, lbl_txt, color=color.new(color.black, 100), textcolor=#089981, style=label.style_label_lower_right, size=size.tiny)
             
+            // --- NUEVO: REINICIO DE VWAP ESTRUCTURAL ---
+            if vwap_mode == "Estructura (BOS/CHoCH)"
+                float new_sumSrcVol = 0.0
+                float new_sumVol = 0.0
+                for i = origin_idx to 0
+                    new_sumSrcVol += hlc3[i] * nz(volume[i])
+                    new_sumVol += nz(volume[i])
+                sumSrcVol := new_sumSrcVol
+                sumVol := new_sumVol
+                vwap_val := sumVol == 0 ? hlc3 : sumSrcVol / sumVol
+                vwap_status := close > vwap_val ? "OVER" : "UNDER"
+            // ------------------------------------------
+            
             string vol_tag = (volume > ta.sma(volume, 20) * vol_mult) ? " | Vol: CLIMAX" : ""
             if alert_choch
                 f_ia_alert(event_prefix, syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Precio: " + f_compact_price(close) + " | VWAP: " + vwap_status + " | ORIGIN: " + str.tostring(min_low) + (confirm_close ? " | CONFIRMED" : "") + vol_tag)
@@ -1416,6 +1431,19 @@ if showBos
                 lbl_txt := lbl_txt + " ✓"
             line.new(curr_pl_idx, curr_pl, bar_index, curr_pl, color=color.new(#f23645, 0), style=line.style_dotted, width=1)
             label.new(bar_index, curr_pl, lbl_txt, color=color.new(color.black, 100), textcolor=#f23645, style=label.style_label_upper_right, size=size.tiny)
+            
+            // --- NUEVO: REINICIO DE VWAP ESTRUCTURAL ---
+            if vwap_mode == "Estructura (BOS/CHoCH)"
+                float new_sumSrcVol = 0.0
+                float new_sumVol = 0.0
+                for i = origin_idx to 0
+                    new_sumSrcVol += hlc3[i] * nz(volume[i])
+                    new_sumVol += nz(volume[i])
+                sumSrcVol := new_sumSrcVol
+                sumVol := new_sumVol
+                vwap_val := sumVol == 0 ? hlc3 : sumSrcVol / sumVol
+                vwap_status := close > vwap_val ? "OVER" : "UNDER"
+            // ------------------------------------------
             
             string vol_tag = (volume > ta.sma(volume, 20) * vol_mult) ? " | Vol: CLIMAX" : ""
             if alert_choch
