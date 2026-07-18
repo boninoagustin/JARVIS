@@ -327,57 +327,11 @@ function evaluateImpulse(
 }
 
 // --- MAIN BACKTEST RUNNER ---
-// --- ASYNC PRE-PARSE ---
-export async function preParseLogsAsync(logs: Map<string, string>): Promise<void> {
-  const allEntries: LogEntry[] = [];
-  
-  for (const [tf, content] of logs.entries()) {
-    let lineStart = 0;
-    let lineEnd = content.indexOf('\n');
-    let i = 0;
-    const uniqueLines = new Set<string>();
-
-    const processLine = (row: string) => {
-        if (row.length > 0 && row.includes(' | TS: ')) {
-            const firstComma = row.indexOf(',');
-            const line = firstComma > 0 ? row.substring(firstComma + 1).replace(/^"|"$/g, '') : row;
-            
-            if (!uniqueLines.has(line)) {
-                uniqueLines.add(line);
-                const tsMatch = line.match(/TS:\s*(\d+)/i);
-                allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
-            }
-        }
-    };
-
-    while (lineEnd !== -1) {
-      processLine(content.substring(lineStart, lineEnd).trim());
-      
-      lineStart = lineEnd + 1;
-      lineEnd = content.indexOf('\n', lineStart);
-      i++;
-      
-      if (i % 5000 === 0) {
-        await new Promise(r => setTimeout(r, 0));
-      }
-    }
-    
-    if (lineStart < content.length) {
-      processLine(content.substring(lineStart).trim());
-    }
-  }
-  
-  const validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
-  (globalThis as any)._cachedValidEntries = validEntries;
-  (globalThis as any)._cachedSyncEntries = validEntries.filter((e: any) => e.line.includes('SYNC_ZONES'));
-  (globalThis as any)._cachedRestEntries = validEntries.filter((e: any) => !e.line.includes('SYNC_ZONES'));
-}
-
-export async function runBacktest(
-  logs: Map<string, string>,
+export function runBacktest(
+  logs: Map<string, string[]>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void
-): Promise<BacktestResult> {
+): BacktestResult {
   const state = emptyState();
   const trades: BacktestTrade[] = [];
   const activeTrades = new Map<string, BacktestTrade>();
@@ -399,13 +353,9 @@ export async function runBacktest(
   if (!validEntries) {
     const allEntries: LogEntry[] = [];
     for (const [tf, lines] of logs.entries()) {
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+      for (const line of lines) {
         const tsMatch = line.match(/TS:\s*(\d+)/i);
         allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
-        if (i % 5000 === 0 && i > 0) {
-          await new Promise(r => setTimeout(r, 0));
-        }
       }
     }
     // 2. Sort chronologically
@@ -431,12 +381,6 @@ export async function runBacktest(
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
     processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
-    
-    // YIELD TO PREVENT BROWSER FREEZE WARNINGS DURING LONG SIMULATIONS
-    if (i % 5000 === 0 && i > 0) {
-      await new Promise(r => setTimeout(r, 0));
-    }
-
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;

@@ -244,6 +244,7 @@ function calculateAdvancedMetrics(trades: any[], riskUsd: number) {
 
 
 import { useToast } from './Toast';
+import { parseCSV } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -253,8 +254,8 @@ import { doc, setDoc } from 'firebase/firestore';
 interface UploadedFile {
   name: string;
   tf: string;
-  content: string;
-  lineCount?: number;
+  lines: string[];
+  lineCount: number;
 }
 
 interface SessionHistory {
@@ -616,16 +617,12 @@ export default function BacktestingPanel() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
-        let detectedTF = "1m";
-        const tfMatch = content.substring(0, 2000).match(/TF:\s*([a-zA-Z0-9]+)/i);
-        if (tfMatch) detectedTF = tfMatch[1].toLowerCase();
-        
-        const lineCount = content.length > 0 ? content.split('\n').length : 0;
-        if (lineCount === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
+        const { lines, detectedTF } = parseCSV(content);
+        if (lines.length === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
         
         setUploadedFiles(prev => {
           const filtered = prev.filter(f => f.tf !== detectedTF);
-          const newFiles = [...filtered, { name: file.name, tf: detectedTF, content, lineCount }]
+          const newFiles = [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
             .sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
             
           // Auto-detect 5m presence and update triggers
@@ -647,7 +644,7 @@ export default function BacktestingPanel() {
           
           return newFiles;
         });
-        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lineCount} eventos cargados`, 'success');
+        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lines.length} eventos cargados`, 'success');
       };
       reader.readAsText(file);
     });
@@ -683,8 +680,8 @@ export default function BacktestingPanel() {
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
 
-    const logs = new Map<string, string>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
     const finalOte = overrideOte !== undefined ? overrideOte : oteEntryPercent;
     const finalSessions = overrideSessions !== undefined ? overrideSessions : sessionTriggers;
@@ -753,8 +750,8 @@ export default function BacktestingPanel() {
   const handleAutoTuneSession = useCallback(async (sessionName: string) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     setIsAutoTuningSession(true);
-    const logs = new Map<string, string>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
     const slBufferOptions = [0.05, 0.1, 0.15, 0.2, 0.25];
     const fixedRROptions = [1.5, 2.0, 2.5, 3.0, 4.0];
@@ -856,24 +853,14 @@ export default function BacktestingPanel() {
   }, [sessionTriggers]);
 
   const isOptimizingRef = useRef(false);
-  const handleOptimize = useCallback(async () => {
+  const handleOptimize = useCallback(() => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     isOptimizingRef.current = true;
     setIsRunning(true); setProgress(0); setTrades([]); setResult(null);
     setOptimizedSessionResults({});
 
-    const logs = new Map<string, string>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.content));
-
-    toast('Iniciando optimización (Enviando datos al Worker)...', 'info');
-    try {
-        await runWorkerTask('INIT_LOGS', { logsArray: Array.from(logs.entries()) });
-    } catch (e) {
-        toast('❌ Error inicializando Worker: ' + e, 'error');
-        setIsRunning(false);
-        isOptimizingRef.current = false;
-        return;
-    }
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
 
     const slOptions = [0, 0.05, 0.1, 0.2];
     const rrOptions = [1.5, 2.0, 2.5, 3.0, 4.0];
@@ -969,12 +956,11 @@ export default function BacktestingPanel() {
     };
 
     const startStage2 = () => {
-        // Reducimos las combinaciones de KS para que la optimización tarde segundos en lugar de horas.
-        const ksMaxDailyLoss = [0, 2.0, 3.0];
-        const ksDailyProfit = [0, 3.0, 5.0];
-        const ksMaxConsLosses = [0, 2, 3];
-        const ksMaxTrades = [0, 3];
-        const ksTrailDD = [0, 2.5];
+        const ksMaxDailyLoss = [0, 1.0, 1.5, 2.0, 3.0];
+        const ksDailyProfit = [0, 2.0, 3.0, 4.0, 6.0];
+        const ksMaxConsLosses = [0, 2, 3, 4];
+        const ksMaxTrades = [0, 2, 3, 5];
+        const ksTrailDD = [0, 1.5, 2.5, 4.0];
 
         const ksCombinations: {
             maxDailyLossR?: number,
@@ -1039,18 +1025,21 @@ export default function BacktestingPanel() {
 
             if (chunkConfigs.length > 0) {
                 try {
-                    const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
+                    const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
 
                     for (let j = 0; j < chunkResults.length; j++) {
                         const task = validTasks[j];
                         const testConfig = chunkConfigs[j];
                         const res = chunkResults[j];
 
-                        const pnl = res.pnlBySession ? res.pnlBySession[task.session] : -Infinity;
+                        const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === task.session);
+                        
+                        const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+                        const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
 
                         if (pnl > bestStage2Pnl[task.session]) {
                             bestStage2Pnl[task.session] = pnl;
-                            bestStage2Data[task.session] = { config: testConfig, result: undefined as any };
+                            bestStage2Data[task.session] = { config: testConfig, result: res };
                         }
                     }
                 } catch(err) {
@@ -1065,18 +1054,11 @@ export default function BacktestingPanel() {
             setProgress(stage2Progress);
 
             if (endIndex < stage2Tasks.length) {
-                // Yield to the event loop so the browser can render the progress bar
-                await new Promise(r => setTimeout(r, 10));
                 processStage2Chunk(endIndex);
             } else {
-                for (const s of Object.keys(bestStage2Data)) {
-                    if (bestStage2Data[s] && bestStage2Data[s].config) {
-                        toast(`Obteniendo trades finales para ${s}...`, 'info');
-                        const finalRes = await runWorkerTask('RUN_BACKTEST', { config: bestStage2Data[s].config });
-                        bestStage2Data[s].result = finalRes;
-                        bestData[s] = bestStage2Data[s];
-                    }
-                }
+                Object.keys(bestStage2Data).forEach(s => {
+                    bestData[s] = bestStage2Data[s];
+                });
                 finalizeOptimization();
             }
         };
@@ -1112,7 +1094,7 @@ export default function BacktestingPanel() {
         }
         
         try {
-            const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
+            const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray: Array.from(logs.entries()), configs: chunkConfigs });
             
             for (let i = 0; i < chunkResults.length; i++) {
                 const config = chunkConfigs[i];
@@ -1120,11 +1102,14 @@ export default function BacktestingPanel() {
                 
                 const sessionsToEval = ['OFF', 'LONDON', 'NY', 'ASIA'] as const;
                 sessionsToEval.forEach(s => {
-                    const pnl = res.pnlBySession ? res.pnlBySession[s] : -Infinity;
+                    const sessionTrades = res.trades.filter((t: any) => getSessionForTimestamp(t.timestamp) === s);
+                    
+                    const closed = sessionTrades.filter((t: any) => t.result && t.result !== 'TIMEOUT');
+                    const pnl = closed.reduce((acc: any, t: any) => acc + (t.rMultiple || 0), 0);
                     
                     if (pnl > bestPnl[s]) {
                         bestPnl[s] = pnl;
-                        bestData[s] = { config, result: undefined as any };
+                        bestData[s] = { config, result: res };
                     }
                 });
             }
@@ -1133,20 +1118,11 @@ export default function BacktestingPanel() {
             setProgress(optimizeSwitches ? Math.floor(baseProgress / 2) : baseProgress);
             
             if (endIndex < combinations.length) {
-                // Yield to the event loop so the browser can render the progress bar
-                await new Promise(r => setTimeout(r, 10));
                 processStage1Chunk(endIndex);
             } else {
                 if (optimizeSwitches && Object.keys(bestData).length > 0) {
                     startStage2();
                 } else {
-                    for (const s of Object.keys(bestData)) {
-                        if (bestData[s] && bestData[s].config) {
-                            toast(`Obteniendo trades finales para ${s}...`, 'info');
-                            const finalRes = await runWorkerTask('RUN_BACKTEST', { config: bestData[s].config });
-                            bestData[s].result = finalRes;
-                        }
-                    }
                     finalizeOptimization();
                 }
             }
@@ -2645,8 +2621,8 @@ export default function BacktestingPanel() {
                           }
 
                           if (uploadedFiles.length > 0) {
-                            const logs = new Map<string, string>();
-                            uploadedFiles.forEach(f => logs.set(f.tf, f.content));
+                            const logs = new Map<string, string[]>();
+                            uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
                             
                             // @ts-ignore
                             const finalSessions = s.config.sessions || sessionTriggers;
