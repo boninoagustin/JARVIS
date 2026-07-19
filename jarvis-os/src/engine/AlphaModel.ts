@@ -210,8 +210,30 @@ export function evaluateImpulseCore(
                 oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                 oteMinScore = 8;
             }
+            const basePoints = (leg.chochPoints || 0) + 4;
+            
+            let scoreMultiplier = 1.0;
+            const biasD = state.marketBias['D'] || state.marketBias['1D'];
+            const bias4H = state.marketBias['4H'] || state.marketBias['240'];
+            const bias1H = state.marketBias['1H'] || state.marketBias['60'];
 
-            const totalPoints = (leg.chochPoints || 0) + 4;
+            let alignedTfs = 0;
+            let againstTfs = 0;
+
+            if (biasD === leg.dir) alignedTfs++;
+            else if (biasD && biasD !== leg.dir) againstTfs++;
+
+            if (bias4H === leg.dir) alignedTfs++;
+            else if (bias4H && bias4H !== leg.dir) againstTfs++;
+
+            if (bias1H === leg.dir) alignedTfs++;
+            else if (bias1H && bias1H !== leg.dir) againstTfs++;
+
+            if (alignedTfs >= 3) scoreMultiplier = 1.3;
+            else if (againstTfs >= 2) scoreMultiplier = 0.6;
+            else if (biasD && biasD !== leg.dir) scoreMultiplier = 0.8;
+
+            const totalPoints = Math.floor(basePoints * scoreMultiplier);
 
             if (sessionConfig && !sessionThresholds && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (!oteEnabled || totalPoints < oteMinScore) {

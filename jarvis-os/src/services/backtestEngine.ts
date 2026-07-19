@@ -305,11 +305,11 @@ function processAlert(
 
     const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
     state.activeImpulseBuy = buyRes.updatedLeg;
-    if (buyRes.newTrade) createTrade(buyRes.newTrade, nowMs, trades, activeTrades, dailyStats, config);
+    if (buyRes.newTrade && buyRes.oteData) createTrade({ ...buyRes.oteData, ...buyRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
 
     const sellRes = evaluateImpulseCore(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
     state.activeImpulseSell = sellRes.updatedLeg;
-    if (sellRes.newTrade) createTrade(sellRes.newTrade, nowMs, trades, activeTrades, dailyStats, config);
+    if (sellRes.newTrade && sellRes.oteData) createTrade({ ...sellRes.oteData, ...sellRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
 
 
     // Evaluate macro impulse legs (1H/4H stretching)
@@ -771,7 +771,7 @@ function processAlert(
       );
       const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
       activeLeg.isValidated = efectiveValidation;
-      activeLeg.chochPoints = totalPoints;
+      console.log("CALCULATING CHOCH POINTS:", { prefix, totalPoints, activeScorePoints: activeScore.points }); activeLeg.chochPoints = totalPoints;
       activeLeg.chochEvents = [...activeScore.events, `${prefix}_${parseTF(eventTf)}`];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
