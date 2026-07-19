@@ -1,148 +1,25 @@
 import { db } from './memory.js';
-import { z } from 'zod';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
-import { logTrade, recordResult, getPerformance, sendDailyReview } from '../services/journal.js';
+import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
 
-// --- INTERFACES DEL RADAR JSON ---
-interface RadarZone {
-    tf?: string;
-    dir: 'BUY' | 'SELL';
-    top: number;
-    btm: number;
-    lvl?: string;
-    medal?: string;
-    score?: number;
-    mid?: number;
-    atr?: number;
-    t?: string;      
-    d?: 'BUY' | 'SELL';  
-    p?: number;      
-    b?: number;      
-    lv?: string;     
-    md?: string;     
-    sc?: number;     
-    mi?: number;     
-    a?: number;      
-    createdAt?: number;
-    mg?: number;
-    kz?: boolean;
-}
+import {
+    RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema
+} from '../engine/Types.js';
 
-function normalizeZone(raw: any): RadarZone {
-    if (raw.t !== undefined && raw.tf === undefined) raw.tf = raw.t;
-    if (raw.d !== undefined && raw.dir === undefined) raw.dir = raw.d;
-    if (raw.p !== undefined && raw.top === undefined) raw.top = raw.p;
-    if (raw.b !== undefined && raw.btm === undefined) raw.btm = raw.b;
-    if (raw.lv !== undefined && raw.lvl === undefined) raw.lvl = raw.lv;
-    if (raw.md !== undefined && raw.medal === undefined) raw.medal = raw.md;
-    if (raw.sc !== undefined && raw.score === undefined) raw.score = raw.sc;
-    if (raw.mi !== undefined && raw.mid === undefined) raw.mid = raw.mi;
-    if (raw.a !== undefined && raw.atr === undefined) raw.atr = raw.a;
-    if (raw.mg !== undefined) raw.mg = raw.mg;
-    if (raw.kz !== undefined) raw.kz = raw.kz;
-    return raw as RadarZone;
-}
+import {
+    activeTrades, localRadarStates, lastFirebaseSave
+} from '../engine/StateStore.js';
 
-interface ScoreState {
-    points: number;
-    lastUpdate: number;
-    events: string[];
-}
+import {
+    emptyState, normalizeZone, SETUP_MEMORY_WINDOW_MS, TF_WEIGHT, evaluateImpulseCore, getDecimals, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone
+} from '../engine/AlphaModel.js';
 
-interface ImpulseLeg {
-    dir: 'BUY' | 'SELL';
-    origin: number;
-    extreme: number;
-    createdAt: number;         // 🆕 Timestamp de creación (anti-pingpong)
-    tp2?: number | null;       
-    oteScored?: boolean;       
-    isValidated?: boolean;     
-    chochPoints?: number;
-    chochEvents?: string[];
-    chochReport?: string;
-    bestZone?: RadarZone | null;
-}
+import { evaluateNetTrade } from '../engine/FrictionModel.js';
 
-interface RadarState {
-    lastSyncDate: string | null;
-    zones: RadarZone[];
-    activeLocks: string[];
-    lastPrice: number | null;
-    scoreBuy: ScoreState;
-    scoreSell: ScoreState;
-    marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
-    lastApproachAlert?: number;
-    lastSniperAlert?: number;
-    nextZones?: RadarZone[];     
-    lastHeartbeat?: number;       
-    zUp?: number;
-    zDn?: number;
-    activeImpulseBuy?: ImpulseLeg | null;  
-    activeImpulseSell?: ImpulseLeg | null; 
-    activeMacroImpulseBuy?: ImpulseLeg | null;  
-    activeMacroImpulseSell?: ImpulseLeg | null; 
-    lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; tf?: string; };
-    version?: number;
-    lastModified?: number;
-}
-
-const emptyState = (): RadarState => ({
-    lastSyncDate: null,
-    zones: [],
-    activeLocks: [],
-    lastPrice: null,
-    scoreBuy: { points: 0, lastUpdate: 0, events: [] },
-    scoreSell: { points: 0, lastUpdate: 0, events: [] },
-    marketBias: { "D": 'NEUTRAL', "240": 'NEUTRAL', "60": 'NEUTRAL', "15": 'NEUTRAL', "5": 'NEUTRAL' },
-    lastApproachAlert: 0,
-    lastSniperAlert: 0,
-    activeImpulseBuy: null,
-    activeImpulseSell: null,
-    activeMacroImpulseBuy: null,
-    activeMacroImpulseSell: null,
-    lastGatillo: undefined,
-    version: 0,
-    lastModified: 0
-});
-
-const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
-
-const TF_WEIGHT: Record<string, number> = {
-    '3': 0.5,    // 3M: medio punto (mucho ruido)
-    '5': 0.75,   // 5M: tres cuartos
-    '15': 1.0,   // 15M: base (gatillo principal)
-    '60': 1.5,   // 1H: 50% más
-    '240': 2.0,  // 4H: doble
-    'D': 3.0,    // Daily: triple
-};
-
-interface ActiveTrade {
-    tradeId: string;
-    journalId?: string;       
-    ticker: string;
-    direction: 'BUY' | 'SELL';
-    entryPrice: number;
-    tp1Price: number;         
-    tp2Price: number;         
-    slPrice: number;
-    originalSlPrice?: number; // 🆕 Precio del Stop Loss original antes de ser movido a Breakeven
-    targetSlPrice?: number;   // 🆕 Precio objetivo al que intentamos mover el SL en el broker
-    targetSlPending?: boolean; // 🆕 Indica si hay una orden de mover el SL pendiente
-    targetSlRetries?: number;  // 🆕 Contador de reintentos
-    tp1Hit: boolean;          
-    tp2Hit: boolean;          
-    slHalfwayHit?: boolean;   // 🆕 Indica si ya se movió el SL un 50% post-TP1
-    timestamp: number;
-    ctraderPositionId?: string; // 🆕 ID de la posición en cTrader para poder manejar Breakeven
-    score: number;            // 🆕 Puntaje de la señal para evaluación de Reversión (SAR)
-}
-
-const activeTrades = new Map<string, ActiveTrade>();
-
-// 🧠 NUEVA MEMORIA RAM (Evita lecturas/escrituras masivas en Firebase)
-const localRadarStates = new Map<string, RadarState>();
-const lastFirebaseSave = new Map<string, number>();
+import { 
+    evaluateGlobalRisk, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
+} from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
 let lastPingTime = 0;
@@ -191,44 +68,7 @@ let dynamicBotConfig = {
     maxSmartRiskPercent: 0.15      // 🔧 Límite de distancia al SL para forzar OTE en SMART mode
 };
 
-// 🆕 v6.0: Configuraciones por Activo + Sesión de Mercado
-const SessionSchema = z.object({
-    choch5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
-    choch15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
-    bos5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
-    bos15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional() }).optional(),
-    oteChoch5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
-    oteChoch15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
-    oteBos5m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
-    oteBos15m: z.object({ enabled: z.boolean(), minScore: z.number().optional(), minScoreBuy: z.number().optional(), minScoreSell: z.number().optional(), entryPercent: z.number().optional() }).optional(),
-    maxSellLosses: z.number().optional(),
-    maxBuyLosses: z.number().optional(),
-    slBufferPercent: z.number().optional(),
-    fixedRR: z.number().optional(),
-    maxSmartRiskPercent: z.number().optional()
-});
-
-const AssetSessionConfigSchema = z.object({
-    minPointsForBuy: z.coerce.number().optional(),
-    minPointsForSell: z.coerce.number().optional(),
-    slBufferPercent: z.coerce.number().optional(),
-    fixedRR: z.coerce.number().optional(),
-    oteEntryPercent: z.coerce.number().optional(),
-    entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH', 'SMART']).optional(),
-    autoTrading: z.boolean().optional(),
-    maxSmartRiskPercent: z.coerce.number().optional(),
-    enabled: z.boolean().optional(),
-    maxSellsPerDay: z.coerce.number().optional(),
-    sellScorePenalty: z.coerce.number().optional(),
-    maxBuysPerDay: z.coerce.number().optional(),
-    buyScorePenalty: z.coerce.number().optional(),
-    sessions: z.record(z.string(), SessionSchema).optional()
-}).passthrough();
-
-type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
-
-// Map: "BTCUSD_LONDON" -> config
-const assetSessionConfigs = new Map<string, AssetSessionConfig>();
+import { assetSessionConfigs } from '../engine/StateStore.js';
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
 function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
@@ -396,15 +236,13 @@ if (db) {
     }
 }
 
-const recentAlertCache = new Map<string, number>();
-const DEDUP_WINDOW_MS = 60000; 
-const lastSyncTime = new Map<string, number>();
-const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 120000, '60': 300000, '240': 600000, 'D': 900000 };
-const tickerLastSeen = new Map<string, number>();
-const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000;
+import {
+    recentAlertCache, lastSyncTime, tickerLastSeen, tickerLocks
+} from '../engine/StateStore.js';
 
-// 🛡️ v5.4: Lock por ticker para evitar race conditions (alertas duplicadas en mismo ms)
-const tickerLocks = new Map<string, Promise<void>>();
+const DEDUP_WINDOW_MS = 60000; 
+const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 120000, '60': 300000, '240': 600000, 'D': 900000 };
+const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function isDuplicate(fingerprint: string, nowMs: number): boolean {
     for (const [key, ts] of recentAlertCache) {
@@ -424,8 +262,6 @@ const parseTF = (tf: string) => {
     return `${tf}M`;
 };
 
-// 🆕 Helpers Dinámicos
-const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
 const getBuffer = (ticker: string, price: number) => (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 export const parseTVPrice = (str: string): number => {
@@ -463,338 +299,39 @@ async function sendTelegramAlert(message: string) {
     }
 }
 
-// --- Dynamic SL Buffer Calculator ---
-export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
-    const t = ticker.toUpperCase();
-    
-    // 1. Forex JPY Pairs (1 pip = 0.01)
-    if (t.includes('JPY')) {
-        return bufferConfig * 0.1; // e.g. 0.1 -> 0.01 (1 pip)
-    }
-    
-    // 2. Forex Majors/Minors (1 pip = 0.0001)
-    const forexPairs = ['EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
-    if (forexPairs.some(fiat => t.includes(fiat)) && !t.includes('BTC') && !t.includes('ETH')) {
-        return bufferConfig * 0.001; // e.g. 0.1 -> 0.0001 (1 pip)
-    }
-    
-    // 3. Indices
-    const indices = ['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'];
-    if (indices.some(idx => t.includes(idx))) {
-        return bufferConfig * 100; // e.g. 0.1 -> 10 points
-    }
-    
-    // 4. Metals (Gold)
-    if (t.includes('XAU') || t.includes('GOLD')) {
-        return bufferConfig * 10; // e.g. 0.1 -> $1
-    }
-    
-    // 5. Default / Crypto (Treat as Percentage)
-    return originPrice * (bufferConfig / 100);
-}
 
-function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number): ImpulseLeg | null {
-    if (!leg) return null;
-
-    // 🧹 Expiración: legs macro duran hasta 24 horas en RAM
-    const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;
-    if (leg.createdAt && (nowMs - leg.createdAt) > MAX_MACRO_LEG_AGE_MS) {
-        console.log(`[FIBO-MACRO] 🧹 Leg MACRO ${leg.dir} expirado por antigüedad.`);
-        return null;
-    }
-
-    let macroInvalidated = false;
-    
-    // Invalida si el precio rompe el origen
-    if (leg.dir === 'BUY' && lowPrice < leg.origin) macroInvalidated = true;
-    else if (leg.dir === 'SELL' && highPrice > leg.origin) macroInvalidated = true;
-
-    if (macroInvalidated) {
-        console.log(`[FIBO-MACRO] 🚫 Leg MACRO ${leg.dir} invalidado por ruptura de origen.`);
-        return null;
-    }
-
-    // Estirar extremo flexible
-    if (leg.dir === 'BUY' && highPrice > leg.extreme) {
-        leg.extreme = highPrice;
-    } else if (leg.dir === 'SELL' && lowPrice < leg.extreme) {
-        leg.extreme = lowPrice;
-    }
-
-    return leg;
-}
-
-function isInsideMacroOteZone(leg: ImpulseLeg | null | undefined, price: number): boolean {
-    if (!leg) return false;
-    const range = Math.abs(leg.extreme - leg.origin);
-    if (range === 0) return false;
-    
-    if (leg.dir === 'BUY') {
-        const oteBtm = leg.extreme - (range * 0.79);
-        const oteTop = leg.extreme - (range * 0.50); // Límite de descuento superior (50%)
-        return price >= oteBtm && price <= oteTop;
-    } else {
-        const oteBtm = leg.extreme + (range * 0.50);
-        const oteTop = leg.extreme + (range * 0.79);
-        return price >= oteBtm && price <= oteTop;
-    }
-}
 
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number, sessionThresholds: { buy: number; sell: number } | null = null) {
-    if (!leg) return { updatedLeg: null };
-    let impulseInvalidated = false;
-
     const config = getConfigForTicker(ticker, nowMs);
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
-
-    // 🔧 FIX 1: Stale leg cleaner — legs de más de 8 horas se invalidan automáticamente (Intradia)
-    const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
-    if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
-        console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
-        return { updatedLeg: null };
-    }
-
-    // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y el minScore de sesión, el leg se anula
-    const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-    const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
-    const minOppositeScore = sessionConfig?.choch?.minScore ?? 9;
     
-    if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
-        console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
-        return { updatedLeg: null };
-    }
+    const decision = evaluateImpulseCore(leg, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds, {
+        config, currentSession, sessionConfig
+    });
 
-    // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
-    const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
-    if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
-        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
-        return { updatedLeg: null };
-    }
-
-    // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
-    const range = Math.abs(leg.extreme - leg.origin);
-    const atrEstimate = range * 0.3;
-    const priceBeyondExtreme = leg.dir === 'BUY' 
-        ? (currentPrice > leg.extreme + atrEstimate) 
-        : (currentPrice < leg.extreme - atrEstimate);
-    if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
-        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
-        return { updatedLeg: null };
-    }
-
-    if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
-    else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
-
-    if (leg.dir === 'BUY' && lowPrice < leg.origin) impulseInvalidated = true;
-    else if (leg.dir === 'SELL' && highPrice > leg.origin) impulseInvalidated = true;
-
-    if (!impulseInvalidated) {
-        const range = Math.abs(leg.extreme - leg.origin);
-        // 🔧 FIX: minRange adaptado por tipo de ticker (mismo criterio que minImpulseRange)
-        let minRange: number;
-        if (ticker.includes('BTC') || ticker.includes('ETH')) {
-            minRange = currentPrice * 0.0003; // 0.03% para crypto
-        } else if (ticker.includes('JPY')) {
-            minRange = 0.015; // 1.5 pips para pares JPY
-        } else if (ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('SPX') || ticker.includes('DXY')) {
-            minRange = currentPrice * 0.0002; // 0.02% para índices
+    if (decision.newTrade) {
+        // 🔥 ESCUDO: Evaluar el trade contra el Modelo de Fricción (Prop Firm)
+        const frictionEval = evaluateNetTrade(decision.newTrade, nowMs);
+        
+        if (!frictionEval.approved) {
+            console.log(`[FRICTION] 🛡️ Trade RECHAZADO en ${ticker}: ${frictionEval.reason}`);
+            // Cancelar el gatillo de OTE
+            decision.triggerOte = false;
+            decision.oteData = null;
         } else {
-            minRange = 0.00010; // 1.0 pip para forex majors
-        }
-        const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
-        const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
-
-        let triggerTfStr = leg.chochEvents?.map(e => {
-            const parts = e.split('_');
-            return parts[parts.length - 1]; // "5M" or "15M"
-        }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
-        let triggerTf = triggerTfStr.toLowerCase(); // "5m" or "15m"
-
-        let activeOteEntryPercent = config.oteEntryPercent || 50;
-        if (sessionConfig) {
-            if (isChoch) {
-                const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
-                const tfConfig = sessionConfig[tfKey] as any;
-                if (tfConfig) {
-                    activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
-                } else if ((sessionConfig as any).oteChoch) {
-                    activeOteEntryPercent = (sessionConfig as any).oteChoch.entryPercent ?? config.oteEntryPercent ?? 50;
-                }
-            } else if (isBos) {
-                const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
-                const tfConfig = sessionConfig[tfKey] as any;
-                if (tfConfig) {
-                    activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
-                } else if ((sessionConfig as any).oteBos) {
-                    activeOteEntryPercent = (sessionConfig as any).oteBos.entryPercent ?? config.oteEntryPercent ?? 50;
-                }
-            } else {
-                activeOteEntryPercent = config.oteEntryPercent ?? 50;
+            const netTrade = frictionEval.netTrade;
+            if (frictionEval.frictionCostDetails) {
+                console.log(`[FRICTION] ✅ Trade Aprobado en ${ticker}. Detalles: ${frictionEval.frictionCostDetails}`);
             }
-        }
-
-        const fibRatio = activeOteEntryPercent / 100;
-        const entryLevel = leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio);
-
-        // 🔓 OTE entry: el leg fue creado por un CHoCH que ya pasó todos los filtros de puntaje.
-        // No re-validamos con leg.isValidated porque el reset del score borra los eventos
-        // de zona ANTES de llegar aquí, causando que el 90% de los legs queden isValidated=false.
-        // Si el leg existe y no fue invalidado por precio ni expiración, el OTE es válido.
-        // PERO: legs con < 8 chochPoints y sin validación se filtran (baja calidad).
-        
-        const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
-        
-        if (isEntryHit && !leg.oteScored) {
-
-            let oteEnabled = false;
-            let oteMinScore = 8;
-
-            if (sessionThresholds) {
-                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-                oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
-            } else if (sessionConfig) {
-                if (isChoch) {
-                    const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
-                    const tfConfig = sessionConfig[tfKey] as any;
-                    if (tfConfig) {
-                        oteEnabled = tfConfig.enabled ?? false;
-                        oteMinScore = leg.dir === 'BUY' 
-                            ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
-                            : (tfConfig.minScoreSell ?? tfConfig.minScore ?? 8);
-                    } else if ((sessionConfig as any).oteChoch) {
-                        oteEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
-                        oteMinScore = (sessionConfig as any).oteChoch.minScore ?? 8;
-                    }
-                } else if (isBos) {
-                    const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
-                    const tfConfig = sessionConfig[tfKey] as any;
-                    if (tfConfig) {
-                        oteEnabled = tfConfig.enabled ?? false;
-                        oteMinScore = leg.dir === 'BUY' 
-                            ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
-                            : (tfConfig.minScoreSell ?? tfConfig.minScore ?? 8);
-                    } else if ((sessionConfig as any).oteBos) {
-                        oteEnabled = (sessionConfig as any).oteBos.enabled ?? false;
-                        oteMinScore = (sessionConfig as any).oteBos.minScore ?? 8;
-                    }
-                } else {
-                    oteEnabled = false;
-                    oteMinScore = 8;
-                }
-            } else {
-                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-                oteMinScore = 8;
-            }
-
-            const totalPoints = (leg.chochPoints || 0) + 4;
-
-            if (sessionConfig && !sessionThresholds && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
-                if (!oteEnabled || totalPoints < oteMinScore) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
-                    return { updatedLeg: leg };
-                }
-            } else {
-                const MIN_OTE_POINTS = oteMinScore;
-                if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
-                    return { updatedLeg: leg };
-                }
-                if (!oteEnabled || totalPoints < oteMinScore) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
-                    return { updatedLeg: leg };
-                }
-            }
-
-            // 🛡️ Filtro R:R teórico del OTE (50%-79% de retroceso del impulso)
-            // El R:R se calcula sobre los niveles ESTRUCTURALES del OTE, no sobre el precio
-            // actual de la vela (que puede estar desviado del OTE exacto).
-            // A 50% retroceso: R:R = 1.0, a 79% retroceso: R:R = 3.76
-            const riskDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.21; // peor caso: 79% fib
-            const rewardDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.50; // 50% fib OTE
-            const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 1.0;
-            if (riskDistanceOTE === 0 || rrRatioOTE < 1.2) {
-                console.error(`[FIBO] ❌ R:R invalid: risk=${riskDistanceOTE}, reward=${rewardDistanceOTE}, ratio=${rrRatioOTE}`);
-                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
-                return { updatedLeg: leg };
-            }
-
-            const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
-            const tfFormatted = triggerTf.toUpperCase() || '5M';
-            const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
             
-            if (!activeScore.events.includes(eventName)) {
-                activeScore.events.push(eventName);
-                activeScore.points += 4;
-                activeScore.lastUpdate = nowMs;
-                leg.oteScored = true;
-                
-                const decimals = getDecimals(ticker);
-                // 🔧 FIX: Calculamos la distancia del stop loss usando el buffer dinámico por activo
-                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
-                const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
-                const stopLoss = adjustedSL.toFixed(decimals);
-                const tp1 = leg.extreme.toFixed(decimals);
-                const riskDist = Math.abs(currentPrice - adjustedSL);
-                // Aseguramos que TP2 sea siempre más ambicioso que TP1 para setups OTE
-                const oteTP2Limit = leg.dir === 'BUY'
-                    ? leg.extreme + (range * 0.27)
-                    : leg.extreme - (range * 0.27);
-                const fixedTP2 = leg.dir === 'BUY'
-                    ? Math.max(oteTP2Limit, currentPrice + (riskDist * config.fixedRR))
-                    : Math.min(oteTP2Limit, currentPrice - (riskDist * config.fixedRR));
-                const tp2 = fixedTP2.toFixed(decimals);
-
-                const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-                console.log(`[FIBO] 🎯 RETROCESO 50% CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
-
-                const bias240 = state.marketBias["240"] || 'NEUTRAL';
-                const bias60 = state.marketBias["60"] || 'NEUTRAL';
-                const bias15 = state.marketBias["15"] || 'NEUTRAL';
-                const getIconStr = (bias: string) => bias === 'BUY' ? '🟢' : bias === 'SELL' ? '🔴' : '⚪';
-                const fallbackReport = `🗺️ <b>Contexto Macro:</b>\n` +
-                    `${getIconStr(bias240)} 4H: ${bias240}\n` +
-                    `${getIconStr(bias60)} 1H: ${bias60}\n` +
-                    `${getIconStr(bias15)} 15M: ${bias15}\n\n` +
-                    `🎯 <b>Confluencia de Entrada:</b> Retroceso OTE 5M en nivel del 50% Fibo (Puntaje base: ${leg.chochPoints || 0} pts + OTE: +4 pts).`;
-
-                const oteData = {
-                    tradeId, 
-                    direction: leg.dir,
-                    dirText: leg.dir === 'BUY' ? 'COMPRA' : 'VENTA',
-                    stopLoss, tp1, tp2,
-                    entryPrice: currentPrice,
-                    points: (leg.chochPoints || 0) + 4, 
-                    events: [...(leg.chochEvents || []), eventName],
-                    confluenceReport: leg.chochReport || fallbackReport,
-                    bestZone: leg.bestZone || null,
-                    marketBias: { ...state.marketBias },
-                    tf: eventName.split('_').pop(),
-                    isChochEntry: false
-                };
-
-                const newTrade: ActiveTrade = {
-                    tradeId, ticker, direction: leg.dir,
-                    entryPrice: currentPrice,
-                    tp1Price: leg.extreme,
-                    tp2Price: fixedTP2,
-                    slPrice: adjustedSL,
-                    tp1Hit: false,
-                    tp2Hit: false,
-                    score: oteData.points || 0,
-                    timestamp: nowMs
-                };
-
-                // 💾 Sincronización en RAM y Firebase
-                activeTrades.set(tradeId, newTrade);
-                if (db) db.collection('active_trades').doc(tradeId).set(newTrade).catch(() => {});
-
-                return { updatedLeg: leg, triggerOte: true, oteData };
-            }
+            // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
+            activeTrades.set(netTrade.tradeId, netTrade);
+            if (db) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => {});
         }
     }
-    return { updatedLeg: impulseInvalidated ? null : leg };
+
+    return { updatedLeg: decision.updatedLeg, triggerOte: decision.triggerOte, oteData: decision.oteData };
 }
 
 /**
@@ -803,271 +340,46 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
  * Retorna true si hay un bloqueo activo (cuenta deshabilitada temporalmente para operar hoy).
  */
 async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
-    if (!globalPortfolioConfig.enabled) {
-        return false;
-    }
-
     const currentSession = getCurrentSession(nowMs);
-    if (globalPortfolioConfig.disabledSessions && globalPortfolioConfig.disabledSessions.includes(currentSession)) {
-        console.log(`[GLOBAL KILLSWITCH] ⛔ Sesión actual (${currentSession}) está deshabilitada globalmente.`);
-        return true;
-    }
-
-    if (nowMs < globalPortfolioKillswitchUntil) {
-        return true;
-    }
-
-    if (!db) return false;
-
-    try {
-        // Calcular la medianoche de hoy en Argentina (UTC-3)
-        // La medianoche en ART es a las 03:00:00 UTC
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now); // YYYY-MM-DD
-        const dateParts = argDateStr.split('-');
-        const year = parseInt(dateParts[0]);
-        const month = parseInt(dateParts[1]) - 1;
-        const day = parseInt(dateParts[2]);
-
-        const artMidnight = new Date(Date.UTC(year, month, day, 3, 0, 0));
-        const artMidnightMs = artMidnight.getTime();
-
-        // Consultar los trades de hoy
-        const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
-            .get();
-
-        if (snapshot.empty) {
-            return false;
-        }
-
-        // Mapear y ordenar ascendentemente por timestamp para evaluar rachas correctamente
-        const trades = snapshot.docs
-            .map((d: any) => d.data())
-            .filter((t: any) => t.mode !== 'backtesting' && t.result)
-            .sort((a: any, b: any) => a.timestamp - b.timestamp);
-
-        let totalTrades = trades.length;
-        let dailyPnLR = 0;
-        let peakPnLR = 0;
-        let consecutiveLosses = 0;
-        let maxConsecutiveLosses = 0;
-
-        for (const t of trades) {
-            let rMultiple = Number(t.rMultiple);
-            if (isNaN(rMultiple) || rMultiple === undefined) {
-                // Fallback si no está el rMultiple explícito
-                if (t.result === 'WIN') {
-                    rMultiple = 1.5;
-                } else if (t.result === 'LOSS') {
-                    rMultiple = -1.0;
-                } else {
-                    rMultiple = 0;
-                }
-            }
-
-            dailyPnLR += rMultiple;
-            if (dailyPnLR > peakPnLR) {
-                peakPnLR = dailyPnLR;
-            }
-
-            // Consideramos una pérdida si rMultiple es negativo (ej. <= -0.5R)
-            if (rMultiple < 0) {
-                consecutiveLosses++;
-                if (consecutiveLosses > maxConsecutiveLosses) {
-                    maxConsecutiveLosses = consecutiveLosses;
-                }
-            } else if (rMultiple > 0) {
-                // Se reinicia o reduce en racha (ej. TP1 exitosa o TP2 exitoso corta la racha)
-                consecutiveLosses = 0;
-            }
-        }
-
-        const trailingDrawdown = peakPnLR - dailyPnLR;
-
-        // Comprobación de límites
-        let isKilled = false;
-        let killReason = '';
-
-        if (globalPortfolioConfig.maxDailyLossR > 0 && dailyPnLR <= -globalPortfolioConfig.maxDailyLossR) {
-            isKilled = true;
-            killReason = `Max Daily Loss superado (-${globalPortfolioConfig.maxDailyLossR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
-        } else if (globalPortfolioConfig.dailyProfitTargetR > 0 && dailyPnLR >= globalPortfolioConfig.dailyProfitTargetR) {
-            isKilled = true;
-            killReason = `Daily Profit Target alcanzado (+${globalPortfolioConfig.dailyProfitTargetR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
-        } else if (globalPortfolioConfig.maxTradesPerDay > 0 && totalTrades >= globalPortfolioConfig.maxTradesPerDay) {
-            isKilled = true;
-            killReason = `Max Trades per Day superado (${globalPortfolioConfig.maxTradesPerDay} trades | Realizados: ${totalTrades})`;
-        } else if (globalPortfolioConfig.maxConsecutiveLosses > 0 && maxConsecutiveLosses >= globalPortfolioConfig.maxConsecutiveLosses) {
-            isKilled = true;
-            killReason = `Max Consecutive Losses superado (${globalPortfolioConfig.maxConsecutiveLosses} consecutivas | Racha: ${maxConsecutiveLosses})`;
-        } else if (globalPortfolioConfig.trailingDrawdownR > 0 && trailingDrawdown >= globalPortfolioConfig.trailingDrawdownR) {
-            isKilled = true;
-            killReason = `Trailing Drawdown superado (${globalPortfolioConfig.trailingDrawdownR}R | Drawdown: ${trailingDrawdown.toFixed(2)}R)`;
-        }
-
-        if (isKilled) {
-            // El bloqueo dura hasta el final de la sesión de hoy (23:59:59 ART de hoy)
-            const endOfDayMs = artMidnightMs + 24 * 60 * 60 * 1000 - 1000;
-            globalPortfolioKillswitchUntil = endOfDayMs;
-
-            const timeStr = new Date(endOfDayMs).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const res = await evaluateGlobalRisk(nowMs, globalPortfolioConfig, globalPortfolioKillswitchUntil, currentSession, db);
+    
+    if (res.isKilled) {
+        if (res.killUntilMs && res.killUntilMs > globalPortfolioKillswitchUntil) {
+            globalPortfolioKillswitchUntil = res.killUntilMs;
+            const timeStr = new Date(res.killUntilMs).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
             const warningMsg = `🚨 <b>[KILLSWITCH PORTAFOLIO GLOBAL]</b> 🚨\n\n` +
                 `⚠️ <b>Cuenta Bloqueada Temporalmente</b>\n` +
-                `📋 <b>Causa:</b> ${killReason}\n` +
+                `📋 <b>Causa:</b> ${res.killReason}\n` +
                 `⏳ <b>Duración:</b> Hasta el final del día de hoy (reseteo a medianoche ART - aprox ${timeStr})\n\n` +
                 `💡 <i>Las alertas en vivo Sniper OTE se filtrarán automáticamente y no se enviarán a ejecución para proteger el balance de la cuenta consolidada.</i>`;
-
+            
             sendTelegramAlert(warningMsg).catch(() => {});
-            console.log(`[KILLSWITCH GLOBAL] ⛔ Cuenta bloqueada. Causa: ${killReason}`);
-            return true;
+            console.log(`[KILLSWITCH GLOBAL] ⛔ Cuenta bloqueada. Causa: ${res.killReason}`);
         }
-
-        return false;
-    } catch (e: any) {
-        console.error('[KILLSWITCH GLOBAL] Error evaluando el riesgo unificado:', e.message);
-        return false;
+        return true;
     }
+    return false;
 }
 
 /**
  * 🆕 v7.1: Cuenta los trades SELL ejecutados hoy para un ticker específico.
- * Se usa para implementar el límite diario de operaciones en corto por activo.
- * Activos con sesgo alcista (NAS100, US500, etc.) pueden tener un cap de SELLs diarios
- * para evitar rachas perdedoras que activen el killswitch.
  */
 async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
-    try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const year = parseInt(dateParts[0]);
-        const month = parseInt(dateParts[1]) - 1;
-        const day = parseInt(dateParts[2]);
-        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
-
-        const tickerVariants = [ticker];
-        if (ticker.includes('NAS') || ticker.includes('US100')) {
-            tickerVariants.push('NAS100', 'US100');
-        }
-
-        const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
-            .where('direction', '==', 'SELL')
-            .get();
-
-        return snapshot.docs.filter((d: any) => {
-            const data = d.data();
-            const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
-            const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
-            return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
-        }).length;
-    } catch (e: any) {
-        return 0;
-    }
+    return await pmCountDailySells(db, ticker, nowMs, isBacktest, backtestSessionId);
 }
 
 /**
  * 🆕 v7.2: Cuenta los trades BUY ejecutados hoy para un ticker específico.
  */
 async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
-    try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const year = parseInt(dateParts[0]);
-        const month = parseInt(dateParts[1]) - 1;
-        const day = parseInt(dateParts[2]);
-        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
-
-        const tickerVariants = [ticker];
-        if (ticker.includes('NAS') || ticker.includes('US100')) {
-            tickerVariants.push('NAS100', 'US100');
-        }
-
-        const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
-            .where('direction', '==', 'BUY')
-            .get();
-
-        return snapshot.docs.filter((d: any) => {
-            const data = d.data();
-            const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
-            const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
-            return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
-        }).length;
-    } catch (e: any) {
-        return 0;
-    }
+    return await pmCountDailyBuys(db, ticker, nowMs, isBacktest, backtestSessionId);
 }
 
 /**
  * Cuenta las pérdidas consecutivas de un activo en la sesión y dirección actual para el día de hoy.
  */
 async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
-    try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const year = parseInt(dateParts[0]);
-        const month = parseInt(dateParts[1]) - 1;
-        const day = parseInt(dateParts[2]);
-        const artMidnightMs = new Date(Date.UTC(year, month, day, 3, 0, 0)).getTime();
-
-        const tickerVariants = [ticker];
-        if (ticker.includes('NAS') || ticker.includes('US100')) {
-            tickerVariants.push('NAS100', 'US100');
-        }
-
-        const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
-            .where('direction', '==', direction)
-            .get();
-
-        if (snapshot.empty) return 0;
-
-        const trades = snapshot.docs
-            .map((d: any) => d.data())
-            .filter((t: any) => {
-                const isMatchingTicker = tickerVariants.includes(t.ticker);
-                const isMatchingSession = t.session === session;
-                const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
-                const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
-                return modeMatch && sessionMatch && isMatchingTicker && isMatchingSession && t.result;
-            })
-            .sort((a: any, b: any) => a.timestamp - b.timestamp);
-
-        let streak = 0;
-        for (const t of trades) {
-            let rMultiple = Number(t.rMultiple);
-            if (isNaN(rMultiple) || rMultiple === undefined) {
-                if (t.result === 'WIN') {
-                    rMultiple = 1.5;
-                } else if (t.result === 'LOSS') {
-                    rMultiple = -1.0;
-                } else {
-                    rMultiple = 0;
-                }
-            }
-
-            if (rMultiple < 0) {
-                streak++;
-            } else if (rMultiple > 0) {
-                streak = 0;
-            }
-        }
-        return streak;
-    } catch (e: any) {
-        console.error('[STREAK LIMIT] Error contando pérdidas consecutivas:', e.message);
-        return 0;
-    }
+    return await countConsecutiveLossesForAsset(db, ticker, session, direction, nowMs, isBacktest, backtestSessionId);
 }
 
 export async function processTradingAlert(alertText: string) {
@@ -1252,7 +564,7 @@ export async function processTradingAlert(alertText: string) {
 
             // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice; 
-            const hasPreviousPrice = previousPrice !== null;
+            // Actualizar después de guardar la referencia
             // Actualizar después de guardar la referencia
             state.lastPrice = currentPrice;
             lastPingTime = nowMs; // 🏥 Healthcheck
@@ -1463,7 +775,7 @@ export async function processTradingAlert(alertText: string) {
                                     } else {
                                         console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
                                     }
-                                }).catch(err => {});
+                                }).catch(() => {});
                             }
                         }
                     }
