@@ -753,6 +753,31 @@ function processAlert(
     if (isDAgainst) totalPoints -= 2;
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
 
+    // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
+    let scoreMultiplier = 1.0;
+    const tradeDir = currentDirection;
+    const biasD = state.marketBias['D'] || state.marketBias['1D'];
+    const bias4H = state.marketBias['4H'] || state.marketBias['240'];
+    const bias1H = state.marketBias['1H'] || state.marketBias['60'];
+
+    let alignedTfs = 0;
+    let againstTfs = 0;
+
+    if (biasD === tradeDir) alignedTfs++;
+    else if (biasD && biasD !== tradeDir) againstTfs++;
+
+    if (bias4H === tradeDir) alignedTfs++;
+    else if (bias4H && bias4H !== tradeDir) againstTfs++;
+
+    if (bias1H === tradeDir) alignedTfs++;
+    else if (bias1H && bias1H !== tradeDir) againstTfs++;
+
+    if (alignedTfs >= 3) scoreMultiplier = 1.3;
+    else if (againstTfs >= 2) scoreMultiplier = 0.6;
+    else if (biasD && biasD !== tradeDir) scoreMultiplier = 0.8;
+
+    totalPoints = Math.floor(totalPoints * scoreMultiplier);
+
     // Crypto: reduce minPtsRequired by 1 (ported from live)
     const isCryptoTicker = ticker.includes('BTC') || ticker.includes('ETH');
     if (isCryptoTicker) minPtsRequired = Math.max(minPtsRequired - 1, 3);

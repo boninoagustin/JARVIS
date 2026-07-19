@@ -94,7 +94,7 @@ export function evaluateNetTrade(
 
     // Filtro Escudo: Si el RR después de comisiones y spread cae de 1.0, descartar trade.
     // Esto salva cuentas fondeadas de scalping extremo en temporalidades pequeñas.
-    if (netRR < 1.0) {
+    if (netRR < 0.2) {
         return {
             approved: false,
             netTrade: trade,
