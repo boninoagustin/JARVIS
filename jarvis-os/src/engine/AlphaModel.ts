@@ -1,4 +1,4 @@
-import { RadarZone, RadarState } from './Types.js';
+import type { RadarZone, RadarState } from './Types.js';
 
 export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
 
@@ -58,7 +58,7 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
     return originPrice * (bufferConfig / 100);
 }
 
-import { ImpulseLeg, ActiveTrade } from './Types.js';
+import type { ImpulseLeg, ActiveTrade } from './Types.js';
 
 export interface AlphaContext {
     config: any;
