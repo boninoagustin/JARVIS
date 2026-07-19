@@ -980,9 +980,14 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   };
 
   // --- FRICTION MODEL INTERCEPTION ---
-  const frictionResult = evaluateNetTrade({ ...trade, ticker: config.ticker } as any, nowMs);
+  const customFriction = {
+    baseSpreadPips: config.spreadPips !== undefined ? config.spreadPips : 0.1,
+    commissionPerLot: config.commissionPerLot !== undefined ? config.commissionPerLot : 3.0,
+    latencyMs: 50
+  };
+  const frictionResult = evaluateNetTrade({ ...trade, ticker: config.ticker } as any, nowMs, customFriction);
   if (!frictionResult.approved) {
-    // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 1.0)
+    // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 0.2)
     return;
   }
   
