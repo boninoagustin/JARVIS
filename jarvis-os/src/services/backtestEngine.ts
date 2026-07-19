@@ -955,7 +955,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   };
 
   // --- FRICTION MODEL INTERCEPTION ---
-  const frictionResult = evaluateNetTrade(trade as any, nowMs);
+  const frictionResult = evaluateNetTrade({ ...trade, ticker: config.ticker } as any, nowMs);
   if (!frictionResult.approved) {
     // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 1.0)
     return;
