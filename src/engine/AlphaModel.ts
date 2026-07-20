@@ -1,7 +1,7 @@
 import { RadarZone, RadarState, ImpulseLeg, ActiveTrade } from './Types.js';
 
 const DEBUG = false;
-const dbg = (...args: unknown[]) => { if (DEBUG) dbg(...args); };
+const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
 
 
 export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
@@ -119,7 +119,7 @@ export function evaluateImpulseCore(
 
     // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
     const range = Math.abs(leg.extreme - leg.origin);
-    const atrEstimate = range * 0.3;
+    const atrEstimate = state.atr14 ?? (range * 0.3);
     const priceBeyondExtreme = leg.dir === 'BUY' 
         ? (currentPrice > leg.extreme + atrEstimate) 
         : (currentPrice < leg.extreme - atrEstimate);
@@ -231,11 +231,17 @@ export function evaluateImpulseCore(
                 }
             }
 
-            const riskDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.21;
-            const rewardDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.50;
-            const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 1.0;
-            if (riskDistanceOTE === 0 || rrRatioOTE < 1.2) {
-                dbg(`[FIBO] ❌ R:R invalid: risk=${riskDistanceOTE}, reward=${rewardDistanceOTE}, ratio=${rrRatioOTE}`);
+            const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
+            const decimals = getDecimals(ticker);
+            const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
+            const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
+
+            const risk = Math.abs(entryFill - adjustedSL);
+            const reward = Math.abs(leg.extreme - entryFill); // TP1 = extreme
+            const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
+
+            if (risk <= 0 || rrRatioOTE < 1.2) {
+                dbg(`[FIBO] ❌ R:R invalid: risk=${risk}, reward=${reward}, ratio=${rrRatioOTE}`);
                 dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
                 return { updatedLeg: leg };
             }
@@ -250,18 +256,15 @@ export function evaluateImpulseCore(
                 activeScore.lastUpdate = nowMs;
                 leg.oteScored = true;
                 
-                const decimals = getDecimals(ticker);
-                const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
-                const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const tp1 = leg.extreme.toFixed(decimals);
-                const riskDist = Math.abs(currentPrice - adjustedSL);
+                const riskDist = risk;
                 const oteTP2Limit = leg.dir === 'BUY'
                     ? leg.extreme + (range * 0.27)
                     : leg.extreme - (range * 0.27);
                 const fixedTP2 = leg.dir === 'BUY'
-                    ? Math.max(oteTP2Limit, currentPrice + (riskDist * config.fixedRR))
-                    : Math.min(oteTP2Limit, currentPrice - (riskDist * config.fixedRR));
+                    ? Math.min(oteTP2Limit, entryFill + (riskDist * config.fixedRR))
+                    : Math.max(oteTP2Limit, entryFill - (riskDist * config.fixedRR));
                 const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -283,7 +286,7 @@ export function evaluateImpulseCore(
                     direction: leg.dir,
                     dirText: leg.dir === 'BUY' ? 'COMPRA' : 'VENTA',
                     stopLoss, tp1, tp2,
-                    entryPrice: currentPrice,
+                    entryPrice: entryFill,
                     points: (leg.chochPoints || 0) + 4, 
                     events: [...(leg.chochEvents || []), eventName],
                     confluenceReport: leg.chochReport || fallbackReport,
@@ -295,7 +298,7 @@ export function evaluateImpulseCore(
 
                 const newTrade: ActiveTrade = {
                     tradeId, ticker, direction: leg.dir,
-                    entryPrice: currentPrice,
+                    entryPrice: entryFill,
                     tp1Price: leg.extreme,
                     tp2Price: fixedTP2,
                     slPrice: adjustedSL,

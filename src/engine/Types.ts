@@ -47,6 +47,11 @@ export interface ImpulseLeg {
 }
 
 export interface RadarState {
+  vwapTs?: Record<string, number>;
+  biasTs?: Record<string, number>;
+  tickTimes?: number[];
+  densityMedian?: number;
+  atr14?: number;
     lastSyncDate: string | null;
     zones: RadarZone[];
     activeLocks: string[];

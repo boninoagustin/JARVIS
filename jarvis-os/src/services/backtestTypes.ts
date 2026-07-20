@@ -11,7 +11,7 @@ export interface BacktestTrade {
   resultTp1?: 'WIN' | 'LOSS' | 'TIMEOUT' | 'REVERSAL'; pnlTp1?: number;
   resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnlTp2?: number;
   tp1Hit?: boolean; slHalfwayHit?: boolean; closeTimestamp?: number; durationMin?: number;
-  rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number;
+  rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number; riskMult?: number;
   oteEntryUsed?: number;
   tf?: string;
   marketBias?: Record<string, string>;

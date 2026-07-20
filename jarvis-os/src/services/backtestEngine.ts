@@ -2,7 +2,7 @@ import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
-import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, calculateDynamicSlBuffer, SETUP_MEMORY_WINDOW_MS } from '../engine/AlphaModel';
+import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, SETUP_MEMORY_WINDOW_MS } from '../engine/AlphaModel';
 import { getPipValue } from '../engine/FrictionModel';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
@@ -22,6 +22,7 @@ export interface DailyStats {
   sellLossCount: number;
   buyLossCount: number;
   sessionTradeCount: number;
+  sessionExp?: Record<string, { n: number; sumR: number }>;
 }
 
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
@@ -32,15 +33,20 @@ function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats,
     dailyStats.peakPnlR = dailyStats.pnlR;
   }
   
-  if (trade.result === 'LOSS') {
+  if (trade.rMultiple < 0) {
     dailyStats.consecutiveLosses++;
     if (trade.direction === 'SELL') dailyStats.sellLossCount++;
     if (trade.direction === 'BUY') dailyStats.buyLossCount++;
-  } else if (trade.result === 'WIN' || trade.result === 'BE') {
+  } else if (trade.rMultiple > 0) {
     dailyStats.consecutiveLosses = 0;
     if (trade.direction === 'SELL') dailyStats.sellLossCount = 0;
     if (trade.direction === 'BUY') dailyStats.buyLossCount = 0;
   }
+  
+  if (!dailyStats.sessionExp) dailyStats.sessionExp = {};
+  const currentSession = dailyStats.currentSessionStr;
+  const e = (dailyStats.sessionExp[currentSession] ??= { n: 0, sumR: 0 });
+  e.n++; e.sumR += trade.rMultiple;
 
   if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
   if (config.dailyProfitTargetR && dailyStats.pnlR >= config.dailyProfitTargetR) dailyStats.isKilled = true;
@@ -270,11 +276,21 @@ function processAlert(
   const alertText = entry.line;
   const upperText = alertText.toUpperCase();
 
+  // --- TICK DENSITY (ACTIVITY PROXY) ---
+  state.tickTimes = (state.tickTimes ?? []).filter(t => nowMs - t < 3600000);
+  state.tickTimes.push(nowMs);
+  const density = state.tickTimes.length;
+  const a = 1 / 50;
+  state.densityMedian = state.densityMedian === undefined ? density 
+    : state.densityMedian + a * (density - state.densityMedian);
+
   // Extract VWAP status globally for the event timeframe
   const vwapMatch = upperText.match(/VWAP:\s*(UNDER|OVER)/);
   if (vwapMatch && eventTf) {
     if (!state.vwapStatus) state.vwapStatus = {};
+    if (!state.vwapTs) state.vwapTs = {};
     state.vwapStatus[eventTf] = vwapMatch[1];
+    state.vwapTs[eventTf] = nowMs;
   }
   const ticker = config.ticker;
   const todayStr = getArgentinaDayStr(nowMs);
@@ -308,7 +324,11 @@ function processAlert(
     if (!alertText.includes('Payload:')) return;
     const sourceTf = eventTf;
 
-    if (p.trendMatch) state.marketBias[sourceTf] = p.trendMatch;
+    if (p.trendMatch) {
+      if (!state.biasTs) state.biasTs = {};
+      state.marketBias[sourceTf] = p.trendMatch;
+      state.biasTs[sourceTf] = nowMs;
+    }
 
     try {
       const rawZones = p.rawZones as Record<string, unknown>[];
@@ -332,6 +352,10 @@ function processAlert(
     const currentPrice = p.currentPrice;
     const highPrice = p.highPrice !== undefined ? p.highPrice : currentPrice;
     const lowPrice = p.lowPrice !== undefined ? p.lowPrice : currentPrice;
+
+    const tr = highPrice - lowPrice;
+    const alpha = 1 / 14;
+    state.atr14 = state.atr14 === undefined ? tr : state.atr14 + alpha * (tr - state.atr14);
 
     const previousPrice = state.lastPrice;
     state.lastPrice = currentPrice;
@@ -364,22 +388,49 @@ function processAlert(
       // 🆕 COSTOS DE TRANSACCIÓN / SPREAD (Mejora 6)
       // pipSize comes from runBacktest
 
-      // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
-      if (trade.tp1Hit && !trade.slHalfwayHit) {
-        const distEntryToTp1 = Math.abs(trade.tp1Price - trade.entryPrice);
-        const halfwayPrice = trade.direction === 'BUY'
-          ? trade.tp1Price + (distEntryToTp1 * 0.5)
-          : trade.tp1Price - (distEntryToTp1 * 0.5);
+      // 1) SL con niveles de apertura de barra (path desconocido => peor caso)
+      const slAtBarOpen = trade.slPrice;
+      const slHitFirst = trade.direction === 'BUY' ? lowPrice <= slAtBarOpen : highPrice >= slAtBarOpen;
+      if (slHitFirst) {
+        const isPartialClose = trade.tp1Hit;
+        const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
+        const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
+        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
+        const finalResult = finalPnlPct > 0 ? 'WIN' : finalPnlPct === 0 ? 'BE' : 'LOSS';
 
-        const halfwayHit = trade.direction === 'BUY'
-          ? highPrice >= halfwayPrice
-          : lowPrice <= halfwayPrice;
-
-        if (halfwayHit) {
-          trade.slHalfwayHit = true;
-          trade.slPrice = trade.entryPrice;
+        trade.result = finalResult;
+        trade.pnl = finalPnlPct;
+        trade.resultTp2 = finalResult;
+        trade.pnlTp2 = finalPnlPct;
+        
+        const originalSl = trade.originalSlPrice ?? trade.slPrice;
+        const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+        
+        // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
+        const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+        const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
+        
+        const grossR = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
+        trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+        
+        if (!isPartialClose) {
+          trade.resultTp1 = 'LOSS';
+          trade.pnlTp1 = -initialSlLossPct;
+          trade.rMultipleTp1 = undefined; // Don't show confusing -50 in TP1
+          trade.rMultipleTp2 = undefined; // Don't show confusing -50 in TP2
+        } else {
+          trade.rMultipleTp2 = 0.0;
         }
+
+        trade.closeTimestamp = nowMs;
+        trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
+        activeTrades.delete(tradeId);
+        updateDailyStatsFromClose(trade, dailyStats, config);
+        continue;
       }
+
+      // 2) solo si no hubo SL: TP1, trailing BE, TP2
+
 
       // TP1
       if (!trade.tp1Hit) {
@@ -393,7 +444,7 @@ function processAlert(
             
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultipleTp1 = slLossPct > 0 ? (trade.pnlTp1 / slLossPct) * 0.5 : 0.5;
+          trade.rMultipleTp1 = (slLossPct > 0 ? (trade.pnlTp1 / slLossPct) * 0.5 : 0.5) * (trade.riskMult || 1.0);
         }
       }
 
@@ -417,9 +468,9 @@ function processAlert(
           const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
           
           const grossR = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
-          trade.rMultiple = grossR - transactionCostR;
+          trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
           
-          trade.rMultipleTp2 = initialSlLossPct > 0 ? (pnlTp2 / initialSlLossPct) * 0.5 : 0.75;
+          trade.rMultipleTp2 = (initialSlLossPct > 0 ? (pnlTp2 / initialSlLossPct) * 0.5 : 0.75) * (trade.riskMult || 1.0);
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -428,50 +479,12 @@ function processAlert(
         }
       }
 
-      // SL
-      const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
-      if (slHit) {
-        const isPartialClose = trade.tp1Hit;
-        const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
-        const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
-        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
-        const finalResult = finalPnlPct > 0 ? 'WIN' : finalPnlPct === 0 ? 'BE' : 'LOSS';
 
-        trade.result = finalResult;
-        trade.pnl = finalPnlPct;
-        trade.resultTp2 = finalResult;
-        trade.pnlTp2 = finalPnlPct;
-        
-        const originalSl = trade.originalSlPrice ?? trade.slPrice;
-        const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-        
-        // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
-        const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
-        const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
-        
-        const grossR = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
-        trade.rMultiple = grossR - transactionCostR;
-        
-        if (!isPartialClose) {
-          trade.resultTp1 = 'LOSS';
-          trade.pnlTp1 = -initialSlLossPct;
-          trade.rMultipleTp1 = undefined; // Don't show confusing -50 in TP1
-          trade.rMultipleTp2 = undefined; // Don't show confusing -50 in TP2
-        } else {
-          trade.rMultipleTp2 = 0.0;
-        }
-
-        trade.closeTimestamp = nowMs;
-        trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
-        activeTrades.delete(tradeId);
-        updateDailyStatsFromClose(trade, dailyStats, config);
-        continue;
-      }
 
     }
 
     // Zone touching (scoring)
-    const buffer = getBuffer(ticker, currentPrice);
+    const buffer = Math.max(getBuffer(ticker, currentPrice), (state.atr14 ?? 0) * 0.25);
     const validZones: RadarZone[] = [];
     for (const zone of state.zones) {
       if (zone.createdAt && (nowMs - zone.createdAt) >= (MAX_ZONE_AGE_MS[zone.tf || '60'] || 14400000)) continue;
@@ -509,7 +522,9 @@ function processAlert(
   let addedPoints = 0;
 
   if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
+    if (!state.biasTs) state.biasTs = {};
     state.marketBias[eventTf] = currentDirection;
+    state.biasTs[eventTf] = nowMs;
 
     if (eventTf === '5' || eventTf === '15') {
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
@@ -554,8 +569,13 @@ function processAlert(
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
               if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
-                if (newOrigin > trade.slPrice) {
-                  trade.slPrice = newOrigin;
+                const structuralBuffer = Math.max(
+                  2 * (config.spreadPips ?? 0.1) * pipSize,
+                  Math.abs(actualPrice - newOrigin) * 0.075
+                );
+                const trailedSL = newOrigin - structuralBuffer;
+                if (trailedSL > trade.slPrice) {
+                  trade.slPrice = trailedSL;
                 }
               }
             }
@@ -564,8 +584,13 @@ function processAlert(
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
               if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
-                if (newOrigin < trade.slPrice) {
-                  trade.slPrice = newOrigin;
+                const structuralBuffer = Math.max(
+                  2 * (config.spreadPips ?? 0.1) * pipSize,
+                  Math.abs(actualPrice - newOrigin) * 0.075
+                );
+                const trailedSL = newOrigin + structuralBuffer;
+                if (trailedSL < trade.slPrice) {
+                  trade.slPrice = trailedSL;
                 }
               }
             }
@@ -623,8 +648,16 @@ function processAlert(
   }
   else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
     if (!activeScore.events.includes(`Sweep_${readableTf}`)) {
-      if (upperText.includes('ABSORCION')) { addedPoints = 6; activeScore.events.push(`🩸_V-Shape_Absorb_${readableTf}`); }
-      else { addedPoints = 3; activeScore.events.push(`Sweep_${readableTf}`); }
+      if (upperText.includes('ABSORCION') && density >= state.densityMedian) { 
+        addedPoints = 6; 
+        activeScore.events.push(`🩸_V-Shape_Absorb_${readableTf}`); 
+      } else if (upperText.includes('ABSORCION')) { 
+        addedPoints = 3; 
+        activeScore.events.push(`Sweep_${readableTf}`); // sin confirmación de actividad       
+      } else { 
+        addedPoints = 3; 
+        activeScore.events.push(`Sweep_${readableTf}`); 
+      }
     }
   }
   else if (prefix === 'HEARTBEAT') {
@@ -660,19 +693,25 @@ function processAlert(
   if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) {
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
 
-    const isMacroAligned = (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
-    const isDAgainst = state.marketBias['D'] !== currentDirection && state.marketBias['D'] !== 'NEUTRAL';
-    const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
-    const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
+    const BIAS_TTL: Record<string, number> = { '60': 8*3600e3, '240': 48*3600e3, '1D': 120*3600e3, 'D': 120*3600e3, '4H': 48*3600e3, '1H': 8*3600e3 };
+    const freshBias = (tf: string) => (nowMs - (state.biasTs?.[tf] ?? 0) < (BIAS_TTL[tf] ?? 24*3600e3)) ? state.marketBias?.[tf] : undefined;
+    const mb240 = freshBias('240'); const mb60 = freshBias('60'); const mbD = freshBias('D') || freshBias('1D');
+    
+    const isMacroAligned = (mb240 === currentDirection) || (mb60 === currentDirection);
+    const isDAgainst = mbD !== undefined && mbD !== currentDirection && mbD !== 'NEUTRAL';
+    const is4HAgainst = mb240 !== undefined && mb240 !== currentDirection && mb240 !== 'NEUTRAL';
+    const is1HAgainst = mb60 !== undefined && mb60 !== currentDirection && mb60 !== 'NEUTRAL';
     const baseBiasPoints = isMacroAligned ? 5 : 0;
 
     let vwapBonus = 0;
     let vwapPenalty = 0;
 
-    state.vwapStatus = state.vwapStatus || {};
-    const vwap15m = state.vwapStatus['15'] || (upperText.match(/VWAP:\s*(UNDER|OVER)/)?.[1]);
-    const vwap1H = state.vwapStatus['60'];
-    const vwap4H = state.vwapStatus['240'];
+    const VWAP_TTL: Record<string, number> = { '15': 2*3600e3, '60': 8*3600e3, '240': 48*3600e3 };
+    const freshVwap = (tf: string) => (nowMs - (state.vwapTs?.[tf] ?? 0) < (VWAP_TTL[tf] ?? 4*3600e3)) ? state.vwapStatus?.[tf] : undefined;
+    
+    const vwap15m = freshVwap('15') || (upperText.match(/VWAP:\s*(UNDER|OVER)/)?.[1]);
+    const vwap1H = freshVwap('60');
+    const vwap4H = freshVwap('240');
 
     if (currentDirection === 'BUY') {
       if (vwap15m === 'UNDER') vwapBonus += 2;
@@ -687,8 +726,8 @@ function processAlert(
     }
 
     // Apply Anti-Bias Filters
-    const session = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[session] || config.sessions?.['OFF'];
+    
+    const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
     if (currentDirection === 'SELL') {
       if (sessionConfig?.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0 && dailyStats.sellLossCount >= sessionConfig.maxSellLosses) return;
     } else if (currentDirection === 'BUY') {
@@ -699,7 +738,7 @@ function processAlert(
     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
     const chOrigin = activeLeg ? activeLeg.origin : null;
     const chExtreme = activeLeg ? activeLeg.extreme : null;
-    const spatialBuffer = getBuffer(ticker, chOrigin ?? state.lastPrice ?? 0);
+    const spatialBuffer = Math.max(getBuffer(ticker, chOrigin ?? state.lastPrice ?? 0), (state.atr14 ?? 0) * 0.25);
 
     let hasSpatialBacking = false;
     let spatialBonus = 0;
@@ -803,9 +842,9 @@ function processAlert(
     // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
     let scoreMultiplier = 1.0;
     const tradeDir = currentDirection;
-    const biasD = state.marketBias['D'] || state.marketBias['1D'];
-    const bias4H = state.marketBias['4H'] || state.marketBias['240'];
-    const bias1H = state.marketBias['1H'] || state.marketBias['60'];
+    const biasD = freshBias('D') || freshBias('1D');
+    const bias4H = freshBias('4H') || freshBias('240');
+    const bias1H = freshBias('1H') || freshBias('60');
 
     let alignedTfs = 0;
     let againstTfs = 0;
@@ -825,12 +864,18 @@ function processAlert(
 
     totalPoints = Math.floor(totalPoints * scoreMultiplier);
 
+    
+    const se = dailyStats.sessionExp?.[currentSession];
+    if (se && se.n >= 10 && se.sumR / se.n < 0) {
+      totalPoints = Math.floor(totalPoints * 0.8);
+    }
+
     // Crypto: reduce minPtsRequired by 1 (ported from live)
     const isCryptoTicker = ticker.includes('BTC') || ticker.includes('ETH');
     if (isCryptoTicker) minPtsRequired = Math.max(minPtsRequired - 1, 3);
 
-    // Consecutive losses escalation (ported from live)
-    if (dailyStats.consecutiveLosses >= 2) minPtsRequired += 2;
+    // Escalado de umbral removido: la calidad de la señal debe ser constante.
+    // Usaremos riskMult (Anti-martingala inversa) en su lugar.
 
     // Validate leg
     
@@ -849,11 +894,14 @@ function processAlert(
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
-        const activeSlBufferPercent = 0; // SL Buffer only applies to OTE entries
+        const structuralBuffer = Math.max(
+          2 * (config.spreadPips ?? 0.1) * pipSize,
+          (state.atr14 ?? 0) * 0.5
+        );
+        const adjustedSL = currentDirection === 'BUY'
+          ? activeLeg.origin - structuralBuffer
+          : activeLeg.origin + structuralBuffer;
         const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
-
-        const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, activeSlBufferPercent);
-        const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
         const stopLoss = adjustedSL.toFixed(decimals);
         const currentPrice = state.lastPrice || (currentDirection === 'BUY' ? activeLeg.extreme : activeLeg.extreme);
         const riskDist = Math.abs(currentPrice - adjustedSL);
@@ -864,7 +912,7 @@ function processAlert(
         const fixedTP2 = currentDirection === 'BUY'
           ? currentPrice + (riskDist * activeFixedRR)
           : currentPrice - (riskDist * activeFixedRR);
-        const tp2 = fixedTP2.toFixed(decimals);
+        let tp2 = fixedTP2.toFixed(decimals);
         const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
         
         let takeChoch = false;
@@ -920,10 +968,11 @@ function processAlert(
                 else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
             }
             
-            let rrChoch = 3.0; // Default optimista
+            let rrChoch = 0; // sin zona opuesta no hay reward demostrable
             if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
                 const rewardDist = Math.abs(closestZonePrice - currentPrice);
-                rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
+                rrChoch = riskDist > 0 ? rewardDist / riskDist : 0;
+                tp2 = closestZonePrice.toFixed(decimals);
             }
         
             const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5;
@@ -976,6 +1025,10 @@ function processAlert(
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
   if (dailyStats.isKilled) return;
 
+  const riskMult = dailyStats.consecutiveLosses >= 3 ? 0.25 :
+                   dailyStats.consecutiveLosses >= 2 ? 0.5 : 1.0;
+  oteData.riskMult = riskMult;
+
   const currentSession = getSessionForTimestamp(nowMs);
   if (config.sessionFilter && config.sessionFilter.length > 0) {
       if (!config.sessionFilter.includes(currentSession)) return;
@@ -983,6 +1036,8 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   if (config.maxTradesPerSession && dailyStats.sessionTradeCount >= config.maxTradesPerSession) {
       return;
   }
+
+  if (isNewsBlackout(nowMs)) return;
 
   // 🛡️ ANTI-PYRAMIDACIÓN & SAR
   let existingTradeForTicker: BacktestTrade | undefined;
@@ -1033,6 +1088,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     grade: oteData.points >= 8 ? 'A+' : 'B',
     oteEntryUsed: oteData.oteEntryUsed,
     tf: oteData.tf,
+    riskMult: oteData.riskMult,
   };
 
   // --- FRICTION MODEL INTERCEPTION ---
@@ -1075,4 +1131,13 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   if (config.maxTradesPerDay && dailyStats.tradeCount >= config.maxTradesPerDay) {
     dailyStats.isKilled = true;
   }
+}
+
+export function isNewsBlackout(ts: number): boolean {
+  const d = new Date(ts);
+  const t = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const inW = (a: number, b: number) => t >= a && t <= b;
+  const usData = inW(12 * 60 + 25, 12 * 60 + 40) || inW(13 * 60 + 55, 14 * 60 + 10);
+  const nfp = d.getUTCDay() === 5 && d.getUTCDate() <= 7 && inW(12 * 60 + 20, 13 * 60);
+  return usData || nfp;
 }

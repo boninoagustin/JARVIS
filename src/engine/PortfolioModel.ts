@@ -9,6 +9,9 @@ export interface KillswitchResult {
     killReason?: string;
 }
 
+const riskCache = new Map<string, { at: number; result: any }>();
+const TTL = 5 * 60 * 1000;
+
 
 function getArgentinaMidnightMs(nowMs: number): number {
     const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -92,15 +95,19 @@ export async function evaluateGlobalRisk(
             killReason = `Trailing Drawdown superado (${globalPortfolioConfig.trailingDrawdownR}R | Drawdown: ${trailingDrawdown.toFixed(2)}R)`;
         }
 
+        let result = { isKilled: false } as KillswitchResult;
         if (isKilled) {
             const endOfDayMs = artMidnightMs + 24 * 60 * 60 * 1000 - 1000;
-            return { isKilled: true, killUntilMs: endOfDayMs, killReason };
+            result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
         }
 
-        return { isKilled: false };
+        riskCache.set('global', { at: nowMs, result });
+        return result;
     } catch (e: any) {
         console.error('[PortfolioModel] Error evaluando el riesgo unificado:', e.message);
-        return { isKilled: false };
+        const c = riskCache.get('global');
+        if (c && nowMs - c.at < TTL) return c.result;
+        return { isKilled: true, killReason: 'risk-data-unavailable: límites en fail-closed' };
     }
 }
 
@@ -117,14 +124,18 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
             .where('direction', '==', 'SELL')
             .get();
 
-        return snapshot.docs.filter((d: any) => {
+        const result = snapshot.docs.filter((d: any) => {
             const data = d.data();
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
             return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
+        riskCache.set(`sells_${ticker}`, { at: nowMs, result });
+        return result;
     } catch (e) {
-        return 0;
+        const c = riskCache.get(`sells_${ticker}`);
+        if (c && nowMs - c.at < TTL) return c.result;
+        return 999; // fail closed if no cache
     }
 }
 
@@ -141,14 +152,18 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
             .where('direction', '==', 'BUY')
             .get();
 
-        return snapshot.docs.filter((d: any) => {
+        const result = snapshot.docs.filter((d: any) => {
             const data = d.data();
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
             return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
+        riskCache.set(`buys_${ticker}`, { at: nowMs, result });
+        return result;
     } catch (e) {
-        return 0;
+        const c = riskCache.get(`buys_${ticker}`);
+        if (c && nowMs - c.at < TTL) return c.result;
+        return 999; // fail closed if no cache
     }
 }
 
@@ -190,9 +205,12 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
             if (rMultiple < 0) streak++;
             else if (rMultiple > 0) streak = 0;
         }
+        riskCache.set(`streak_${ticker}_${session}_${direction}`, { at: nowMs, result: streak });
         return streak;
     } catch (e) {
-        return 0;
+        const c = riskCache.get(`streak_${ticker}_${session}_${direction}`);
+        if (c && nowMs - c.at < TTL) return c.result;
+        return 999; // fail closed if no cache
     }
 }
 

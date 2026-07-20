@@ -101,13 +101,12 @@ export function evaluateNetTrade(
 
     const netRR = netRewardDistance / netRiskDistance;
 
-    // Filtro Escudo: Si el RR después de comisiones y spread cae de 1.0, descartar trade.
-    // Esto salva cuentas fondeadas de scalping extremo en temporalidades pequeñas.
-    if (netRR < 1.0) {
+    const MIN_NET_RR = 1.0; // break-even realista con win rate ~50% + costes
+    if (netRR < MIN_NET_RR) {
         return {
             approved: false,
             netTrade: trade,
-            reason: `Net R:R inaceptable (${netRR.toFixed(2)}). El SL es demasiado ajustado y el Broker absorbe casi toda la rentabilidad.`,
+            reason: `Net R:R inaceptable (${netRR.toFixed(2)} < ${MIN_NET_RR}). El Broker absorbe la rentabilidad.`,
             frictionCostDetails
         };
     }
