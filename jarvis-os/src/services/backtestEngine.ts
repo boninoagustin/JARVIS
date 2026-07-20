@@ -1,8 +1,9 @@
 import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
-  BacktestConfig, BacktestResult, LogEntry,
+  BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
-import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, calculateDynamicSlBuffer } from '../engine/AlphaModel';
+import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, calculateDynamicSlBuffer, SETUP_MEMORY_WINDOW_MS } from '../engine/AlphaModel';
+import { getPipValue } from '../engine/FrictionModel';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
@@ -24,49 +25,65 @@ export interface DailyStats {
 }
 
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
-  if (trade.rMultiple !== undefined) {
-    dailyStats.pnlR += trade.rMultiple;
-    if (dailyStats.pnlR > dailyStats.peakPnlR) {
-      dailyStats.peakPnlR = dailyStats.pnlR;
-    }
-    
-    if (trade.result === 'LOSS') {
-      dailyStats.consecutiveLosses++;
-      if (trade.direction === 'SELL') dailyStats.sellLossCount++;
-      if (trade.direction === 'BUY') dailyStats.buyLossCount++;
-    } else if (trade.result === 'WIN') {
-      dailyStats.consecutiveLosses = 0;
-      if (trade.direction === 'SELL') dailyStats.sellLossCount = 0;
-      if (trade.direction === 'BUY') dailyStats.buyLossCount = 0;
-    }
+  if (trade.rMultiple === undefined || Number.isNaN(trade.rMultiple)) return;
 
-    if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
-    if (config.dailyProfitTargetR && dailyStats.pnlR >= config.dailyProfitTargetR) dailyStats.isKilled = true;
-    if (config.maxConsecutiveLosses && dailyStats.consecutiveLosses >= config.maxConsecutiveLosses) dailyStats.isKilled = true;
-    if (config.trailingDrawdownR && (dailyStats.peakPnlR - dailyStats.pnlR) >= config.trailingDrawdownR) dailyStats.isKilled = true;
+  dailyStats.pnlR += trade.rMultiple;
+  if (dailyStats.pnlR > dailyStats.peakPnlR) {
+    dailyStats.peakPnlR = dailyStats.pnlR;
+  }
+  
+  if (trade.result === 'LOSS') {
+    dailyStats.consecutiveLosses++;
+    if (trade.direction === 'SELL') dailyStats.sellLossCount++;
+    if (trade.direction === 'BUY') dailyStats.buyLossCount++;
+  } else if (trade.result === 'WIN' || trade.result === 'BE') {
+    dailyStats.consecutiveLosses = 0;
+    if (trade.direction === 'SELL') dailyStats.sellLossCount = 0;
+    if (trade.direction === 'BUY') dailyStats.buyLossCount = 0;
+  }
+
+  if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
+  if (config.dailyProfitTargetR && dailyStats.pnlR >= config.dailyProfitTargetR) dailyStats.isKilled = true;
+  if (config.maxConsecutiveLosses && dailyStats.consecutiveLosses >= config.maxConsecutiveLosses) dailyStats.isKilled = true;
+  if (config.trailingDrawdownR && (dailyStats.peakPnlR - dailyStats.pnlR) >= config.trailingDrawdownR) dailyStats.isKilled = true;
+}
+
+
+const MAX_ZONE_AGE_MS: Record<string, number> = {
+  '3': 1800000, '5': 3600000, '15': 21600000,
+  '60': 28800000, '240': 86400000, 'D': 604800000,
+};
+
+// --- CSV PARSING ---
+export function* parseCSVLines(content: string): Generator<LogEntry> {
+  const seen = new Set<string>();
+  const rows = content.split(/\r?\n/);
+  for (const r of rows) {
+    if (r.trim().length === 0 || !r.includes(' | TS: ')) continue;
+    const firstComma = r.indexOf(',');
+    const line = firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    const tsMatch = line.match(/TS:\s*(\d+)/i);
+    const tfMatch = line.match(/TF:\s*([a-zA-Z0-9]+)/i);
+    yield {
+      line,
+      ts: tsMatch ? parseInt(tsMatch[1], 10) : 0,
+      tf: tfMatch ? tfMatch[1].toUpperCase() : '3',
+      parsed: preParseAlert(line)
+    };
   }
 }
 
-const SETUP_MEMORY_WINDOW_MS = 21600000;
-const MAX_ZONE_AGE_MS: Record<string, number> = { '3': 1800000, '15': 21600000, '60': 28800000, '240': 86400000 };
-
-// --- CSV PARSING ---
-export function parseCSV(content: string): { lines: string[]; detectedTF: string } {
-  const rows = content.split('\n').filter(l => l.trim().length > 0 && l.includes(' | TS: '));
-  const lines = rows.map(r => {
-    const firstComma = r.indexOf(',');
-    return firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
-  });
-  
-  // 🆕 DEDUPLICACIÓN DE LOGS: Elimina líneas idénticas (repetidas) del mismo archivo
-  const uniqueLines = Array.from(new Set(lines));
-
+export function parseCSV(content: string): { lines: LogEntry[]; detectedTF: string } {
+  const entries: LogEntry[] = [];
   let tf = '3';
-  for (const l of uniqueLines.slice(0, 10)) {
-    const m = l.match(/TF:\s*([a-zA-Z0-9]+)/i);
-    if (m) { tf = m[1].toUpperCase(); break; }
+  let first = true;
+  for (const entry of parseCSVLines(content)) {
+    if (first && entry.tf) { tf = entry.tf; first = false; }
+    entries.push(entry);
   }
-  return { lines: uniqueLines, detectedTF: tf };
+  return { lines: entries, detectedTF: tf };
 }
 
 // --- GET SESSION FOR TIMESTAMP ---
@@ -87,7 +104,7 @@ export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | '
 
 // --- MAIN BACKTEST RUNNER ---
 export function runBacktest(
-  logs: Map<string, string[]>,
+  logs: Map<string, (string | LogEntry)[]>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void
 ): BacktestResult {
@@ -108,38 +125,40 @@ export function runBacktest(
   };
 
   // 1. Parse all entries with timestamps
-  let validEntries = (globalThis as any)._cachedValidEntries;
-  if (!validEntries) {
-    const allEntries: LogEntry[] = [];
-    for (const [tf, lines] of logs.entries()) {
-      for (const line of lines) {
-        const tsMatch = line.match(/TS:\s*(\d+)/i);
-        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line, tf, parsed: preParseAlert(line) });
+  const allEntries: LogEntry[] = [];
+  for (const [tf, items] of logs.entries()) {
+    for (const item of items) {
+      if (typeof item === 'string') {
+        const tsMatch = item.match(/TS:\s*(\d+)/i);
+        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line: item, tf, parsed: preParseAlert(item) });
+      } else {
+        allEntries.push(item as LogEntry);
       }
     }
-    // 2. Sort chronologically
-    validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
-    (globalThis as any)._cachedValidEntries = validEntries;
   }
-  // 3. Pre-sync: process SYNC_ZONES first
-  let syncEntries = (globalThis as any)._cachedSyncEntries;
-  let restEntries = (globalThis as any)._cachedRestEntries;
-  if (!syncEntries || !restEntries) {
-      syncEntries = validEntries.filter((e: any) => e.line.includes('SYNC_ZONES'));
-      restEntries = validEntries.filter((e: any) => !e.line.includes('SYNC_ZONES'));
-      (globalThis as any)._cachedSyncEntries = syncEntries;
-      (globalThis as any)._cachedRestEntries = restEntries;
-  }
+  // 2. Sort chronologically
+  const validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
   
+  if (validEntries.length === 0) {
+    return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '' };
+  }
+
+  // 3. Pre-sync: process SYNC_ZONES first
+  const syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
+  const restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
+  
+  const initialPrice = validEntries.find(e => e.parsed?.currentPrice !== undefined)?.parsed?.currentPrice ?? 1;
+  const pipSize = getPipValue(config.ticker, initialPrice);
+
   for (const entry of syncEntries) {
-    processAlert(entry, entry.ts, state, config, trades, activeTrades, dailyStats);
+    processAlert(entry, entry.ts, state, config, trades, activeTrades, dailyStats, pipSize);
   }
 
   // 4. Process rest chronologically
   const total = restEntries.length;
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
-    processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats);
+    processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats, pipSize);
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
@@ -147,11 +166,26 @@ export function runBacktest(
     }
   }
 
-  // Close remaining active trades as BE (previously TIMEOUT)
-  for (const [, trade] of activeTrades) {
-    trade.result = 'BE';
-    trade.closeTimestamp = validEntries[validEntries.length - 1].ts;
+  // Close remaining active trades at closing price
+  const lastEntry = validEntries[validEntries.length - 1];
+  const closingPrice = state.lastPrice ?? lastEntry.parsed?.currentPrice;
+  if (closingPrice !== undefined) {
+    for (const [, trade] of activeTrades) {
+      const slDistance = Math.abs(trade.originalSlPrice! - trade.entryPrice);
+      const pnlDistance = trade.direction === 'BUY'
+        ? closingPrice - trade.entryPrice
+        : trade.entryPrice - closingPrice;
+      const pct = (pnlDistance / trade.entryPrice) * 100;
+      const r = slDistance > 0 ? pnlDistance / slDistance : 0;
+      trade.result = r > 0 ? 'WIN' : r === 0 ? 'BE' : 'LOSS';
+      trade.pnl = pct;
+      trade.rMultiple = r;
+      trade.closeTimestamp = lastEntry.ts;
+      trade.durationMin = Math.round((lastEntry.ts - trade.timestamp) / 60000);
+      updateDailyStatsFromClose(trade, dailyStats, config);
+    }
   }
+  activeTrades.clear();
 
   if (onProgress) onProgress(100, [...trades]);
 
@@ -166,7 +200,7 @@ export function runBacktest(
 
 // --- PROCESS SINGLE ALERT (ported from backend processTradingAlert) ---
 
-function preParseAlert(alertText: string): any {
+function preParseAlert(alertText: string): ParsedAlert | undefined {
   const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
   const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
   if (parts.length < 2) return undefined;
@@ -218,11 +252,17 @@ function preParseAlert(alertText: string): any {
   return parsed;
 }
 
+function getArgentinaDayStr(nowMs: number): string {
+  const d = new Date(nowMs - 3 * 3600 * 1000);
+  return d.toISOString().split('T')[0];
+}
+
 function processAlert(
   entry: LogEntry, nowMs: number, state: RadarState,
   config: BacktestConfig, trades: BacktestTrade[],
   activeTrades: Map<string, BacktestTrade>,
-  dailyStats: DailyStats
+  dailyStats: DailyStats,
+  pipSize: number
 ) {
   const p = entry.parsed;
   if (!p) return;
@@ -237,7 +277,7 @@ function processAlert(
     state.vwapStatus[eventTf] = vwapMatch[1];
   }
   const ticker = config.ticker;
-  const todayStr = new Date(nowMs).toISOString().split('T')[0];
+  const todayStr = getArgentinaDayStr(nowMs);
   const currentSession = getSessionForTimestamp(nowMs);
   const sessionId = `${todayStr}-${currentSession}`;
 
@@ -303,13 +343,13 @@ function processAlert(
     const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
     const ctx = { config, currentSession, sessionConfig };
 
-    const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
+    const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, ctx);
     state.activeImpulseBuy = buyRes.updatedLeg;
-    if (buyRes.newTrade && buyRes.oteData) createTrade({ ...buyRes.oteData, ...buyRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
+    if (buyRes.newTrade && buyRes.oteData) createTrade({ ...buyRes.oteData, ...buyRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config, state);
 
-    const sellRes = evaluateImpulseCore(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
+    const sellRes = evaluateImpulseCore(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, ctx);
     state.activeImpulseSell = sellRes.updatedLeg;
-    if (sellRes.newTrade && sellRes.oteData) createTrade({ ...sellRes.oteData, ...sellRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
+    if (sellRes.newTrade && sellRes.oteData) createTrade({ ...sellRes.oteData, ...sellRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config, state);
 
 
     // Evaluate macro impulse legs (1H/4H stretching)
@@ -322,11 +362,7 @@ function processAlert(
       if (tradeAge < 5000) continue;
 
       // 🆕 COSTOS DE TRANSACCIÓN / SPREAD (Mejora 6)
-      let pipSize = 0.0001;
-      const tUpper = ticker.toUpperCase();
-      if (tUpper.includes('JPY')) pipSize = 0.01;
-      else if (tUpper.includes('XAU') || tUpper.includes('GOLD')) pipSize = 0.1;
-      else if (tUpper.includes('BTC') || tUpper.includes('ETH') || tUpper.includes('US30') || tUpper.includes('NAS') || tUpper.includes('NDX') || tUpper.includes('SPX') || tUpper.includes('US500') || tUpper.includes('DJI')) pipSize = 1.0;
+      // pipSize comes from runBacktest
 
       // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
       if (trade.tp1Hit && !trade.slHalfwayHit) {
@@ -351,12 +387,9 @@ function processAlert(
         if (tp1Hit) {
           trade.tp1Hit = true;
           const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          
-          // 🆕 MOVER SL AL 50% DE REDUCCIÓN DE RIESGO POST-TP1
-          const riskDist = Math.abs(trade.entryPrice - trade.slPrice);
-          trade.slPrice = trade.direction === 'BUY'
-            ? trade.slPrice + (riskDist * 0.5)
-            : trade.slPrice - (riskDist * 0.5);
+          // Tras TP1: mitad de posición cerrada en TP1, SL de la mitad restante a BE
+          trade.slPrice = trade.entryPrice;
+          trade.slHalfwayHit = true;
             
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
@@ -381,7 +414,7 @@ function processAlert(
           
           // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
           const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
-          const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
+          const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
           
           const grossR = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
           trade.rMultiple = grossR - transactionCostR;
@@ -396,14 +429,13 @@ function processAlert(
       }
 
       // SL
-      const spreadAdjustmentPrice = (config.spreadPips || 0) * pipSize;
-      const slHit = trade.direction === 'BUY' ? lowPrice <= (trade.slPrice + spreadAdjustmentPrice) : highPrice >= (trade.slPrice - spreadAdjustmentPrice);
+      const slHit = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
       if (slHit) {
         const isPartialClose = trade.tp1Hit;
         const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
         const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
         const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
-        const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BE' : 'LOSS') : 'LOSS';
+        const finalResult = finalPnlPct > 0 ? 'WIN' : finalPnlPct === 0 ? 'BE' : 'LOSS';
 
         trade.result = finalResult;
         trade.pnl = finalPnlPct;
@@ -415,7 +447,7 @@ function processAlert(
         
         // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
         const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
-        const transactionCostR = riskPips > 0 ? ((config.spreadPips || 0) / riskPips) + ((config.commissionPerLot || 0) / (riskPips * 10)) : 0;
+        const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
         
         const grossR = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
         trade.rMultiple = grossR - transactionCostR;
@@ -440,7 +472,11 @@ function processAlert(
 
     // Zone touching (scoring)
     const buffer = getBuffer(ticker, currentPrice);
+    const validZones: RadarZone[] = [];
     for (const zone of state.zones) {
+      if (zone.createdAt && (nowMs - zone.createdAt) >= (MAX_ZONE_AGE_MS[zone.tf || '60'] || 14400000)) continue;
+      validZones.push(zone);
+
       if (currentPrice <= (zone.top + buffer) && currentPrice >= (zone.btm - buffer)) {
         const enteredFromAbove = previousPrice !== null && previousPrice > zone.top;
         const enteredFromBelow = previousPrice !== null && previousPrice < zone.btm;
@@ -463,9 +499,7 @@ function processAlert(
         }
       }
     }
-
-    // Zone age cleanup
-    state.zones = state.zones.filter(z => !z.createdAt || (nowMs - z.createdAt) < (MAX_ZONE_AGE_MS[z.tf || '60'] || 14400000));
+    state.zones = validZones;
     return;
   }
 
@@ -481,6 +515,14 @@ function processAlert(
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
       const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
       const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice || 0;
+      
+      // 🆕 FIX 2.5: Registrar explícitamente el CHOCH/BOS contrario en el score opuesto para permitir invalidación
+      const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+      const eventKey = `${prefix}_${readableTf}`;
+      if (!oppositeScore.events.includes(eventKey)) {
+        oppositeScore.events.push(eventKey);
+        oppositeScore.lastUpdate = nowMs;
+      }
 
       if (originMatch && actualPrice) {
         const newOrigin = parseFloat(originMatch[1]);
@@ -595,6 +637,10 @@ function processAlert(
     activeScore.lastUpdate = nowMs;
   }
 
+  // 🆕 FIX PERF: Limitar tamaño de arrays de eventos para evitar crecimiento infinito O(N)
+  if (state.scoreBuy.events.length > 50) state.scoreBuy.events = state.scoreBuy.events.slice(-50);
+  if (state.scoreSell.events.length > 50) state.scoreSell.events = state.scoreSell.events.slice(-50);
+
   // --- LATE RE-VALIDATION (ported from live) ---
   if (prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS' && currentDirection) {
     const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
@@ -681,7 +727,8 @@ function processAlert(
     }
 
     let triggerEnabled = false;
-    let minPtsRequired = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
+    const baseMin = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
+    let minPtsRequired = baseMin;
     
     if (sessionConfig) {
       const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
@@ -691,19 +738,19 @@ function processAlert(
         const tfConfig = sessionConfig[tfKeyChoch] as any;
         if (tfConfig) {
             triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = tfConfig.minScore ?? config.minBuyPoints;
+            minPtsRequired = tfConfig.minScore ?? baseMin;
         } else if ((sessionConfig as any).choch) {
             triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
-            minPtsRequired = (sessionConfig as any).choch.minScore ?? config.minBuyPoints;
+            minPtsRequired = (sessionConfig as any).choch.minScore ?? baseMin;
         }
       } else if (prefix === 'EVENTO_BOS') {
         const tfConfig = sessionConfig[tfKeyBos] as any;
         if (tfConfig) {
             triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = tfConfig.minScore ?? config.minBuyPoints;
+            minPtsRequired = tfConfig.minScore ?? baseMin;
         } else if ((sessionConfig as any).bos) {
             triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
-            minPtsRequired = (sessionConfig as any).bos.minScore ?? config.minBuyPoints;
+            minPtsRequired = (sessionConfig as any).bos.minScore ?? baseMin;
         }
       }
     } else {
@@ -796,7 +843,7 @@ function processAlert(
       );
       const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
       activeLeg.isValidated = efectiveValidation;
-      console.log("CALCULATING CHOCH POINTS:", { prefix, totalPoints, activeScorePoints: activeScore.points }); activeLeg.chochPoints = totalPoints;
+      activeLeg.chochPoints = totalPoints;
       activeLeg.chochEvents = [...activeScore.events, `${prefix}_${parseTF(eventTf)}`];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
@@ -909,7 +956,7 @@ function processAlert(
               stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_${readableTf}`],
               tf: readableTf
             };
-            createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config);
+            createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config, state);
         }
         
         if (disableOte) activeLeg.oteScored = true;
@@ -926,7 +973,7 @@ function processAlert(
 }
 
 // --- CREATE TRADE ---
-function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig) {
+function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
   if (dailyStats.isKilled) return;
 
   const currentSession = getSessionForTimestamp(nowMs);
@@ -950,6 +997,15 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     } else {
       if (oteData.points > existingTradeForTicker.points) {
         // Ejecutar SAR (Reversión)
+        const currentPrice = state.lastPrice ?? existingTradeForTicker.entryPrice;
+        const originalSl = existingTradeForTicker.originalSlPrice ?? existingTradeForTicker.slPrice;
+        const slDist = Math.abs(originalSl - existingTradeForTicker.entryPrice);
+        const pnlDist = existingTradeForTicker.direction === 'BUY'
+          ? currentPrice - existingTradeForTicker.entryPrice
+          : existingTradeForTicker.entryPrice - currentPrice;
+        
+        existingTradeForTicker.pnl = (pnlDist / existingTradeForTicker.entryPrice) * 100;
+        existingTradeForTicker.rMultiple = slDist > 0 ? pnlDist / slDist : 0;
         existingTradeForTicker.result = 'REVERSAL';
         existingTradeForTicker.resultTp2 = 'REVERSAL';
         if (!existingTradeForTicker.tp1Hit) existingTradeForTicker.resultTp1 = 'REVERSAL';
@@ -985,7 +1041,20 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     commissionPerLot: config.commissionPerLot !== undefined ? config.commissionPerLot : 3.0,
     latencyMs: 50
   };
-  const frictionResult = evaluateNetTrade({ ...trade, ticker: config.ticker } as any, nowMs, customFriction);
+  const activeLike = {
+    tradeId: trade.id,
+    ticker: config.ticker,
+    direction: trade.direction,
+    entryPrice: trade.entryPrice,
+    tp1Price: trade.tp1Price,
+    tp2Price: trade.tp2Price,
+    slPrice: trade.slPrice,
+    tp1Hit: false,
+    tp2Hit: false,
+    score: trade.points,
+    timestamp: trade.timestamp,
+  } as any; // Still cast as any since ActiveTrade is in backend types, but matches shape perfectly
+  const frictionResult = evaluateNetTrade(activeLike, nowMs, customFriction);
   if (!frictionResult.approved) {
     // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 0.2)
     return;

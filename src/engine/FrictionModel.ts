@@ -22,7 +22,7 @@ function getAssetClass(ticker: string): string {
     return 'FOREX';
 }
 
-function getPipValue(ticker: string, currentPrice: number): number {
+export function getPipValue(ticker: string, currentPrice: number): number {
     const assetClass = getAssetClass(ticker);
     if (assetClass === 'FOREX') {
         if (ticker.includes('JPY')) return 0.01;
@@ -72,14 +72,23 @@ export function evaluateNetTrade(
     const commissionPips = commissionRoundTurn / 10;
     const commissionCostInPrice = commissionPips * pipValue;
 
+    const frictionCostDetails = `Spread: ${activeSpreadPips.toFixed(2)} pips | Slip: ${slippagePips.toFixed(2)} pips | Com: ${commissionPips.toFixed(2)} pips (Total R:R Merma)`;
+
     // 4. Recalcular Beneficio Neto vs Riesgo Real
     const grossRiskDistance = Math.abs(trade.entryPrice - trade.slPrice);
+    const minRisk = Math.max(Number.EPSILON, pipValue * 0.5); // media unidad de precisión mínima
+    if (grossRiskDistance <= minRisk) {
+        return { 
+            approved: false, 
+            netTrade: trade, 
+            reason: 'Riesgo bruto insuficiente (SL demasiado cerca del entry).',
+            frictionCostDetails
+        };
+    }
     const netRiskDistance = grossRiskDistance + entryFriction + commissionCostInPrice;
     
     const grossRewardDistance = Math.abs(trade.tp1Price - trade.entryPrice);
     const netRewardDistance = grossRewardDistance - entryFriction - commissionCostInPrice;
-
-    const frictionCostDetails = `Spread: ${activeSpreadPips.toFixed(2)} pips | Slip: ${slippagePips.toFixed(2)} pips | Com: ${commissionPips.toFixed(2)} pips (Total R:R Merma)`;
 
     if (netRewardDistance <= 0) {
         return { 
@@ -105,6 +114,7 @@ export function evaluateNetTrade(
 
     const modifiedTrade = { ...trade };
     modifiedTrade.entryPrice = parseFloat(netEntryPrice.toFixed(decimals));
+    // SL y TP NO se modifican: son niveles de orden, la fricción actúa en el fill.
 
     return {
         approved: true,

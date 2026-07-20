@@ -3,13 +3,12 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
 
-import {
-    RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema
-} from '../engine/Types.js';
+import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema } from '../engine/Types.js';
+import { StateStore, createStateStore } from '../engine/StateStore.js';
 
-import {
-    activeTrades, localRadarStates, lastFirebaseSave
-} from '../engine/StateStore.js';
+export const globalState = createStateStore();
+
+
 
 import {
     emptyState, normalizeZone, SETUP_MEMORY_WINDOW_MS, TF_WEIGHT, evaluateImpulseCore, getDecimals, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone
@@ -22,14 +21,9 @@ import {
 } from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
-let lastPingTime = 0;
-export const getActiveTradeCount = () => activeTrades.size;
-export const getLastPingTime = () => lastPingTime;
+export const getActiveTradeCount = () => globalState.activeTrades.size;
+export const getLastPingTime = () => globalState.lastPingTime;
 
-let consecutiveLosses = 0; 
-let streakKillswitchUntil = 0;
-let vixKillswitchUntil = 0;
-let globalKillswitches: Record<string, boolean> = {};
 
 // 🆕 v7.0: Consolidación de Cuenta & Portfolio Global
 interface GlobalPortfolioConfig {
@@ -42,33 +36,10 @@ interface GlobalPortfolioConfig {
     disabledSessions?: string[]; // 🚫 Killswitch global de sesión
 }
 
-let globalPortfolioConfig: GlobalPortfolioConfig = {
-    maxDailyLossR: 0,
-    dailyProfitTargetR: 0,
-    maxTradesPerDay: 0,
-    maxConsecutiveLosses: 0,
-    trailingDrawdownR: 0,
-    enabled: false,
-    disabledSessions: []
-};
 
-let globalPortfolioKillswitchUntil = 0;
 
-let dynamicBotConfig = {
-    sniperCooldownMs: 180000,      // 🔧 v5.4: 3 min (antes 5 min) — se alinea con cierre de vela 3M. Un CHoCH válido
-                                   // puede completarse en 1-2 velas de 3M y ya estar listo para el siguiente.
-    minPointsForBuy: 5,           // 🔧 Bajado de 6 a 5: filtro de dirección ahora es más estricto
-    minPointsForSell: 5,          // 🔧 Bajado de 6 a 5: mismo criterio
-    baseRiskPercentage: 1.0,
-    slBufferPercent: 0.1,          // 🔧 v5.5: % extra más allá del origin para el SL (absorbe sweeps de liquidez)
-    fixedRR: 2.0,                  // 🔧 v5.6: R:R fijo para TP2 (2.0 = 2x el riesgo)
-    oteEntryPercent: 50,           // 🔧 Nivel de Fibonacci para entrada en OTE (50, 62, 79, etc)
-    entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART',
-    autoTrading: false,            // 🆕 Modo Automático (bypass confirmación de Telegram)
-    maxSmartRiskPercent: 0.15      // 🔧 Límite de distancia al SL para forzar OTE en SMART mode
-};
 
-import { assetSessionConfigs } from '../engine/StateStore.js';
+
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
 function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
@@ -92,7 +63,7 @@ function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
 }
 
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
-function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotConfig & { 
+function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.dynamicBotConfig & { 
     sessionEnabled: boolean;
     maxSellsPerDay: number;
     sellScorePenalty: number;
@@ -124,19 +95,19 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotCo
     
     // El nuevo AdminPanel guarda la configuración directamente bajo el ID del ticker (ej. NAS100)
     // y maneja las sesiones dentro del campo `sessions`.
-    const config = assetSessionConfigs.get(ticker) || assetSessionConfigs.get(`${ticker}_${session}`) || assetSessionConfigs.get(`${ticker}_ALL`);
+    const config = globalState.assetSessionConfigs.get(ticker) || globalState.assetSessionConfigs.get(`${ticker}_${session}`) || globalState.assetSessionConfigs.get(`${ticker}_ALL`);
     
     if (config) {
         console.log(`[CONFIG] 📋 Usando config de: ${ticker}`);
         const sessionConfig = config.sessions ? config.sessions[session] : undefined;
         return {
-            ...dynamicBotConfig,
-            minPointsForBuy: config.minPointsForBuy ?? dynamicBotConfig.minPointsForBuy,
-            minPointsForSell: config.minPointsForSell ?? dynamicBotConfig.minPointsForSell,
-            slBufferPercent: sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? dynamicBotConfig.slBufferPercent,
-            fixedRR: sessionConfig?.fixedRR ?? config.fixedRR ?? dynamicBotConfig.fixedRR,
-            oteEntryPercent: config.oteEntryPercent ?? dynamicBotConfig.oteEntryPercent,
-            entryTrigger: config.entryTrigger ?? dynamicBotConfig.entryTrigger,
+            ...globalState.dynamicBotConfig,
+            minPointsForBuy: config.minPointsForBuy ?? globalState.dynamicBotConfig.minPointsForBuy,
+            minPointsForSell: config.minPointsForSell ?? globalState.dynamicBotConfig.minPointsForSell,
+            slBufferPercent: sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? globalState.dynamicBotConfig.slBufferPercent,
+            fixedRR: sessionConfig?.fixedRR ?? config.fixedRR ?? globalState.dynamicBotConfig.fixedRR,
+            oteEntryPercent: config.oteEntryPercent ?? globalState.dynamicBotConfig.oteEntryPercent,
+            entryTrigger: config.entryTrigger ?? globalState.dynamicBotConfig.entryTrigger,
             sessionEnabled: config.enabled ?? true,
             maxSellsPerDay: config.maxSellsPerDay ?? 0,
             sellScorePenalty: config.sellScorePenalty ?? 0,
@@ -147,7 +118,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof dynamicBotCo
     }
     
     // Fallback
-    return { ...dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
+    return { ...globalState.dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
 }
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
@@ -157,28 +128,28 @@ if (db) {
     try {
         db.collection('active_trades').get().then((snap: any) => {
             snap.forEach((doc: any) => {
-                activeTrades.set(doc.id, doc.data() as ActiveTrade);
+                globalState.activeTrades.set(doc.id, doc.data() as ActiveTrade);
             });
-            console.log(`[RADAR] 🧠 Memoria restaurada: ${activeTrades.size} trades activos cargados.`);
+            console.log(`[RADAR] 🧠 Memoria restaurada: ${globalState.activeTrades.size} trades activos cargados.`);
         });
 
         unsubscribers.push(db.collection('app_settings').doc('global').onSnapshot((snap: any) => {
-            if (snap.exists) globalKillswitches = snap.data()?.killswitches || {};
+            if (snap.exists) globalState.globalKillswitches = snap.data()?.killswitches || {};
         }));
         unsubscribers.push(db.collection('app_settings').doc('bot_config').onSnapshot((snap: any) => {
             if (snap.exists) {
                 const data = snap.data() || {};
-                dynamicBotConfig = {
-                    sniperCooldownMs: Number(data.sniperCooldownMs) || dynamicBotConfig.sniperCooldownMs,
-                    minPointsForBuy: Number(data.minPointsForBuy) || dynamicBotConfig.minPointsForBuy,
-                    minPointsForSell: Number(data.minPointsForSell) || dynamicBotConfig.minPointsForSell,
-                    baseRiskPercentage: Number(data.baseRiskPercentage) || dynamicBotConfig.baseRiskPercentage,
-                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : dynamicBotConfig.slBufferPercent,
-                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : dynamicBotConfig.fixedRR,
-                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : dynamicBotConfig.oteEntryPercent,
-                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger,
-                    autoTrading: data.autoTrading !== undefined ? data.autoTrading : dynamicBotConfig.autoTrading,
-                    maxSmartRiskPercent: data.maxSmartRiskPercent !== undefined ? Number(data.maxSmartRiskPercent) : dynamicBotConfig.maxSmartRiskPercent
+                globalState.dynamicBotConfig = {
+                    sniperCooldownMs: Number(data.sniperCooldownMs) || globalState.dynamicBotConfig.sniperCooldownMs,
+                    minPointsForBuy: Number(data.minPointsForBuy) || globalState.dynamicBotConfig.minPointsForBuy,
+                    minPointsForSell: Number(data.minPointsForSell) || globalState.dynamicBotConfig.minPointsForSell,
+                    baseRiskPercentage: Number(data.baseRiskPercentage) || globalState.dynamicBotConfig.baseRiskPercentage,
+                    slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : globalState.dynamicBotConfig.slBufferPercent,
+                    fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : globalState.dynamicBotConfig.fixedRR,
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : globalState.dynamicBotConfig.oteEntryPercent,
+                    entryTrigger: data.entryTrigger || globalState.dynamicBotConfig.entryTrigger,
+                    autoTrading: data.autoTrading !== undefined ? data.autoTrading : globalState.dynamicBotConfig.autoTrading,
+                    maxSmartRiskPercent: data.maxSmartRiskPercent !== undefined ? Number(data.maxSmartRiskPercent) : globalState.dynamicBotConfig.maxSmartRiskPercent
                 };
             }
         }));
@@ -188,7 +159,7 @@ if (db) {
             snap.forEach(doc => {
                 if (doc.id === 'GLOBAL') {
                     const data = doc.data() || {};
-                    globalPortfolioConfig = {
+                    globalState.globalPortfolioConfig = {
                         maxDailyLossR: Number(data.maxDailyLossR) || 0,
                         dailyProfitTargetR: Number(data.dailyProfitTargetR) || 0,
                         maxTradesPerDay: Number(data.maxTradesPerDay) || 0,
@@ -197,7 +168,7 @@ if (db) {
                         enabled: data.enabled === true,
                         disabledSessions: Array.isArray(data.disabledSessions) ? data.disabledSessions : []
                     };
-                    console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalPortfolioConfig);
+                    console.log('[CONFIG] 🧠 Configuración del Portfolio Global cargada:', globalState.globalPortfolioConfig);
                     return;
                 }
                 const parsed = AssetSessionConfigSchema.safeParse(doc.data());
@@ -206,13 +177,13 @@ if (db) {
                     return;
                 }
                 const data = parsed.data;
-                assetSessionConfigs.set(doc.id, {
-                    minPointsForBuy: data.minPointsForBuy || dynamicBotConfig.minPointsForBuy,
-                    minPointsForSell: data.minPointsForSell || dynamicBotConfig.minPointsForSell,
-                    slBufferPercent: data.slBufferPercent !== undefined ? data.slBufferPercent : dynamicBotConfig.slBufferPercent,
-                    fixedRR: data.fixedRR !== undefined ? data.fixedRR : dynamicBotConfig.fixedRR,
-                    oteEntryPercent: data.oteEntryPercent !== undefined ? data.oteEntryPercent : dynamicBotConfig.oteEntryPercent,
-                    entryTrigger: data.entryTrigger || dynamicBotConfig.entryTrigger,
+                globalState.assetSessionConfigs.set(doc.id, {
+                    minPointsForBuy: data.minPointsForBuy || globalState.dynamicBotConfig.minPointsForBuy,
+                    minPointsForSell: data.minPointsForSell || globalState.dynamicBotConfig.minPointsForSell,
+                    slBufferPercent: data.slBufferPercent !== undefined ? data.slBufferPercent : globalState.dynamicBotConfig.slBufferPercent,
+                    fixedRR: data.fixedRR !== undefined ? data.fixedRR : globalState.dynamicBotConfig.fixedRR,
+                    oteEntryPercent: data.oteEntryPercent !== undefined ? data.oteEntryPercent : globalState.dynamicBotConfig.oteEntryPercent,
+                    entryTrigger: data.entryTrigger || globalState.dynamicBotConfig.entryTrigger,
                     enabled: data.enabled !== false, // default enabled
                     maxSellsPerDay: data.maxSellsPerDay || 0,
                     sellScorePenalty: data.sellScorePenalty || 0,
@@ -221,7 +192,7 @@ if (db) {
                     sessions: data.sessions as any
                 });
             });
-            const actualAssets = [...assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
+            const actualAssets = [...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
             console.log(`[CONFIG] 🧠 ${actualAssets.length} configs por activo+sesión cargadas:`, actualAssets.join(', '));
         }));
         
@@ -236,20 +207,18 @@ if (db) {
     }
 }
 
-import {
-    recentAlertCache, lastSyncTime, tickerLastSeen, tickerLocks
-} from '../engine/StateStore.js';
+
 
 const DEDUP_WINDOW_MS = 60000; 
 const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 120000, '60': 300000, '240': 600000, 'D': 900000 };
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function isDuplicate(fingerprint: string, nowMs: number): boolean {
-    for (const [key, ts] of recentAlertCache) {
-        if (nowMs - ts > DEDUP_WINDOW_MS) recentAlertCache.delete(key);
+    for (const [key, ts] of globalState.recentAlertCache) {
+        if (nowMs - ts > DEDUP_WINDOW_MS) globalState.recentAlertCache.delete(key);
     }
-    if (recentAlertCache.has(fingerprint)) return true;
-    recentAlertCache.set(fingerprint, nowMs);
+    if (globalState.recentAlertCache.has(fingerprint)) return true;
+    globalState.recentAlertCache.set(fingerprint, nowMs);
     return false;
 }
 
@@ -301,12 +270,12 @@ async function sendTelegramAlert(message: string) {
 
 
 
-function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number, sessionThresholds: { buy: number; sell: number } | null = null) {
+function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
     const config = getConfigForTicker(ticker, nowMs);
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
     
-    const decision = evaluateImpulseCore(leg, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds, {
+    const decision = evaluateImpulseCore(leg, currentPrice, highPrice, lowPrice, ticker, state, nowMs, {
         config, currentSession, sessionConfig
     });
 
@@ -326,7 +295,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             }
             
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
-            activeTrades.set(netTrade.tradeId, netTrade);
+            globalState.activeTrades.set(netTrade.tradeId, netTrade);
             if (db) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => {});
         }
     }
@@ -341,11 +310,11 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
  */
 async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
     const currentSession = getCurrentSession(nowMs);
-    const res = await evaluateGlobalRisk(nowMs, globalPortfolioConfig, globalPortfolioKillswitchUntil, currentSession, db);
+    const res = await evaluateGlobalRisk(nowMs, globalState.globalPortfolioConfig, globalState.globalPortfolioKillswitchUntil, currentSession, db);
     
     if (res.isKilled) {
-        if (res.killUntilMs && res.killUntilMs > globalPortfolioKillswitchUntil) {
-            globalPortfolioKillswitchUntil = res.killUntilMs;
+        if (res.killUntilMs && res.killUntilMs > globalState.globalPortfolioKillswitchUntil) {
+            globalState.globalPortfolioKillswitchUntil = res.killUntilMs;
             const timeStr = new Date(res.killUntilMs).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
             const warningMsg = `🚨 <b>[KILLSWITCH PORTAFOLIO GLOBAL]</b> 🚨\n\n` +
                 `⚠️ <b>Cuenta Bloqueada Temporalmente</b>\n` +
@@ -440,24 +409,24 @@ export async function processTradingAlert(alertText: string) {
     }
 
     // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
-    if (globalKillswitches['GLOBAL_SYSTEM']) {
-        if (ticker === 'BTCUSD' && !globalKillswitches['BTCUSD']) {
+    if (globalState.globalKillswitches['GLOBAL_SYSTEM']) {
+        if (ticker === 'BTCUSD' && !globalState.globalKillswitches['BTCUSD']) {
             console.log(`[RADAR] 🤖 Master Killswitch activo, pero permitiendo BTCUSD de forma excepcional.`);
         } else {
             console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada debido a que el BOT GLOBAL está APAGADO.`);
             return;
         }
-    } else if (globalKillswitches[ticker]) {
+    } else if (globalState.globalKillswitches[ticker]) {
         console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada por killswitch individual activo.`);
         return;
     }
 
     // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
     // Dos PINGs del mismo ticker se procesan secuencialmente, no en paralelo
-    const previousLock = tickerLocks.get(ticker) || Promise.resolve();
+    const previousLock = globalState.tickerLocks.get(ticker) || Promise.resolve();
     let releaseLock: () => void;
     const newLock = new Promise<void>(resolve => { releaseLock = resolve; });
-    tickerLocks.set(ticker, newLock);
+    globalState.tickerLocks.set(ticker, newLock);
     
     try {
         await previousLock; // Esperar que termine el procesamiento anterior de este ticker
@@ -472,7 +441,7 @@ export async function processTradingAlert(alertText: string) {
                                    'DIV_BROKEN', 'EVENTO_SMC_DIV', 'EVENTO_SWEEP', 'EVENTO_SWEEP_TL',
                                    'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE', 'LIQ_GRAB']);
     if (!FAKE_TICKERS.has(ticker)) {
-        tickerLastSeen.set(ticker, nowMs);
+        globalState.tickerLastSeen.set(ticker, nowMs);
     }
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
@@ -497,7 +466,7 @@ export async function processTradingAlert(alertText: string) {
         oteData = null;
 
         // 1. LEER DE LA RAM (Ultra rápido y sin costo de base de datos)
-        let state = localRadarStates.get(ticker);
+        let state = globalState.localRadarStates.get(ticker);
         
         // Si el servidor se reinició y la RAM está vacía, hacemos 1 sola lectura a Firebase
         if (!state) {
@@ -506,7 +475,7 @@ export async function processTradingAlert(alertText: string) {
                 new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore docRef.get() timeout tras 5s")), 5000))
             ]);
             state = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
-            localRadarStates.set(ticker, state);
+            globalState.localRadarStates.set(ticker, state);
         }
 
         if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
@@ -521,13 +490,13 @@ export async function processTradingAlert(alertText: string) {
             const sourceTf = eventTf;
             
             const syncKey = `${ticker}_${sourceTf}`;
-            const lastSync = lastSyncTime.get(syncKey) || 0;
+            const lastSync = globalState.lastSyncTime.get(syncKey) || 0;
             const throttleMs = SYNC_THROTTLE_MS[sourceTf] || 60000;
             if (nowMs - lastSync < throttleMs) {
                 console.log(`[SYNC] ⏭️ SYNC_ZONES throttled para ${ticker} ${sourceTf} (último: hace ${Math.round((nowMs - lastSync)/1000)}s, límite: ${throttleMs/1000}s)`);
                 return;
             }
-            lastSyncTime.set(syncKey, nowMs);
+            globalState.lastSyncTime.set(syncKey, nowMs);
             
             const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
             const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
@@ -567,13 +536,13 @@ export async function processTradingAlert(alertText: string) {
             // Actualizar después de guardar la referencia
             // Actualizar después de guardar la referencia
             state.lastPrice = currentPrice;
-            lastPingTime = nowMs; // 🏥 Healthcheck
+            globalState.lastPingTime = nowMs; // 🏥 Healthcheck
             // Guardar también el precio previo para referencia en el siguiente tick
             (state as any).previousPrice = previousPrice;
 
             // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
             const config = getConfigForTicker(ticker, nowMs);
-            const isKillswitched = nowMs < streakKillswitchUntil || nowMs < vixKillswitchUntil || !config.sessionEnabled;
+            const isKillswitched = nowMs < globalState.streakKillswitchUntil || nowMs < globalState.vixKillswitchUntil || !config.sessionEnabled;
             
             if (!isKillswitched) {
                 // 🗺️ Estirar patas Macro si están activas
@@ -584,11 +553,11 @@ export async function processTradingAlert(alertText: string) {
                     state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
                 }
 
-                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds);
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
 
-                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, sessionThresholds);
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para ${ticker}`); }
             }
@@ -596,8 +565,8 @@ export async function processTradingAlert(alertText: string) {
             // =========================================================
             // GESTIÓN DE TRADES ACTIVOS (TP Y SL)
             // =========================================================
-            if (activeTrades.size > 0) {
-                for (const [tradeId, trade] of activeTrades) {
+            if (globalState.activeTrades.size > 0) {
+                for (const [tradeId, trade] of globalState.activeTrades) {
                     if (trade.ticker !== ticker) continue;
                     const nowTrade = nowMs;
                     
@@ -791,7 +760,7 @@ export async function processTradingAlert(alertText: string) {
                             if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             // 💾 Eliminar de RAM inmediatamente de forma síncrona
-                            activeTrades.delete(tradeId);
+                            globalState.activeTrades.delete(tradeId);
                             if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                             trade.tp2Hit = true;
@@ -823,8 +792,8 @@ export async function processTradingAlert(alertText: string) {
                                 recordResult(tradeId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             }
 
-                            if (trade.tp1Hit) consecutiveLosses = Math.max(0, consecutiveLosses - 1);
-                            else consecutiveLosses = 0;
+                            if (trade.tp1Hit) globalState.consecutiveLosses = Math.max(0, globalState.consecutiveLosses - 1);
+                            else globalState.consecutiveLosses = 0;
                             
                             const tp2Msg = `🟢 <b>TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` + 
@@ -833,7 +802,7 @@ export async function processTradingAlert(alertText: string) {
                                 `🚀 TP2: ${trade.tp2Price} ✅\n` +
                                 `📊 PnL: +${finalPnlPct.toFixed(2)}%\n` +
                                 `⏱️ Duración total: ${durationMin} min\n\n` +
-                                `🏆 ¡Trade completo! ${consecutiveLosses > 0 ? `Racha protección: ${consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
+                                `🏆 ¡Trade completo! ${globalState.consecutiveLosses > 0 ? `Racha protección: ${globalState.consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
                             if (!isBacktest) sendTelegramAlert(tp2Msg).catch(() => {});
                             console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId}`);
                             continue;
@@ -865,7 +834,7 @@ export async function processTradingAlert(alertText: string) {
                         if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
                         
                         // 💾 Eliminar de RAM inmediatamente de forma síncrona para evitar race conditions
-                        activeTrades.delete(tradeId);
+                        globalState.activeTrades.delete(tradeId);
                         if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                         const isPartialClose = trade.tp1Hit;
@@ -910,17 +879,17 @@ export async function processTradingAlert(alertText: string) {
                         // Lógica de racha perdedora (solo contar PÉRDIDAS reales, no breakevens ni parciales)
                         const isBreakevenResult = trade.tp1Hit && !trade.tp2Hit;
                         if (!isPartialClose && !isBreakevenResult) {
-                            consecutiveLosses++;
-                            if (consecutiveLosses >= 5) streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
+                            globalState.consecutiveLosses++;
+                            if (globalState.consecutiveLosses >= 5) globalState.streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
                         }
                         
-                        const protectionMsg = consecutiveLosses >= 5 
+                        const protectionMsg = globalState.consecutiveLosses >= 5 
                             ? '🔴 ALERTA: 5 pérdidas consecutivas. KILLSWITCH ACTIVADO por 30 min.'
-                            : consecutiveLosses === 4
+                            : globalState.consecutiveLosses === 4
                                 ? '⚠️ 4 pérdidas consecutivas.'
-                                : consecutiveLosses === 3 
+                                : globalState.consecutiveLosses === 3 
                                     ? '⚠️ 3 pérdidas consecutivas.'
-                                    : consecutiveLosses === 2 
+                                    : globalState.consecutiveLosses === 2 
                                         ? '⚠️ 2 pérdidas consecutivas.'
                                         : '';
                         const slMsg = isPartialClose 
@@ -937,7 +906,7 @@ export async function processTradingAlert(alertText: string) {
                               `📊 PnL: ${finalPnlPct.toFixed(2)}%\n` +
                               `⏱️ Duración: ${durationMin} min\n\n` +
                               `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
-                              `📈 Racha actual: ${consecutiveLosses} pérdida(s) consecutiva(s)`;
+                              `📈 Racha actual: ${globalState.consecutiveLosses} pérdida(s) consecutiva(s)`;
 
                         if (!isBacktest) sendTelegramAlert(slMsg).catch(() => {});
                         console.log(`[JOURNAL] ${isPartialClose ? '⚠️ SL Post-Parcial (BREAKEVEN)' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
@@ -1742,17 +1711,20 @@ export async function processTradingAlert(alertText: string) {
 
         // 🔧 FIX v5.4: 15M zones now live 6h (antes 2h) para cubrir el gap entre killzones
         // London 4-6 ART → NY 10:30-12:30 ART = 4.5h sin sync. Con 6h las zonas sobreviven.
-        const MAX_ZONE_AGE_MS: Record<string, number> = { '5': 1800000, '15': 21600000, '60': 28800000, '240': 86400000, 'D': 604800000 };
+        const MAX_ZONE_AGE_MS: Record<string, number> = {
+          '3': 1800000, '5': 3600000, '15': 21600000,
+          '60': 28800000, '240': 86400000, 'D': 604800000,
+        };
         state.zones = state.zones.filter(z => {
             if (!z.createdAt) return true; 
             return (nowMs - z.createdAt) < (MAX_ZONE_AGE_MS[z.tf || '60'] || 14400000);
         });
 
         // 💾 2. GUARDAR LOS CAMBIOS EN LA RAM LOCAL SIEMPRE
-        localRadarStates.set(ticker, state);
+        globalState.localRadarStates.set(ticker, state);
 
         // 💾 3. GUARDAR EN FIREBASE (BACKUP INTELIGENTE CADA 5 MINUTOS O EN EVENTOS)
-        const timeSinceLastSave = nowMs - (lastFirebaseSave.get(ticker) || 0);
+        const timeSinceLastSave = nowMs - (globalState.lastFirebaseSave.get(ticker) || 0);
         const FIREBASE_INTERVAL_MS = 5 * 60 * 1000; // 5 Minutos
 
         state.version = (state.version || 0) + 1;
@@ -1760,7 +1732,7 @@ export async function processTradingAlert(alertText: string) {
 
         if (prefix !== 'PING_PRICE' || timeSinceLastSave > FIREBASE_INTERVAL_MS) {
             docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando estado ${ticker}: ${err.message}`));
-            lastFirebaseSave.set(ticker, nowMs);
+            globalState.lastFirebaseSave.set(ticker, nowMs);
         }
 
         // =========================================================================
@@ -1788,7 +1760,7 @@ export async function processTradingAlert(alertText: string) {
                 state.lastGatillo.status = 'BLOCKED_SESSION';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                activeTrades.delete(oteData.tradeId);
+                globalState.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
@@ -1799,28 +1771,28 @@ export async function processTradingAlert(alertText: string) {
                 state.lastGatillo.status = 'BLOCKED_GLOBAL';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                activeTrades.delete(oteData.tradeId);
+                globalState.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
-            if (nowMs < streakKillswitchUntil) {
-                const remainingMin = Math.round((streakKillswitchUntil - nowMs) / 60000);
-                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
+            if (nowMs < globalState.streakKillswitchUntil) {
+                const remainingMin = Math.round((globalState.streakKillswitchUntil - nowMs) / 60000);
+                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${globalState.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_RACHA';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                activeTrades.delete(oteData.tradeId);
+                globalState.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
-            if (nowMs < vixKillswitchUntil) {
-                const remainingMin = Math.round((vixKillswitchUntil - nowMs) / 60000);
+            if (nowMs < globalState.vixKillswitchUntil) {
+                const remainingMin = Math.round((globalState.vixKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_VIX';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                activeTrades.delete(oteData.tradeId);
+                globalState.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
@@ -1841,22 +1813,22 @@ export async function processTradingAlert(alertText: string) {
                 const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = sellConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
-                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, isBacktest, activeSessionId);
-                    if (consecutiveLosses >= sessionConfig.maxSellLosses) {
-                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, isBacktest, activeSessionId);
+                    if (currentConsecutiveLosses >= sessionConfig.maxSellLosses) {
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
+                        globalState.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
-                            `📊 Se alcanzaron <b>${consecutiveLosses}/${sessionConfig.maxSellLosses}</b> pérdidas consecutivas de tipo SELL hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `📊 Se alcanzaron <b>${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses}</b> pérdidas consecutivas de tipo SELL hoy en la sesión <b>${currentSession}</b>.\n` +
                             `💡 <i>Límite de pérdidas consecutivas (maxSellLosses) superado.</i>`
                         ).catch(() => {});
                         return;
                     }
-                    console.log(`[MCL LIMIT] ✅ ${ticker} SELL permitido: ${consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas de tipo SELL.`);
+                    console.log(`[MCL LIMIT] ✅ ${ticker} SELL permitido: ${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas de tipo SELL.`);
                 }
 
                 // 📊 Verificar límite diario de SELLs
@@ -1866,7 +1838,7 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
+                        globalState.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
@@ -1889,22 +1861,22 @@ export async function processTradingAlert(alertText: string) {
                 const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = buyConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
-                    const consecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, isBacktest, activeSessionId);
-                    if (consecutiveLosses >= sessionConfig.maxBuyLosses) {
-                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, isBacktest, activeSessionId);
+                    if (currentConsecutiveLosses >= sessionConfig.maxBuyLosses) {
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
+                        globalState.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
-                            `📊 Se alcanzaron <b>${consecutiveLosses}/${sessionConfig.maxBuyLosses}</b> pérdidas consecutivas de tipo BUY hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `📊 Se alcanzaron <b>${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses}</b> pérdidas consecutivas de tipo BUY hoy en la sesión <b>${currentSession}</b>.\n` +
                             `💡 <i>Límite de pérdidas consecutivas (maxBuyLosses) superado.</i>`
                         ).catch(() => {});
                         return;
                     }
-                    console.log(`[MCL LIMIT] ✅ ${ticker} BUY permitido: ${consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas de tipo BUY.`);
+                    console.log(`[MCL LIMIT] ✅ ${ticker} BUY permitido: ${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas de tipo BUY.`);
                 }
 
                 // 📊 Verificar límite diario de BUYs
@@ -1914,7 +1886,7 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
                         docRef.set(state).catch(() => {});
-                        activeTrades.delete(oteData.tradeId);
+                        globalState.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
@@ -1931,7 +1903,7 @@ export async function processTradingAlert(alertText: string) {
             
             // 🆕 Filtro Anti-Piramidación y Lógica SAR (Stop and Reverse)
             let existingTradeForTicker: ActiveTrade | undefined;
-            for (const trade of activeTrades.values()) {
+            for (const trade of globalState.activeTrades.values()) {
                 if (trade.ticker === ticker && trade.tradeId !== oteData.tradeId) {
                     existingTradeForTicker = trade;
                     break;
@@ -1980,7 +1952,7 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[SAR] 🔄 Reversión Activada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) supera a la activa (Score: ${existingTradeForTicker.score}).`);
                         
                         // Cerrar operación vieja
-                        activeTrades.delete(existingTradeForTicker.tradeId);
+                        globalState.activeTrades.delete(existingTradeForTicker.tradeId);
                         if (db) db.collection('active_trades').doc(existingTradeForTicker.tradeId).delete().catch(() => {});
                         
                         if (existingTradeForTicker.journalId) {
@@ -2059,7 +2031,7 @@ export async function processTradingAlert(alertText: string) {
                                     events: oteData.events || [],
                                     confluenceReport: oteData.confluenceReport || '',
                                     marketBias: oteData.marketBias || {},
-                                    consecutiveLosses,
+                                    consecutiveLosses: globalState.consecutiveLosses,
                                     winRate: 0,
                                     kronosVerdict: kronosVerdict,
                                     kronosDetails: kronosRawDetails
@@ -2152,7 +2124,7 @@ export async function processTradingAlert(alertText: string) {
                 }).catch(() => 'ERR');
                 
                 // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)
-                let activeTrade = activeTrades.get(oteData.tradeId);
+                let activeTrade = globalState.activeTrades.get(oteData.tradeId);
                 if (!activeTrade) {
                     activeTrade = {
                         tradeId: oteData.tradeId,
@@ -2168,7 +2140,7 @@ export async function processTradingAlert(alertText: string) {
                         score: oteData.points || 0,
                         timestamp: nowMs
                     };
-                    activeTrades.set(oteData.tradeId, activeTrade);
+                    globalState.activeTrades.set(oteData.tradeId, activeTrade);
                     if (db) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => {});
                     console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
                 }
@@ -2187,7 +2159,7 @@ export async function processTradingAlert(alertText: string) {
                         const ctraderConfigured = !!(globalConfig.CTRADER_CLIENT_ID && globalConfig.CTRADER_ACCESS_TOKEN);
                         
                         if (ctraderConfigured) {
-                            if (dynamicBotConfig.autoTrading) {
+                            if (globalState.dynamicBotConfig.autoTrading) {
                                 // 🚀 MODO AUTOMÁTICO: Ejecutar directamente
                                 const { executeMarketOrder } = await import('../services/ctrader.js');
                                 console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
@@ -2264,7 +2236,7 @@ export async function processTradingAlert(alertText: string) {
                 docRef.set(state).catch(() => {});
                 
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                activeTrades.delete(oteData.tradeId);
+                globalState.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
             }
         }
@@ -2292,9 +2264,9 @@ export function startWatchdog() {
             const data: any = await res.json();
             if (data.c && data.c > 30) {
                 console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
-                vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
+                globalState.vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
             } else {
-                vixKillswitchUntil = 0;
+                globalState.vixKillswitchUntil = 0;
             }
         } catch (e) {
             console.error('[NEWS FILTER] Error verificando VIX:', e);
@@ -2330,15 +2302,15 @@ export function startWatchdog() {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
         
-        for (const [id, trade] of activeTrades) {
+        for (const [id, trade] of globalState.activeTrades) {
             const age = now - trade.timestamp;
             // 🛡️ Si no hay registros de pings para este ticker, usamos la hora de creación del trade
             // para evitar que se interprete como inactivo desde 1970 (inactividad = now)
-            const lastSeen = tickerLastSeen.get(trade.ticker) || trade.timestamp;
+            const lastSeen = globalState.tickerLastSeen.get(trade.ticker) || trade.timestamp;
             const inactivity = now - lastSeen;
             
-            // Si tickerLastSeen está completamente vacío (post-reinicio), no cerrar el trade
-            if (tickerLastSeen.size === 0) {
+            // Si globalState.tickerLastSeen está completamente vacío (post-reinicio), no cerrar el trade
+            if (globalState.tickerLastSeen.size === 0) {
                 continue; // No cerrar trades hasta que llegue el primer PING real
             }
             
@@ -2346,17 +2318,17 @@ export function startWatchdog() {
             
             // Limpieza de trades huérfanos (7 días)
             if (age > SEVEN_DAYS) {
-                activeTrades.delete(id);
+                globalState.activeTrades.delete(id);
                 if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
                 console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
             }
         }
 
-        for (const [ticker, lastSeen] of tickerLastSeen) {
+        for (const [ticker, lastSeen] of globalState.tickerLastSeen) {
             const inactiveMin = Math.round((now - lastSeen) / 60000);
             if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
                 // 🔔 Alerta proactiva de desconexión
-                const state = localRadarStates.get(ticker);
+                const state = globalState.localRadarStates.get(ticker);
                 const lastHb = state?.lastHeartbeat || 0;
                 // 🛡️ v5.5: Ignorar timestamps "viejos" que vienen de Firebase post-reinicio
                 // Si lastHeartbeat es 0 o menor que el timestamp de hace 2 horas, son datos inválidos
@@ -2369,7 +2341,7 @@ export function startWatchdog() {
                 if (hbAge < TWO_HOURS_MS) continue; // Tiene heartbeat reciente, no está desconectado
                 
                 // 🛡️ v5.5.1: Solo alertar 1 vez por desconexión — no spamear
-                tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
+                globalState.tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
                 console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta Silenciosa.`);
             }
         }
@@ -2381,7 +2353,7 @@ export function startWatchdog() {
  * Esto permite que trading.ts pueda hacer cierres parciales y breakeven automáticamente
  */
 export function updateTradePositionId(tradeId: string, positionId: string) {
-    const trade = activeTrades.get(tradeId);
+    const trade = globalState.activeTrades.get(tradeId);
     if (trade) {
         trade.ctraderPositionId = positionId;
         console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);

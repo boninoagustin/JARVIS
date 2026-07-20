@@ -1,4 +1,8 @@
-import type { RadarZone, RadarState } from './Types.js';
+import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade } from './Types.js';
+
+const DEBUG = false;
+const dbg = (...args: unknown[]) => { if (DEBUG) dbg(...args); };
+
 
 export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
 
@@ -31,18 +35,19 @@ export const emptyState = (): RadarState => ({
 });
 
 export function normalizeZone(raw: any): RadarZone {
-    if (raw.t !== undefined && raw.tf === undefined) raw.tf = raw.t;
-    if (raw.d !== undefined && raw.dir === undefined) raw.dir = raw.d;
-    if (raw.p !== undefined && raw.top === undefined) raw.top = raw.p;
-    if (raw.b !== undefined && raw.btm === undefined) raw.btm = raw.b;
-    if (raw.lv !== undefined && raw.lvl === undefined) raw.lvl = raw.lv;
-    if (raw.md !== undefined && raw.medal === undefined) raw.medal = raw.md;
-    if (raw.sc !== undefined && raw.score === undefined) raw.score = raw.sc;
-    if (raw.mi !== undefined && raw.mid === undefined) raw.mid = raw.mi;
-    if (raw.a !== undefined && raw.atr === undefined) raw.atr = raw.a;
-    if (raw.mg !== undefined) raw.mg = raw.mg;
-    if (raw.kz !== undefined) raw.kz = raw.kz;
-    return raw as RadarZone;
+    const r = { ...raw } as Record<string, unknown>;
+    if (r.t !== undefined && r.tf === undefined) r.tf = r.t;
+    if (r.d !== undefined && r.dir === undefined) r.dir = r.d;
+    if (r.p !== undefined && r.top === undefined) r.top = r.p;
+    if (r.b !== undefined && r.btm === undefined) r.btm = r.b;
+    if (r.lv !== undefined && r.lvl === undefined) r.lvl = r.lv;
+    if (r.md !== undefined && r.medal === undefined) r.medal = r.md;
+    if (r.sc !== undefined && r.score === undefined) r.score = r.sc;
+    if (r.mi !== undefined && r.mid === undefined) r.mid = r.mi;
+    if (r.a !== undefined && r.atr === undefined) r.atr = r.a;
+    if (r.mg !== undefined) r.mg = r.mg;
+    if (r.kz !== undefined) r.kz = r.kz;
+    return r as unknown as RadarZone;
 }
 
 export const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
@@ -57,8 +62,6 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
     if (t.includes('XAU') || t.includes('GOLD')) return bufferConfig * 10;
     return originPrice * (bufferConfig / 100);
 }
-
-import type { ImpulseLeg, ActiveTrade } from './Types.js';
 
 export interface AlphaContext {
     config: any;
@@ -81,7 +84,6 @@ export function evaluateImpulseCore(
     ticker: string, 
     state: RadarState, 
     nowMs: number, 
-    sessionThresholds: { buy: number; sell: number } | null,
     ctx: AlphaContext
 ): AlphaInsight {
     if (!leg) return { updatedLeg: null };
@@ -92,24 +94,24 @@ export function evaluateImpulseCore(
     // 🔧 FIX 1: Stale leg cleaner — legs de más de 8 horas se invalidan automáticamente (Intradia)
     const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
-        console.log(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
+        dbg(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
         return { updatedLeg: null };
     }
 
     // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y el minScore de sesión, el leg se anula
     const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
     const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
-    const minOppositeScore = sessionConfig?.choch?.minScore ?? 9;
+    const minOppositeScore = sessionConfig?.choch5m?.minScore ?? sessionConfig?.choch15m?.minScore ?? 9;
     
     if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
-        console.log(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+        dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
         return { updatedLeg: null };
     }
 
     // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
     const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
     if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
-        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
+        dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
         return { updatedLeg: null };
     }
 
@@ -120,7 +122,7 @@ export function evaluateImpulseCore(
         ? (currentPrice > leg.extreme + atrEstimate) 
         : (currentPrice < leg.extreme - atrEstimate);
     if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
-        console.log(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
+        dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
         return { updatedLeg: null };
     }
 
@@ -174,10 +176,7 @@ export function evaluateImpulseCore(
             let oteEnabled = false;
             let oteMinScore = 8;
 
-            if (sessionThresholds) {
-                oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-                oteMinScore = leg.dir === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
-            } else if (sessionConfig) {
+            if (sessionConfig) {
                 if (isChoch) {
                     const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
                     const tfConfig = sessionConfig[tfKey] as any;
@@ -213,19 +212,19 @@ export function evaluateImpulseCore(
 
             const totalPoints = (leg.chochPoints || 0) + 4;
 
-            if (sessionConfig && !sessionThresholds && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
+            if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (!oteEnabled || totalPoints < oteMinScore) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
+                    dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
                     return { updatedLeg: leg };
                 }
             } else {
                 const MIN_OTE_POINTS = oteMinScore;
                 if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
+                    dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
                     return { updatedLeg: leg };
                 }
                 if (!oteEnabled || totalPoints < oteMinScore) {
-                    console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
+                    dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
                     return { updatedLeg: leg };
                 }
             }
@@ -234,8 +233,8 @@ export function evaluateImpulseCore(
             const rewardDistanceOTE = Math.abs(leg.extreme - leg.origin) * 0.50;
             const rrRatioOTE = riskDistanceOTE > 0 ? rewardDistanceOTE / riskDistanceOTE : 1.0;
             if (riskDistanceOTE === 0 || rrRatioOTE < 1.2) {
-                console.error(`[FIBO] ❌ R:R invalid: risk=${riskDistanceOTE}, reward=${rewardDistanceOTE}, ratio=${rrRatioOTE}`);
-                console.log(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
+                dbg(`[FIBO] ❌ R:R invalid: risk=${riskDistanceOTE}, reward=${rewardDistanceOTE}, ratio=${rrRatioOTE}`);
+                dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
                 return { updatedLeg: leg };
             }
 
@@ -265,7 +264,7 @@ export function evaluateImpulseCore(
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-                console.log(`[FIBO] 🎯 RETROCESO 50% CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
+                dbg(`[FIBO] 🎯 RETROCESO 50% CONFIRMADO para ${ticker} ${leg.dir}. Despertando IA...`);
 
                 const bias240 = state.marketBias["240"] || 'NEUTRAL';
                 const bias60 = state.marketBias["60"] || 'NEUTRAL';
@@ -319,7 +318,7 @@ export function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, high
     // 🧹 Expiración: legs macro duran hasta 24 horas en RAM
     const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_MACRO_LEG_AGE_MS) {
-        console.log(`[FIBO-MACRO] 🧹 Leg MACRO ${leg.dir} expirado por antigüedad.`);
+        dbg(`[FIBO-MACRO] 🧹 Leg MACRO ${leg.dir} expirado por antigüedad.`);
         return null;
     }
 
@@ -330,7 +329,7 @@ export function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, high
     else if (leg.dir === 'SELL' && highPrice > leg.origin) macroInvalidated = true;
 
     if (macroInvalidated) {
-        console.log(`[FIBO-MACRO] 🚫 Leg MACRO ${leg.dir} invalidado por ruptura de origen.`);
+        dbg(`[FIBO-MACRO] 🚫 Leg MACRO ${leg.dir} invalidado por ruptura de origen.`);
         return null;
     }
 

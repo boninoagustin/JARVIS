@@ -8,6 +8,8 @@ export interface RadarZone {
     lvl?: string;
     medal?: string;
     score?: number;
+    tp?: number;
+    sl?: number;
     mid?: number;
     atr?: number;
     t?: string;      
@@ -49,9 +51,11 @@ export interface RadarState {
     zones: RadarZone[];
     activeLocks: string[];
     lastPrice: number | null;
+    previousPrice?: number | null;
     scoreBuy: ScoreState;
     scoreSell: ScoreState;
-    marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
+    marketBias: Record<string, string>;
+    vwapStatus?: Record<string, string>;
     lastApproachAlert?: number;
     lastSniperAlert?: number;
     nextZones?: RadarZone[];     

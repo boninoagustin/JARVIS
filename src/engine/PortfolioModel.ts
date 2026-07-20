@@ -1,4 +1,7 @@
 // PortfolioModel.ts - Lógica de control de riesgo global y de cuenta
+import type { firestore } from 'firebase-admin';
+
+import { GlobalPortfolioConfig } from './Types.js';
 
 export interface KillswitchResult {
     isKilled: boolean;
@@ -6,12 +9,19 @@ export interface KillswitchResult {
     killReason?: string;
 }
 
+
+function getArgentinaMidnightMs(nowMs: number): number {
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const [year, month, day] = formatter.format(new Date(nowMs)).split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, day, 3, 0, 0)).getTime();
+}
+
 export async function evaluateGlobalRisk(
     nowMs: number,
-    globalPortfolioConfig: any,
+    globalPortfolioConfig: GlobalPortfolioConfig,
     currentKillswitchUntil: number,
     currentSession: string,
-    db: any
+    db: firestore.Firestore
 ): Promise<KillswitchResult> {
     if (!globalPortfolioConfig.enabled) return { isKilled: false };
 
@@ -23,16 +33,7 @@ export async function evaluateGlobalRisk(
     if (!db) return { isKilled: false };
 
     try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const year = parseInt(dateParts[0]);
-        const month = parseInt(dateParts[1]) - 1;
-        const day = parseInt(dateParts[2]);
-
-        const artMidnight = new Date(Date.UTC(year, month, day, 3, 0, 0));
-        const artMidnightMs = artMidnight.getTime();
+        const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const snapshot = await db.collection('trade_journal')
             .where('timestamp', '>=', artMidnightMs)
@@ -103,14 +104,10 @@ export async function evaluateGlobalRisk(
     }
 }
 
-export async function countDailySellsForTicker(db: any, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const artMidnightMs = new Date(Date.UTC(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]), 3, 0, 0)).getTime();
+        const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
@@ -131,14 +128,10 @@ export async function countDailySellsForTicker(db: any, ticker: string, nowMs: n
     }
 }
 
-export async function countDailyBuysForTicker(db: any, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const artMidnightMs = new Date(Date.UTC(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]), 3, 0, 0)).getTime();
+        const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
@@ -159,14 +152,10 @@ export async function countDailyBuysForTicker(db: any, ticker: string, nowMs: nu
     }
 }
 
-export async function countConsecutiveLossesForAsset(db: any, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     try {
-        const now = new Date(nowMs);
-        const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const argDateStr = formatter.format(now);
-        const dateParts = argDateStr.split('-');
-        const artMidnightMs = new Date(Date.UTC(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]), 3, 0, 0)).getTime();
+        const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');

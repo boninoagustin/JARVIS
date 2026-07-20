@@ -1,30 +1,6 @@
 // Tipos para el motor de backtesting standalone
-export interface RadarZone {
-  tf?: string; dir: 'BUY' | 'SELL'; top: number; btm: number;
-  lvl?: string; medal?: string; score?: number; tp?: number; sl?: number;
-  mid?: number; atr?: number; createdAt?: number;
-}
-
-export interface ScoreState {
-  points: number; lastUpdate: number; events: string[];
-}
-
-export interface ImpulseLeg {
-  dir: 'BUY' | 'SELL'; origin: number; extreme: number; createdAt: number;
-  tp2?: number | null; oteScored?: boolean; isValidated?: boolean;
-  chochPoints?: number; chochEvents?: string[]; chochReport?: string;
-  bestZone?: RadarZone | null;
-}
-
-export interface RadarState {
-  zones: RadarZone[]; lastPrice: number | null; previousPrice?: number | null;
-  scoreBuy: ScoreState; scoreSell: ScoreState;
-  marketBias: Record<string, string>;
-  vwapStatus: Record<string, string>;
-  lastSyncDate: string | null; lastSniperAlert?: number; lastHeartbeat?: number;
-  activeImpulseBuy?: ImpulseLeg | null; activeImpulseSell?: ImpulseLeg | null;
-  activeMacroImpulseBuy?: ImpulseLeg | null; activeMacroImpulseSell?: ImpulseLeg | null;
-}
+import type { RadarZone, RadarState, ImpulseLeg, ScoreState } from '../../../src/engine/Types';
+export type { RadarZone, RadarState, ImpulseLeg, ScoreState };
 
 export interface BacktestTrade {
   id: string; timestamp: number; direction: 'BUY' | 'SELL';
@@ -104,7 +80,7 @@ export interface BacktestResult {
 export interface ParsedAlert {
   prefix: string;
   eventTf: string;
-  readableTf: number;
+  readableTf: string;
   currentDirection: 'BUY' | 'SELL' | null;
   trendMatch?: string | null;
   rawZones?: Record<string, unknown>[];
@@ -130,6 +106,7 @@ export function emptyState(): RadarState {
     lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
     activeImpulseBuy: null, activeImpulseSell: null,
     activeMacroImpulseBuy: null, activeMacroImpulseSell: null,
+    activeLocks: [],
   };
 }
 

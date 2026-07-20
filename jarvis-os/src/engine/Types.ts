@@ -51,7 +51,7 @@ export interface RadarState {
     lastPrice: number | null;
     scoreBuy: ScoreState;
     scoreSell: ScoreState;
-    marketBias: { [tf: string]: 'BUY' | 'SELL' | 'NEUTRAL' };
+    marketBias: Record<string, string>;
     lastApproachAlert?: number;
     lastSniperAlert?: number;
     nextZones?: RadarZone[];     
