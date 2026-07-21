@@ -1,7 +1,7 @@
 // PortfolioModel.ts - Lógica de control de riesgo global y de cuenta
 import type { firestore } from 'firebase-admin';
 
-import type { GlobalPortfolioConfig, ActiveTrade } from './Types.js';
+import type { GlobalPortfolioConfig } from './Types.js';
 
 export interface KillswitchResult {
     isKilled: boolean;
@@ -44,7 +44,7 @@ async function withCache<T>(key: string, nowMs: number, fetcher: () => Promise<T
     const promise = fetcher().then(result => {
         riskCache.set(key, { at: nowMs, result });
         return result;
-    }).catch(err => {
+    }).catch(_err => {
         // En caso de fallo, intentamos devolver el último valor conocido si existe, o el fallback
         const lastKnown = riskCache.get(key);
         if (lastKnown && lastKnown.result !== undefined) {
