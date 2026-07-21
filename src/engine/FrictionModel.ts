@@ -1,4 +1,4 @@
-import { ActiveTrade } from './Types.js';
+import type { ActiveTrade } from './Types.js';
 import { getDecimals } from './AlphaModel.js';
 
 export interface FrictionConfig {

@@ -1,4 +1,4 @@
-import { ActiveTrade, RadarState, AssetSessionConfig, GlobalPortfolioConfig } from './Types.js';
+import type { ActiveTrade, RadarState, AssetSessionConfig, GlobalPortfolioConfig } from './Types.js';
 
 export class StateStore {
     activeTrades = new Map<string, ActiveTrade>();

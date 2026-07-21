@@ -254,7 +254,7 @@ import { doc, setDoc } from 'firebase/firestore';
 interface UploadedFile {
   name: string;
   tf: string;
-  lines: string[];
+  lines: any[];
   lineCount: number;
 }
 

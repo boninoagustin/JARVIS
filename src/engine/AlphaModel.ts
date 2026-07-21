@@ -1,4 +1,4 @@
-import { RadarZone, RadarState, ImpulseLeg, ActiveTrade } from './Types.js';
+import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade } from './Types.js';
 
 const DEBUG = false;
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };

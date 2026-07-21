@@ -1,7 +1,7 @@
 // PortfolioModel.ts - Lógica de control de riesgo global y de cuenta
 import type { firestore } from 'firebase-admin';
 
-import { GlobalPortfolioConfig } from './Types.js';
+import type { GlobalPortfolioConfig } from './Types.js';
 
 export interface KillswitchResult {
     isKilled: boolean;
