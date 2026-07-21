@@ -63,13 +63,25 @@ const MAX_ZONE_AGE_MS: Record<string, number> = {
 // --- CSV PARSING ---
 export function* parseCSVLines(content: string): Generator<LogEntry> {
   const seen = new Set<string>();
-  const rows = content.split(/\r?\n/);
-  for (const r of rows) {
+  let start = 0;
+  while (start < content.length) {
+    let end = content.indexOf('\n', start);
+    if (end === -1) end = content.length;
+    let r = content.substring(start, end);
+    if (r.endsWith('\r')) r = r.slice(0, -1);
+    start = end + 1;
+
     if (r.trim().length === 0 || !r.includes(' | TS: ')) continue;
     const firstComma = r.indexOf(',');
     const line = firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
-    if (seen.has(line)) continue;
-    seen.add(line);
+    
+    // Guardamos una subcadena o hash simple en memoria en vez de la línea completa de 300 chars
+    // para reducir drásticamente el uso de RAM del Set. 
+    // Como las duplicaciones suelen ser exactas, un prefijo + TS suele bastar.
+    const dedupKey = line.substring(0, 60);
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+
     const tsMatch = line.match(/TS:\s*(\d+)/i);
     const tfMatch = line.match(/TF:\s*([a-zA-Z0-9]+)/i);
     yield {

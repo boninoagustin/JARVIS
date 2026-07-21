@@ -1,7 +1,7 @@
 // PortfolioModel.ts - Lógica de control de riesgo global y de cuenta
 import type { firestore } from 'firebase-admin';
 
-import type { GlobalPortfolioConfig } from './Types.js';
+import type { GlobalPortfolioConfig, ActiveTrade } from './Types.js';
 
 export interface KillswitchResult {
     isKilled: boolean;
@@ -9,7 +9,8 @@ export interface KillswitchResult {
     killReason?: string;
 }
 
-const riskCache = new Map<string, { at: number; result: any }>();
+// Caché mejorado que previene "race conditions" (estampidas de promesas)
+const riskCache = new Map<string, { at: number; result?: any; promise?: Promise<any> }>();
 const TTL = 5 * 60 * 1000;
 
 
@@ -17,6 +18,43 @@ function getArgentinaMidnightMs(nowMs: number): number {
     const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
     const [year, month, day] = formatter.format(new Date(nowMs)).split('-').map(Number);
     return new Date(Date.UTC(year, month - 1, day, 3, 0, 0)).getTime();
+}
+
+/**
+ * Función genérica de caché con Mutex/Promesas para evitar queries duplicadas
+ */
+async function withCache<T>(key: string, nowMs: number, fetcher: () => Promise<T>, fallback: T): Promise<T> {
+    const cached = riskCache.get(key);
+    
+    // 1. Si hay un resultado válido y no ha expirado, retornarlo de inmediato
+    if (cached && cached.result !== undefined && nowMs - cached.at < TTL) {
+        return cached.result;
+    }
+    
+    // 2. Si hay una promesa en vuelo, esperarla
+    if (cached && cached.promise) {
+        try {
+            return await cached.promise;
+        } catch (e) {
+            // Si la promesa falló, seguimos adelante para reintentar
+        }
+    }
+    
+    // 3. Crear la nueva promesa y guardarla en caché
+    const promise = fetcher().then(result => {
+        riskCache.set(key, { at: nowMs, result });
+        return result;
+    }).catch(err => {
+        // En caso de fallo, intentamos devolver el último valor conocido si existe, o el fallback
+        const lastKnown = riskCache.get(key);
+        if (lastKnown && lastKnown.result !== undefined) {
+            return lastKnown.result;
+        }
+        return fallback;
+    });
+    
+    riskCache.set(key, { at: nowMs, promise });
+    return promise;
 }
 
 export async function evaluateGlobalRisk(
@@ -35,19 +73,20 @@ export async function evaluateGlobalRisk(
     if (nowMs < currentKillswitchUntil) return { isKilled: true };
     if (!db) return { isKilled: false };
 
-    try {
+    return withCache('global', nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const snapshot = await db.collection('trade_journal')
             .where('timestamp', '>=', artMidnightMs)
             .get();
 
-        if (snapshot.empty) return { isKilled: false };
+        if (snapshot.empty) return { isKilled: false } as KillswitchResult;
 
+        // Limpieza de tipos 'any' utilizando as ActiveTrade
         const trades = snapshot.docs
-            .map((d: any) => d.data())
-            .filter((t: any) => t.mode !== 'backtesting' && t.result)
-            .sort((a: any, b: any) => a.timestamp - b.timestamp);
+            .map(d => d.data() as Record<string, any>)
+            .filter(t => t.mode !== 'backtesting' && t.result)
+            .sort((a, b) => a.timestamp - b.timestamp);
 
         let totalTrades = trades.length;
         let dailyPnLR = 0;
@@ -63,7 +102,8 @@ export async function evaluateGlobalRisk(
                 else rMultiple = 0;
             }
 
-            dailyPnLR += rMultiple;
+            // Corrección de punto flotante
+            dailyPnLR = Math.round((dailyPnLR + rMultiple) * 1000) / 1000;
             if (dailyPnLR > peakPnLR) peakPnLR = dailyPnLR;
 
             if (rMultiple < 0) {
@@ -74,7 +114,7 @@ export async function evaluateGlobalRisk(
             }
         }
 
-        const trailingDrawdown = peakPnLR - dailyPnLR;
+        const trailingDrawdown = Math.round((peakPnLR - dailyPnLR) * 1000) / 1000;
         let isKilled = false;
         let killReason = '';
 
@@ -101,19 +141,14 @@ export async function evaluateGlobalRisk(
             result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
         }
 
-        riskCache.set('global', { at: nowMs, result });
         return result;
-    } catch (e: any) {
-        console.error('[PortfolioModel] Error evaluando el riesgo unificado:', e.message);
-        const c = riskCache.get('global');
-        if (c && nowMs - c.at < TTL) return c.result;
-        return { isKilled: true, killReason: 'risk-data-unavailable: límites en fail-closed' };
-    }
+    }, { isKilled: true, killReason: 'risk-data-unavailable: límites en fail-closed' });
 }
 
 export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
-    try {
+    
+    return withCache(`sells_${ticker}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -124,24 +159,21 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
             .where('direction', '==', 'SELL')
             .get();
 
-        const result = snapshot.docs.filter((d: any) => {
-            const data = d.data();
+        const result = snapshot.docs.filter(d => {
+            const data = d.data() as Record<string, any>;
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
             return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
-        riskCache.set(`sells_${ticker}`, { at: nowMs, result });
+        
         return result;
-    } catch (e) {
-        const c = riskCache.get(`sells_${ticker}`);
-        if (c && nowMs - c.at < TTL) return c.result;
-        return 999; // fail closed if no cache
-    }
+    }, 999); // 999 = fail closed
 }
 
 export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
-    try {
+    
+    return withCache(`buys_${ticker}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -152,24 +184,21 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
             .where('direction', '==', 'BUY')
             .get();
 
-        const result = snapshot.docs.filter((d: any) => {
-            const data = d.data();
+        const result = snapshot.docs.filter(d => {
+            const data = d.data() as Record<string, any>;
             const modeMatch = isBacktest ? data.mode === 'backtesting' : data.mode !== 'backtesting';
             const sessionMatch = isBacktest ? (backtestSessionId ? data.sessionId === backtestSessionId : true) : true;
             return modeMatch && sessionMatch && tickerVariants.includes(data.ticker);
         }).length;
-        riskCache.set(`buys_${ticker}`, { at: nowMs, result });
+        
         return result;
-    } catch (e) {
-        const c = riskCache.get(`buys_${ticker}`);
-        if (c && nowMs - c.at < TTL) return c.result;
-        return 999; // fail closed if no cache
-    }
+    }, 999);
 }
 
 export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
-    try {
+    
+    return withCache(`streak_${ticker}_${session}_${direction}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -183,15 +212,15 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
         if (snapshot.empty) return 0;
 
         const trades = snapshot.docs
-            .map((d: any) => d.data())
-            .filter((t: any) => {
+            .map(d => d.data() as Record<string, any>)
+            .filter(t => {
                 const isMatchingTicker = tickerVariants.includes(t.ticker);
                 const isMatchingSession = t.session === session;
                 const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
                 const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
                 return modeMatch && sessionMatch && isMatchingTicker && isMatchingSession && t.result;
             })
-            .sort((a: any, b: any) => a.timestamp - b.timestamp);
+            .sort((a, b) => a.timestamp - b.timestamp);
 
         let streak = 0;
         for (const t of trades) {
@@ -205,12 +234,7 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
             if (rMultiple < 0) streak++;
             else if (rMultiple > 0) streak = 0;
         }
-        riskCache.set(`streak_${ticker}_${session}_${direction}`, { at: nowMs, result: streak });
+        
         return streak;
-    } catch (e) {
-        const c = riskCache.get(`streak_${ticker}_${session}_${direction}`);
-        if (c && nowMs - c.at < TTL) return c.result;
-        return 999; // fail closed if no cache
-    }
+    }, 999);
 }
-
