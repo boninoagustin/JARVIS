@@ -420,9 +420,21 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, cur
     }
 
     try {
-        // Usar la API de bajo nivel de ctrader-ts para forzar el absolutePrice
-        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), { stopLoss: newSlPrice });
-        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${newSlPrice}`);
+        const state = await ctClient.getState();
+        const positions = state?.positions || [];
+        const pos = positions?.find((p: any) => Number(p.positionId || p.id) === Number(positionId));
+        
+        let existingTp = undefined;
+        if (pos && pos.takeProfit) {
+            existingTp = pos.takeProfit;
+        }
+
+        // Usar la API de bajo nivel de ctrader-ts para forzar el absolutePrice y preservar el TP si existe
+        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), { 
+            stopLoss: newSlPrice,
+            ...(existingTp !== undefined ? { takeProfit: existingTp } : {})
+        });
+        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${newSlPrice} (Mantenido TP: ${existingTp || 'Ninguno'})`);
         return true;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error modificando SL de ${positionId}:`, err.message);
