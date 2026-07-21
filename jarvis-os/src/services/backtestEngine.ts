@@ -236,6 +236,11 @@ function preParseAlert(alertText: string): ParsedAlert | undefined {
     }
   }
 
+  if (prefix === 'HEARTBEAT') {
+    const biasMatch = alertText.match(/Bias:\s*(BUY|SELL|NEUTRAL)/i);
+    if (biasMatch) parsed.biasMatch = biasMatch[1].toUpperCase();
+  }
+
   if (prefix === 'PING_PRICE') {
     const priceMatch = alertText.match(/Precio:\s*([0-9.]+)/i);
     if (priceMatch) parsed.currentPrice = parseFloat(priceMatch[1]);
@@ -1113,6 +1118,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const frictionResult = evaluateNetTrade(activeLike, nowMs, customFriction);
   if (!frictionResult.approved) {
     // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 0.2)
+    console.log('REJECTED BY FRICTION:', frictionResult.reason);
     return;
   }
   

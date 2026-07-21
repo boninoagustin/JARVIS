@@ -99,9 +99,20 @@ export function evaluateNetTrade(
         };
     }
 
-    const netRR = netRewardDistance / netRiskDistance;
+    let netRR = netRewardDistance / netRiskDistance;
 
-    const MIN_NET_RR = 1.0; // break-even realista con win rate ~50% + costes
+    const hasTp2 = trade.tp2Price !== undefined && trade.tp2Price !== trade.tp1Price && trade.tp2Price !== 0;
+    if (hasTp2) {
+        const grossRewardDistanceTp2 = Math.abs(trade.tp2Price - trade.entryPrice);
+        const netRewardDistanceTp2 = grossRewardDistanceTp2 - entryFriction - commissionCostInPrice;
+        if (netRewardDistanceTp2 > 0) {
+            const netRRTp2 = netRewardDistanceTp2 / netRiskDistance;
+            // Evaluamos la viabilidad global del trade basándonos en TP2 si existe
+            netRR = Math.max(netRR, netRRTp2);
+        }
+    }
+
+    const MIN_NET_RR = 0.8; // Permitimos un poco menos de 1.0 porque TP1 neto suele ser < 1.0 tras spread/comisiones
     if (netRR < MIN_NET_RR) {
         return {
             approved: false,

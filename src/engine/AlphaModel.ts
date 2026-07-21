@@ -97,7 +97,7 @@ export function evaluateImpulseCore(
     const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
         dbg(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
-        return { updatedLeg: null };
+        leg.oteScored = true; return { updatedLeg: leg };
     }
 
     // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y el minScore de sesión, el leg se anula
@@ -107,14 +107,14 @@ export function evaluateImpulseCore(
     
     if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
         dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
-        return { updatedLeg: null };
+        leg.oteScored = true; return { updatedLeg: leg };
     }
 
     // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
     const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
     if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
-        return { updatedLeg: null };
+        leg.oteScored = true; return { updatedLeg: leg };
     }
 
     // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
@@ -125,7 +125,7 @@ export function evaluateImpulseCore(
         : (currentPrice < leg.extreme - atrEstimate);
     if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
-        return { updatedLeg: null };
+        leg.oteScored = true; return { updatedLeg: leg };
     }
 
     if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
@@ -314,7 +314,7 @@ export function evaluateImpulseCore(
             }
         }
     }
-    return { updatedLeg: impulseInvalidated ? null : leg };
+    if (impulseInvalidated) leg.oteScored = true; return { updatedLeg: leg };
 }
 
 
