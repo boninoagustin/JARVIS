@@ -968,7 +968,7 @@ function processAlert(
                 else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
             }
             
-            let rrChoch = 0; // sin zona opuesta no hay reward demostrable
+            let rrChoch = 999.0; // Camino libre: sin zona opuesta el R:R teórico es infinito
             if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
                 const rewardDist = Math.abs(closestZonePrice - currentPrice);
                 rrChoch = riskDist > 0 ? rewardDist / riskDist : 0;

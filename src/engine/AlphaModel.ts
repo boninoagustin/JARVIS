@@ -237,7 +237,8 @@ export function evaluateImpulseCore(
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
-            const reward = Math.abs(leg.extreme - entryFill); // TP1 = extreme
+            const oteTP2Ext = leg.dir === 'BUY' ? leg.extreme + (range * 0.27) : leg.extreme - (range * 0.27);
+            const reward = Math.abs(oteTP2Ext - entryFill); // Se evalúa el R:R contra la proyección de TP2
             const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
 
             if (risk <= 0 || rrRatioOTE < 1.2) {
