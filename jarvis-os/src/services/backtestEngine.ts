@@ -3,7 +3,7 @@ import type {
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
 import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, SETUP_MEMORY_WINDOW_MS } from '../engine/AlphaModel';
-import { getPipValue } from '../engine/FrictionModel';
+import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
@@ -28,24 +28,29 @@ export interface DailyStats {
 function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats, config: BacktestConfig) {
   if (trade.rMultiple === undefined || Number.isNaN(trade.rMultiple)) return;
 
-  dailyStats.pnlR += trade.rMultiple;
+  dailyStats.pnlR = Math.round((dailyStats.pnlR + trade.rMultiple) * 1000) / 1000;
   if (dailyStats.pnlR > dailyStats.peakPnlR) {
     dailyStats.peakPnlR = dailyStats.pnlR;
   }
   
-  if (trade.rMultiple < 0) {
+  const NET_BE_EPS = 0.05;
+  if (trade.rMultiple < -NET_BE_EPS) {
     dailyStats.consecutiveLosses++;
     if (trade.direction === 'SELL') dailyStats.sellLossCount++;
     if (trade.direction === 'BUY') dailyStats.buyLossCount++;
-  } else if (trade.rMultiple > 0) {
+  } else if (trade.rMultiple >= 0.8) {
     dailyStats.consecutiveLosses = 0;
     if (trade.direction === 'SELL') dailyStats.sellLossCount = 0;
     if (trade.direction === 'BUY') dailyStats.buyLossCount = 0;
+  } else if (trade.rMultiple > NET_BE_EPS) {
+    dailyStats.consecutiveLosses = Math.max(0, dailyStats.consecutiveLosses - 1);
+    if (trade.direction === 'SELL') dailyStats.sellLossCount = Math.max(0, dailyStats.sellLossCount - 1);
+    if (trade.direction === 'BUY') dailyStats.buyLossCount = Math.max(0, dailyStats.buyLossCount - 1);
   }
   
   if (!dailyStats.sessionExp) dailyStats.sessionExp = {};
-  const currentSession = dailyStats.currentSessionStr;
-  const e = (dailyStats.sessionExp[currentSession] ??= { n: 0, sumR: 0 });
+  const key = `${dailyStats.currentSessionStr.split('-').pop()}-${trade.direction}`;
+  const e = (dailyStats.sessionExp[key] ??= { n: 0, sumR: 0 });
   e.n++; e.sumR += trade.rMultiple;
 
   if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
@@ -62,7 +67,7 @@ const MAX_ZONE_AGE_MS: Record<string, number> = {
 
 // --- CSV PARSING ---
 export function* parseCSVLines(content: string): Generator<LogEntry> {
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   let start = 0;
   while (start < content.length) {
     let end = content.indexOf('\n', start);
@@ -161,22 +166,14 @@ export function runBacktest(
     return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '' };
   }
 
-  // 3. Pre-sync: process SYNC_ZONES first
-  const syncEntries = validEntries.filter(e => e.line.includes('SYNC_ZONES'));
-  const restEntries = validEntries.filter(e => !e.line.includes('SYNC_ZONES'));
-  
+  // 3. Procesar cronológicamente (sin hoistar SYNC_ZONES para evitar lookahead bias)
   const initialPrice = validEntries.find(e => e.parsed?.currentPrice !== undefined)?.parsed?.currentPrice ?? 1;
   const pipSize = getPipValue(config.ticker, initialPrice);
 
-  for (const entry of syncEntries) {
-    processAlert(entry, entry.ts, state, config, trades, activeTrades, dailyStats, pipSize);
-  }
-
-  // 4. Process rest chronologically
-  const total = restEntries.length;
+  const total = validEntries.length;
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
-    processAlert(restEntries[i], restEntries[i].ts, state, config, trades, activeTrades, dailyStats, pipSize);
+    processAlert(validEntries[i], validEntries[i].ts, state, config, trades, activeTrades, dailyStats, pipSize);
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
@@ -194,10 +191,20 @@ export function runBacktest(
         ? closingPrice - trade.entryPrice
         : trade.entryPrice - closingPrice;
       const pct = (pnlDistance / trade.entryPrice) * 100;
+      
+      const pipSize = getPipValue(config.ticker, closingPrice);
+      const riskPips = slDistance / pipSize;
+      const cls = getAssetClass(config.ticker);
+      const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+      const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, closingPrice)) : 0;
+      
+      const applyFullComm = !trade.tp1Hit;
+      const finalCost = applyFullComm ? transactionCostR : (transactionCostR * 0.5);
+      
       const r = slDistance > 0 ? pnlDistance / slDistance : 0;
       trade.result = r > 0 ? 'WIN' : r === 0 ? 'BE' : 'LOSS';
       trade.pnl = pct;
-      trade.rMultiple = r;
+      trade.rMultiple = (r - finalCost) * (trade.riskMult || 1.0);
       trade.closeTimestamp = lastEntry.ts;
       trade.durationMin = Math.round((lastEntry.ts - trade.timestamp) / 60000);
       updateDailyStatsFromClose(trade, dailyStats, config);
@@ -210,7 +217,7 @@ export function runBacktest(
   return {
     trades,
     totalEvents: validEntries.length,
-    processedEvents: syncEntries.length + total,
+    processedEvents: total,
     startDate: new Date(validEntries[0].ts).toISOString().split('T')[0],
     endDate: new Date(validEntries[validEntries.length - 1].ts).toISOString().split('T')[0],
   };
@@ -241,7 +248,8 @@ function preParseAlert(alertText: string): ParsedAlert | undefined {
     const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
     if (trendMatch) parsed.trendMatch = trendMatch[1].toUpperCase();
     if (alertText.includes('Payload:')) {
-      const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
+      const afterPayload = alertText.substring(alertText.indexOf('Payload:') + 8);
+      const payloadStr = afterPayload.split(/\s*\|\s*TS:/)[0].trim().replace(/""/g, '"');
       try {
         parsed.rawZones = JSON.parse(payloadStr);
       } catch { /* ignore */ }
@@ -276,7 +284,8 @@ function preParseAlert(alertText: string): ParsedAlert | undefined {
 }
 
 function getArgentinaDayStr(nowMs: number): string {
-  const d = new Date(nowMs - 3 * 3600 * 1000);
+  // Para ASIA: anclar el día de trading a las 17:00 ART (convención FX: el día cambia al cierre de NY):
+  const d = new Date(nowMs - 3 * 3600e3 - 17 * 3600e3);
   return d.toISOString().split('T')[0];
 }
 
@@ -370,9 +379,15 @@ function processAlert(
     const highPrice = p.highPrice !== undefined ? p.highPrice : currentPrice;
     const lowPrice = p.lowPrice !== undefined ? p.lowPrice : currentPrice;
 
-    const tr = highPrice - lowPrice;
-    const alpha = 1 / 14;
-    state.atr14 = state.atr14 === undefined ? tr : state.atr14 + alpha * (tr - state.atr14);
+    const prevClose = state.lastPrice ?? currentPrice;
+    const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
+    if (state.atr14 === undefined) {
+        state.atrSeed = (state.atrSeed ?? 0) + tr;
+        state.atrSamples = (state.atrSamples ?? 0) + 1;
+        if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14;
+    } else {
+        state.atr14 = (state.atr14 * 13 + tr) / 14;
+    }
 
     const previousPrice = state.lastPrice;
     state.lastPrice = currentPrice;
@@ -402,17 +417,50 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
-      // 🆕 COSTOS DE TRANSACCIÓN / SPREAD (Mejora 6)
-      // pipSize comes from runBacktest
+      const MAX_HOLD_MS = config.maxHoldMin ? config.maxHoldMin * 60000 : Infinity;
+      if (tradeAge >= MAX_HOLD_MS) {
+        const pnlDist = trade.direction === 'BUY'
+          ? currentPrice - trade.entryPrice
+          : trade.entryPrice - currentPrice;
+        
+        const originalSl = trade.originalSlPrice ?? trade.slPrice;
+        const slDist = Math.abs(originalSl - trade.entryPrice);
+        
+        const riskPips = slDist / pipSize;
+        const cls = getAssetClass(config.ticker);
+        const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+        const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
+
+        const lockedPct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 * 0.5 : 0;
+        const openPct = (pnlDist / trade.entryPrice) * 100 * (trade.tp1Hit ? 0.5 : 1.0);
+        const slPct = (slDist / trade.entryPrice) * 100;
+
+        trade.pnl = lockedPct + openPct;
+        trade.rMultiple = slPct > 0 ? ((lockedPct + openPct) / slPct - transactionCostR) * (trade.riskMult || 1.0) : 0;
+        trade.result = trade.rMultiple > 0 ? 'WIN' : trade.rMultiple === 0 ? 'BE' : 'LOSS';
+        
+        trade.closeTimestamp = nowMs;
+        trade.durationMin = Math.round(tradeAge / 60000);
+        activeTrades.delete(tradeId);
+        updateDailyStatsFromClose(trade, dailyStats, config);
+        continue;
+      }
 
       // 1) SL con niveles de apertura de barra (path desconocido => peor caso)
       const slAtBarOpen = trade.slPrice;
       const slHitFirst = trade.direction === 'BUY' ? lowPrice <= slAtBarOpen : highPrice >= slAtBarOpen;
       if (slHitFirst) {
         const isPartialClose = trade.tp1Hit;
-        const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100; // should be 0 if moved to BE
+        const cls = getAssetClass(config.ticker);
+        const latencyMs = config.latencyMs ?? defaultFrictionConfig[cls].latencyMs;
+        const exitSlip = (latencyMs / 50) * 0.1 * pipSize;
+        const slFill = trade.direction === 'BUY' ? trade.slPrice - exitSlip : trade.slPrice + exitSlip;
+
+        const slPnlPct = trade.direction === 'BUY' 
+          ? (slFill - trade.entryPrice) / trade.entryPrice * 100 
+          : (trade.entryPrice - slFill) / trade.entryPrice * 100;
         const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
-        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
+        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 + slPnlPct * 0.5) : slPnlPct;
         const finalResult = finalPnlPct > 0 ? 'WIN' : finalPnlPct === 0 ? 'BE' : 'LOSS';
 
         trade.result = finalResult;
@@ -425,10 +473,11 @@ function processAlert(
         
         // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
         const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
-        const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
+        const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+        const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker)) : 0;
         
         const grossR = initialSlLossPct > 0 ? finalPnlPct / initialSlLossPct : 0;
-        trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+        trade.rMultiple = initialSlLossPct > 0 ? (grossR - transactionCostR) * (trade.riskMult || 1.0) : 0;
         
         if (!isPartialClose) {
           trade.resultTp1 = 'LOSS';
@@ -436,7 +485,7 @@ function processAlert(
           trade.rMultipleTp1 = undefined; // Don't show confusing -50 in TP1
           trade.rMultipleTp2 = undefined; // Don't show confusing -50 in TP2
         } else {
-          trade.rMultipleTp2 = 0.0;
+          trade.rMultipleTp2 = initialSlLossPct > 0 ? slPnlPct / initialSlLossPct : 0.0;
         }
 
         trade.closeTimestamp = nowMs;
@@ -454,17 +503,84 @@ function processAlert(
         const tp1Hit = trade.direction === 'BUY' ? highPrice >= trade.tp1Price : lowPrice <= trade.tp1Price;
         if (tp1Hit) {
           trade.tp1Hit = true;
-          const slLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
-          // Tras TP1: mitad de posición cerrada en TP1, SL de la mitad restante a BE
-          trade.slPrice = trade.entryPrice;
+          const originalSl = trade.originalSlPrice ?? trade.slPrice;
+          const slLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+          // Tras TP1: SL de la mitad restante se ajusta al 50% del riesgo (simulando live)
+          trade.slPrice = originalSl + (trade.entryPrice - originalSl) * 0.5;
           trade.slHalfwayHit = true;
             
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-          trade.rMultipleTp1 = (slLossPct > 0 ? (trade.pnlTp1 / slLossPct) * 0.5 : 0.5) * (trade.riskMult || 1.0);
+          
+          const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+          const cls = getAssetClass(config.ticker);
+          const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+          const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker)) : 0;
+          
+          const grossR = slLossPct > 0 ? trade.pnlTp1 / slLossPct : 1.0;
+          trade.rMultipleTp1 = ((grossR * 0.5) - (transactionCostR * 0.5)) * (trade.riskMult || 1.0);
         }
       }
 
+      // TP1.5 (Trailing a BE diferido)
+      if (trade.tp1Hit && !trade.tp1_5Hit) {
+        const tp1_5Price = trade.direction === 'BUY' 
+          ? trade.tp1Price + Math.abs(trade.tp1Price - trade.entryPrice) * 0.5
+          : trade.tp1Price - Math.abs(trade.tp1Price - trade.entryPrice) * 0.5;
+        const tp1_5Hit = trade.direction === 'BUY' ? highPrice >= tp1_5Price : lowPrice <= tp1_5Price;
+        if (tp1_5Hit) {
+          trade.tp1_5Hit = true;
+          trade.slPrice = trade.entryPrice;
+        }
+      }
+
+      // Complemento PING: trailing continuo post-TP1 por distancia
+      if (trade.tp1Hit) {
+        const atrThreshold = (state.atr14 ?? 0) * 1.5;
+        const ratchetStep = (state.atr14 ?? 0) * 0.25;
+        if (trade.direction === 'BUY') {
+          const atrTrailSL = highPrice - atrThreshold;
+          if (atrTrailSL > trade.slPrice + ratchetStep) {
+            trade.slPrice = atrTrailSL;
+          }
+        } else {
+          const atrTrailSL = lowPrice + atrThreshold;
+          if (atrTrailSL < trade.slPrice - ratchetStep) {
+            trade.slPrice = atrTrailSL;
+          }
+        }
+      }
+
+      // Chequeo de vela ambigua: si en la misma vela se alcanzó TP1 o TP1.5 (modificando el SL) y también se violó el nuevo SL
+      if (trade.tp1Hit) {
+        const slViolated = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
+        if (slViolated) {
+          trade.result = 'WIN'; 
+          trade.resultTp2 = 'LOSS';
+          const slPnlPct = trade.direction === 'BUY' 
+            ? (trade.slPrice - trade.entryPrice) / trade.entryPrice * 100 
+            : (trade.entryPrice - trade.slPrice) / trade.entryPrice * 100;
+          trade.pnl = trade.pnlTp1! * 0.5 + slPnlPct * 0.5;
+          trade.pnlTp2 = trade.pnl;
+          
+          const originalSl = trade.originalSlPrice ?? trade.slPrice;
+          const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+          
+          const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+          const cls = getAssetClass(config.ticker);
+          const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+          const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker)) : 0;
+          
+          const grossR = initialSlLossPct > 0 ? trade.pnl / initialSlLossPct : 0;
+          trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+          
+          trade.closeTimestamp = nowMs;
+          trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
+          activeTrades.delete(tradeId);
+          updateDailyStatsFromClose(trade, dailyStats, config);
+          continue;
+        }
+      }
       // TP2
       if (trade.tp2Price > 0) {
         const tp2Hit = trade.direction === 'BUY' ? highPrice >= trade.tp2Price : lowPrice <= trade.tp2Price;
@@ -482,12 +598,15 @@ function processAlert(
           
           // 🆕 COSTOS DE TRANSACCIÓN (Mejora 6)
           const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
-          const transactionCostR = riskPips > 0 ? (config.commissionPerLot || 0) / (riskPips * 10) : 0;
+          const cls = getAssetClass(config.ticker);
+          const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+          const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker)) : 0;
           
-          const grossR = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 1.5;
-          trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+          const grossR = initialSlLossPct > 0 ? finalPnl / initialSlLossPct : 0;
+          trade.rMultiple = initialSlLossPct > 0 ? (grossR - transactionCostR) * (trade.riskMult || 1.0) : 0;
           
-          trade.rMultipleTp2 = (initialSlLossPct > 0 ? (pnlTp2 / initialSlLossPct) * 0.5 : 0.75) * (trade.riskMult || 1.0);
+          const grossRTp2 = initialSlLossPct > 0 ? pnlTp2 / initialSlLossPct : 0;
+          trade.rMultipleTp2 = initialSlLossPct > 0 ? ((grossRTp2 * 0.5) - (transactionCostR * 0.5)) * (trade.riskMult || 1.0) : 0;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -586,14 +705,11 @@ function processAlert(
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
               if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
-                const structuralBuffer = Math.max(
-                  2 * (config.spreadPips ?? 0.1) * pipSize,
-                  Math.abs(actualPrice - newOrigin) * 0.075
-                );
+                const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
+                const structuralBuffer = Math.max(2 * (config.spreadPips ?? 0.1) * pipSize, atrTrail);
                 const trailedSL = newOrigin - structuralBuffer;
-                if (trailedSL > trade.slPrice) {
-                  trade.slPrice = trailedSL;
-                }
+                // Ratchet con paso mínimo: solo mover si mejora ≥ 0.25×ATR
+                if (trailedSL > trade.slPrice + atrTrail * 0.5) trade.slPrice = trailedSL;
               }
             }
           } else {
@@ -601,14 +717,11 @@ function processAlert(
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
               if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
-                const structuralBuffer = Math.max(
-                  2 * (config.spreadPips ?? 0.1) * pipSize,
-                  Math.abs(actualPrice - newOrigin) * 0.075
-                );
+                const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
+                const structuralBuffer = Math.max(2 * (config.spreadPips ?? 0.1) * pipSize, atrTrail);
                 const trailedSL = newOrigin + structuralBuffer;
-                if (trailedSL < trade.slPrice) {
-                  trade.slPrice = trailedSL;
-                }
+                // Ratchet con paso mínimo: solo mover si mejora ≥ 0.25×ATR
+                if (trailedSL < trade.slPrice - atrTrail * 0.5) trade.slPrice = trailedSL;
               }
             }
           }
@@ -881,10 +994,12 @@ function processAlert(
 
     totalPoints = Math.floor(totalPoints * scoreMultiplier);
 
-    
-    const se = dailyStats.sessionExp?.[currentSession];
-    if (se && se.n >= 10 && se.sumR / se.n < 0) {
-      totalPoints = Math.floor(totalPoints * 0.8);
+    const se = dailyStats.sessionExp?.[`${currentSession}-${currentDirection}`];
+    if (se && se.n >= 5) {
+        const expR = se.sumR / se.n;
+        if (expR < -0.3) minPtsRequired += 2;
+        else if (expR < 0) minPtsRequired += 1;
+        else if (expR > 0.5 && se.n >= 10) minPtsRequired = Math.max(minPtsRequired - 1, 3);
     }
 
     // Crypto: reduce minPtsRequired by 1 (ported from live)
@@ -920,7 +1035,7 @@ function processAlert(
           : activeLeg.origin + structuralBuffer;
         const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
         const stopLoss = adjustedSL.toFixed(decimals);
-        const currentPrice = state.lastPrice || (currentDirection === 'BUY' ? activeLeg.extreme : activeLeg.extreme);
+        const currentPrice = state.lastPrice ?? activeLeg.extreme;
         const riskDist = Math.abs(currentPrice - adjustedSL);
         const fixedTP1 = currentDirection === 'BUY' 
           ? currentPrice + riskDist 
@@ -1023,22 +1138,37 @@ function processAlert(
               tf: readableTf
             };
             createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config, state);
+            
+            // ✅ Cooldown y reset SOLO cuando el trade realmente se dispara (idéntico a live)
+            state.lastSniperAlert = nowMs;
+            activeScore.points = 0; activeScore.events = [];
+            const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+            oppositeScore.points = 0; oppositeScore.events = [];
+        } else if (!disableOte) {
+            // Si va a esperar OTE, reseteamos score y ponemos cooldown, pero dejamos la pata habilitada
+            state.lastSniperAlert = nowMs;
+            activeScore.points = 0; activeScore.events = [];
+            const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+            oppositeScore.points = 0; oppositeScore.events = [];
         }
-        
+
         if (disableOte) activeLeg.oteScored = true;
       }
-
-      if (totalPoints >= minPtsRequired) {
-        const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
-        oppositeScore.points = 0; oppositeScore.events = [];
-      }
-      state.lastSniperAlert = nowMs;
-      activeScore.points = 0; activeScore.events = [];
     }
   }
 }
 
 // --- CREATE TRADE ---
+function minutesSinceSessionOpen(ts: number): number {
+    const d = new Date(ts - 3 * 3600 * 1000);
+    const t = d.getUTCHours() * 60 + d.getUTCMinutes();
+    const session = getSessionForTimestamp(ts);
+    const openMin = session === 'LONDON' ? 240 : session === 'NY' ? 630 : session === 'ASIA' ? 1260 : -1;
+    if (openMin < 0) return Infinity;
+    let m = t - openMin; if (m < 0) m += 1440;
+    return m;
+}
+
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
   if (dailyStats.isKilled) return;
 
@@ -1050,11 +1180,18 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   if (config.sessionFilter && config.sessionFilter.length > 0) {
       if (!config.sessionFilter.includes(currentSession)) return;
   }
+
+  const warmupMin = (config as any).sessionWarmupMin ?? 15;
+  if ((currentSession === 'LONDON' || currentSession === 'NY') && minutesSinceSessionOpen(nowMs) < warmupMin) return;
+
   if (config.maxTradesPerSession && dailyStats.sessionTradeCount >= config.maxTradesPerSession) {
       return;
   }
 
   if (isNewsBlackout(nowMs)) return;
+
+  // (c) Guardia al crear el trade + eliminar defaults mágicos
+  if (!isFinite(oteData.slPrice) || oteData.slPrice === oteData.entryPrice) return;
 
   // 🛡️ ANTI-PYRAMIDACIÓN & SAR
   let existingTradeForTicker: BacktestTrade | undefined;
@@ -1076,9 +1213,20 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
           ? currentPrice - existingTradeForTicker.entryPrice
           : existingTradeForTicker.entryPrice - currentPrice;
         
-        existingTradeForTicker.pnl = (pnlDist / existingTradeForTicker.entryPrice) * 100;
-        existingTradeForTicker.rMultiple = slDist > 0 ? pnlDist / slDist : 0;
-        existingTradeForTicker.result = 'REVERSAL';
+        const pipSize = getPipValue(config.ticker, currentPrice);
+        const riskPips = slDist / pipSize;
+        const cls = getAssetClass(config.ticker);
+        const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+        const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
+        
+        const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * 0.5 : 0;
+        const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? 0.5 : 1.0);
+        const slPct = (slDist / existingTradeForTicker.entryPrice) * 100;
+        
+        existingTradeForTicker.pnl = lockedPct + openPct;
+        existingTradeForTicker.rMultiple = slPct > 0 ? ((lockedPct + openPct) / slPct - transactionCostR) * (existingTradeForTicker.riskMult || 1.0) : 0;
+        existingTradeForTicker.result = existingTradeForTicker.rMultiple > 0 ? 'WIN' : existingTradeForTicker.rMultiple === 0 ? 'BE' : 'LOSS';
+        
         existingTradeForTicker.resultTp2 = 'REVERSAL';
         if (!existingTradeForTicker.tp1Hit) existingTradeForTicker.resultTp1 = 'REVERSAL';
         existingTradeForTicker.closeTimestamp = nowMs;
@@ -1109,9 +1257,10 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   };
 
   // --- FRICTION MODEL INTERCEPTION ---
+  const clsFriction = getAssetClass(config.ticker);
   const customFriction = {
-    baseSpreadPips: config.spreadPips !== undefined ? config.spreadPips : 0.1,
-    commissionPerLot: config.commissionPerLot !== undefined ? config.commissionPerLot : 3.0,
+    baseSpreadPips: config.spreadPips !== undefined ? config.spreadPips : defaultFrictionConfig[clsFriction].baseSpreadPips,
+    commissionPerLot: config.commissionPerLot !== undefined ? config.commissionPerLot : defaultFrictionConfig[clsFriction].commissionPerLot,
     latencyMs: 50
   };
   const activeLike = {
@@ -1155,7 +1304,7 @@ export function isNewsBlackout(ts: number): boolean {
   const d = new Date(ts);
   const t = d.getUTCHours() * 60 + d.getUTCMinutes();
   const inW = (a: number, b: number) => t >= a && t <= b;
-  const usData = inW(12 * 60 + 25, 12 * 60 + 40) || inW(13 * 60 + 55, 14 * 60 + 10);
-  const nfp = d.getUTCDay() === 5 && d.getUTCDate() <= 7 && inW(12 * 60 + 20, 13 * 60);
-  return usData || nfp;
+  const usData = inW(12 * 60 + 25, 14 * 60 + 10);
+  const fomc = inW(17 * 60 + 55, 18 * 60 + 15) || inW(18 * 60 + 55, 19 * 60 + 15);
+  return usData || fomc;
 }

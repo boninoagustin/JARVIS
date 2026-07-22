@@ -48,8 +48,17 @@ export interface CTraderAccountInfo {
 
 let ctClient: any = null;
 let isConnected = false;
-let connectionAttempts = 0;
+let connectingPromise: Promise<boolean> | null = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
+const CONNECT_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}: timeout`)), ms);
+    });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
 // ─── Connection Management ───
 
@@ -63,47 +72,70 @@ export async function connectCTrader(): Promise<boolean> {
         return false;
     }
 
-    if (isConnected && ctClient) {
-        return true;
-    }
+    if (isConnected && ctClient) return true;
+    if (connectingPromise) return connectingPromise; // single-flight
+    
+    connectingPromise = connectWithRetry().finally(() => { connectingPromise = null; });
+    return connectingPromise;
+}
 
-    try {
-        connectionAttempts++;
-        console.log(`[CTRADER] 🔌 Conectando a cTrader Open API (intento ${connectionAttempts})...`);
-        console.log(`[CTRADER] Modo: ${config.CTRADER_DEMO ? 'DEMO 🧪' : 'LIVE 🔴'}`);
-        
-        const { connect } = await import('ctrader-ts');
-        
-        ctClient = await connect({
-            clientId: config.CTRADER_CLIENT_ID,
-            clientSecret: config.CTRADER_CLIENT_SECRET,
-            accessToken: config.CTRADER_ACCESS_TOKEN,
-            accountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
-            environment: config.CTRADER_DEMO ? 'demo' : 'live',
-        });
-        
-        isConnected = true;
-        connectionAttempts = 0;
-        console.log('[CTRADER] ✅ Conectado exitosamente a cTrader.');
-        
-        setupCTraderEvents(ctClient);
-        
-        return true;
-    } catch (err: any) {
-        isConnected = false;
-        ctClient = null;
-        console.error(`[CTRADER] ❌ Error de conexión (intento ${connectionAttempts}):`, err.message);
-        
-        if (connectionAttempts < MAX_RECONNECT_ATTEMPTS) {
-            const delay = Math.min(5000 * connectionAttempts, 30000);
-            console.log(`[CTRADER] 🔄 Reintentando en ${delay / 1000}s...`);
-            await new Promise(r => setTimeout(r, delay));
-            return connectCTrader();
+async function connectWithRetry(): Promise<boolean> {
+    for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+        try {
+            console.log(`[CTRADER] 🔌 Conectando a cTrader Open API (intento ${attempt})...`);
+            console.log(`[CTRADER] Modo: ${config.CTRADER_DEMO ? 'DEMO 🧪' : 'LIVE 🔴'}`);
+            
+            const { connect } = await import('ctrader-ts');
+            let timedOut = false;
+            
+            const connectPromise = connect({
+                clientId: config.CTRADER_CLIENT_ID,
+                clientSecret: config.CTRADER_CLIENT_SECRET,
+                accessToken: config.CTRADER_ACCESS_TOKEN,
+                accountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
+                environment: config.CTRADER_DEMO ? 'demo' : 'live',
+            });
+            
+            connectPromise.then(c => { 
+                if (timedOut) { 
+                    try { c.disconnect(); } catch {} 
+                } 
+            }).catch(() => {});
+            
+            const client = await withTimeout(connectPromise, CONNECT_TIMEOUT_MS, 'connectCTrader')
+                .catch(err => { timedOut = true; throw err; });
+                
+            ctClient = client;
+            isConnected = true;
+            console.log('[CTRADER] ✅ Conectado exitosamente a cTrader.');
+            
+            setupCTraderEvents(client);
+            
+            // Invalidar el flag cuando el SDK reporte desconexión definitiva
+            client.connection.onEvent('stateChange', (s: any) => {
+                if (s.status === 'disconnected' && ctClient === client) {
+                    isConnected = false;
+                    ctClient = null;
+                }
+            });
+            
+            return true;
+        } catch (err: any) {
+            console.error(`[CTRADER] ❌ Error de conexión (intento ${attempt}):`, err.message);
+            try { ctClient?.disconnect(); } catch { /* noop */ } // ✅ matar al huérfano
+            ctClient = null;
+            isConnected = false;
+            
+            if (attempt < MAX_RECONNECT_ATTEMPTS) {
+                const delay = Math.min(5000 * attempt, 30000);
+                console.log(`[CTRADER] 🔄 Reintentando en ${delay / 1000}s...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
         }
-        
-        console.error('[CTRADER] ⛔ Max reintentos alcanzado. Servicio offline.');
-        return false;
     }
+    
+    console.error('[CTRADER] ⛔ Max reintentos alcanzado. Servicio offline.');
+    return false;
 }
 
 /**
@@ -366,33 +398,26 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 
         console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
 
-        let pipPosition = 4; // Default forex
-        if (info && info.pipPosition !== undefined) {
-            pipPosition = info.pipPosition;
-        } else if (ctraderSymbol.includes('JPY') || ctraderSymbol.includes('BTC') || ctraderSymbol.includes('XAU') || ctraderSymbol.includes('US30')) {
-            pipPosition = 2;
-        }
-        
-        const pipMultiplier = Math.pow(10, pipPosition);
-        const slPips = Math.abs(currentPrice - slPrice) * pipMultiplier;
-        const tpPips = Math.abs(currentPrice - (tp2Price || tp1Price)) * pipMultiplier;
-
         // Execute order
         let position: any;
-        const orderParams: any = {
-            lots,
-            sl: { pips: Math.round(slPips) },
-            tp: { pips: Math.round(tpPips) }, 
-        };
-
         if (direction === 'BUY') {
-            position = await ctClient.buy(ctraderSymbol, orderParams);
+            position = await ctClient.buy(ctraderSymbol, { lots });
         } else {
-            position = await ctClient.sell(ctraderSymbol, orderParams);
+            position = await ctClient.sell(ctraderSymbol, { lots });
         }
 
-        const positionId = position?.positionId || position?.id || String(position);
-        const executedPrice = position?.entryPrice || currentPrice;
+        const rawPositionId = position?.positionId ?? position?.id;
+        if (rawPositionId === undefined || rawPositionId === null) {
+            throw new Error('Orden ejecutada pero sin positionId en la respuesta.');
+        }
+        const positionId = String(rawPositionId);
+        const executedPrice = position?.entryPrice || position?.price || currentPrice;
+
+        // SL/TP ABSOLUTOS sobre la posición ya abierta
+        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
+            stopLoss: slPrice,
+            takeProfit: tp2Price || tp1Price,
+        });
 
         console.log(`[CTRADER] ✅ Orden ejecutada: ${direction} ${ticker} | ${lots} lotes @ ${executedPrice} | posID: ${positionId}`);
 
@@ -483,15 +508,22 @@ export async function closePartial(positionId: string, percentToClose: number = 
 
         const totalVolume = pos.tradeData.volume;
         
-        // Deducir el step (min granularity) basado en el volumen total (e.g. 2000 -> 1000)
+        // stepVolume REAL del símbolo, no deducido por divisibilidad
+        const symbolName = pos.symbolName || pos.tradeData?.symbolName || '';
         let step = 1;
-        while (totalVolume % (step * 10) === 0 && step < 100000) step *= 10;
-        
+        try {
+            const info = await ctClient.getSymbolInfo(symbolName);
+            if (info?.stepVolume) step = info.stepVolume;
+        } catch { /* fallback step=1 */ }
+
         const volumeToClose = Math.floor((totalVolume * (percentToClose / 100)) / step) * step;
-        
-        if (volumeToClose <= 0) {
-            console.warn(`[CTRADER] ⚠️ Volumen a cerrar es 0 para posición ${positionId}.`);
-            return false;
+
+        if (volumeToClose < step) {
+            // Cerrar el mínimo permitido en lugar de no cerrar nada
+            const minClose = Math.min(step, totalVolume);
+            await (ctClient as any).raw.trading.closePosition(Number(positionId), minClose);
+            console.log(`[CTRADER] 🟡 Posición ${positionId}: cerrado mínimo posible (${minClose} unidades).`);
+            return true;
         }
 
         // Llamada a bajo nivel para cerrar exactamente el volumen deseado

@@ -1,4 +1,8 @@
+import { z } from 'zod';
 import type { ActiveTrade, RadarState, AssetSessionConfig, GlobalPortfolioConfig } from './Types.js';
+import { AssetSessionConfigSchema } from './Types.js';
+
+type EntryTrigger = NonNullable<z.infer<typeof AssetSessionConfigSchema>['entryTrigger']>;
 
 export class StateStore {
     activeTrades = new Map<string, ActiveTrade>();
@@ -32,7 +36,7 @@ export class StateStore {
         slBufferPercent: 0.1,
         fixedRR: 2.0,
         oteEntryPercent: 50,
-        entryTrigger: 'OTE' as 'CHOCH' | 'OTE' | 'BOTH' | 'SMART',
+        entryTrigger: 'OTE' as EntryTrigger,
         autoTrading: false,
         maxSmartRiskPercent: 0.15
     };

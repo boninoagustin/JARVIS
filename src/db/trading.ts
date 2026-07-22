@@ -3,7 +3,10 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
 
-import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema } from '../engine/Types.js';
+import { z } from 'zod';
+import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema } from '../engine/Types.js';
+
+type SessionConfig = z.infer<typeof SessionSchema>;
 import { StateStore, createStateStore } from '../engine/StateStore.js';
 
 export const globalState = createStateStore();
@@ -26,15 +29,7 @@ export const getLastPingTime = () => globalState.lastPingTime;
 
 
 // 🆕 v7.0: Consolidación de Cuenta & Portfolio Global
-interface GlobalPortfolioConfig {
-    maxDailyLossR: number;       // MDL: R máxima pérdida diaria (ej. 3R)
-    dailyProfitTargetR: number;  // DPT: R máximo profit diario (ej. 5R)
-    maxTradesPerDay: number;     // MTD: Máximo de operaciones diarias
-    maxConsecutiveLosses: number;// MCL: Máximo de pérdidas consecutivas diarias
-    trailingDrawdownR: number;   // TDD: Drawdown dinámico máximo diario en R
-    enabled: boolean;
-    disabledSessions?: string[]; // 🚫 Killswitch global de sesión
-}
+
 
 
 
@@ -42,6 +37,39 @@ interface GlobalPortfolioConfig {
 
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
+
+function computeConfluenceTFs(zones: RadarZone[]): Map<RadarZone, string[]> {
+    const byDir = new Map<string, RadarZone[]>();
+    for (const z of zones) {
+        const list = byDir.get(z.dir) ?? [];
+        list.push(z);
+        byDir.set(z.dir, list);
+    }
+    const result = new Map<RadarZone, string[]>();
+    for (const group of byDir.values()) {
+        for (const zone of group) {
+            const tfs: string[] = [];
+            for (const other of group) {
+                if (other === zone || other.tf === zone.tf) continue;
+                if (!(other.top < zone.btm || other.btm > zone.top) && !tfs.includes(other.tf || '')) {
+                    tfs.push(other.tf || '');
+                }
+            }
+            result.set(zone, tfs);
+        }
+    }
+    return result;
+}
+function minutesSinceSessionOpen(ts: number): number {
+    const d = new Date(ts - 3 * 3600 * 1000);
+    const t = d.getUTCHours() * 60 + d.getUTCMinutes();
+    const session = getCurrentSession(ts);
+    const openMin = session === 'LONDON' ? 240 : session === 'NY' ? 630 : session === 'ASIA' ? 1260 : -1;
+    if (openMin < 0) return Infinity;
+    let m = t - openMin; if (m < 0) m += 1440;
+    return m;
+}
+
 function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
     const now = nowMs ? new Date(nowMs) : new Date();
     
@@ -128,7 +156,7 @@ if (db) {
     try {
         db.collection('active_trades').get().then((snap: any) => {
             snap.forEach((doc: any) => {
-                globalState.activeTrades.set(doc.id, doc.data() as ActiveTrade);
+                globalState.activeTrades.set(doc.id, structuredClone(doc.data() as ActiveTrade));
             });
             console.log(`[RADAR] 🧠 Memoria restaurada: ${globalState.activeTrades.size} trades activos cargados.`);
         });
@@ -270,7 +298,7 @@ async function sendTelegramAlert(message: string) {
 
 
 
-function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number) {
+function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number, store: StateStore = globalState, isBacktest: boolean = false) {
     const config = getConfigForTicker(ticker, nowMs);
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
@@ -295,7 +323,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             }
             
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
-            globalState.activeTrades.set(netTrade.tradeId, netTrade);
+                        (netTrade as any).isBacktest = isBacktest;
+            store.activeTrades.set(netTrade.tradeId, netTrade);
             if (db) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => {});
         }
     }
@@ -308,13 +337,14 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
  * consultando los resultados cerrados del día de hoy en 'trade_journal'.
  * Retorna true si hay un bloqueo activo (cuenta deshabilitada temporalmente para operar hoy).
  */
-async function evaluateGlobalKillswitch(nowMs: number): Promise<boolean> {
+async function evaluateGlobalKillswitch(nowMs: number, store: any, isBacktest: boolean = false): Promise<boolean> {
+    if (isBacktest) return false;
     const currentSession = getCurrentSession(nowMs);
-    const res = await evaluateGlobalRisk(nowMs, globalState.globalPortfolioConfig, globalState.globalPortfolioKillswitchUntil, currentSession, db);
-    
+    const res = await evaluateGlobalRisk(nowMs, store.globalPortfolioConfig, store.globalPortfolioKillswitchUntil, currentSession, db);
+
     if (res.isKilled) {
-        if (res.killUntilMs && res.killUntilMs > globalState.globalPortfolioKillswitchUntil) {
-            globalState.globalPortfolioKillswitchUntil = res.killUntilMs;
+        if (res.killUntilMs && res.killUntilMs > store.globalPortfolioKillswitchUntil) {
+            store.globalPortfolioKillswitchUntil = res.killUntilMs;
             const timeStr = new Date(res.killUntilMs).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
             const warningMsg = `🚨 <b>[KILLSWITCH PORTAFOLIO GLOBAL]</b> 🚨\n\n` +
                 `⚠️ <b>Cuenta Bloqueada Temporalmente</b>\n` +
@@ -347,11 +377,11 @@ async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest
 /**
  * Cuenta las pérdidas consecutivas de un activo en la sesión y dirección actual para el día de hoy.
  */
-async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    return await countConsecutiveLossesForAsset(db, ticker, session, direction, nowMs, isBacktest, backtestSessionId);
+async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, store: StateStore, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+    return await countConsecutiveLossesForAsset(db, ticker, session, direction, nowMs, store.globalPortfolioConfig, isBacktest, backtestSessionId);
 }
 
-export async function processTradingAlert(alertText: string) {
+export async function processTradingAlert(alertText: string, store: StateStore = globalState) {
     if (!db) return;
 
     const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
@@ -409,24 +439,31 @@ export async function processTradingAlert(alertText: string) {
     }
 
     // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
-    if (globalState.globalKillswitches['GLOBAL_SYSTEM']) {
-        if (ticker === 'BTCUSD' && !globalState.globalKillswitches['BTCUSD']) {
+    if (store.globalKillswitches['GLOBAL_SYSTEM']) {
+        if (ticker === 'BTCUSD' && !store.globalKillswitches['BTCUSD']) {
             console.log(`[RADAR] 🤖 Master Killswitch activo, pero permitiendo BTCUSD de forma excepcional.`);
         } else {
             console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada debido a que el BOT GLOBAL está APAGADO.`);
             return;
         }
-    } else if (globalState.globalKillswitches[ticker]) {
+    } else if (store.globalKillswitches[ticker]) {
         console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada por killswitch individual activo.`);
         return;
     }
 
     // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
     // Dos PINGs del mismo ticker se procesan secuencialmente, no en paralelo
-    const previousLock = globalState.tickerLocks.get(ticker) || Promise.resolve();
+    const previousLock = store.tickerLocks.get(ticker) || Promise.resolve();
     let releaseLock: () => void;
     const newLock = new Promise<void>(resolve => { releaseLock = resolve; });
-    globalState.tickerLocks.set(ticker, newLock);
+    store.tickerLocks.set(ticker, newLock);
+    
+    // 🧹 Limpieza: borrar el lock del mapa si no ha sido sobrescrito por uno más nuevo
+    newLock.finally(() => {
+        if (store.tickerLocks.get(ticker) === newLock) {
+            store.tickerLocks.delete(ticker);
+        }
+    });
     
     try {
         await previousLock; // Esperar que termine el procesamiento anterior de este ticker
@@ -441,7 +478,7 @@ export async function processTradingAlert(alertText: string) {
                                    'DIV_BROKEN', 'EVENTO_SMC_DIV', 'EVENTO_SWEEP', 'EVENTO_SWEEP_TL',
                                    'EVENTO_SWEEP_SCALP', 'SYNC_ZONES', 'PING_PRICE', 'LIQ_GRAB']);
     if (!FAKE_TICKERS.has(ticker)) {
-        globalState.tickerLastSeen.set(ticker, nowMs);
+        store.tickerLastSeen.set(ticker, nowMs);
     }
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
@@ -455,10 +492,13 @@ export async function processTradingAlert(alertText: string) {
     const isClimaxCandle = alertText.includes('Vol: CLIMAX');
 
     const docRef = db.collection('radar_states').doc(ticker);
-    const todayStr = new Date(nowMs).toISOString().split('T')[0];
+    // Para ASIA: anclar el día de trading a las 17:00 ART (convención FX: el día cambia al cierre de NY):
+    const todayStr = new Date(nowMs - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
 
     let triggerOte = false;
     let oteData: any = null;
+    let dispatchData: any = null;
+    let state: any = null;
 
     try {
         // 🔥 Reemplazo completo de la Transacción por Memoria RAM Local 🔥
@@ -466,7 +506,7 @@ export async function processTradingAlert(alertText: string) {
         oteData = null;
 
         // 1. LEER DE LA RAM (Ultra rápido y sin costo de base de datos)
-        let state = globalState.localRadarStates.get(ticker);
+        state = store.localRadarStates.get(ticker);
         
         // Si el servidor se reinició y la RAM está vacía, hacemos 1 sola lectura a Firebase
         if (!state) {
@@ -474,8 +514,8 @@ export async function processTradingAlert(alertText: string) {
                 docRef.get(),
                 new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore docRef.get() timeout tras 5s")), 5000))
             ]);
-            state = docSnap.exists ? (docSnap.data() as RadarState) : emptyState();
-            globalState.localRadarStates.set(ticker, state);
+            state = docSnap.exists ? structuredClone(docSnap.data() as RadarState) : emptyState();
+            store.localRadarStates.set(ticker, state);
         }
 
         if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
@@ -490,13 +530,13 @@ export async function processTradingAlert(alertText: string) {
             const sourceTf = eventTf;
             
             const syncKey = `${ticker}_${sourceTf}`;
-            const lastSync = globalState.lastSyncTime.get(syncKey) || 0;
+            const lastSync = store.lastSyncTime.get(syncKey) || 0;
             const throttleMs = SYNC_THROTTLE_MS[sourceTf] || 60000;
             if (nowMs - lastSync < throttleMs) {
                 console.log(`[SYNC] ⏭️ SYNC_ZONES throttled para ${ticker} ${sourceTf} (último: hace ${Math.round((nowMs - lastSync)/1000)}s, límite: ${throttleMs/1000}s)`);
                 return;
             }
-            globalState.lastSyncTime.set(syncKey, nowMs);
+            store.lastSyncTime.set(syncKey, nowMs);
             
             const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
             const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
@@ -509,11 +549,13 @@ export async function processTradingAlert(alertText: string) {
 
                 if (state.lastSyncDate !== todayStr) {
                     state.zones = [];
+                    state.zoneConfluence = computeConfluenceTFs(state.zones);
                     state.activeLocks = [];
                     state.lastSyncDate = todayStr;
                 }
-                state.zones = state.zones.filter(z => z.tf !== sourceTf);
+                state.zones = state.zones.filter((z: any) => z.tf !== sourceTf);
                 state.zones.push(...parsedZones);
+                state.zoneConfluence = computeConfluenceTFs(state.zones);
             } catch (e) { }
         }
         else if (prefix === 'PING_PRICE') {
@@ -533,16 +575,26 @@ export async function processTradingAlert(alertText: string) {
 
             // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice; 
-            // Actualizar después de guardar la referencia
+            
+            const prevClose = previousPrice ?? currentPrice;
+            const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
+            if (state.atr14 === undefined) {
+                state.atrSeed = (state.atrSeed ?? 0) + tr;
+                state.atrSamples = (state.atrSamples ?? 0) + 1;
+                if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14; // SMA de arranque
+            } else {
+                state.atr14 = (state.atr14 * 13 + tr) / 14; // suavizado de Wilder
+            }
+            
             // Actualizar después de guardar la referencia
             state.lastPrice = currentPrice;
-            globalState.lastPingTime = nowMs; // 🏥 Healthcheck
+            store.lastPingTime = nowMs; // 🏥 Healthcheck
             // Guardar también el precio previo para referencia en el siguiente tick
             (state as any).previousPrice = previousPrice;
 
             // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
             const config = getConfigForTicker(ticker, nowMs);
-            const isKillswitched = nowMs < globalState.streakKillswitchUntil || nowMs < globalState.vixKillswitchUntil || !config.sessionEnabled;
+            const isKillswitched = nowMs < store.streakKillswitchUntil || nowMs < store.vixKillswitchUntil || !config.sessionEnabled;
             
             if (!isKillswitched) {
                 // 🗺️ Estirar patas Macro si están activas
@@ -553,11 +605,11 @@ export async function processTradingAlert(alertText: string) {
                     state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
                 }
 
-                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, store, isBacktest);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
 
-                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs);
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, store, isBacktest);
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para ${ticker}`); }
             }
@@ -565,9 +617,10 @@ export async function processTradingAlert(alertText: string) {
             // =========================================================
             // GESTIÓN DE TRADES ACTIVOS (TP Y SL)
             // =========================================================
-            if (globalState.activeTrades.size > 0) {
-                for (const [tradeId, trade] of globalState.activeTrades) {
+            if (store.activeTrades.size > 0) {
+                for (const [tradeId, trade] of store.activeTrades) {
                     if (trade.ticker !== ticker) continue;
+                    if (!!(trade as any).isBacktest !== isBacktest) continue;
                     const nowTrade = nowMs;
                     
                     // 🛡️ v5.4: Anti-instantáneo — no evaluar TP/SL si el trade se creó hace < 5s
@@ -648,8 +701,9 @@ export async function processTradingAlert(alertText: string) {
                                         tp1Hit: true,
                                         tp1Timestamp: nowTrade,
                                         slPrice: trade.slPrice,
-                                        originalSlPrice: trade.originalSlPrice
-                                    }).catch(() => {});
+                                        originalSlPrice: trade.originalSlPrice,
+                                        closedAt: nowTrade
+                                    }).then(() => import('../engine/PortfolioModel.js').then(m => m.invalidateRiskCache())).catch(() => {});
                                 }
                             }
                             
@@ -719,8 +773,9 @@ export async function processTradingAlert(alertText: string) {
                                 if (fireDb) {
                                     fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         slHalfwayHit: true,
-                                        slPrice: trade.entryPrice
-                                    }).catch(() => {});
+                                        slPrice: trade.entryPrice,
+                                        closedAt: nowTrade
+                                    }).then(() => import('../engine/PortfolioModel.js').then(m => m.invalidateRiskCache())).catch(() => {});
                                 }
                             }
 
@@ -749,6 +804,37 @@ export async function processTradingAlert(alertText: string) {
                         }
                     }
                     
+                    // Complemento PING: trailing continuo post-TP1 por distancia
+                    if (trade.tp1Hit) {
+                        const atrThreshold = (state.atr14 ?? 0) * 1.5;
+                        const ratchetStep = (state.atr14 ?? 0) * 0.25;
+                        if (trade.direction === 'BUY') {
+                            const atrTrailSL = highPrice - atrThreshold;
+                            if (atrTrailSL > trade.slPrice + ratchetStep) {
+                                if (isBacktest) {
+                                    trade.slPrice = atrTrailSL;
+                                } else {
+                                    trade.targetSlPrice = parseFloat(atrTrailSL.toFixed(5));
+                                    trade.targetSlPending = true;
+                                    trade.targetSlRetries = 0;
+                                    if (db) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
+                                }
+                            }
+                        } else {
+                            const atrTrailSL = lowPrice + atrThreshold;
+                            if (atrTrailSL < trade.slPrice - ratchetStep) {
+                                if (isBacktest) {
+                                    trade.slPrice = atrTrailSL;
+                                } else {
+                                    trade.targetSlPrice = parseFloat(atrTrailSL.toFixed(5));
+                                    trade.targetSlPending = true;
+                                    trade.targetSlRetries = 0;
+                                    if (db) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
+                                }
+                            }
+                        }
+                    }
+                    
                     // 🚀 EVALUACIÓN DE TP2
                     if (trade.tp2Price > 0) {
                         const tp2Hit = trade.direction === 'BUY' 
@@ -760,7 +846,7 @@ export async function processTradingAlert(alertText: string) {
                             if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             // 💾 Eliminar de RAM inmediatamente de forma síncrona
-                            globalState.activeTrades.delete(tradeId);
+                            store.activeTrades.delete(tradeId);
                             if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                             trade.tp2Hit = true;
@@ -787,13 +873,12 @@ export async function processTradingAlert(alertText: string) {
                                 }
                             }
                             if (trade.journalId) {
-                                recordResult(trade.journalId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(trade.journalId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             } else {
-                                recordResult(tradeId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(tradeId, 'WIN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             }
 
-                            if (trade.tp1Hit) globalState.consecutiveLosses = Math.max(0, globalState.consecutiveLosses - 1);
-                            else globalState.consecutiveLosses = 0;
+                            store.consecutiveLosses = 0;
                             
                             const tp2Msg = `🟢 <b>TP2 ALCANZADO (WIN) | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` + 
@@ -802,7 +887,7 @@ export async function processTradingAlert(alertText: string) {
                                 `🚀 TP2: ${trade.tp2Price} ✅\n` +
                                 `📊 PnL: +${finalPnlPct.toFixed(2)}%\n` +
                                 `⏱️ Duración total: ${durationMin} min\n\n` +
-                                `🏆 ¡Trade completo! ${globalState.consecutiveLosses > 0 ? `Racha protección: ${globalState.consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
+                                `🏆 ¡Trade completo! ${store.consecutiveLosses > 0 ? `Racha protección: ${store.consecutiveLosses} pérdidas` : 'Racha limpia.'}`;
                             if (!isBacktest) sendTelegramAlert(tp2Msg).catch(() => {});
                             console.log(`[JOURNAL] 🟢 TP2 alcanzado (WIN): ${ticker} ${trade.direction} #${tradeId}`);
                             continue;
@@ -834,7 +919,7 @@ export async function processTradingAlert(alertText: string) {
                         if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
                         
                         // 💾 Eliminar de RAM inmediatamente de forma síncrona para evitar race conditions
-                        globalState.activeTrades.delete(tradeId);
+                        store.activeTrades.delete(tradeId);
                         if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                         const isPartialClose = trade.tp1Hit;
@@ -864,32 +949,36 @@ export async function processTradingAlert(alertText: string) {
                         // Si tomamos parciales, igual registramos la operación para no castigar
                         if (!isPartialClose) {
                             if (trade.journalId) {
-                                recordResult(trade.journalId, 'LOSS', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(trade.journalId, 'LOSS', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             } else {
-                                recordResult(tradeId, 'LOSS', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(tradeId, 'LOSS', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             }
                         } else {
                             if (trade.journalId) {
-                                recordResult(trade.journalId, 'BREAKEVEN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(trade.journalId, 'BREAKEVEN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             } else {
-                                recordResult(tradeId, 'BREAKEVEN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
+                                if (!isBacktest) recordResult(tradeId, 'BREAKEVEN', parseFloat(finalPnlPct.toFixed(2))).catch(() => {});
                             }
                         }
 
-                        // Lógica de racha perdedora (solo contar PÉRDIDAS reales, no breakevens ni parciales)
-                        const isBreakevenResult = trade.tp1Hit && !trade.tp2Hit;
-                        if (!isPartialClose && !isBreakevenResult) {
-                            globalState.consecutiveLosses++;
-                            if (globalState.consecutiveLosses >= 5) globalState.streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
+                        // Lógica de racha perdedora con banda neutra
+                        const NET_BE_EPS = 0.05;
+                        if (rMultiple < -NET_BE_EPS) {
+                            store.consecutiveLosses++;
+                            if (store.consecutiveLosses >= 5) store.streakKillswitchUntil = nowTrade + 30 * 60 * 1000;
+                        } else if (rMultiple >= 0.8) {
+                            store.consecutiveLosses = 0;
+                        } else if (rMultiple > NET_BE_EPS) {
+                            store.consecutiveLosses = Math.max(0, store.consecutiveLosses - 1);
                         }
                         
-                        const protectionMsg = globalState.consecutiveLosses >= 5 
+                        const protectionMsg = store.consecutiveLosses >= 5 
                             ? '🔴 ALERTA: 5 pérdidas consecutivas. KILLSWITCH ACTIVADO por 30 min.'
-                            : globalState.consecutiveLosses === 4
+                            : store.consecutiveLosses === 4
                                 ? '⚠️ 4 pérdidas consecutivas.'
-                                : globalState.consecutiveLosses === 3 
+                                : store.consecutiveLosses === 3 
                                     ? '⚠️ 3 pérdidas consecutivas.'
-                                    : globalState.consecutiveLosses === 2 
+                                    : store.consecutiveLosses === 2 
                                         ? '⚠️ 2 pérdidas consecutivas.'
                                         : '';
                         const slMsg = isPartialClose 
@@ -906,7 +995,7 @@ export async function processTradingAlert(alertText: string) {
                               `📊 PnL: ${finalPnlPct.toFixed(2)}%\n` +
                               `⏱️ Duración: ${durationMin} min\n\n` +
                               `${protectionMsg ? protectionMsg + '\n\n' : ''}` +
-                              `📈 Racha actual: ${globalState.consecutiveLosses} pérdida(s) consecutiva(s)`;
+                              `📈 Racha actual: ${store.consecutiveLosses} pérdida(s) consecutiva(s)`;
 
                         if (!isBacktest) sendTelegramAlert(slMsg).catch(() => {});
                         console.log(`[JOURNAL] ${isPartialClose ? '⚠️ SL Post-Parcial (BREAKEVEN)' : '🔴 SL alcanzado (LOSS)'}: ${ticker} #${tradeId}`);
@@ -988,7 +1077,7 @@ export async function processTradingAlert(alertText: string) {
                     if (!zonesOverlap) continue;
                     
                     let confluenceBonus = tfCount === 4 ? 10 : tfCount === 3 ? 7 : 4;
-                    const tfList = [...uniqueTFs].map(t => parseTF(t || '')).sort((a, b) => {
+                    const tfList = [...uniqueTFs].map(t => parseTF(t || '')).sort((a: any, b: any) => {
                         const order: Record<string, number> = { '5M': 0, '15M': 1, '1H': 2, '4H': 3, 'D': 4 };
                         return (order[b] || 0) - (order[a] || 0);
                     }).join('+');
@@ -1103,7 +1192,7 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'ZONE_BROKEN') {
                 let pointsToDeduct = 0;
                 const initialLength = activeScore.events.length;
-                activeScore.events = activeScore.events.filter(e => {
+                activeScore.events = activeScore.events.filter((e: any) => {
                     if (e === `POC_Volume_${readableTf}`) { pointsToDeduct += 4; return false; }
                     if (e === `Breaker_${readableTf}`) { pointsToDeduct += 3; return false; }
                     if (e === `OB_${readableTf}`) { pointsToDeduct += 3; return false; }
@@ -1113,7 +1202,7 @@ export async function processTradingAlert(alertText: string) {
                 // 🔧 FIX: Limpiar las zonas CONTRARIAS rotas del mapa de zonas en RAM
                 // ZONE_BROKEN dir=BUY → presión alcista rompió zonas SELL (soportes/supply)
                 // ZONE_BROKEN dir=SELL → presión bajista rompió zonas BUY (demanda/demand)
-                state.zones = state.zones.filter(z => {
+                state.zones = state.zones.filter((z: any) => {
                     if (z.tf !== eventTf) return true;
                     if (currentDirection === 'BUY' && z.dir === 'BUY') return true;   // Mantener zonas BUY (no afectadas)
                     if (currentDirection === 'SELL' && z.dir === 'SELL') return true;  // Mantener zonas SELL (no afectadas)
@@ -1124,7 +1213,7 @@ export async function processTradingAlert(alertText: string) {
 
             if (prefix === 'DIV_BROKEN') {
                 const initialLength = activeScore.events.length;
-                activeScore.events = activeScore.events.filter(e => e !== `DIV_${readableTf}`);
+                activeScore.events = activeScore.events.filter((e: any) => e !== `DIV_${readableTf}`);
                 if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - 2);
                 return;
             }
@@ -1132,7 +1221,7 @@ export async function processTradingAlert(alertText: string) {
             if (prefix === 'SWEEP_BROKEN') {
                 let pointsToDeduct = 0;
                 const initialLength = activeScore.events.length;
-                activeScore.events = activeScore.events.filter(e => {
+                activeScore.events = activeScore.events.filter((e: any) => {
                     if (e === `Sweep_${readableTf}_Absorcion`) { pointsToDeduct += 5; return false; }
                     if (e === `Sweep_${readableTf}`) { pointsToDeduct += 3; return false; }
                     if (e === `📉_TL_Sweep_${readableTf}`) { pointsToDeduct += 2; return false; }
@@ -1204,7 +1293,7 @@ export async function processTradingAlert(alertText: string) {
             else if (prefix === 'EVENTO_SWEEP_TL') {
                 if (!activeScore.events.includes(`📉_TL_Sweep_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`📉_TL_Sweep_${readableTf}`); }
                 if (oppositeScore.events.includes(`📉_TL_Sweep_${readableTf}`)) {
-                    oppositeScore.events = oppositeScore.events.filter(e => e !== `📉_TL_Sweep_${readableTf}`);
+                    oppositeScore.events = oppositeScore.events.filter((e: any) => e !== `📉_TL_Sweep_${readableTf}`);
                     oppositeScore.points = Math.max(0, oppositeScore.points - 2);
                 }
             }
@@ -1219,7 +1308,7 @@ export async function processTradingAlert(alertText: string) {
                 if (prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS') {
                     const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
-                        const hasZoneNow = activeScore.events.some(e => 
+                        const hasZoneNow = activeScore.events.some((e: any) => 
                             e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
                             e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
                             e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
@@ -1349,14 +1438,14 @@ export async function processTradingAlert(alertText: string) {
                 const spatialBonus = Math.round(spatialMaxWeight * 5);
 
                 // CASO C: Zona contraria DENTRO del rango del CHoCH (trampa / liquidity grab)
-                const caseC_TrapZone = (chLow !== null && chHigh !== null) ? state.zones.filter(z =>
+                const caseC_TrapZone = (chLow !== null && chHigh !== null) ? state.zones.filter((z: any) =>
                     z.dir !== currentDirection &&
                     z.top >= chLow && z.btm <= chHigh
                 ).length : 0;
 
                 // El respaldo viene del mapa espacial Y/O de la mochila secuencial
                 const hasSpatialBacking = caseA_OriginInZone || caseB_PathTouchedZone;
-                const hasSequentialBacking = activeScore.events.some(e => 
+                const hasSequentialBacking = activeScore.events.some((e: any) => 
                     e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
                     e.includes('ZoneTouched_') || e.includes('OTE_') ||
                     (e.includes('DIV_') && !e.includes('_3')) || 
@@ -1507,13 +1596,13 @@ export async function processTradingAlert(alertText: string) {
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
                 if (isCrypto) minPtsRequired = Math.max(minPtsRequired - 1, 3); // Crypto: 1 punto menos
                 
-                const bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
+                const bestZone = state.zones.filter((z: any) => z.dir === currentDirection).sort((a: any, b: any) => (b.score || 0) - (a.score || 0))[0] || null;
 
                 if (true) {
                     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (activeLeg) {
                         // 🛡️ Requiere al menos 1 evento de zona real O respaldo espacial del mapa de zonas
-                        const hasZoneConfluence = activeScore.events.some(e => 
+                        const hasZoneConfluence = activeScore.events.some((e: any) => 
                             e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
                             e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
                             e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
@@ -1612,7 +1701,7 @@ export async function processTradingAlert(alertText: string) {
                                 const signalTfMs = parseTfToMinutes(readableTf);
                                 
                                 // 🔧 MEJORA 1: Filtrar Paredes de Papel (Ignorar debiles y de menor TF)
-                                const oppositeZones = state.zones.filter(z => {
+                                const oppositeZones = state.zones.filter((z: any) => {
                                     if (z.dir === currentDirection) return false;
                                     if (z.medal === 'SMC_DIV') return false; // Divergencias no son zonas duras
                                     
@@ -1690,6 +1779,10 @@ export async function processTradingAlert(alertText: string) {
                             } else {
                                 if (smartReport) oteData.confluenceReport += smartReport;
                                 triggerOte = true;
+                                // ✅ Cooldown y reset SOLO cuando el trade realmente se dispara
+                                state.lastSniperAlert = nowMs;
+                                activeScore.points = 0; activeScore.events = [];
+                                oppositeScore.points = 0; oppositeScore.events = [];
                             }
 
                             if (disableOte) {
@@ -1697,13 +1790,6 @@ export async function processTradingAlert(alertText: string) {
                             }
                         }
                     }
-                    
-                    if (totalPoints >= minPtsRequired) {
-                        oppositeScore.points = 0; oppositeScore.events = [];
-                    }
-                    
-                    state.lastSniperAlert = nowMs;
-                    activeScore.points = 0; activeScore.events = [];
                 }
             }
             else if (prefix === 'HEARTBEAT') state.lastHeartbeat = nowMs;
@@ -1715,16 +1801,16 @@ export async function processTradingAlert(alertText: string) {
           '3': 1800000, '5': 3600000, '15': 21600000,
           '60': 28800000, '240': 86400000, 'D': 604800000,
         };
-        state.zones = state.zones.filter(z => {
+        state.zones = state.zones.filter((z: any) => {
             if (!z.createdAt) return true; 
             return (nowMs - z.createdAt) < (MAX_ZONE_AGE_MS[z.tf || '60'] || 14400000);
         });
 
         // 💾 2. GUARDAR LOS CAMBIOS EN LA RAM LOCAL SIEMPRE
-        globalState.localRadarStates.set(ticker, state);
+        store.localRadarStates.set(ticker, state);
 
         // 💾 3. GUARDAR EN FIREBASE (BACKUP INTELIGENTE CADA 5 MINUTOS O EN EVENTOS)
-        const timeSinceLastSave = nowMs - (globalState.lastFirebaseSave.get(ticker) || 0);
+        const timeSinceLastSave = nowMs - (store.lastFirebaseSave.get(ticker) || 0);
         const FIREBASE_INTERVAL_MS = 5 * 60 * 1000; // 5 Minutos
 
         state.version = (state.version || 0) + 1;
@@ -1732,13 +1818,156 @@ export async function processTradingAlert(alertText: string) {
 
         if (prefix !== 'PING_PRICE' || timeSinceLastSave > FIREBASE_INTERVAL_MS) {
             docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando estado ${ticker}: ${err.message}`));
-            globalState.lastFirebaseSave.set(ticker, nowMs);
+            store.lastFirebaseSave.set(ticker, nowMs);
         }
 
+        if (triggerOte && oteData) {
+            state.lastGatillo = {
+                dir: oteData.direction as 'BUY' | 'SELL',
+                price: oteData.entryPrice,
+                time: nowMs,
+                type: oteData.isChochEntry ? 'CHOCH' : 'OTE',
+                status: 'EVALUANDO...',
+                tf: oteData.tf
+            };
+            state.version = (state.version || 0) + 1;
+            state.lastModified = nowMs;
+            docRef.set(state, { merge: true }).catch(() => {});
+            dispatchData = oteData;
+        }
+
+    } catch (e: any) {
+        console.error(`[RADAR] Error crítico en memoria/Firebase:`, e.message);
+    } finally {
+        releaseLock!(); // 🛡️ v5.4: Liberar lock del ticker
+    }
+
+    if (dispatchData) {
+        await dispatchOteSignal(dispatchData, state, docRef, { ticker, nowMs, isBacktest, sessionThresholds, store });
+    }
+}
+
+const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
+let watchdogStarted = false;
+
+export function startWatchdog() {
+    if (watchdogStarted) return;
+    watchdogStarted = true;
+    
+    const checkVix = async () => {
+        try {
+            const fetch = (await import('node-fetch')).default;
+            const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
+            if (!FINNHUB_API_KEY) { console.warn('[NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.'); return; }
+            const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
+            const data: any = await res.json();
+            if (data.c && data.c > 30) {
+                console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
+                globalState.vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
+            } else {
+                globalState.vixKillswitchUntil = 0;
+            }
+        } catch (e) {
+            console.error('[NEWS FILTER] Error verificando VIX:', e);
+        }
+    };
+    setInterval(checkVix, 15 * 60 * 1000);
+    checkVix();
+
+    // 📊 v5.6: Resumen diario UNIFICADO — delega a journal.ts (sendDailyReview)
+    // Mantiene solo la lógica de scheduling (18:00 ART, once-per-day guard)
+    const scheduleDailySummary = () => {
+        const now = new Date();
+        const artNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+        const artHour = artNow.getHours();
+        const artMin = artNow.getMinutes();
+        
+        // Disparar entre 18:00 y 18:05 ART
+        if (artHour === 18 && artMin >= 0 && artMin < 5) {
+            const today = artNow.toISOString().split('T')[0];
+            const lastSummaryDate = (globalThis as any).__lastSummaryDate;
+            if (lastSummaryDate === today) return;
+            (globalThis as any).__lastSummaryDate = today;
+            
+            sendDailyReview()
+                .then(() => console.log(`[DAILY] 📊 Resumen diario enviado via journal.ts`))
+                .catch((e: any) => console.error('[DAILY] Error generando resumen:', e));
+        }
+    };
+    setInterval(scheduleDailySummary, 5 * 60 * 1000);
+    scheduleDailySummary();
+
+    setInterval(() => {
+        const now = Date.now();
+        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+        
+        for (const [id, trade] of globalState.activeTrades) {
+            const age = now - trade.timestamp;
+            // 🛡️ Si no hay registros de pings para este ticker, usamos la hora de creación del trade
+            // para evitar que se interprete como inactivo desde 1970 (inactividad = now)
+            const lastSeen = globalState.tickerLastSeen.get(trade.ticker) || trade.timestamp;
+            const inactivity = now - lastSeen;
+            
+            // Si globalState.tickerLastSeen está completamente vacío (post-reinicio), no cerrar el trade
+            if (globalState.tickerLastSeen.size === 0) {
+                continue; // No cerrar trades hasta que llegue el primer PING real
+            }
+            
+            // Cierre por timeout: ELIMINADO SEGÚN SOLICITUD
+            
+            // Limpieza de trades huérfanos (7 días)
+            if (age > SEVEN_DAYS) {
+                globalState.activeTrades.delete(id);
+                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
+                console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
+            }
+        }
+
+        for (const [ticker, lastSeen] of globalState.tickerLastSeen) {
+            const inactiveMin = Math.round((now - lastSeen) / 60000);
+            if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
+                // 🔔 Alerta proactiva de desconexión
+                const state = globalState.localRadarStates.get(ticker);
+                const lastHb = state?.lastHeartbeat || 0;
+                // 🛡️ v5.5: Ignorar timestamps "viejos" que vienen de Firebase post-reinicio
+                // Si lastHeartbeat es 0 o menor que el timestamp de hace 2 horas, son datos inválidos
+                const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+                const hbAge = (lastHb > 0 && lastHb > (now - 86400000)) ? (now - lastHb) : 0;
+                const hbInactiveMin = Math.round(hbAge / 60000);
+                
+                // 🛡️ v5.5: Solo enviar alerta de desconexión si realmente está desconectado
+                // (>2 horas sin heartbeat Y sin otros eventos en el mismo período)
+                if (hbAge < TWO_HOURS_MS) continue; // Tiene heartbeat reciente, no está desconectado
+                
+                // 🛡️ v5.5.1: Solo alertar 1 vez por desconexión — no spamear
+                globalState.tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
+                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta Silenciosa.`);
+            }
+        }
+    }, WATCHDOG_INTERVAL_MS);
+}
+
+/**
+ * 🆕 v7.2: Inyectar el ID de la posición de cTrader en la RAM
+ * Esto permite que trading.ts pueda hacer cierres parciales y breakeven automáticamente
+ */
+export function updateTradePositionId(tradeId: string, positionId: string) {
+    const trade = globalState.activeTrades.get(tradeId);
+    if (trade) {
+        trade.ctraderPositionId = positionId;
+        console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
+    }
+}
+
+async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx: any) {
+    const { ticker, nowMs, isBacktest, sessionThresholds, store } = ctx;
+    const oteData = dispatchData;
+    const { db: fireDb } = await import('./memory.js');
+    const db = fireDb;
         // =========================================================================
         // EJECUCIÓN OTE FUERA DE LA TRANSACCIÓN
         // =========================================================================
-        if (triggerOte && oteData) {
+        {
             console.log(`[SNIPER] 🎯 triggerOte=true para ${ticker} ${oteData.direction}. Puntos: ${oteData.points}. Evaluando killswitches...`);
             
             state.lastGatillo = {
@@ -1760,39 +1989,50 @@ export async function processTradingAlert(alertText: string) {
                 state.lastGatillo.status = 'BLOCKED_SESSION';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                globalState.activeTrades.delete(oteData.tradeId);
+                store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
-            const isGlobalKilled = await evaluateGlobalKillswitch(nowMs);
+            const currentSession = getCurrentSession(nowMs);
+            const warmupMin = (config as any).sessionWarmupMin ?? 15;
+            if ((currentSession === 'LONDON' || currentSession === 'NY') && minutesSinceSessionOpen(nowMs) < warmupMin) {
+                console.log(`[RADAR] 🚫 Trading bloqueado por warmup de sesión (${currentSession}) para ${ticker}`);
+                state.lastGatillo.status = 'BLOCKED_WARMUP';
+                docRef.set(state).catch(() => {});
+                store.activeTrades.delete(oteData.tradeId);
+                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                return;
+            }
+
+            const isGlobalKilled = await evaluateGlobalKillswitch(nowMs, store, isBacktest);
             if (isGlobalKilled) {
                 console.log(`[GLOBAL KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por riesgo global consolidado de la cuenta.`);
                 state.lastGatillo.status = 'BLOCKED_GLOBAL';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                globalState.activeTrades.delete(oteData.tradeId);
+                store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
-            if (nowMs < globalState.streakKillswitchUntil) {
-                const remainingMin = Math.round((globalState.streakKillswitchUntil - nowMs) / 60000);
-                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${globalState.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
+            if (nowMs < store.streakKillswitchUntil) {
+                const remainingMin = Math.round((store.streakKillswitchUntil - nowMs) / 60000);
+                console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${store.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_RACHA';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                globalState.activeTrades.delete(oteData.tradeId);
+                store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
-            if (nowMs < globalState.vixKillswitchUntil) {
-                const remainingMin = Math.round((globalState.vixKillswitchUntil - nowMs) / 60000);
+            if (nowMs < store.vixKillswitchUntil) {
+                const remainingMin = Math.round((store.vixKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_VIX';
                 docRef.set(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                globalState.activeTrades.delete(oteData.tradeId);
+                store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
@@ -1813,22 +2053,22 @@ export async function processTradingAlert(alertText: string) {
                 const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = sellConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
-                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, isBacktest, activeSessionId);
+                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, store, isBacktest, activeSessionId);
                     if (currentConsecutiveLosses >= sessionConfig.maxSellLosses) {
-                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        globalState.activeTrades.delete(oteData.tradeId);
+                        store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
-                            `📊 Se alcanzaron <b>${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses}</b> pérdidas consecutivas de tipo SELL hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `📊 Se alcanzaron <b>${currentConsecutiveLosses}/${sessionConfig.maxSellLosses}</b> pérdidas consecutivas de tipo SELL hoy en la sesión <b>${currentSession}</b>.\n` +
                             `💡 <i>Límite de pérdidas consecutivas (maxSellLosses) superado.</i>`
                         ).catch(() => {});
                         return;
                     }
-                    console.log(`[MCL LIMIT] ✅ ${ticker} SELL permitido: ${globalState.consecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas de tipo SELL.`);
+                    console.log(`[MCL LIMIT] ✅ ${ticker} SELL permitido: ${currentConsecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas de tipo SELL.`);
                 }
 
                 // 📊 Verificar límite diario de SELLs
@@ -1838,7 +2078,7 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        globalState.activeTrades.delete(oteData.tradeId);
+                        store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
@@ -1861,22 +2101,22 @@ export async function processTradingAlert(alertText: string) {
                 const currentSession = getCurrentSession(nowMs);
                 const sessionConfig = buyConfig.sessions?.[currentSession];
                 if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
-                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, isBacktest, activeSessionId);
+                    const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, store, isBacktest, activeSessionId);
                     if (currentConsecutiveLosses >= sessionConfig.maxBuyLosses) {
-                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                        console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         docRef.set(state).catch(() => {});
-                        globalState.activeTrades.delete(oteData.tradeId);
+                        store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
-                            `📊 Se alcanzaron <b>${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses}</b> pérdidas consecutivas de tipo BUY hoy en la sesión <b>${currentSession}</b>.\n` +
+                            `📊 Se alcanzaron <b>${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses}</b> pérdidas consecutivas de tipo BUY hoy en la sesión <b>${currentSession}</b>.\n` +
                             `💡 <i>Límite de pérdidas consecutivas (maxBuyLosses) superado.</i>`
                         ).catch(() => {});
                         return;
                     }
-                    console.log(`[MCL LIMIT] ✅ ${ticker} BUY permitido: ${globalState.consecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas de tipo BUY.`);
+                    console.log(`[MCL LIMIT] ✅ ${ticker} BUY permitido: ${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas de tipo BUY.`);
                 }
 
                 // 📊 Verificar límite diario de BUYs
@@ -1886,7 +2126,7 @@ export async function processTradingAlert(alertText: string) {
                         console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
                         docRef.set(state).catch(() => {});
-                        globalState.activeTrades.delete(oteData.tradeId);
+                        store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
@@ -1903,7 +2143,7 @@ export async function processTradingAlert(alertText: string) {
             
             // 🆕 Filtro Anti-Piramidación y Lógica SAR (Stop and Reverse)
             let existingTradeForTicker: ActiveTrade | undefined;
-            for (const trade of globalState.activeTrades.values()) {
+            for (const trade of store.activeTrades.values()) {
                 if (trade.ticker === ticker && trade.tradeId !== oteData.tradeId) {
                     existingTradeForTicker = trade;
                     break;
@@ -1929,7 +2169,7 @@ export async function processTradingAlert(alertText: string) {
                                 tp1Price: 0, tp2Price: 0, slPrice: 0,
                                 tp1Hit: false, tp2Hit: false,
                                 score: 0, // Score 0 significa que cualquier señal nueva le ganará en SAR
-                                timestamp: Date.now(),
+                                timestamp: Date.now(), isBacktest: isBacktest,
                                 ctraderPositionId: String(cTraderPos.positionId || cTraderPos.id)
                             };
                             console.log(`[ANTI-PYRAMID] ⚠️ Trade encontrado en cTrader (huérfano en RAM): ${existingTradeForTicker.direction} posID: ${existingTradeForTicker.ctraderPositionId}`);
@@ -1940,38 +2180,34 @@ export async function processTradingAlert(alertText: string) {
                 }
             }
 
+            let sarPendingClose: any = null;
             if (existingTradeForTicker) {
+                const cleanupPrecreatedTrade = () => {
+                    if (oteData && oteData.tradeId) {
+                        store.activeTrades.delete(oteData.tradeId);
+                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                    }
+                };
+
                 if (existingTradeForTicker.direction === oteData.direction) {
                     // Mismo sentido -> Bloquear para evitar piramidación
                     console.log(`[ANTI-PYRAMID] ⛔ Señal ${oteData.direction} ignorada para ${ticker}: ya hay una operación activa en la misma dirección.`);
+                    cleanupPrecreatedTrade();
+                    if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_ANTIPYRAMID';
+                    docRef.set(state).catch(() => {});
                     if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL IGNORADA</b> | ${ticker}\nSe detectó una nueva señal <b>${oteData.direction}</b>, pero ya hay una operación abierta en la misma dirección. (Anti-Piramidación)`).catch(() => {});
                     return;
                 } else {
                     // Dirección Opuesta -> SAR (Stop and Reverse)
                     if (oteData.points > existingTradeForTicker.score) {
-                        console.log(`[SAR] 🔄 Reversión Activada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) supera a la activa (Score: ${existingTradeForTicker.score}).`);
-                        
-                        // Cerrar operación vieja
-                        globalState.activeTrades.delete(existingTradeForTicker.tradeId);
-                        if (db) db.collection('active_trades').doc(existingTradeForTicker.tradeId).delete().catch(() => {});
-                        
-                        if (existingTradeForTicker.journalId) {
-                            recordResult(existingTradeForTicker.journalId, 'REVERSAL').catch(() => {});
-                        }
-                        
-                        if (!isBacktest) sendTelegramAlert(`🔄 <b>CIERRE POR REVERSIÓN (SAR)</b> | ${ticker}\n\nSe cerró la operación <b>${existingTradeForTicker.direction}</b> porque ingresó una nueva señal <b>${oteData.direction}</b> con mayor convicción (Puntaje: ${oteData.points} vs ${existingTradeForTicker.score}).`).catch(() => {});
-                        
-                        if (!isBacktest && existingTradeForTicker.ctraderPositionId) {
-                            try {
-                                const ctrader = await import('../services/ctrader.js');
-                                await ctrader.closePosition(existingTradeForTicker!.ctraderPositionId!);
-                            } catch (e) {
-                                console.error("[SAR] Error al cerrar posición cTrader:", e);
-                            }
-                        }
+                        console.log(`[SAR] 🔄 Reversión Activada (Diferida) para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) supera a la activa (Score: ${existingTradeForTicker.score}).`);
+                        sarPendingClose = existingTradeForTicker;
                     } else {
                         // Puntaje menor o igual -> Ignorar la nueva señal
                         console.log(`[SAR] ⛔ Reversión Denegada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) no supera a la activa (Score: ${existingTradeForTicker.score}).`);
+                        cleanupPrecreatedTrade();
+                        if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_SAR_DENIED';
+                        docRef.set(state).catch(() => {});
                         if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL DESCARTADA</b> | ${ticker}\n\nSe detectó una señal <b>${oteData.direction}</b> (Puntaje: ${oteData.points}), pero se mantiene la operación <b>${existingTradeForTicker.direction}</b> actual porque tiene mayor o igual convicción (Puntaje: ${existingTradeForTicker.score}).`).catch(() => {});
                         return;
                     }
@@ -2031,7 +2267,7 @@ export async function processTradingAlert(alertText: string) {
                                     events: oteData.events || [],
                                     confluenceReport: oteData.confluenceReport || '',
                                     marketBias: oteData.marketBias || {},
-                                    consecutiveLosses: globalState.consecutiveLosses,
+                                    consecutiveLosses: store.consecutiveLosses,
                                     winRate: 0,
                                     kronosVerdict: kronosVerdict,
                                     kronosDetails: kronosRawDetails
@@ -2124,7 +2360,7 @@ export async function processTradingAlert(alertText: string) {
                 }).catch(() => 'ERR');
                 
                 // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)
-                let activeTrade = globalState.activeTrades.get(oteData.tradeId);
+                let activeTrade = store.activeTrades.get(oteData.tradeId);
                 if (!activeTrade) {
                     activeTrade = {
                         tradeId: oteData.tradeId,
@@ -2138,9 +2374,9 @@ export async function processTradingAlert(alertText: string) {
                         tp2Hit: false,
                         slHalfwayHit: false,
                         score: oteData.points || 0,
-                        timestamp: nowMs
+                        timestamp: nowMs, isBacktest: isBacktest
                     };
-                    globalState.activeTrades.set(oteData.tradeId, activeTrade);
+                    store.activeTrades.set(oteData.tradeId, activeTrade);
                     if (db) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => {});
                     console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
                 }
@@ -2159,7 +2395,28 @@ export async function processTradingAlert(alertText: string) {
                         const ctraderConfigured = !!(globalConfig.CTRADER_CLIENT_ID && globalConfig.CTRADER_ACCESS_TOKEN);
                         
                         if (ctraderConfigured) {
-                            if (globalState.dynamicBotConfig.autoTrading) {
+                            const recheckKillswitchesBeforeExecution = async (): Promise<string | null> => {
+                                const nowLive = Date.now();
+                                const cfg = getConfigForTicker(ticker, nowLive);
+                                if (!cfg.sessionEnabled) return 'BLOCKED_SESSION';
+                                if (store.globalKillswitches['GLOBAL_SYSTEM'] || store.globalKillswitches[ticker]) return 'BLOCKED_KILLSWITCH';
+                                if (await evaluateGlobalKillswitch(nowLive, store, isBacktest)) return 'BLOCKED_GLOBAL';
+                                if (nowLive < store.streakKillswitchUntil) return 'BLOCKED_RACHA';
+                                if (nowLive < store.vixKillswitchUntil) return 'BLOCKED_VIX';
+                                return null;
+                            };
+
+                            const blockedBy = await recheckKillswitchesBeforeExecution();
+                            if (blockedBy) {
+                                console.log(`[KILLSWITCH] ⛔ TOCTOU Prevención: Ejecución bloqueada por ${blockedBy} para ${ticker}`);
+                                if (state.lastGatillo) state.lastGatillo.status = blockedBy;
+                                docRef.set(state).catch(() => {});
+                                store.activeTrades.delete(oteData.tradeId);
+                                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                                return;
+                            }
+
+                            if (store.dynamicBotConfig.autoTrading) {
                                 // 🚀 MODO AUTOMÁTICO: Ejecutar directamente
                                 const { executeMarketOrder } = await import('../services/ctrader.js');
                                 console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
@@ -2175,6 +2432,20 @@ export async function processTradingAlert(alertText: string) {
                                 });
 
                                 if (result.success && result.positionId) {
+                                    if (sarPendingClose) {
+                                        try {
+                                            if (sarPendingClose.ctraderPositionId) {
+                                                const ctrader = await import('../services/ctrader.js');
+                                                await ctrader.closePosition(sarPendingClose.ctraderPositionId);
+                                            }
+                                            store.activeTrades.delete(sarPendingClose.tradeId);
+                                            if (db) db.collection('active_trades').doc(sarPendingClose.tradeId).delete().catch(() => {});
+                                            if (sarPendingClose.journalId) recordResult(sarPendingClose.journalId, 'REVERSAL').catch(() => {});
+                                        } catch (e) {
+                                            console.error('[SAR] Error cierre diferido automático:', e);
+                                        }
+                                    }
+
                                     updateTradePositionId(oteData.tradeId, result.positionId);
                                     if (db && journalId) {
                                         db.collection('trade_journal').doc(journalId).update({
@@ -2211,6 +2482,7 @@ export async function processTradingAlert(alertText: string) {
                                     alertMessage: msg,
                                     journalId: typeof journalId === 'string' ? journalId : undefined,
                                     isChochEntry: oteData.isChochEntry,
+                                    sarPendingClose,
                                 });
                                 console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR + botones cTrader enviada para ${ticker}`);
                             }
@@ -2236,126 +2508,9 @@ export async function processTradingAlert(alertText: string) {
                 docRef.set(state).catch(() => {});
                 
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
-                globalState.activeTrades.delete(oteData.tradeId);
+                store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
             }
         }
 
-    } catch (e: any) {
-        console.error(`[RADAR] Error crítico en memoria/Firebase:`, e.message);
-    } finally {
-        releaseLock!(); // 🛡️ v5.4: Liberar lock del ticker
-    }
-}
-
-const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
-let watchdogStarted = false;
-
-export function startWatchdog() {
-    if (watchdogStarted) return;
-    watchdogStarted = true;
-    
-    const checkVix = async () => {
-        try {
-            const fetch = (await import('node-fetch')).default;
-            const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
-            if (!FINNHUB_API_KEY) { console.warn('[NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.'); return; }
-            const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
-            const data: any = await res.json();
-            if (data.c && data.c > 30) {
-                console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
-                globalState.vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
-            } else {
-                globalState.vixKillswitchUntil = 0;
-            }
-        } catch (e) {
-            console.error('[NEWS FILTER] Error verificando VIX:', e);
-        }
-    };
-    setInterval(checkVix, 15 * 60 * 1000);
-    checkVix();
-
-    // 📊 v5.6: Resumen diario UNIFICADO — delega a journal.ts (sendDailyReview)
-    // Mantiene solo la lógica de scheduling (18:00 ART, once-per-day guard)
-    const scheduleDailySummary = () => {
-        const now = new Date();
-        const artNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
-        const artHour = artNow.getHours();
-        const artMin = artNow.getMinutes();
-        
-        // Disparar entre 18:00 y 18:05 ART
-        if (artHour === 18 && artMin >= 0 && artMin < 5) {
-            const today = artNow.toISOString().split('T')[0];
-            const lastSummaryDate = (globalThis as any).__lastSummaryDate;
-            if (lastSummaryDate === today) return;
-            (globalThis as any).__lastSummaryDate = today;
-            
-            sendDailyReview()
-                .then(() => console.log(`[DAILY] 📊 Resumen diario enviado via journal.ts`))
-                .catch(e => console.error('[DAILY] Error generando resumen:', e));
-        }
-    };
-    setInterval(scheduleDailySummary, 5 * 60 * 1000);
-    scheduleDailySummary();
-
-    setInterval(() => {
-        const now = Date.now();
-        const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
-        
-        for (const [id, trade] of globalState.activeTrades) {
-            const age = now - trade.timestamp;
-            // 🛡️ Si no hay registros de pings para este ticker, usamos la hora de creación del trade
-            // para evitar que se interprete como inactivo desde 1970 (inactividad = now)
-            const lastSeen = globalState.tickerLastSeen.get(trade.ticker) || trade.timestamp;
-            const inactivity = now - lastSeen;
-            
-            // Si globalState.tickerLastSeen está completamente vacío (post-reinicio), no cerrar el trade
-            if (globalState.tickerLastSeen.size === 0) {
-                continue; // No cerrar trades hasta que llegue el primer PING real
-            }
-            
-            // Cierre por timeout: ELIMINADO SEGÚN SOLICITUD
-            
-            // Limpieza de trades huérfanos (7 días)
-            if (age > SEVEN_DAYS) {
-                globalState.activeTrades.delete(id);
-                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
-                console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
-            }
-        }
-
-        for (const [ticker, lastSeen] of globalState.tickerLastSeen) {
-            const inactiveMin = Math.round((now - lastSeen) / 60000);
-            if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
-                // 🔔 Alerta proactiva de desconexión
-                const state = globalState.localRadarStates.get(ticker);
-                const lastHb = state?.lastHeartbeat || 0;
-                // 🛡️ v5.5: Ignorar timestamps "viejos" que vienen de Firebase post-reinicio
-                // Si lastHeartbeat es 0 o menor que el timestamp de hace 2 horas, son datos inválidos
-                const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-                const hbAge = (lastHb > 0 && lastHb > (now - 86400000)) ? (now - lastHb) : 0;
-                const hbInactiveMin = Math.round(hbAge / 60000);
-                
-                // 🛡️ v5.5: Solo enviar alerta de desconexión si realmente está desconectado
-                // (>2 horas sin heartbeat Y sin otros eventos en el mismo período)
-                if (hbAge < TWO_HOURS_MS) continue; // Tiene heartbeat reciente, no está desconectado
-                
-                // 🛡️ v5.5.1: Solo alertar 1 vez por desconexión — no spamear
-                globalState.tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
-                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta Silenciosa.`);
-            }
-        }
-    }, WATCHDOG_INTERVAL_MS);
-}
-
-/**
- * 🆕 v7.2: Inyectar el ID de la posición de cTrader en la RAM
- * Esto permite que trading.ts pueda hacer cierres parciales y breakeven automáticamente
- */
-export function updateTradePositionId(tradeId: string, positionId: string) {
-    const trade = globalState.activeTrades.get(tradeId);
-    if (trade) {
-        trade.ctraderPositionId = positionId;
-        console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
-    }
 }

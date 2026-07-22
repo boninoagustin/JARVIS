@@ -1,29 +1,53 @@
 import { z } from 'zod';
 
+export interface RadarZoneWire {
+    d?: 'BUY'|'SELL';
+    p?: number;
+    b?: number;
+    lv?: string;
+    md?: string;
+    sc?: number;
+    mi?: number;
+    a?: number;
+    t?: string;
+    mg?: number;
+    kz?: boolean;
+}
+
 export interface RadarZone {
     tf?: string;
-    dir: 'BUY' | 'SELL';
+    dir: 'BUY'|'SELL';
     top: number;
     btm: number;
     lvl?: string;
     medal?: string;
     score?: number;
-    tp?: number;
-    sl?: number;
     mid?: number;
     atr?: number;
-    t?: string;      
-    d?: 'BUY' | 'SELL';  
-    p?: number;      
-    b?: number;      
-    lv?: string;     
-    md?: string;     
-    sc?: number;     
-    mi?: number;     
-    a?: number;      
+    tp?: number;
+    sl?: number;
     createdAt?: number;
     mg?: number;
     kz?: boolean;
+}
+
+export function normalizeRadarZone(raw: any): RadarZone {
+    return {
+        dir: raw.d ?? raw.dir,
+        top: raw.p ?? raw.top,
+        btm: raw.b ?? raw.btm,
+        lvl: raw.lv ?? raw.lvl,
+        medal: raw.md ?? raw.medal,
+        score: raw.sc ?? raw.score,
+        mid: raw.mi ?? raw.mid,
+        atr: raw.a ?? raw.atr,
+        tf: raw.t ?? raw.tf,
+        tp: raw.tp,
+        sl: raw.sl,
+        createdAt: raw.createdAt,
+        mg: raw.mg,
+        kz: raw.kz
+    };
 }
 
 export interface ScoreState {
@@ -54,6 +78,7 @@ export interface RadarState {
   atr14?: number;
     lastSyncDate: string | null;
     zones: RadarZone[];
+    zoneConfluence?: Map<RadarZone, string[]>;
     activeLocks: string[];
     lastPrice: number | null;
     previousPrice?: number | null;
@@ -95,6 +120,7 @@ export interface ActiveTrade {
     timestamp: number;
     ctraderPositionId?: string;
     score: number;
+    isBacktest?: boolean;
 }
 
 export interface GlobalPortfolioConfig {
@@ -105,6 +131,7 @@ export interface GlobalPortfolioConfig {
     trailingDrawdownR: number;
     enabled: boolean;
     disabledSessions?: string[];
+    assumedWinR?: number;
 }
 
 export const SessionSchema = z.object({
@@ -123,21 +150,23 @@ export const SessionSchema = z.object({
     maxSmartRiskPercent: z.number().optional()
 });
 
+const nonNegativeNumber = z.coerce.number().refine(n => Number.isFinite(n), { message: 'Debe ser un número finito' });
+
 export const AssetSessionConfigSchema = z.object({
-    minPointsForBuy: z.coerce.number().optional(),
-    minPointsForSell: z.coerce.number().optional(),
-    slBufferPercent: z.coerce.number().optional(),
-    fixedRR: z.coerce.number().optional(),
-    oteEntryPercent: z.coerce.number().optional(),
+    minPointsForBuy: nonNegativeNumber.optional(),
+    minPointsForSell: nonNegativeNumber.optional(),
+    slBufferPercent: nonNegativeNumber.optional(),
+    fixedRR: nonNegativeNumber.optional(),
+    oteEntryPercent: nonNegativeNumber.optional(),
     entryTrigger: z.enum(['CHOCH', 'OTE', 'BOTH', 'SMART']).optional(),
     autoTrading: z.boolean().optional(),
-    maxSmartRiskPercent: z.coerce.number().optional(),
+    maxSmartRiskPercent: nonNegativeNumber.optional(),
     enabled: z.boolean().optional(),
-    maxSellsPerDay: z.coerce.number().optional(),
-    sellScorePenalty: z.coerce.number().optional(),
-    maxBuysPerDay: z.coerce.number().optional(),
-    buyScorePenalty: z.coerce.number().optional(),
+    maxSellsPerDay: nonNegativeNumber.optional(),
+    sellScorePenalty: nonNegativeNumber.optional(),
+    maxBuysPerDay: nonNegativeNumber.optional(),
+    buyScorePenalty: nonNegativeNumber.optional(),
     sessions: z.record(z.string(), SessionSchema).optional()
-}).passthrough();
+}).strict();
 
 export type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;

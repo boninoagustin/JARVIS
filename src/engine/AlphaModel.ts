@@ -45,9 +45,20 @@ export function normalizeZone(raw: any): RadarZone {
     if (r.sc !== undefined && r.score === undefined) r.score = r.sc;
     if (r.mi !== undefined && r.mid === undefined) r.mid = r.mi;
     if (r.a !== undefined && r.atr === undefined) r.atr = r.a;
-    if (r.mg !== undefined) r.mg = r.mg;
-    if (r.kz !== undefined) r.kz = r.kz;
     return r as unknown as RadarZone;
+}
+
+
+export function resolveOteGate(isChoch: boolean, isBos: boolean, triggerTf: string, dir: 'BUY'|'SELL', config: any, sessionConfig: any) {
+    if (!sessionConfig) return { entryPercent: config.oteEntryPercent || 50, enabled: ['OTE','BOTH','SMART'].includes(config.entryTrigger), minScore: 8 };
+    const prefix = isChoch ? 'oteChoch' : isBos ? 'oteBos' : null;
+    const tfConfig = prefix ? (sessionConfig[`${prefix}${triggerTf}`] ?? sessionConfig[prefix]) : null;
+    if (!tfConfig) return { entryPercent: config.oteEntryPercent ?? 50, enabled: false, minScore: 8 };
+    return {
+        entryPercent: tfConfig.entryPercent ?? config.oteEntryPercent ?? 50,
+        enabled: tfConfig.enabled ?? false,
+        minScore: dir === 'BUY' ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) : (tfConfig.minScoreSell ?? tfConfig.minScore ?? 8)
+    };
 }
 
 export const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
@@ -105,8 +116,11 @@ export function evaluateImpulseCore(
     const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
     const minOppositeScore = sessionConfig?.choch5m?.minScore ?? sessionConfig?.choch15m?.minScore ?? 9;
     
-    if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= minOppositeScore && (nowMs - oppositeScore.lastUpdate) < 900000) {
-        dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts (mín ${minOppositeScore}) vs propio ${legScore.points} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+    const ownStrength = Math.max(legScore.points, leg.chochPoints ?? 0);
+    const dominanceThreshold = Math.max(ownStrength * 3, minOppositeScore * 2);
+    
+    if (oppositeScore.points >= dominanceThreshold && (nowMs - oppositeScore.lastUpdate) < 900000) {
+        dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts vs propio histórico ${ownStrength} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
         leg.oteScored = true; return { updatedLeg: leg };
     }
 
@@ -136,13 +150,15 @@ export function evaluateImpulseCore(
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
-        const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH')) || false;
-        const isBos = leg.chochEvents?.some(e => e.includes('BOS')) || false;
-
-        let triggerTfStr = leg.chochEvents?.map(e => {
-            const parts = e.split('_');
-            return parts[parts.length - 1]; // "5M" or "15M"
-        }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+        let isChoch = false, isBos = false, triggerTfStr = '';
+        for (const e of leg.chochEvents ?? []) {
+            if (e.includes('CHOCH') || e.includes('CHoCH')) isChoch = true;
+            if (e.includes('BOS')) isBos = true;
+            if (!triggerTfStr) {
+                const tf = e.substring(e.lastIndexOf('_') + 1);
+                if (tf === '3M' || tf === '5M' || tf === '15M') triggerTfStr = tf;
+            }
+        }
         let triggerTf = triggerTfStr.toLowerCase(); // "5m" or "15m"
 
         let activeOteEntryPercent = config.oteEntryPercent || 50;
@@ -174,6 +190,18 @@ export function evaluateImpulseCore(
         const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
         
         if (isEntryHit && !leg.oteScored) {
+
+            // 🆕 FILTRO DE CALIDAD DE VELA DE GATILLO (Clímax y Rechazo)
+            const atr = state.atr14 ?? 0;
+            const barRange = highPrice - lowPrice;
+            if (atr > 0 && barRange > 2.0 * atr) return { updatedLeg: leg }; // vela clímax
+            const openApprox = state.previousPrice ?? currentPrice;
+            if (barRange > 0) {
+                const upperWick = (highPrice - Math.max(openApprox, currentPrice)) / barRange;
+                const lowerWick = (Math.min(openApprox, currentPrice) - lowPrice) / barRange;
+                if (leg.dir === 'BUY' && upperWick > 0.6) return { updatedLeg: leg };
+                if (leg.dir === 'SELL' && lowerWick > 0.6) return { updatedLeg: leg };
+            }
 
             let oteEnabled = false;
             let oteMinScore = 8;
@@ -233,7 +261,8 @@ export function evaluateImpulseCore(
 
             const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
             const decimals = getDecimals(ticker);
-            const slBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
+            const fixedBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
+            const slBuffer = Math.max(fixedBuffer, (state.atr14 ?? 0) * 0.5); // piso: 0.5×ATR real
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
@@ -258,8 +287,9 @@ export function evaluateImpulseCore(
                 leg.oteScored = true;
                 
                 const stopLoss = adjustedSL.toFixed(decimals);
-                const tp1 = leg.extreme.toFixed(decimals);
                 const riskDist = risk;
+                const fixedTP1 = leg.dir === 'BUY' ? entryFill + riskDist : entryFill - riskDist;
+                const tp1 = fixedTP1.toFixed(decimals);
                 const oteTP2Limit = leg.dir === 'BUY'
                     ? leg.extreme + (range * 0.27)
                     : leg.extreme - (range * 0.27);
@@ -293,7 +323,7 @@ export function evaluateImpulseCore(
                     confluenceReport: leg.chochReport || fallbackReport,
                     bestZone: leg.bestZone || null,
                     marketBias: { ...state.marketBias },
-                    tf: eventName.split('_').pop(),
+                    tf: tfFormatted,
                     isChochEntry: false
                 };
 

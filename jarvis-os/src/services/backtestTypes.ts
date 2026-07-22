@@ -10,7 +10,7 @@ export interface BacktestTrade {
   result?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnl?: number;
   resultTp1?: 'WIN' | 'LOSS' | 'TIMEOUT' | 'REVERSAL'; pnlTp1?: number;
   resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnlTp2?: number;
-  tp1Hit?: boolean; slHalfwayHit?: boolean; closeTimestamp?: number; durationMin?: number;
+  tp1Hit?: boolean; tp1_5Hit?: boolean; slHalfwayHit?: boolean; closeTimestamp?: number; durationMin?: number;
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number; riskMult?: number;
   oteEntryUsed?: number;
   tf?: string;
@@ -21,13 +21,11 @@ export interface BacktestTrade {
 export interface TriggerConfig {
   enabled: boolean;
   minScore: number;
-  entryPercent: number;
 }
 
 export interface OteConfig {
   enabled: boolean;
   minScore: number;
-  entryPercent: number;
 }
 
 export interface SessionConfig {
@@ -137,4 +135,4 @@ export const getBuffer = (ticker: string, price: number) =>
   (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
 export const getDecimals = (ticker: string) =>
-  (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
+  (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);

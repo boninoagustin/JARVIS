@@ -87,7 +87,7 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
     }
 
     const id = generateTradeId();
-    const date = new Date(Number(record.timestamp)).toISOString().split('T')[0];
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date(Number(record.timestamp)));
 
     try {
         // Eliminar propiedades undefined para evitar errores en Firestore
@@ -103,6 +103,10 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
         );
 
         await db.collection(JOURNAL_COLLECTION).doc(id).set(cleanRecord);
+        try {
+            const { invalidateRiskCache } = await import('../engine/PortfolioModel.js');
+            invalidateRiskCache();
+        } catch (e) {}
         console.log(`[JOURNAL] Trade #${id} logged: ${record.ticker} ${record.direction} ${record.grade} (${record.points} pts) | SL:${record.slPrice} TP1:${record.tp1Price} TP2:${record.tp2Price}`);
         return id;
     } catch (err: any) {
@@ -132,7 +136,11 @@ export async function recordResult(
             return false;
         }
 
-        await docRef.update({ result, pnl: pnl || null });
+        await docRef.update({ result, pnl: pnl || null, closedAt: Date.now() });
+        try {
+            const { invalidateRiskCache } = await import('../engine/PortfolioModel.js');
+            invalidateRiskCache();
+        } catch (e) {}
         console.log(`[JOURNAL] Trade #${tradeId} recorded as ${result}${pnl ? ` (${pnl > 0 ? '+' : ''}${pnl}%)` : ''}`);
         return true;
     } catch (err: any) {

@@ -38,6 +38,7 @@ interface PendingConfirmation {
     timestamp: number;       // When the confirmation was sent
     journalId?: string;      // Journal entry ID
     isChochEntry?: boolean;
+    sarPendingClose?: any;   // To close old trade ONLY after user approves new SAR trade
 }
 
 // Map: tradeId → pending confirmation data
@@ -70,6 +71,7 @@ export async function sendTradeConfirmation(data: {
     alertMessage: string;       // The full alert message already built
     journalId?: string;
     isChochEntry?: boolean;
+    sarPendingClose?: any;
 }): Promise<void> {
     // Check if cTrader is configured (if not, skip confirmation flow)
     if (!config.CTRADER_CLIENT_ID || !config.CTRADER_ACCESS_TOKEN) {
@@ -95,6 +97,7 @@ export async function sendTradeConfirmation(data: {
         timestamp: Date.now(),
         journalId: data.journalId,
         isChochEntry: data.isChochEntry,
+        sarPendingClose: data.sarPendingClose,
     };
 
     pendingConfirmations.set(data.tradeId, pending);
@@ -235,6 +238,26 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
     const result: CTraderOrderResult = await executeMarketOrder(orderParams);
 
     if (result.success) {
+        // Ejecución exitosa de la nueva posición. Si hay un SAR pendiente, cerrar la vieja ahora.
+        if (pending.sarPendingClose) {
+            try {
+                if (pending.sarPendingClose.ctraderPositionId) {
+                    const ctrader = await import('./ctrader.js');
+                    await ctrader.closePosition(pending.sarPendingClose.ctraderPositionId);
+                }
+                const { globalState } = await import('../db/trading.js');
+                globalState.activeTrades.delete(pending.sarPendingClose.tradeId);
+                if (db) db.collection('active_trades').doc(pending.sarPendingClose.tradeId).delete().catch(() => {});
+                
+                if (pending.sarPendingClose.journalId) {
+                    const { recordResult } = await import('./journal.js');
+                    recordResult(pending.sarPendingClose.journalId, 'REVERSAL').catch(() => {});
+                }
+            } catch (e) {
+                console.error('[SAR] Error cierre diferido en confirmación manual:', e);
+            }
+        }
+
         // Success — update Telegram message
         const successText = `\n\n✅ <b>EJECUTADO EN CTRADER</b>\n` +
             `📊 Lotes: ${result.lots}\n` +

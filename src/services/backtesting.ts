@@ -6,6 +6,7 @@
 // =========================================================================
 import { db } from '../db/memory.js';
 import { processTradingAlert } from '../db/trading.js';
+import { createStateStore } from '../engine/StateStore.js';
 
 let currentSessionId: string | null = null;
 let currentSessionThresholds: { buy: number; sell: number } | null = null;
@@ -30,6 +31,7 @@ export async function replayUploadedLogs(
     }
 
     isReplaying = true;
+    const backtestState = createStateStore();
     replayAbortController = new AbortController();
     const signal = replayAbortController.signal;
 
@@ -118,7 +120,7 @@ export async function replayUploadedLogs(
         // Procesar SYNC_ZONES instantáneamente (sin esperar gaps)
         for (const entry of syncEntries) {
             if (signal.aborted) break;
-            await processTradingAlert(entry.line);
+            await processTradingAlert(entry.line, backtestState);
         }
         console.log(`[REPLAY] 🔮 Pre-sync completado. Mapa de zonas inicializado.`);
 
@@ -147,7 +149,7 @@ export async function replayUploadedLogs(
                 }
             }
 
-            await processTradingAlert(entry.line);
+            await processTradingAlert(entry.line, backtestState);
 
             lastTs = entry.ts;
             processed++;

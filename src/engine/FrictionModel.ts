@@ -14,12 +14,19 @@ export const defaultFrictionConfig: Record<string, FrictionConfig> = {
     'METALS': { commissionPerLot: 3.0, baseSpreadPips: 1.0, latencyMs: 50 },
 };
 
-function getAssetClass(ticker: string): string {
+export function getAssetClass(ticker: string): string {
     const t = ticker.toUpperCase();
     if (t.includes('BTC') || t.includes('ETH')) return 'CRYPTO';
     if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'].some(i => t.includes(i))) return 'INDICES';
     if (t.includes('XAU') || t.includes('GOLD')) return 'METALS';
     return 'FOREX';
+}
+
+export function pipValuePerLotUsd(ticker: string, currentPrice?: number): number {
+    const cls = getAssetClass(ticker);
+    if (cls === 'INDICES') return 1.0;
+    if (cls === 'CRYPTO') return (currentPrice || 50000) * 0.0001; 
+    return 10.0; // FOREX and METALS
 }
 
 export function getPipValue(ticker: string, currentPrice: number): number {
@@ -59,6 +66,7 @@ export function evaluateNetTrade(
 
     // Fricción Total en la entrada (Peor precio)
     const entryFriction = spreadCost + slippageCost;
+    const exitFriction = slippageCost; // Spread applies once per round-trip, slippage twice (entry & exit)
     
     // Aplicamos el peor precio de entrada al simulador
     const netEntryPrice = trade.direction === 'BUY' 
@@ -85,10 +93,10 @@ export function evaluateNetTrade(
             frictionCostDetails
         };
     }
-    const netRiskDistance = grossRiskDistance + entryFriction + commissionCostInPrice;
+    const netRiskDistance = grossRiskDistance + entryFriction + exitFriction + commissionCostInPrice;
     
     const grossRewardDistance = Math.abs(trade.tp1Price - trade.entryPrice);
-    const netRewardDistance = grossRewardDistance - entryFriction - commissionCostInPrice;
+    const netRewardDistance = grossRewardDistance - entryFriction - exitFriction - commissionCostInPrice;
 
     if (netRewardDistance <= 0) {
         return { 
@@ -101,10 +109,13 @@ export function evaluateNetTrade(
 
     let netRR = netRewardDistance / netRiskDistance;
 
-    const hasTp2 = trade.tp2Price !== undefined && trade.tp2Price !== trade.tp1Price && trade.tp2Price !== 0;
+    const priceEps = pipValue * 0.1;
+    const hasTp2 = trade.tp2Price !== undefined 
+        && Math.abs(trade.tp2Price - trade.tp1Price) > priceEps 
+        && Math.abs(trade.tp2Price) > priceEps;
     if (hasTp2) {
         const grossRewardDistanceTp2 = Math.abs(trade.tp2Price - trade.entryPrice);
-        const netRewardDistanceTp2 = grossRewardDistanceTp2 - entryFriction - commissionCostInPrice;
+        const netRewardDistanceTp2 = grossRewardDistanceTp2 - entryFriction - exitFriction - commissionCostInPrice;
         if (netRewardDistanceTp2 > 0) {
             const netRRTp2 = netRewardDistanceTp2 / netRiskDistance;
             // Evaluamos la viabilidad global del trade basándonos en TP2 si existe

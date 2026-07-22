@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, query, getDocs, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Activity, Zap, Crosshair, AlertTriangle, Sparkles, TrendingUp, TrendingDown, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
 import { useToast } from './Toast';
@@ -177,12 +177,11 @@ export default function RadarHeatmap() {
   const { toast } = useToast();
 
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>;
+    setLoading(true);
+    const q = query(collection(db, 'radar_states'));
     
-    const fetchRadarStates = async () => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       try {
-        const q = query(collection(db, 'radar_states'));
-        const snapshot = await getDocs(q);
         const data = snapshot.docs
           .filter(doc => isNaN(Number(doc.id)))
           .map(doc => ({ id: doc.id, ...doc.data() } as RadarState));
@@ -190,39 +189,35 @@ export default function RadarHeatmap() {
         setLoading(false);
         setError(null);
       } catch (err) {
-        console.error('[Radar] Error fetching Firestore data:', err);
-        setError('Error de conexión con Firebase. Verificá tu conexión.');
+        console.error('[Radar] Error processing Firestore data:', err);
+        setError('Error procesando datos en tiempo real.');
         setLoading(false);
       }
-    };
+    }, (err) => {
+      console.error('[Radar] Error in onSnapshot:', err);
+      setError('Error de conexión con Firebase. Verificá tu conexión.');
+      setLoading(false);
+    });
 
-    setLoading(true);
-    fetchRadarStates();
-    
-    // Polling cada 30 segundos (Estrategia de Caché de Lectura)
-    intervalId = setInterval(fetchRadarStates, 30000);
-
-    return () => clearInterval(intervalId);
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    const fetchTrades = async () => {
+    const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       try {
-        const q = query(collection(db, 'trade_journal'), orderBy('timestamp', 'desc'), limit(100));
-        const snapshot = await getDocs(q);
         const data = snapshot.docs
           .map(d => ({ id: d.id, ...d.data() } as TradeLog))
           .filter(t => t.ctraderStatus === 'EXECUTED');
         setTrades(data);
       } catch (err) {
-        console.error('Error fetching trade journal:', err);
+        console.error('Error processing trade journal snapshot:', err);
       }
-    };
+    }, (err) => {
+      console.error('Error listening to trade journal:', err);
+    });
 
-    fetchTrades();
-    const intervalId = setInterval(fetchTrades, 60000); // Polling 60s
-
-    return () => clearInterval(intervalId);
+    return () => unsubscribe();
   }, []);
 
   const handleSetResult = async (tradeId: string, result: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'SKIP') => {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { Activity, Terminal, PieChart, Settings, Play, BrainCircuit } from 'lucide-react';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
 import FundamentalTerminal from './components/FundamentalTerminal';
@@ -59,29 +59,26 @@ function Header({ time }: { time: Date }) {
   const [autoTrading, setAutoTrading] = useState(false);
 
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>;
-
-    const fetchGlobalSettings = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, 'app_settings', 'global'));
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          setKillswitches(data?.killswitches || {});
-        }
-        
-        const botSnap = await getDoc(doc(db, 'app_settings', 'bot_config'));
-        if (botSnap.exists()) {
-          setAutoTrading(botSnap.data()?.autoTrading === true);
-        }
-      } catch (err) {
-        console.error('[Header] Error fetching global settings:', err);
+    const unsubGlobal = onSnapshot(doc(db, 'app_settings', 'global'), (docSnap) => {
+      if (docSnap.exists()) {
+        setKillswitches(docSnap.data()?.killswitches || {});
       }
+    }, (err) => {
+      console.error('[Header] Error listening to global settings:', err);
+    });
+    
+    const unsubBot = onSnapshot(doc(db, 'app_settings', 'bot_config'), (botSnap) => {
+      if (botSnap.exists()) {
+        setAutoTrading(botSnap.data()?.autoTrading === true);
+      }
+    }, (err) => {
+      console.error('[Header] Error listening to bot config:', err);
+    });
+
+    return () => {
+      unsubGlobal();
+      unsubBot();
     };
-
-    fetchGlobalSettings();
-    intervalId = setInterval(fetchGlobalSettings, 30000); // Polling cada 30s
-
-    return () => clearInterval(intervalId);
   }, []);
 
   const isBotActive = !killswitches['GLOBAL_SYSTEM'];

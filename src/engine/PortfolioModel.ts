@@ -11,13 +11,23 @@ export interface KillswitchResult {
 
 // Caché mejorado que previene "race conditions" (estampidas de promesas)
 const riskCache = new Map<string, { at: number; result?: any; promise?: Promise<any> }>();
-const TTL = 5 * 60 * 1000;
+const TTL = 30 * 1000; // 30s: suficiente anti-estampida, mínima ventana de bypass
 
+export function invalidateRiskCache(prefix?: string): void {
+    for (const key of riskCache.keys()) {
+        if (!prefix || key.startsWith(prefix)) riskCache.delete(key);
+    }
+}
+
+
+const BA_TZ = 'America/Argentina/Buenos_Aires';
 
 function getArgentinaMidnightMs(nowMs: number): number {
-    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' });
-    const [year, month, day] = formatter.format(new Date(nowMs)).split('-').map(Number);
-    return new Date(Date.UTC(year, month - 1, day, 3, 0, 0)).getTime();
+    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: BA_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const [year, month, day] = dayFmt.format(new Date(nowMs)).split('-').map(Number);
+    const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+    const offsetMs = new Date(probe.toLocaleString('en-US', { timeZone: BA_TZ })).getTime() - probe.getTime();
+    return Date.UTC(year, month - 1, day, 0, 0, 0) - offsetMs;
 }
 
 /**
@@ -47,7 +57,8 @@ async function withCache<T>(key: string, nowMs: number, fetcher: () => Promise<T
     }).catch(_err => {
         // En caso de fallo, intentamos devolver el último valor conocido si existe, o el fallback
         const lastKnown = riskCache.get(key);
-        if (lastKnown && lastKnown.result !== undefined) {
+        const STALE_TOLERANCE = 5 * 60 * 1000;
+        if (lastKnown?.result !== undefined && Date.now() - lastKnown.at < STALE_TOLERANCE) {
             return lastKnown.result;
         }
         return fallback;
@@ -62,7 +73,9 @@ export async function evaluateGlobalRisk(
     globalPortfolioConfig: GlobalPortfolioConfig,
     currentKillswitchUntil: number,
     currentSession: string,
-    db: firestore.Firestore
+    db: firestore.Firestore,
+    isBacktest: boolean = false,
+    backtestSessionId?: string
 ): Promise<KillswitchResult> {
     if (!globalPortfolioConfig.enabled) return { isKilled: false };
 
@@ -73,11 +86,12 @@ export async function evaluateGlobalRisk(
     if (nowMs < currentKillswitchUntil) return { isKilled: true };
     if (!db) return { isKilled: false };
 
-    return withCache('global', nowMs, async () => {
+    const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
+    return withCache(`global_${namespace}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
+            .where('timestamp', '>=', artMidnightMs - 48 * 60 * 60 * 1000)
             .get();
 
         if (snapshot.empty) return { isKilled: false } as KillswitchResult;
@@ -85,8 +99,13 @@ export async function evaluateGlobalRisk(
         // Limpieza de tipos 'any' utilizando as ActiveTrade
         const trades = snapshot.docs
             .map(d => d.data() as Record<string, any>)
-            .filter(t => t.mode !== 'backtesting' && t.result)
-            .sort((a, b) => a.timestamp - b.timestamp);
+            .filter(t => {
+                const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
+                const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
+                return modeMatch && sessionMatch && t.result;
+            })
+            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= artMidnightMs)
+            .sort((a, b) => (a.closedAt ?? a.timestamp) - (b.closedAt ?? b.timestamp));
 
         let totalTrades = trades.length;
         let dailyPnLR = 0;
@@ -96,8 +115,8 @@ export async function evaluateGlobalRisk(
 
         for (const t of trades) {
             let rMultiple = Number(t.rMultiple);
-            if (isNaN(rMultiple) || rMultiple === undefined) {
-                if (t.result === 'WIN') rMultiple = 1.5;
+            if (!Number.isFinite(rMultiple) || t.rMultiple == null) {
+                if (t.result === 'WIN') rMultiple = globalPortfolioConfig.assumedWinR ?? 1.5;
                 else if (t.result === 'LOSS') rMultiple = -1.0;
                 else rMultiple = 0;
             }
@@ -137,7 +156,7 @@ export async function evaluateGlobalRisk(
 
         let result = { isKilled: false } as KillswitchResult;
         if (isKilled) {
-            const endOfDayMs = artMidnightMs + 24 * 60 * 60 * 1000 - 1000;
+            const endOfDayMs = getArgentinaMidnightMs(artMidnightMs + 30 * 60 * 60 * 1000) - 1000;
             result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
         }
 
@@ -148,7 +167,8 @@ export async function evaluateGlobalRisk(
 export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     
-    return withCache(`sells_${ticker}`, nowMs, async () => {
+    const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
+    return withCache(`sells_${namespace}_${ticker}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -173,7 +193,8 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
 export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     
-    return withCache(`buys_${ticker}`, nowMs, async () => {
+    const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
+    return withCache(`buys_${namespace}_${ticker}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -195,10 +216,11 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
     }, 999);
 }
 
-export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, globalPortfolioConfig: GlobalPortfolioConfig, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     
-    return withCache(`streak_${ticker}_${session}_${direction}`, nowMs, async () => {
+    const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
+    return withCache(`streak_${namespace}_${ticker}_${session}_${direction}`, nowMs, async () => {
         const artMidnightMs = getArgentinaMidnightMs(nowMs);
 
         const tickerVariants = [ticker];
@@ -225,8 +247,8 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
         let streak = 0;
         for (const t of trades) {
             let rMultiple = Number(t.rMultiple);
-            if (isNaN(rMultiple) || rMultiple === undefined) {
-                if (t.result === 'WIN') rMultiple = 1.5;
+            if (!Number.isFinite(rMultiple) || t.rMultiple == null) {
+                if (t.result === 'WIN') rMultiple = globalPortfolioConfig.assumedWinR ?? 1.5;
                 else if (t.result === 'LOSS') rMultiple = -1.0;
                 else rMultiple = 0;
             }

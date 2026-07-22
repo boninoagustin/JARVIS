@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Settings, Save, Shield, TrendingDown, TrendingUp } from 'lucide-react';
 import { useToast } from './Toast';
@@ -14,9 +14,9 @@ export default function AdminPanel() {
 
   // Cargar config del activo seleccionado
   useEffect(() => {
-    const fetchConfig = async () => {
+    const docRef = doc(db, 'asset_configs', activeTicker);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
       try {
-        const docSnap = await getDoc(doc(db, 'asset_configs', activeTicker));
         if (docSnap.exists()) {
           const data = docSnap.data() as AssetConfig;
           // Asegurar estructura de sesiones
@@ -52,16 +52,13 @@ export default function AdminPanel() {
           setAssetConfig(newConfig);
         }
       } catch (err) {
-        console.error("Error fetching config:", err);
+        console.error("Error processing config:", err);
       }
-    };
+    }, (err) => {
+      console.error("Error listening to config:", err);
+    });
 
-    fetchConfig();
-    const intervalId = setInterval(() => {
-      fetchConfig();
-    }, 60000); // 60s polling
-
-    return () => clearInterval(intervalId);
+    return () => unsubscribe();
   }, [activeTicker]);
 
   const handleChange = (field: keyof AssetConfig, value: any) => {

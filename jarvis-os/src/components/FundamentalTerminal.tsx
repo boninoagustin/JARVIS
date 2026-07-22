@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, setDoc, query, collection, getDoc, getDocs } from 'firebase/firestore';
+import { doc, setDoc, query, collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   Terminal, 
@@ -238,36 +238,39 @@ export default function FundamentalTerminal() {
   useEffect(() => {
     const abortController = new AbortController();
 
-    const fetchFirebaseData = async () => {
+    const unsubGlobal = onSnapshot(doc(db, 'app_settings', 'global'), (globalSnap) => {
       try {
-        const [globalSnap, fundamentalsSnap, radarSnap] = await Promise.all([
-          getDoc(doc(db, 'app_settings', 'global')),
-          getDoc(doc(db, 'app_settings', 'fundamentals')),
-          getDocs(query(collection(db, 'radar_states')))
-        ]);
-
         if (globalSnap.exists()) {
           const data = globalSnap.data() as Partial<AppSettings>;
           setSettings({ killswitches: data.killswitches || {} });
         }
+      } catch(err) {
+        console.error('[FundTerm] Error processing global settings:', err);
+      }
+    });
 
+    const unsubFundamentals = onSnapshot(doc(db, 'app_settings', 'fundamentals'), (fundamentalsSnap) => {
+      try {
         if (fundamentalsSnap.exists()) {
           setFundamentals(fundamentalsSnap.data() as Fundamentals);
           setErrorFundamentals(null);
         }
         setLoadingFundamentals(false);
-
-        const assets = radarSnap.docs.map(doc => doc.id).filter(id => isNaN(Number(id)));
-        setTradedAssets(assets.sort());
-      } catch (err) {
-        console.error('[FundTerm] Error fetching Firestore data:', err);
+      } catch(err) {
+        console.error('[FundTerm] Error processing fundamentals:', err);
         setErrorFundamentals('Error cargando datos fundamentales');
         setLoadingFundamentals(false);
       }
-    };
+    });
 
-    fetchFirebaseData();
-    const intervalId = setInterval(fetchFirebaseData, 60000); // Actualizar cada 60s (Estrategia de Caché/Polling)
+    const unsubRadar = onSnapshot(query(collection(db, 'radar_states')), (radarSnap) => {
+      try {
+        const assets = radarSnap.docs.map(doc => doc.id).filter(id => isNaN(Number(id)));
+        setTradedAssets(assets.sort());
+      } catch(err) {
+        console.error('[FundTerm] Error processing radar states:', err);
+      }
+    });
 
     fetchMacroData(abortController.signal).catch(err => {
       if (err.name !== 'AbortError') console.error('[FundTerm]', err);
@@ -275,7 +278,9 @@ export default function FundamentalTerminal() {
 
     return () => {
       abortController.abort();
-      clearInterval(intervalId);
+      unsubGlobal();
+      unsubFundamentals();
+      unsubRadar();
     };
   }, []);
 
