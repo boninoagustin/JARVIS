@@ -270,8 +270,11 @@ export function evaluateImpulseCore(
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
-            const oteTP2Ext = leg.dir === 'BUY' ? leg.extreme + (range * 0.27) : leg.extreme - (range * 0.27);
-            const reward = Math.abs(oteTP2Ext - entryFill); // Se evalúa el R:R contra la proyección de TP2
+            // TP2 del OTE: respeta config.fixedRR sin truncar a la extensión -0.27 (alineado con la ruta live)
+            const fixedTP2 = leg.dir === 'BUY'
+                ? entryFill + (risk * config.fixedRR)
+                : entryFill - (risk * config.fixedRR);
+            const reward = Math.abs(fixedTP2 - entryFill); // Se evalúa el R:R contra el TP2 real de la orden
             const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
 
             if (risk <= 0 || rrRatioOTE < 0.75) {
@@ -294,12 +297,6 @@ export function evaluateImpulseCore(
                 const riskDist = risk;
                 const fixedTP1 = leg.dir === 'BUY' ? entryFill + riskDist : entryFill - riskDist;
                 const tp1 = fixedTP1.toFixed(decimals);
-                const oteTP2Limit = leg.dir === 'BUY'
-                    ? leg.extreme + (range * 0.27)
-                    : leg.extreme - (range * 0.27);
-                const fixedTP2 = leg.dir === 'BUY'
-                    ? Math.min(oteTP2Limit, entryFill + (riskDist * config.fixedRR))
-                    : Math.max(oteTP2Limit, entryFill - (riskDist * config.fixedRR));
                 const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
