@@ -387,8 +387,14 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         // Alinear al stepVolume (incremento mínimo)
         correctVolumeCents = Math.round(correctVolumeCents / stepVolumeCents) * stepVolumeCents;
         
-        // Asegurar límites min y max
-        correctVolumeCents = Math.max(minVolumeCents, correctVolumeCents);
+        // GUARDRAIL DE RIESGO: Si el volumen necesario para mantener el 1% es menor al mínimo del broker,
+        // no debemos forzar el mínimo, porque expondríamos la cuenta a una pérdida mayor a la permitida.
+        if (correctVolumeCents < minVolumeCents) {
+            const riskMsg = `Volumen requerido (${correctVolumeCents / 100} lotes) es menor al mínimo del broker (${minVolumeCents / 100} lotes). Trade abortado por exceso de riesgo.`;
+            console.warn(`[CTRADER] ⛔ ${riskMsg}`);
+            return { success: false, error: riskMsg };
+        }
+
         if (info && info.maxVolume) {
             correctVolumeCents = Math.min(info.maxVolume, correctVolumeCents);
         }
