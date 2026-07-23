@@ -1191,7 +1191,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   if (isNewsBlackout(nowMs)) return;
 
   // (c) Guardia al crear el trade + eliminar defaults mágicos
-  if (!isFinite(oteData.slPrice) || oteData.slPrice === oteData.entryPrice) return;
+  // El path de gatillo directo pasa `stopLoss` (string); el path OTE pasa `slPrice` (number)
+  const guardSl = parseFloat(oteData.stopLoss ?? oteData.slPrice);
+  if (!isFinite(guardSl) || guardSl === oteData.entryPrice) return;
 
   // 🛡️ ANTI-PYRAMIDACIÓN & SAR
   let existingTradeForTicker: BacktestTrade | undefined;
