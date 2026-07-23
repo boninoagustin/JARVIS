@@ -420,7 +420,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
     const rawTf = tfMatchForTolerance ? tfMatchForTolerance[1] : '';
     const parsedTf = rawTf ? parseTF(rawTf) : ''; // Ej: '5M', '15M', '1H', etc.
     
-    let tfToleranceMs = 300000; // 5 minutos por defecto
+    let tfToleranceMs = 43200000; // 12 horas por defecto (evita falsos positivos de backtest en TFs altos si falta 'TF:')
     // Buscar coincidencia en la temporalidad parseada o en el prefix
     const tfStringToMatch = parsedTf || prefix;
     const tfPrefixMatch = tfStringToMatch.match(/(1M|3M|5M|15M|30M|1H|4H|D|1D|1W)/i);

@@ -44,12 +44,12 @@ export default async function handler(req: any, res: any) {
         
         console.log(`[WEBHOOK TW] ${alertText.substring(0, 120)}...`);
 
-        // 🔥 FIRE & FORGET: escribir sin await para responder rápido a TradingView
-        db.collection('trading_incoming').add({
+        // 🛡️ AWAIT: En Vercel (serverless), si no hacés await, la función muere antes de que termine el request de red
+        await db.collection('trading_incoming').add({
             alertText,
             received_at: new Date().toISOString(),
             status: 'pending'
-        }).catch((e: any) => console.error('[WEBHOOK TW] Firestore write error:', e.message));
+        });
 
         // ⚡ Responder inmediatamente
         return res.status(200).json({ ok: true });
