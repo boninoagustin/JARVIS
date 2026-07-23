@@ -240,6 +240,10 @@ export function evaluateImpulseCore(
                 oteMinScore = 8;
             }
 
+            if (config.entryTrigger === 'SMART' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'OTE') {
+                oteEnabled = true;
+            }
+
             const totalPoints = (leg.chochPoints || 0) + 4;
 
             if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {

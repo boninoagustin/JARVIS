@@ -1,0 +1,295 @@
+--- legacy_backtest.ts	2026-07-19 04:35:25.174103967 -0300
++++ jarvis-os/src/services/backtestEngine.ts	2026-07-19 04:00:30.482676396 -0300
+@@ -2,6 +2,8 @@
++import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, calculateDynamicSlBuffer } from '../engine/AlphaModel';
++import { evaluateNetTrade } from '../engine/FrictionModel';
+@@ -67,20 +69,6 @@
+-// --- Dynamic SL Buffer Calculator ---
+-export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
+-  const t = ticker.toUpperCase();
+-  if (t.includes('JPY')) return bufferConfig * 0.1;
+-  const forexPairs = ['EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
+-  if (forexPairs.some(fiat => t.includes(fiat)) && !t.includes('BTC') && !t.includes('ETH')) {
+-      return bufferConfig * 0.001;
+-  }
+-  const indices = ['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'];
+-  if (indices.some(idx => t.includes(idx))) return bufferConfig * 100;
+-  if (t.includes('XAU') || t.includes('GOLD')) return bufferConfig * 10;
+-  return originPrice * (bufferConfig / 100);
+-}
+-
+@@ -96,235 +84,6 @@
+-// --- MACRO OTE ZONE CHECK (ported from live) ---
+-function isInsideMacroOteZone(leg: ImpulseLeg | null | undefined, price: number): boolean {
+-  if (!leg) return false;
+-  const range = Math.abs(leg.extreme - leg.origin);
+-  if (range === 0) return false;
+-  if (leg.dir === 'BUY') {
+-    const oteBtm = leg.extreme - (range * 0.79);
+-    const oteTop = leg.extreme - (range * 0.50);
+-    return price >= oteBtm && price <= oteTop;
+-  } else {
+-    const oteBtm = leg.extreme + (range * 0.50);
+-    const oteTop = leg.extreme + (range * 0.79);
+-    return price >= oteBtm && price <= oteTop;
+-  }
+-}
+-
+-// --- MACRO IMPULSE LEG STRETCHING (ported from live) ---
+-function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number): ImpulseLeg | null {
+-  if (!leg) return null;
+-  const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;
+-  if (leg.createdAt && (nowMs - leg.createdAt) > MAX_MACRO_LEG_AGE_MS) return null;
+-
+-  let macroInvalidated = false;
+-  if (leg.dir === 'BUY' && lowPrice < leg.origin) macroInvalidated = true;
+-  else if (leg.dir === 'SELL' && highPrice > leg.origin) macroInvalidated = true;
+-  if (macroInvalidated) return null;
+-
+-  if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
+-  else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
+-  return leg;
+-}
+-function evaluateImpulse(
+-  leg: ImpulseLeg | null | undefined, currentPrice: number,
+-  highPrice: number, lowPrice: number, ticker: string,
+-  state: RadarState, nowMs: number, config: BacktestConfig
+-): { updatedLeg: ImpulseLeg | null; triggerOte?: boolean; oteData?: any } {
+-  if (!leg) return { updatedLeg: null };
+-
+-  const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
+-  if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) return { updatedLeg: null };
+-
+-  const legScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+-  const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
+-  if (oppositeScore.points >= legScore.points * 3 && oppositeScore.points >= 9 && (nowMs - oppositeScore.lastUpdate) < 900000)
+-    return { updatedLeg: null };
+-
+-  const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
+-  if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt)
+-    return { updatedLeg: null };
+-
+-  const range = Math.abs(leg.extreme - leg.origin);
+-  const atrEst = range * 0.3;
+-  const beyond = leg.dir === 'BUY' ? (currentPrice > leg.extreme + atrEst) : (currentPrice < leg.extreme - atrEst);
+-  if (beyond && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) return { updatedLeg: null };
+-
+-  if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
+-  else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
+-
+-  let impulseInvalidated = false;
+-  if (leg.dir === 'BUY' && lowPrice < leg.origin) impulseInvalidated = true;
+-  else if (leg.dir === 'SELL' && highPrice > leg.origin) impulseInvalidated = true;
+-
+-  if (!impulseInvalidated) {
+-    const r2 = Math.abs(leg.extreme - leg.origin);
+-    
+-    // --- RESOLUCIÓN DINÁMICA DE OTE ENTRY PERCENT POR SESIÓN Y GATILLO ---
+-    const session = getSessionForTimestamp(nowMs);
+-    const sessionConfig = config.sessions?.[session] || config.sessions?.['OFF'];
+-    const isChoch = leg.chochEvents?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
+-    const isBos = leg.chochEvents?.some(e => e.includes('BOS'));
+-
+-    let activeOteEntryPercent = config.oteEntryPercent || 50;
+-    if (sessionConfig) {
+-      const triggerTfStr = leg.chochEvents?.map(e => {
+-          const parts = e.split('_');
+-          return parts[parts.length - 1];
+-      }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+-      const triggerTf = triggerTfStr.toLowerCase();
+-
+-      if (isChoch) {
+-        const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+-        const tfConfig = sessionConfig[tfKey] as any;
+-        if (tfConfig) activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+-        else if ((sessionConfig as any).oteChoch) activeOteEntryPercent = (sessionConfig as any).oteChoch.entryPercent ?? config.oteEntryPercent ?? 50;
+-      } else if (isBos) {
+-        const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+-        const tfConfig = sessionConfig[tfKey] as any;
+-        if (tfConfig) activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+-        else if ((sessionConfig as any).oteBos) activeOteEntryPercent = (sessionConfig as any).oteBos.entryPercent ?? config.oteEntryPercent ?? 50;
+-      }
+-    }
+-
+-    const fibRatio = activeOteEntryPercent / 100;
+-    const entryLevel = leg.dir === 'BUY' ? leg.extreme - (r2 * fibRatio) : leg.extreme + (r2 * fibRatio);
+-
+-    const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
+-
+-    if (isEntryHit && !leg.oteScored) {
+-      let oteEnabled = false;
+-      let oteMinScore = 8;
+-
+-      const triggerTfStr = leg.chochEvents?.map(e => {
+-          const parts = e.split('_');
+-          return parts[parts.length - 1];
+-      }).find(tf => tf === '3M' || tf === '5M' || tf === '15M') || '';
+-      const triggerTf = triggerTfStr.toLowerCase();
+-
+-      if (sessionConfig) {
+-
+-        if (isChoch) {
+-          const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
+-          const tfConfig = sessionConfig[tfKey] as any;
+-          if (tfConfig) {
+-              oteEnabled = tfConfig.enabled ?? false;
+-              oteMinScore = tfConfig.minScore ?? 8;
+-          } else if ((sessionConfig as any).oteChoch) {
+-              oteEnabled = (sessionConfig as any).oteChoch.enabled ?? false;
+-              oteMinScore = (sessionConfig as any).oteChoch.minScore ?? 8;
+-          }
+-        } else if (isBos) {
+-          const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
+-          const tfConfig = sessionConfig[tfKey] as any;
+-          if (tfConfig) {
+-              oteEnabled = tfConfig.enabled ?? false;
+-              oteMinScore = tfConfig.minScore ?? 8;
+-          } else if ((sessionConfig as any).oteBos) {
+-              oteEnabled = (sessionConfig as any).oteBos.enabled ?? false;
+-              oteMinScore = (sessionConfig as any).oteBos.minScore ?? 8;
+-          }
+-        } else {
+-          oteEnabled = false;
+-          oteMinScore = 8;
+-        }
+-      } else {
+-        oteEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+-        oteMinScore = 8;
+-      }
+-
+-      const basePoints = (leg.chochPoints || 0) + 4;
+-
+-      // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
+-      let scoreMultiplier = 1.0;
+-      const tradeDir = leg.dir;
+-      const biasD = state.marketBias['D'] || state.marketBias['1D'];
+-      const bias4H = state.marketBias['4H'] || state.marketBias['240'];
+-      const bias1H = state.marketBias['1H'] || state.marketBias['60'];
+-      
+-      let alignedTfs = 0;
+-      let againstTfs = 0;
+-      
+-      if (biasD === tradeDir) alignedTfs++;
+-      else if (biasD && biasD !== tradeDir) againstTfs++;
+-      
+-      if (bias4H === tradeDir) alignedTfs++;
+-      else if (bias4H && bias4H !== tradeDir) againstTfs++;
+-      
+-      if (bias1H === tradeDir) alignedTfs++;
+-      else if (bias1H && bias1H !== tradeDir) againstTfs++;
+-
+-      if (alignedTfs >= 3) scoreMultiplier = 1.3;
+-      else if (againstTfs >= 2) scoreMultiplier = 0.6;
+-      else if (biasD && biasD !== tradeDir) scoreMultiplier = 0.8;
+-      
+-      const totalPoints = Math.floor(basePoints * scoreMultiplier);
+-
+-      if (sessionConfig) {
+-        if (!oteEnabled || totalPoints < oteMinScore) {
+-          return { updatedLeg: leg };
+-        }
+-      } else {
+-        const MIN_OTE_POINTS = oteMinScore;
+-        if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS)
+-          return { updatedLeg: leg };
+-        if (!oteEnabled || totalPoints < oteMinScore)
+-          return { updatedLeg: leg };
+-      }
+-
+-      const riskDist = r2 * 0.21;
+-      const rewardDist = r2 * 0.50;
+-      if (riskDist > 0 && rewardDist / riskDist < 1.2) return { updatedLeg: leg };
+-
+-      const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+-      const tfFormatted = triggerTf.toUpperCase();
+-      const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
+-      if (!activeScore.events.includes(eventName)) {
+-        activeScore.events.push(eventName);
+-        activeScore.points += 4;
+-        activeScore.lastUpdate = nowMs;
+-        leg.oteScored = true;
+-
+-        const decimals = getDecimals(ticker);
+-        const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
+-        const activeSlBufferPercent = sessionConfig?.slBufferPercent ?? config.slBufferPercent ?? 0;
+-        const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
+-
+-        const slBufferAmt = calculateDynamicSlBuffer(ticker, leg.origin, activeSlBufferPercent);
+-        const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBufferAmt : leg.origin + slBufferAmt;
+-        
+-        return {
+-          updatedLeg: leg, triggerOte: oteEnabled,
+-          oteData: {
+-            tradeId, direction: leg.dir,
+-            entryPrice: entryLevel,
+-            stopLoss: adjustedSL.toFixed(decimals),
+-            tp1: leg.extreme.toFixed(decimals),
+-            tp2: (() => {
+-              const riskDist = Math.abs(entryLevel - adjustedSL);
+-              const oteTP2Limit = leg.dir === 'BUY'
+-                ? leg.extreme + (r2 * 0.27)
+-                : leg.extreme - (r2 * 0.27);
+-              const fixedTP2 = leg.dir === 'BUY'
+-                ? Math.max(oteTP2Limit, entryLevel + (riskDist * activeFixedRR))
+-                : Math.min(oteTP2Limit, entryLevel - (riskDist * activeFixedRR));
+-              return fixedTP2.toFixed(decimals);
+-            })(),
+-            points: totalPoints,
+-            events: [...(leg.chochEvents || []), eventName],
+-            bestZone: leg.bestZone || null,
+-            marketBias: { ...state.marketBias },
+-            vwapStatus: { ...(state.vwapStatus || {}) },
+-            oteEntryUsed: activeOteEntryPercent,
+-            tf: tfFormatted
+-          }
+-        };
+-      }
+-    }
+-  }
+-  return { updatedLeg: impulseInvalidated ? null : leg };
+-}
+@@ -539,13 +298,19 @@
+-    const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, config);
++
++    const currentSession = getSessionForTimestamp(nowMs);
++    const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
++    const ctx = { config, currentSession, sessionConfig };
++
++    const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
+-    if (buyRes.triggerOte && buyRes.oteData) createTrade(buyRes.oteData, nowMs, trades, activeTrades, dailyStats, config);
++    if (buyRes.newTrade && buyRes.oteData) createTrade({ ...buyRes.oteData, ...buyRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
+-    const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, config);
++    const sellRes = evaluateImpulseCore(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state as any, nowMs, null, ctx);
+-    if (sellRes.triggerOte && sellRes.oteData) createTrade(sellRes.oteData, nowMs, trades, activeTrades, dailyStats, config);
++    if (sellRes.newTrade && sellRes.oteData) createTrade({ ...sellRes.oteData, ...sellRes.newTrade }, nowMs, trades, activeTrades, dailyStats, config);
++
+@@ -1006,7 +771,7 @@
+-      activeLeg.chochPoints = totalPoints;
++      console.log("CALCULATING CHOCH POINTS:", { prefix, totalPoints, activeScorePoints: activeScore.points }); activeLeg.chochPoints = totalPoints;
+@@ -1173,21 +938,35 @@
+-  const trade: BacktestTrade = {
+-    id: oteData.tradeId,
++  let trade: BacktestTrade = {
++    id: oteData.tradeId || (oteData.id),
+-    tp1Price: parseFloat(oteData.tp1),
+-    tp2Price: parseFloat(oteData.tp2) || 0,
+-    slPrice: parseFloat(oteData.stopLoss),
+-    originalSlPrice: parseFloat(oteData.stopLoss),
++    tp1Price: parseFloat(oteData.tp1 || oteData.tp1Price),
++    tp2Price: parseFloat(oteData.tp2 || oteData.tp2Price) || 0,
++    slPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
++    originalSlPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
++
++  // --- FRICTION MODEL INTERCEPTION ---
++  const frictionResult = evaluateNetTrade({ ...trade, ticker: config.ticker } as any, nowMs);
++  if (!frictionResult.approved) {
++    // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 1.0)
++    return;
++  }
++  
++  // Re-asignamos los precios que pudieron ser alterados por el spread/slippage
++  trade.entryPrice = frictionResult.netTrade.entryPrice;
++  trade.tp1Price = frictionResult.netTrade.tp1Price;
++  trade.tp2Price = frictionResult.netTrade.tp2Price;
++  trade.slPrice = frictionResult.netTrade.slPrice;
++
