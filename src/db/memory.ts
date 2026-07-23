@@ -49,7 +49,7 @@ if (admin.apps.length > 0 && process.env.NO_DB !== 'true') {
                     get: async () => ({ empty: true, docs: [] })
                 })
             }),
-            get: async () => ({ empty: true, docs: [], forEach: (cb:any) => {} }),
+            get: async () => ({ empty: true, docs: [], forEach: (_cb:any) => {} }),
             onSnapshot: () => () => {}
         }),
         batch: () => ({

@@ -68,6 +68,8 @@ export interface BacktestConfig {
   // Realism (Spread & Commissions)
   spreadPips?: number;
   commissionPerLot?: number;
+  maxHoldMin?: number;
+  latencyMs?: number;
 }
 
 export interface BacktestResult {

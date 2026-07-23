@@ -252,13 +252,11 @@ export function calculateLotSize(
 
     // Pip value calculation depends on the instrument
     let pipValue: number;
-    let lotMultiplier: number;
     const t = ticker.toUpperCase();
     
     if (t.includes('JPY')) {
         // JPY pairs: 1 pip = 0.01, lot = 100,000 units
         pipValue = slDistance / 0.01;
-        lotMultiplier = 100000;
         const lotSize = riskAmount / (pipValue * (1000 / 100)); // ~$9.xx per pip per lot
         return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
     } else if (t.includes('XAU') || t.includes('GOLD')) {
@@ -299,8 +297,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         slPrice,
         tp1Price,
         tp2Price,
-        riskPercent = config.CTRADER_RISK_PERCENT,
-        tradeId
+        riskPercent = config.CTRADER_RISK_PERCENT
     } = params;
 
     // Ensure connection
@@ -444,7 +441,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 /**
  * Modify stop loss of an existing position (e.g., move to breakeven).
  */
-export async function modifyStopLoss(positionId: string, newSlPrice: number, currentPrice?: number): Promise<boolean> {
+export async function modifyStopLoss(positionId: string, newSlPrice: number, _currentPrice?: number): Promise<boolean> {
     if (!isCTraderReady()) {
         const connected = await connectCTrader();
         if (!connected) return false;

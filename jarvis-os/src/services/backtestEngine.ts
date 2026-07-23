@@ -67,7 +67,7 @@ const MAX_ZONE_AGE_MS: Record<string, number> = {
 
 // --- CSV PARSING ---
 export function* parseCSVLines(content: string): Generator<LogEntry> {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   let start = 0;
   while (start < content.length) {
     let end = content.indexOf('\n', start);

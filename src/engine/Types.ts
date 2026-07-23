@@ -76,6 +76,8 @@ export interface RadarState {
   tickTimes?: number[];
   densityMedian?: number;
   atr14?: number;
+  atrSeed?: number;
+  atrSamples?: number;
     lastSyncDate: string | null;
     zones: RadarZone[];
     zoneConfluence?: Map<RadarZone, string[]>;
