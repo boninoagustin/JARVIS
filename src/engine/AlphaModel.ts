@@ -274,9 +274,9 @@ export function evaluateImpulseCore(
             const reward = Math.abs(oteTP2Ext - entryFill); // Se evalúa el R:R contra la proyección de TP2
             const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
 
-            if (risk <= 0 || rrRatioOTE < 1.2) {
+            if (risk <= 0 || rrRatioOTE < 0.75) {
                 dbg(`[FIBO] ❌ R:R invalid: risk=${risk}, reward=${reward}, ratio=${rrRatioOTE}`);
-                dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 1.2 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
+                dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 0.75 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
                 return { updatedLeg: leg };
             }
 
