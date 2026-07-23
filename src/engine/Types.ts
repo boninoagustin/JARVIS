@@ -168,6 +168,13 @@ export const AssetSessionConfigSchema = z.object({
     sellScorePenalty: nonNegativeNumber.optional(),
     maxBuysPerDay: nonNegativeNumber.optional(),
     buyScorePenalty: nonNegativeNumber.optional(),
+    // ⚙️ Gestión de trades por activo (parcial TP1, SL post-TP1, trailing)
+    partialClosePct: nonNegativeNumber.optional(),
+    slAfterTp1: z.enum(['midpoint', 'breakeven', 'none']).optional(),
+    tp15BeEnabled: z.boolean().optional(),
+    atrTrailEnabled: z.boolean().optional(),
+    structuralTrailEnabled: z.boolean().optional(),
+    tp1StructuralMinRR: nonNegativeNumber.optional(),
     sessions: z.record(z.string(), SessionSchema).optional()
 }).strict();
 

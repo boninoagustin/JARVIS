@@ -43,6 +43,14 @@ export interface SessionConfig {
   maxBuyLosses?: number;
 }
 
+export interface ManagementConfig {
+  partialClosePct?: number;
+  slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+  tp15BeEnabled?: boolean;
+  atrTrailEnabled?: boolean;
+  structuralTrailEnabled?: boolean;
+}
+
 export interface BacktestConfig {
   ticker: string;
   minBuyPoints: number;
@@ -70,6 +78,15 @@ export interface BacktestConfig {
   commissionPerLot?: number;
   maxHoldMin?: number;
   latencyMs?: number;
+  partialClosePct?: number; // Fracción de la posición cerrada en TP1 (default 0.5)
+  tp1StructuralMinRR?: number; // Mínimo R del TP1 estructural (extremo del impulso) para preferirlo sobre el 1:1 fijo (default 1.2)
+  slAfterTp1?: 'midpoint' | 'breakeven' | 'none'; // Ajuste del SL al tocar TP1 (default 'midpoint')
+  tp15BeEnabled?: boolean; // BE diferido al alcanzar TP1.5 (default true)
+  atrTrailEnabled?: boolean; // Trailing ATR continuo post-TP1 (default true)
+  structuralTrailEnabled?: boolean; // Trailing estructural post-TP1 detrás de nuevos impulsos CHOCH/BOS (default true)
+  // Gestión diferenciada por tipo de entrada (override de los flags globales)
+  oteManagement?: ManagementConfig;    // Trades OTE (retroceso fibo)
+  directManagement?: ManagementConfig; // Trades directos CHOCH/BOS
 }
 
 export interface BacktestResult {

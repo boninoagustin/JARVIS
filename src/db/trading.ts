@@ -97,6 +97,12 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     sellScorePenalty: number;
     maxBuysPerDay: number;
     buyScorePenalty: number;
+    partialClosePct?: number;
+    slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+    tp15BeEnabled?: boolean;
+    atrTrailEnabled?: boolean;
+    structuralTrailEnabled?: boolean;
+    tp1StructuralMinRR?: number;
     sessions?: Record<string, {
       choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
       choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -141,6 +147,12 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             sellScorePenalty: config.sellScorePenalty ?? 0,
             maxBuysPerDay: config.maxBuysPerDay ?? 0,
             buyScorePenalty: config.buyScorePenalty ?? 0,
+            partialClosePct: config.partialClosePct,
+            slAfterTp1: config.slAfterTp1,
+            tp15BeEnabled: config.tp15BeEnabled,
+            atrTrailEnabled: config.atrTrailEnabled,
+            structuralTrailEnabled: config.structuralTrailEnabled,
+            tp1StructuralMinRR: config.tp1StructuralMinRR,
             sessions: config.sessions as any
         };
     }
@@ -217,6 +229,12 @@ if (db) {
                     sellScorePenalty: data.sellScorePenalty || 0,
                     maxBuysPerDay: data.maxBuysPerDay || 0,
                     buyScorePenalty: data.buyScorePenalty || 0,
+                    partialClosePct: data.partialClosePct,
+                    slAfterTp1: data.slAfterTp1,
+                    tp15BeEnabled: data.tp15BeEnabled,
+                    atrTrailEnabled: data.atrTrailEnabled,
+                    structuralTrailEnabled: data.structuralTrailEnabled,
+                    tp1StructuralMinRR: data.tp1StructuralMinRR,
                     sessions: data.sessions as any
                 });
             });
@@ -596,6 +614,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             const config = getConfigForTicker(ticker, nowMs);
             const isKillswitched = nowMs < store.streakKillswitchUntil || nowMs < store.vixKillswitchUntil || !config.sessionEnabled;
             
+            // ⚙️ Gestión de trades configurada por activo (asset_configs en Firestore).
+            // Defaults = comportamiento histórico (parcial 50%, SL al 50% del riesgo, TP1.5 y trail ATR activos).
+            const mgmtPartial = Math.min(Math.max(config.partialClosePct ?? 0.5, 0), 1);
+            const mgmtSlMode: 'midpoint' | 'breakeven' | 'none' = config.slAfterTp1 ?? 'midpoint';
+            const mgmtTp15 = config.tp15BeEnabled ?? true;
+            const mgmtAtrTrail = config.atrTrailEnabled ?? true;
+            
             if (!isKillswitched) {
                 // 🗺️ Estirar patas Macro si están activas
                 if (state.activeMacroImpulseBuy) {
@@ -669,17 +694,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             trade.tp1Hit = true;
                             trade.originalSlPrice = trade.slPrice;
                             
-                            // 🆕 RISK REDUCTION: Mover el SL al 50% del riesgo inicial
+                            // 🆕 RISK REDUCTION post-TP1: SL según mgmtSlMode ('midpoint' | 'breakeven' | 'none')
                             const distanceToEntry = trade.entryPrice - trade.originalSlPrice;
-                            const slHalfway = trade.originalSlPrice + (distanceToEntry * 0.5);
-                            const targetSl = parseFloat(slHalfway.toFixed(5));
+                            let targetSl: number | null = null;
+                            if (mgmtSlMode === 'midpoint') {
+                                targetSl = parseFloat((trade.originalSlPrice + (distanceToEntry * 0.5)).toFixed(5));
+                            } else if (mgmtSlMode === 'breakeven') {
+                                targetSl = parseFloat(trade.entryPrice.toFixed(5));
+                            }
                             
-                            if (isBacktest) {
-                                trade.slPrice = targetSl;
-                            } else {
-                                trade.targetSlPrice = targetSl;
-                                trade.targetSlPending = true;
-                                trade.targetSlRetries = 0;
+                            if (targetSl !== null) {
+                                if (isBacktest) {
+                                    trade.slPrice = targetSl;
+                                } else {
+                                    trade.targetSlPrice = targetSl;
+                                    trade.targetSlPending = true;
+                                    trade.targetSlRetries = 0;
+                                }
                             }
                             
                             const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
@@ -707,23 +738,27 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                             }
                             
+                            const slModeText = mgmtSlMode === 'breakeven' ? 'Breakeven' : mgmtSlMode === 'none' ? 'Sin cambios' : 'Reducido 50%';
                             const tp1Msg = `🟡 <b>TP1 ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` + 
                                 `📥 Entrada: ${trade.entryPrice}\n` +
                                 `🎯 TP1: ${trade.tp1Price} ✅\n` +
                                 `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
-                                `🛑 SL (Reducido 50%): ${trade.slPrice}\n` +
+                                `🛑 SL (${slModeText}): ${trade.slPrice}\n` +
                                 `⏱️ Duración: ${durationStr}\n\n` +
-                                `💡 Toma parcial ejecutada (50%). El Stop Loss se ha acercado a la entrada para reducir el riesgo a la mitad (Risk Reduction).`;
+                                (mgmtPartial > 0
+                                    ? `💡 Toma parcial ejecutada (${Math.round(mgmtPartial * 100)}%). Stop Loss: ${slModeText}.`
+                                    : `💡 Sin toma parcial (0%). La posición completa sigue abierta hacia TP2.`);
                             if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => {});
-                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Toma parcial ejecutada, SL reducido al 50%`);
+                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Parcial ${Math.round(mgmtPartial * 100)}%, SL: ${slModeText}`);
 
                             // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
-                                    await ctrader.closePartial(trade.ctraderPositionId!, 50);
-                                    const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                                    if (mgmtPartial > 0) await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartial * 100));
+                                    if (targetSl === null) return; // slAfterTp1 'none': no tocar el SL
+                                    const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, targetSl);
                                     if (success) {
                                         console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
                                         trade.slPrice = trade.targetSlPrice!;
@@ -740,7 +775,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
-                    if (trade.tp1Hit && !trade.slHalfwayHit) {
+                    if (trade.tp1Hit && !trade.slHalfwayHit && mgmtTp15) {
                         const riskDist = Math.abs(trade.tp1Price - trade.entryPrice);
                         const tp1_5Price = trade.direction === 'BUY' ? trade.tp1Price + (riskDist * 0.5) : trade.tp1Price - (riskDist * 0.5);
 
@@ -805,7 +840,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
                     
                     // Complemento PING: trailing continuo post-TP1 por distancia
-                    if (trade.tp1Hit) {
+                    if (trade.tp1Hit && mgmtAtrTrail) {
                         const atrThreshold = (state.atr14 ?? 0) * 1.5;
                         const ratchetStep = (state.atr14 ?? 0) * 0.25;
                         if (trade.direction === 'BUY') {
@@ -852,7 +887,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             trade.tp2Hit = true;
                             const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
                             const pnlTp2Pct = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
-                            const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * 0.5 + pnlTp2Pct * 0.5) : pnlTp2Pct;
+                            const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * mgmtPartial + pnlTp2Pct * (1 - mgmtPartial)) : pnlTp2Pct;
                             
                             const originalSl = trade.originalSlPrice ?? trade.slPrice;
                             const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
@@ -927,7 +962,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
                         const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
                         const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 - currentSlLossPct * 0.5) : -currentSlLossPct;
+                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * mgmtPartial - currentSlLossPct * (1 - mgmtPartial)) : -currentSlLossPct;
                         const rMultiple = initialSlLossPct > 0 ? parseFloat((finalPnlPct / initialSlLossPct).toFixed(4)) : 0;
                         const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BREAKEVEN' : 'LOSS') : 'LOSS';
                         const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);

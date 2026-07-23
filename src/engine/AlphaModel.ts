@@ -296,7 +296,12 @@ export function evaluateImpulseCore(
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const riskDist = risk;
                 const fixedTP1 = leg.dir === 'BUY' ? entryFill + riskDist : entryFill - riskDist;
-                const tp1 = fixedTP1.toFixed(decimals);
+                // TP1 estructural: usar el extremo del impulso si queda a >= tp1StructuralMinRR (default 1.2R);
+                // si está más cerca, fallback al 1:1 fijo del riesgo
+                const structuralMinRR = config.tp1StructuralMinRR ?? 1.2;
+                const structuralDist = Math.abs(leg.extreme - entryFill);
+                const chosenTP1 = structuralDist >= riskDist * structuralMinRR ? leg.extreme : fixedTP1;
+                const tp1 = chosenTP1.toFixed(decimals);
                 const tp2 = fixedTP2.toFixed(decimals);
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -331,7 +336,7 @@ export function evaluateImpulseCore(
                 const newTrade: ActiveTrade = {
                     tradeId, ticker, direction: leg.dir,
                     entryPrice: entryFill,
-                    tp1Price: leg.extreme,
+                    tp1Price: chosenTP1,
                     tp2Price: fixedTP2,
                     slPrice: adjustedSL,
                     tp1Hit: false,

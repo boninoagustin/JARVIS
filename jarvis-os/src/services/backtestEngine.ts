@@ -417,6 +417,15 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
+      // Gestión diferenciada por tipo de entrada: OTE (retroceso fibo) vs directa (CHOCH/BOS)
+      const isOteTrade = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
+      const mgmt = (isOteTrade ? config.oteManagement : config.directManagement) ?? {};
+      const partialPct = mgmt.partialClosePct ?? config.partialClosePct ?? 0.5; // fracción cerrada en TP1
+      const remainderPct = 1 - partialPct;
+      const slAfterTp1Mode = mgmt.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint';
+      const tp15BeEnabled = mgmt.tp15BeEnabled ?? config.tp15BeEnabled ?? true;
+      const atrTrailEnabled = mgmt.atrTrailEnabled ?? config.atrTrailEnabled ?? true;
+
       const MAX_HOLD_MS = config.maxHoldMin ? config.maxHoldMin * 60000 : Infinity;
       if (tradeAge >= MAX_HOLD_MS) {
         const pnlDist = trade.direction === 'BUY'
@@ -431,8 +440,8 @@ function processAlert(
         const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
         const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
 
-        const lockedPct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 * 0.5 : 0;
-        const openPct = (pnlDist / trade.entryPrice) * 100 * (trade.tp1Hit ? 0.5 : 1.0);
+        const lockedPct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 * partialPct : 0;
+        const openPct = (pnlDist / trade.entryPrice) * 100 * (trade.tp1Hit ? remainderPct : 1.0);
         const slPct = (slDist / trade.entryPrice) * 100;
 
         trade.pnl = lockedPct + openPct;
@@ -460,7 +469,7 @@ function processAlert(
           ? (slFill - trade.entryPrice) / trade.entryPrice * 100 
           : (trade.entryPrice - slFill) / trade.entryPrice * 100;
         const pnlTp1Pct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 : 0;
-        const finalPnlPct = isPartialClose ? (pnlTp1Pct * 0.5 + slPnlPct * 0.5) : slPnlPct;
+        const finalPnlPct = isPartialClose ? (pnlTp1Pct * partialPct + slPnlPct * remainderPct) : slPnlPct;
         const finalResult = finalPnlPct > 0 ? 'WIN' : finalPnlPct === 0 ? 'BE' : 'LOSS';
 
         trade.result = finalResult;
@@ -505,9 +514,13 @@ function processAlert(
           trade.tp1Hit = true;
           const originalSl = trade.originalSlPrice ?? trade.slPrice;
           const slLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-          // Tras TP1: SL de la mitad restante se ajusta al 50% del riesgo (simulando live)
-          trade.slPrice = originalSl + (trade.entryPrice - originalSl) * 0.5;
-          trade.slHalfwayHit = true;
+          // Tras TP1: ajuste del SL según slAfterTp1 ('midpoint' default | 'breakeven' | 'none')
+          if (slAfterTp1Mode === 'midpoint') {
+            trade.slPrice = originalSl + (trade.entryPrice - originalSl) * 0.5;
+            trade.slHalfwayHit = true;
+          } else if (slAfterTp1Mode === 'breakeven') {
+            trade.slPrice = trade.entryPrice;
+          }
             
           trade.resultTp1 = 'WIN';
           trade.pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
@@ -518,12 +531,12 @@ function processAlert(
           const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker)) : 0;
           
           const grossR = slLossPct > 0 ? trade.pnlTp1 / slLossPct : 1.0;
-          trade.rMultipleTp1 = ((grossR * 0.5) - (transactionCostR * 0.5)) * (trade.riskMult || 1.0);
+          trade.rMultipleTp1 = ((grossR * partialPct) - (transactionCostR * partialPct)) * (trade.riskMult || 1.0);
         }
       }
 
       // TP1.5 (Trailing a BE diferido)
-      if (trade.tp1Hit && !trade.tp1_5Hit) {
+      if (trade.tp1Hit && !trade.tp1_5Hit && tp15BeEnabled) {
         const tp1_5Price = trade.direction === 'BUY' 
           ? trade.tp1Price + Math.abs(trade.tp1Price - trade.entryPrice) * 0.5
           : trade.tp1Price - Math.abs(trade.tp1Price - trade.entryPrice) * 0.5;
@@ -535,7 +548,7 @@ function processAlert(
       }
 
       // Complemento PING: trailing continuo post-TP1 por distancia
-      if (trade.tp1Hit) {
+      if (trade.tp1Hit && atrTrailEnabled) {
         const atrThreshold = (state.atr14 ?? 0) * 1.5;
         const ratchetStep = (state.atr14 ?? 0) * 0.25;
         if (trade.direction === 'BUY') {
@@ -560,7 +573,7 @@ function processAlert(
           const slPnlPct = trade.direction === 'BUY' 
             ? (trade.slPrice - trade.entryPrice) / trade.entryPrice * 100 
             : (trade.entryPrice - trade.slPrice) / trade.entryPrice * 100;
-          trade.pnl = trade.pnlTp1! * 0.5 + slPnlPct * 0.5;
+          trade.pnl = trade.pnlTp1! * partialPct + slPnlPct * remainderPct;
           trade.pnlTp2 = trade.pnl;
           
           const originalSl = trade.originalSlPrice ?? trade.slPrice;
@@ -589,7 +602,7 @@ function processAlert(
           trade.resultTp2 = 'WIN';
           const pnlTp1 = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
           const pnlTp2 = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
-          const finalPnl = trade.tp1Hit ? (pnlTp1 * 0.5 + pnlTp2 * 0.5) : pnlTp2;
+          const finalPnl = trade.tp1Hit ? (pnlTp1 * partialPct + pnlTp2 * remainderPct) : pnlTp2;
           
           trade.pnl = finalPnl;
           trade.pnlTp2 = finalPnl;
@@ -606,7 +619,7 @@ function processAlert(
           trade.rMultiple = initialSlLossPct > 0 ? (grossR - transactionCostR) * (trade.riskMult || 1.0) : 0;
           
           const grossRTp2 = initialSlLossPct > 0 ? pnlTp2 / initialSlLossPct : 0;
-          trade.rMultipleTp2 = initialSlLossPct > 0 ? ((grossRTp2 * 0.5) - (transactionCostR * 0.5)) * (trade.riskMult || 1.0) : 0;
+          trade.rMultipleTp2 = initialSlLossPct > 0 ? ((grossRTp2 * remainderPct) - (transactionCostR * remainderPct)) * (trade.riskMult || 1.0) : 0;
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
           activeTrades.delete(tradeId);
@@ -704,6 +717,9 @@ function processAlert(
             state.activeImpulseBuy = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
+              const stOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
+              const stEnabled = ((stOte ? config.oteManagement : config.directManagement)?.structuralTrailEnabled) ?? config.structuralTrailEnabled ?? true;
+              if (!stEnabled) continue;
               if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
                 const structuralBuffer = Math.max(2 * (config.spreadPips ?? 0.1) * pipSize, atrTrail);
@@ -716,6 +732,9 @@ function processAlert(
             state.activeImpulseSell = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
+              const stOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
+              const stEnabled = ((stOte ? config.oteManagement : config.directManagement)?.structuralTrailEnabled) ?? config.structuralTrailEnabled ?? true;
+              if (!stEnabled) continue;
               if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
                 const structuralBuffer = Math.max(2 * (config.spreadPips ?? 0.1) * pipSize, atrTrail);
@@ -1221,8 +1240,10 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
         const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
         const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
         
-        const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * 0.5 : 0;
-        const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? 0.5 : 1.0);
+        const partialPct = config.partialClosePct ?? 0.5;
+        const remainderPct = 1 - partialPct;
+        const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * partialPct : 0;
+        const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? remainderPct : 1.0);
         const slPct = (slDist / existingTradeForTicker.entryPrice) * 100;
         
         existingTradeForTicker.pnl = lockedPct + openPct;

@@ -249,7 +249,7 @@ import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { db } from '../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 interface UploadedFile {
   name: string;
@@ -284,6 +284,12 @@ interface SessionHistory {
     maxConsecutiveLosses?: number;
     maxTradesPerDay?: number;
     trailingDrawdownR?: number;
+    partialClosePct?: number;
+    slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+    tp15BeEnabled?: boolean;
+    atrTrailEnabled?: boolean;
+    structuralTrailEnabled?: boolean;
+    tp1StructuralMinRR?: number;
     enabled?: boolean;
     sessions?: Record<string, {
       choch5m: { enabled: boolean; minScore: number };
@@ -303,6 +309,28 @@ export default function BacktestingPanel() {
   const [fixedRR, setFixedRR] = useState(2.0);
   const [oteEntryPercent, setOteEntryPercent] = useState(50);
   const [entryTrigger, setEntryTrigger] = useState<'CHOCH' | 'OTE' | 'BOTH' | 'SMART'>('BOTH');
+  const [partialClosePct, setPartialClosePct] = useState(0.5);
+  const [slAfterTp1, setSlAfterTp1] = useState<'midpoint' | 'breakeven' | 'none'>('midpoint');
+  const [tp15BeEnabled, setTp15BeEnabled] = useState(true);
+  const [atrTrailEnabled, setAtrTrailEnabled] = useState(true);
+  const [structuralTrailEnabled, setStructuralTrailEnabled] = useState(true);
+  const [tp1StructuralMinRR, setTp1StructuralMinRR] = useState(1.2);
+
+  // 🔄 Cargar gestión de trades actual desde Firestore (asset_configs/{ticker})
+  // para que el panel refleje la config que el bot live tiene en producción.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'asset_configs', ticker), (snap) => {
+      if (!snap.exists()) return;
+      const d = snap.data() as any;
+      if (d.partialClosePct !== undefined) setPartialClosePct(d.partialClosePct);
+      if (d.slAfterTp1 !== undefined) setSlAfterTp1(d.slAfterTp1);
+      if (d.tp15BeEnabled !== undefined) setTp15BeEnabled(d.tp15BeEnabled);
+      if (d.atrTrailEnabled !== undefined) setAtrTrailEnabled(d.atrTrailEnabled);
+      if (d.structuralTrailEnabled !== undefined) setStructuralTrailEnabled(d.structuralTrailEnabled);
+      if (d.tp1StructuralMinRR !== undefined) setTp1StructuralMinRR(d.tp1StructuralMinRR);
+    });
+    return () => unsub();
+  }, [ticker]);
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
     choch5m: { enabled: boolean; minScore: number };
     choch15m: { enabled: boolean; minScore: number };
@@ -562,6 +590,12 @@ export default function BacktestingPanel() {
       setEntryTrigger(config.entryTrigger);
       setMinBuyPoints(config.minBuyPoints);
       setMinSellPoints(config.minSellPoints);
+      setPartialClosePct(config.partialClosePct ?? 0.5);
+      setSlAfterTp1(config.slAfterTp1 ?? 'midpoint');
+      setTp15BeEnabled(config.tp15BeEnabled ?? true);
+      setAtrTrailEnabled(config.atrTrailEnabled ?? true);
+      setStructuralTrailEnabled(config.structuralTrailEnabled ?? true);
+      setTp1StructuralMinRR(config.tp1StructuralMinRR ?? 1.2);
       setMaxDailyLossR(config.maxDailyLossR || 0);
       setDailyProfitTargetR(config.dailyProfitTargetR || 0);
       setMaxConsecutiveLosses(config.maxConsecutiveLosses || 0);
@@ -601,6 +635,14 @@ export default function BacktestingPanel() {
         minPointsForSell: minSellPoints,
         entryTrigger: entryTrigger,
         oteEntryPercent: oteEntryPercent,
+
+        // ⚙️ Gestión de trades (consumida por el bot en vivo)
+        partialClosePct: partialClosePct,
+        slAfterTp1: slAfterTp1,
+        tp15BeEnabled: tp15BeEnabled,
+        atrTrailEnabled: atrTrailEnabled,
+        structuralTrailEnabled: structuralTrailEnabled,
+        tp1StructuralMinRR: tp1StructuralMinRR,
 
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -696,6 +738,7 @@ export default function BacktestingPanel() {
         maxTradesPerDay: maxTradesPerDay || undefined,
         maxTradesPerSession: maxTradesPerSession || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
+        partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR,
       };
 
       try {
@@ -726,7 +769,8 @@ export default function BacktestingPanel() {
           tradeData: res.trades,
           config: { 
             minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
-            sessions: finalSessions, minRR, sessionFilter: activeSessions, maxTradesPerSession, spreadPips, commissionPerLot
+            sessions: finalSessions, minRR, sessionFilter: activeSessions, maxTradesPerSession, spreadPips, commissionPerLot,
+            partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR
           }
         };
         setSessions(prev => {
@@ -745,7 +789,7 @@ export default function BacktestingPanel() {
         setIsRunning(false);
       }
     }, 50);
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, minRR, activeSessions, maxTradesPerSession, spreadPips, commissionPerLot]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, sessionTriggers, toast, minRR, activeSessions, maxTradesPerSession, spreadPips, commissionPerLot, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR]);
 
   const handleAutoTuneSession = useCallback(async (sessionName: string) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -767,6 +811,7 @@ export default function BacktestingPanel() {
         maxTradesPerDay: maxTradesPerDay || undefined,
         maxTradesPerSession: maxTradesPerSession || undefined,
         trailingDrawdownR: trailingDrawdownR || undefined,
+        partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR,
     };
 
     for (const sl of slBufferOptions) {
@@ -833,7 +878,7 @@ export default function BacktestingPanel() {
     } finally {
         setIsAutoTuningSession(false);
     }
-  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger, minRR, activeSessions, spreadPips, commissionPerLot, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, maxTradesPerSession, trailingDrawdownR, sessionTriggers, oteEntryPercent, toast, runWorkerTask]);
+  }, [uploadedFiles, ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, entryTrigger, minRR, activeSessions, spreadPips, commissionPerLot, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, maxTradesPerSession, trailingDrawdownR, sessionTriggers, oteEntryPercent, toast, runWorkerTask, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR]);
 
   handleRunRef.current = handleRun;
 
@@ -1089,6 +1134,7 @@ export default function BacktestingPanel() {
                 maxConsecutiveLosses: optimizeSwitches ? undefined : (maxConsecutiveLosses || undefined),
                 maxTradesPerDay: optimizeSwitches ? undefined : (maxTradesPerDay || undefined),
                 trailingDrawdownR: optimizeSwitches ? undefined : (trailingDrawdownR || undefined),
+                partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR,
                 sessions: optSessions
             });
         }
@@ -1134,7 +1180,7 @@ export default function BacktestingPanel() {
     };
     
     processStage1Chunk(0);
-  }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches]);
+  }, [uploadedFiles, ticker, entryTrigger, sessionFilter, toast, getSessionForTimestamp, maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR, optimizeSwitches, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR]);
 
 
 
@@ -1699,6 +1745,12 @@ export default function BacktestingPanel() {
         fixedRR,
         oteEntryPercent,
         entryTrigger,
+        partialClosePct,
+        slAfterTp1,
+        tp15BeEnabled,
+        atrTrailEnabled,
+        structuralTrailEnabled,
+        tp1StructuralMinRR,
         sessions: sessionTriggers
       },
       metrics: globalMetrics,
@@ -1713,7 +1765,7 @@ export default function BacktestingPanel() {
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
     toast('✅ Archivo JSON descargado con éxito (historial completo de trades)', 'success');
-  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast, spreadPips, commissionPerLot]);
+  }, [result, trades, ticker, sessionFilter, tradeFilter, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger, sessionTriggers, riskUsd, toast, spreadPips, commissionPerLot, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, tp1StructuralMinRR]);
 
   const handleTickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value.toUpperCase();
@@ -1894,6 +1946,53 @@ export default function BacktestingPanel() {
                 <option value="CHOCH">CHOCH (Ruptura)</option>
                 <option value="OTE">OTE (Pullback)</option>
               </select>
+            </div>
+
+            {/* ⚙️ GESTIÓN DE TRADES */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💰 PARCIAL TP1</label>
+              <input type="range" min="0" max="1" step="0.05" value={partialClosePct} onChange={e => setPartialClosePct(parseFloat(e.target.value))}
+                style={{ flex: 1, accentColor: 'var(--accent-green)' }} />
+              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent-green)', fontWeight: 700, minWidth: '36px', textAlign: 'right' }}>
+                {Math.round(partialClosePct * 100)}%
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', whiteSpace: 'nowrap', fontWeight: 600 }}>🛡️ SL POST-TP1</label>
+              <select value={slAfterTp1} onChange={e => setSlAfterTp1(e.target.value as any)}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
+                <option value="midpoint">Midpoint (50% riesgo)</option>
+                <option value="breakeven">Breakeven (Entrada)</option>
+                <option value="none">Sin cambio</option>
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(0,136,255,0.05)', borderRadius: '4px', border: '1px solid rgba(0,136,255,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: '#0088ff', whiteSpace: 'nowrap', fontWeight: 600 }}>🎯 TP1 ESTRUCTURAL</label>
+              <select value={tp1StructuralMinRR} onChange={e => setTp1StructuralMinRR(parseFloat(e.target.value))}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
+                <option value={1.2}>Estructural ≥1.2R</option>
+                <option value={99}>Fijo 1:1</option>
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <input type="checkbox" checked={tp15BeEnabled} onChange={e => setTp15BeEnabled(e.target.checked)}
+                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
+                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>BE TP1.5</span>
+              </label>
+              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <input type="checkbox" checked={atrTrailEnabled} onChange={e => setAtrTrailEnabled(e.target.checked)}
+                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
+                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>TRAIL ATR</span>
+              </label>
+              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <input type="checkbox" checked={structuralTrailEnabled} onChange={e => setStructuralTrailEnabled(e.target.checked)}
+                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
+                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>TRAIL ESTRUCT.</span>
+              </label>
             </div>
 
 
@@ -2613,6 +2712,12 @@ export default function BacktestingPanel() {
                           setFixedRR(s.config.fixedRR);
                           setOteEntryPercent(s.config.oteEntryPercent);
                           setEntryTrigger(s.config.entryTrigger);
+                          setPartialClosePct(s.config.partialClosePct ?? 0.5);
+                          setSlAfterTp1(s.config.slAfterTp1 ?? 'midpoint');
+                          setTp15BeEnabled(s.config.tp15BeEnabled ?? true);
+                          setAtrTrailEnabled(s.config.atrTrailEnabled ?? true);
+                          setStructuralTrailEnabled(s.config.structuralTrailEnabled ?? true);
+                          setTp1StructuralMinRR(s.config.tp1StructuralMinRR ?? 1.2);
                           setEnabled(s.config.enabled !== false);
                           // @ts-ignore
                           if (s.config.sessions) {
