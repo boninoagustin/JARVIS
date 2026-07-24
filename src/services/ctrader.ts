@@ -46,7 +46,7 @@ export interface CTraderAccountInfo {
 
 // ─── Connection State ───
 
-let ctClient: any = null;
+export let ctClient: any = null;
 let isConnected = false;
 let connectingPromise: Promise<boolean> | null = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -379,19 +379,19 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         }
 
         // El lotSize que devuelve la API ya está en centavos (ej: EURUSD = 10,000,000; BTCUSD = 100)
-        let correctVolumeCents = lots * lotSizeCents;
-        
-        // Alinear al stepVolume (incremento mínimo)
-        correctVolumeCents = Math.round(correctVolumeCents / stepVolumeCents) * stepVolumeCents;
+        let exactRequiredCents = lots * lotSizeCents;
         
         // GUARDRAIL DE RIESGO: Si el volumen necesario para mantener el 1% es menor al mínimo del broker,
-        // no debemos forzar el mínimo, porque expondríamos la cuenta a una pérdida mayor a la permitida.
-        if (correctVolumeCents < minVolumeCents) {
-            const riskMsg = `Volumen requerido (${correctVolumeCents / 100} lotes) es menor al mínimo del broker (${minVolumeCents / 100} lotes). Trade abortado por exceso de riesgo.`;
+        // no debemos forzar el mínimo ni redondear hacia arriba, porque expondríamos la cuenta a una pérdida mayor.
+        if (exactRequiredCents < minVolumeCents) {
+            const riskMsg = `Volumen requerido exacto (${(exactRequiredCents / 100).toFixed(2)} lotes) es menor al mínimo del broker (${minVolumeCents / 100} lotes). Trade abortado por exceso de riesgo.`;
             console.warn(`[CTRADER] ⛔ ${riskMsg}`);
             return { success: false, error: riskMsg };
         }
 
+        // Alinear al stepVolume (incremento mínimo)
+        let correctVolumeCents = Math.round(exactRequiredCents / stepVolumeCents) * stepVolumeCents;
+        
         if (info && info.maxVolume) {
             correctVolumeCents = Math.min(info.maxVolume, correctVolumeCents);
         }
@@ -417,10 +417,29 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         const executedPrice = position?.entryPrice || position?.price || currentPrice;
 
         // SL/TP ABSOLUTOS sobre la posición ya abierta
-        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
-            stopLoss: slPrice,
-            takeProfit: tp2Price || tp1Price,
-        });
+        try {
+            const digits = info?.digits ?? 5;
+            const roundTo = (val: number, d: number) => Number(val.toFixed(d));
+            
+            const formattedSl = roundTo(slPrice, digits);
+            const tp = tp2Price || tp1Price;
+            const formattedTp = tp ? roundTo(tp, digits) : undefined;
+
+            await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
+                stopLoss: formattedSl,
+                ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {})
+            });
+        } catch (amendErr: any) {
+            console.error(`[CTRADER] 🚨 Error al establecer SL/TP en posID ${positionId}:`, amendErr.message);
+            console.error(`[CTRADER] 🔴 Cerrando posición de emergencia para evitar riesgo no acotado...`);
+            try {
+                await ctClient.close(Number(positionId));
+                console.log(`[CTRADER] ✅ Posición ${positionId} cerrada de emergencia exitosamente.`);
+            } catch (closeErr: any) {
+                console.error(`[CTRADER] ❌ FATAL: No se pudo cerrar la posición ${positionId} de emergencia!`, closeErr.message);
+            }
+            throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
+        }
 
         console.log(`[CTRADER] ✅ Orden ejecutada: ${direction} ${ticker} | ${lots} lotes @ ${executedPrice} | posID: ${positionId}`);
 
@@ -452,6 +471,19 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, _cu
         const positions = state?.positions || [];
         const pos = positions?.find((p: any) => Number(p.positionId || p.id) === Number(positionId));
         
+        // Obtener digits para el símbolo (fallback a 5)
+        let digits = 5;
+        try {
+            const symbolName = pos.symbolName || pos.tradeData?.symbolName || '';
+            if (symbolName) {
+                const symInfo = await ctClient.getSymbolInfo(symbolName);
+                if (symInfo?.digits) digits = symInfo.digits;
+            }
+        } catch { /* ignorar error y usar 5 */ }
+
+        const roundTo = (val: number, d: number) => Number(val.toFixed(d));
+        const formattedSl = roundTo(newSlPrice, digits);
+        
         let existingTp = undefined;
         if (pos && pos.takeProfit) {
             existingTp = pos.takeProfit;
@@ -459,10 +491,10 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, _cu
 
         // Usar la API de bajo nivel de ctrader-ts para forzar el absolutePrice y preservar el TP si existe
         await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), { 
-            stopLoss: newSlPrice,
+            stopLoss: formattedSl,
             ...(existingTp !== undefined ? { takeProfit: existingTp } : {})
         });
-        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${newSlPrice} (Mantenido TP: ${existingTp || 'Ninguno'})`);
+        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${formattedSl} (Mantenido TP: ${existingTp || 'Ninguno'})`);
         return true;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error modificando SL de ${positionId}:`, err.message);
@@ -658,8 +690,10 @@ function mapToCTraderSymbol(ticker: string): string {
         'BTCUSD': 'BTCUSD',
         'US100': 'US TECH 100',   // Usuario reporta que su broker lo llama 'US TECH 100'
         'NAS100': 'US TECH 100',
-        'US30': 'US30',
-        'SPX500': 'US500',
+        'US30': 'US 30',          // Mapeo corregido a 'US 30'
+        'DOW30': 'US 30',
+        'US500': 'US 500',        // Mapeo corregido a 'US 500'
+        'SPX500': 'US 500',
     };
 
     // Try exact match first

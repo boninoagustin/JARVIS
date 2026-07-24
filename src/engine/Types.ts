@@ -176,6 +176,6 @@ export const AssetSessionConfigSchema = z.object({
     structuralTrailEnabled: z.boolean().optional(),
     tp1StructuralMinRR: nonNegativeNumber.optional(),
     sessions: z.record(z.string(), SessionSchema).optional()
-}).strict();
+});
 
 export type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
