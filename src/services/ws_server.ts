@@ -57,8 +57,8 @@ export function initWebSocketServer(port: number = 8080) {
     // 🆕 Ping/pong: sin esto, una conexión TCP medio-muerta (laptop suspendida,
     // red caída) quedaba en los Sets para siempre y el server le emitía eternamente.
     heartbeatInterval = setInterval(() => {
-        wss?.clients.forEach(ws => {
-            if ((ws as any).isAlive === false) {
+        wss?.clients.forEach((ws: any) => {
+            if (ws.isAlive === false) {
                 clients.delete(ws);
                 subscriptions.delete(ws);
                 scannerClients.delete(ws);
