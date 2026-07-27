@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { SMCState, SMCEvents } from '../engine/smc/types.js';
+import { SMCState } from '../engine/smc/types.js';
 
 let wss: WebSocketServer | null = null;
 const clients = new Set<WebSocket>();

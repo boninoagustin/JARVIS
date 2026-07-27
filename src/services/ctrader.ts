@@ -13,7 +13,7 @@
  */
 
 import { config } from '../config.js';
-import { TrendbarPeriod, SpotEvent } from 'ctrader-ts';
+import { TrendbarPeriod } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
 
@@ -270,7 +270,7 @@ function setupCTraderEvents(client: any) {
 
                 // 2. Process trendbars (closed or periodically updated bars by broker)
                 if (msg.trendbar && msg.trendbar.length > 0) {
-                    const tickerObj = Array.from(subscribedSymbols.entries()).find(([k, v]) => v === symbolId);
+                    const tickerObj = Array.from(subscribedSymbols.entries()).find(([, v]) => v === symbolId);
                     
                     if (tickerObj) {
                         const ticker = tickerObj[0]; // e.g. "EURUSD:M5"

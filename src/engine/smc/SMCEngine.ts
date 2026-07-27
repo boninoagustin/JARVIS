@@ -1,5 +1,5 @@
 // src/engine/smc/SMCEngine.ts
-import { OHLCV, SMCEvents, SMCState, SMCPreset } from './types.js';
+import { OHLCV, SMCState, SMCPreset } from './types.js';
 import { getPreset } from './smc_config.js';
 import { ATRCalculator } from './math/atr.js';
 import { RSICalculator } from './math/rsi.js';
@@ -116,7 +116,9 @@ export class SMCEngine {
             if (divEvent) {
                 events.push({
                     type: 'EVENT_DIVERGENCE',
-                    ...divEvent
+                    direction: divEvent.direction,
+                    divergenceType: divEvent.type,
+                    timestamp: divEvent.timestamp
                 });
                 this.state.lastDivergence = divEvent;
             }
@@ -139,13 +141,13 @@ export class SMCEngine {
         events.push(...fvgEvents);
 
         // 5. Liquidity Sweeps Update
-        const liqEvents = this.liquidity.processCandle(candle, this.preset);
+        const liqEvents = this.liquidity.processCandle(candle);
         events.push(...liqEvents);
         
         for (const ev of liqEvents) {
             this.state.lastSweep = {
                 direction: ev.direction,
-                type: ev.sweepType,
+                type: ev.type,
                 timestamp: ev.timestamp
             };
         }

@@ -1,5 +1,5 @@
 // src/engine/smc/modules/liquidity.ts
-import { OHLCV, Pivot, SMCPreset, SMCEvents } from '../types.js';
+import { OHLCV, Pivot, SMCEvents } from '../types.js';
 
 interface LiquidityLevel {
     price: number;
@@ -46,8 +46,7 @@ export class LiquidityEngine {
      * Procesa la vela para detectar si barre algún nivel de liquidez activo.
      */
     public processCandle(
-        candle: OHLCV, 
-        preset: SMCPreset
+        candle: OHLCV
     ): Array<SMCEvents['EVENT_SWEEP']> {
         const events: any[] = [];
         

@@ -26,7 +26,7 @@ export interface SMCEvents {
     EVENT_OB_CREATED: { ob: OrderBlock };
     EVENT_SWEEP: { direction: Direction; price: number; type: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number };
     EVENT_IFVG_CREATED: { fvg: Imbalance };
-    EVENT_DIVERGENCE: { direction: Direction; type: 'Regular' | 'Hidden'; timestamp: number };
+    EVENT_DIVERGENCE: { direction: Direction; divergenceType: 'Regular' | 'Hidden'; timestamp: number };
 }
 
 export interface Pivot {

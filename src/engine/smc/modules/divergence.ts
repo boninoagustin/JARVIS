@@ -1,4 +1,4 @@
-import { Pivot, Direction, SMCEvents } from '../types.js';
+import { Pivot, Direction } from '../types.js';
 
 export interface DivergenceEvent {
     direction: Direction;

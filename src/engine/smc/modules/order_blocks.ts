@@ -76,7 +76,7 @@ export class OrderBlockEngine {
                         top: previous.high,
                         bottom: previous.low,
                         mitigated: false,
-                        score: this.calculateScore('Bullish', previous, current),
+                        score: this.calculateScore(previous, current),
                         category: 'Plata', // Por defecto, luego el SMCEngine lo ajusta con GodZones
                         merged: false
                     };
@@ -93,7 +93,7 @@ export class OrderBlockEngine {
                         top: previous.high,
                         bottom: previous.low,
                         mitigated: false,
-                        score: this.calculateScore('Bearish', previous, current),
+                        score: this.calculateScore(previous, current),
                         category: 'Plata',
                         merged: false
                     };
@@ -122,7 +122,7 @@ export class OrderBlockEngine {
         return false;
     }
 
-    private calculateScore(direction: 'Bullish' | 'Bearish', obCandle: OHLCV, dispCandle: OHLCV): number {
+    private calculateScore(obCandle: OHLCV, dispCandle: OHLCV): number {
         let score = 5; // Base score (Plata)
         // Lógica base: mientras más grande la vela de desplazamiento vs el OB, más score.
         const obRange = obCandle.high - obCandle.low;

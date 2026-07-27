@@ -1,4 +1,3 @@
-import { TrendbarPeriod } from 'ctrader-ts';
 
 export interface OHLCV {
     timestamp: number; // Unix timestamp in milliseconds
