@@ -61,6 +61,13 @@ export class OrderBlockEngine {
         // Limpiar OBs mitigados (que no sean breakers)
         this.activeOBs = this.activeOBs.filter(ob => !ob.mitigated || ob.category === 'Breaker');
 
+        // 🆕 Cap duro: el filtro anterior retiene Breakers mitigados para siempre;
+        // sin límite, el array crece indefinidamente en ejecución 24/7.
+        const MAX_ACTIVE_OBS = 50;
+        if (this.activeOBs.length > MAX_ACTIVE_OBS) {
+            this.activeOBs.splice(0, this.activeOBs.length - MAX_ACTIVE_OBS);
+        }
+
         // 2. Detección de nuevos OBs (Requiere 2 velas)
         if (this.history.length >= 2) {
             const current = this.history[this.history.length - 1]; // Vela de desplazamiento

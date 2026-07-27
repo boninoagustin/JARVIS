@@ -34,7 +34,11 @@ export class SMCEngine {
 
     // Internal Variables
     private currentAtrValue: number = 0;
-    private rsiHistory: { timestamp: number, value: number }[] = [];
+    // 🆕 RSI indexado por timestamp de vela (lookup O(1) para divergencias).
+    // Reemplaza al array rsiHistory: elimina la ambigüedad de timestamps duplicados
+    // y el find() lineal sobre el buffer.
+    private rsiByTimestamp = new Map<number, number>();
+    private static readonly RSI_BUFFER_SIZE = 200;
 
     constructor(presetName: string = 'Forex - 3. Balanceado') {
         this.preset = getPreset(presetName);
@@ -87,14 +91,26 @@ export class SMCEngine {
     public nextCandle(candle: OHLCV): any[] {
         const events: any[] = [];
 
+        // 🆕 Dedupe: el stream en vivo reenvía la vela en formación con el mismo
+        // timestamp varias veces. Reprocesarla corrompe RSI/ATR (Wilder) y puede
+        // duplicar pivots/eventos. La actualización visual de la vela viva va por
+        // broadcastCandle en SMCManager, no necesita pasar por el motor.
+        if (this.previousCandle && candle.timestamp === this.previousCandle.timestamp) {
+            return events;
+        }
+
         // 1. Math Update
         const atrVal = this.atr.nextValue(candle, this.previousCandle);
         if (atrVal !== null) this.currentAtrValue = atrVal;
         
         const rsiVal = this.rsi.nextValue(candle.close, this.previousCandle?.close);
         if (rsiVal !== null) {
-            this.rsiHistory.push({ timestamp: candle.timestamp, value: rsiVal });
-            if (this.rsiHistory.length > 200) this.rsiHistory.shift();
+            this.rsiByTimestamp.set(candle.timestamp, rsiVal);
+            if (this.rsiByTimestamp.size > SMCEngine.RSI_BUFFER_SIZE) {
+                // Map preserva orden de inserción: borrar el más viejo
+                const oldestKey = this.rsiByTimestamp.keys().next().value!;
+                this.rsiByTimestamp.delete(oldestKey);
+            }
         }
         
         this.vwap.nextValue(candle);
@@ -112,7 +128,7 @@ export class SMCEngine {
             this.liquidity.registerPivot(newPivot, this.currentAtrValue);
             
             // Evaluar Divergencias
-            const divEvent = this.divergence.processPivot(newPivot, this.rsiHistory);
+            const divEvent = this.divergence.processPivot(newPivot, this.rsiByTimestamp);
             if (divEvent) {
                 events.push({
                     type: 'EVENT_DIVERGENCE',

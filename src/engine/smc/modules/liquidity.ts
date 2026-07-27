@@ -118,6 +118,13 @@ export class LiquidityEngine {
         // Limpiar niveles barridos
         this.activeLevels = this.activeLevels.filter(l => !l.swept);
 
+        // 🆕 Cap duro: los niveles nunca swepeados se acumulaban sin límite.
+        // Se descartan los más viejos (el array crece en orden cronológico).
+        const MAX_LEVELS = 100;
+        if (this.activeLevels.length > MAX_LEVELS) {
+            this.activeLevels.splice(0, this.activeLevels.length - MAX_LEVELS);
+        }
+
         return events;
     }
 }

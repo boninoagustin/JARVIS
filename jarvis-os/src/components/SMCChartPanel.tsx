@@ -16,7 +16,6 @@ export default function SMCChartPanel() {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-    const wsRef = useRef<WebSocket | null>(null);
     const lastCandleTimeRef = useRef<number>(0);
 
     const [ticker, setTicker] = useState('EURUSD');
@@ -58,16 +57,7 @@ export default function SMCChartPanel() {
         chartRef.current = chart;
         candleSeriesRef.current = candleSeries;
 
-        const handleResize = () => {
-            if (chartContainerRef.current) {
-                chart.applyOptions({ width: chartContainerRef.current.clientWidth });
-            }
-        };
-
-        window.addEventListener('resize', handleResize);
-
         return () => {
-            window.removeEventListener('resize', handleResize);
             chart.remove();
         };
     }, []);
@@ -96,86 +86,52 @@ export default function SMCChartPanel() {
 
     // Connect to WS
     useEffect(() => {
-        let isComponentMounted = true;
-        let reconnectTimeout: ReturnType<typeof setTimeout>;
+        let unsubscribe: (() => void) | undefined;
+        
+        import('../services/wsClient').then(({ wsClient }) => {
+            wsClient.connect('ws://localhost:8081');
+            wsClient.send({ type: 'SUBSCRIBE', ticker: `${ticker}:${period}` });
+            setIsConnected(true);
 
-        const connectWs = () => {
-            if (!isComponentMounted) return;
-            
-            const ws = new WebSocket('ws://localhost:8081');
-            wsRef.current = ws;
+            unsubscribe = wsClient.subscribe((data: any) => {
+                if (data.ticker !== `${ticker}:${period}`) return;
 
-            ws.onopen = () => {
-                if (!isComponentMounted) {
-                    ws.close();
-                    return;
-                }
-                setIsConnected(true);
-                // Suscribirse al par
-                ws.send(JSON.stringify({ type: 'SUBSCRIBE', ticker: `${ticker}:${period}` }));
-            };
-
-            ws.onmessage = (event) => {
-                if (!isComponentMounted) return;
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.ticker !== `${ticker}:${period}`) return;
-
-                    const tzOffsetSeconds = new Date().getTimezoneOffset() * 60;
-
-                    if (data.type === 'HISTORY' && candleSeriesRef.current) {
-                        const offsetCandles = data.candles.map((c: any) => ({
-                            ...c,
-                            time: c.time - tzOffsetSeconds
-                        }));
-                        candleSeriesRef.current.setData(offsetCandles);
-                        if (offsetCandles.length > 0) {
-                            lastCandleTimeRef.current = offsetCandles[offsetCandles.length - 1].time;
-                        }
-                    } else if (data.type === 'NEW_CANDLE' && candleSeriesRef.current) {
-                        const c = data.candle;
-                        const t = (Math.floor(c.timestamp / 1000) - tzOffsetSeconds) as any;
-
-                        // Evitar crasheo si llega un tick de una vela anterior al historial cargado
-                        if (lastCandleTimeRef.current && t < lastCandleTimeRef.current) {
-                            return;
-                        }
-
-                        candleSeriesRef.current.update({
-                            time: t,
-                            open: c.open,
-                            high: c.high,
-                            low: c.low,
-                            close: c.close,
-                        });
-                        lastCandleTimeRef.current = t;
-                    } else if (data.type === 'SMC_EVENT') {
-                        const state = data.event; // En ws_server se envía como event
-                        setSmcState(state);
-                        drawSMCZOnes(state, lastCandleTimeRef.current); // <-- Vuelve a estar activo!
+                if (data.type === 'HISTORY' && candleSeriesRef.current) {
+                    const offsetCandles = data.candles.map((c: any) => ({
+                        ...c,
+                        time: c.time
+                    }));
+                    candleSeriesRef.current.setData(offsetCandles);
+                    if (offsetCandles.length > 0) {
+                        lastCandleTimeRef.current = offsetCandles[offsetCandles.length - 1].time;
                     }
-                } catch (err) {
-                    console.error('WS Parse Error', err);
+                } else if (data.type === 'NEW_CANDLE' && candleSeriesRef.current) {
+                    const c = data.candle;
+                    const t = Math.floor(c.timestamp / 1000) as any;
+
+                    // Evitar crasheo si llega un tick de una vela anterior al historial cargado
+                    if (lastCandleTimeRef.current && t < lastCandleTimeRef.current) {
+                        return;
+                    }
+
+                    candleSeriesRef.current.update({
+                        time: t,
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                    });
+                    lastCandleTimeRef.current = t;
+                } else if (data.type === 'SMC_STATE' && data.state) {
+                    // Estado completo del motor (lo emite broadcastState en cada vela)
+                    setSmcState(data.state);
+                    drawSMCZOnes(data.state, lastCandleTimeRef.current);
                 }
-            };
-
-            ws.onclose = () => {
-                if (!isComponentMounted) return;
-                setIsConnected(false);
-                reconnectTimeout = setTimeout(connectWs, 3000); // Reconnect
-            };
-        };
-
-        connectWs();
+            });
+        });
 
         return () => {
-            isComponentMounted = false;
-            clearTimeout(reconnectTimeout);
-            if (wsRef.current) {
-                // Remove the onclose handler so it doesn't trigger when we intentionally close it
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-            }
+            if (unsubscribe) unsubscribe();
         };
     }, [ticker, period]);
 
@@ -190,13 +146,11 @@ export default function SMCChartPanel() {
         });
         activeBoxesRef.current = [];
 
-        const tzOffsetSeconds = new Date().getTimezoneOffset() * 60;
-
         // Draw OBs
         (state.activeOBs || []).forEach(ob => {
             const color = ob.direction === 'Bullish' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
             const box = new BoxPrimitive({
-                time1: (Math.floor(ob.timestamp / 1000) - tzOffsetSeconds) as any,
+                time1: Math.floor(ob.timestamp / 1000) as any,
                 price1: ob.top,
                 time2: lastCandleTime as any, // Extendemos hasta la vela actual EXACTA
                 price2: ob.bottom,
@@ -212,7 +166,7 @@ export default function SMCChartPanel() {
         (state.activeFVGs || []).forEach(fvg => {
             const color = fvg.direction === 'Bullish' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)';
             const box = new BoxPrimitive({
-                time1: (Math.floor(fvg.timestamp / 1000) - tzOffsetSeconds) as any,
+                time1: Math.floor(fvg.timestamp / 1000) as any,
                 price1: fvg.top,
                 time2: lastCandleTime as any,
                 price2: fvg.bottom,
@@ -260,7 +214,7 @@ export default function SMCChartPanel() {
                 </div>
             </div>
 
-            <div style={{ position: 'relative', flex: '1 1 auto', minHeight: '400px', marginTop: '16px', border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
+            <div style={{ position: 'relative', flex: '1 1 0', minHeight: 0, marginTop: '16px', border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
                 
                 {/* Floating SMC Status Panel */}
                 <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 10, backgroundColor: 'rgba(10, 10, 15, 0.8)', backdropFilter: 'blur(4px)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)', minWidth: '200px' }}>
@@ -284,11 +238,11 @@ export default function SMCChartPanel() {
                     </div>
                 </div>
 
-                <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
+                <div ref={chartContainerRef} style={{ position: 'absolute', inset: 0 }} />
             </div>
             
             {/* Embedded Scanner */}
-            <div style={{ flex: '0 0 auto', marginTop: '16px', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
+            <div style={{ flexShrink: 0, marginTop: '16px', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
                 <SMCScanner wsUrl="ws://localhost:8081" activeAsset={ticker} />
             </div>
         </div>

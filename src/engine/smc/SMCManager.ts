@@ -22,6 +22,31 @@ class SMCManager {
         return states;
     }
 
+    /**
+     * 🆕 Proyección slim para el scanner WebSocket.
+     * SMCState completo incluye pivotsHigh/pivotsLow (hasta 500 c/u por engine):
+     * serializar eso cada segundo por cliente saturaba el event loop (~MBs/s).
+     * El scanner solo necesita tendencia, contadores y últimos eventos (~300 bytes/key).
+     */
+    public getScannerStates(): Record<string, any> {
+        const states: Record<string, any> = {};
+        for (const [key, engine] of this.engines.entries()) {
+            const s = engine.getState();
+            states[key] = {
+                currentTrend: s.currentTrend,
+                obCount: s.activeOBs.length,
+                topOB: s.activeOBs[0] ?? null,
+                fvgCount: s.activeFVGs.length,
+                hasIFVG: s.activeFVGs.some(f => f.is_ifvg),
+                lastBOS: s.lastBOS ?? null,
+                lastCHoCH: s.lastCHoCH ?? null,
+                lastSweep: s.lastSweep ?? null,
+                lastDivergence: s.lastDivergence ?? null
+            };
+        }
+        return states;
+    }
+
     public processLiveCandles(ticker: string, period: string, newCandles: OHLCV[]) {
         const key = `${ticker}:${period}`;
         const engine = this.getEngine(ticker, period);

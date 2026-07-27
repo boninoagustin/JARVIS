@@ -57,6 +57,13 @@ export class ImbalanceEngine {
         // Limpiar los FVGs que fueron mitigados y no se convirtieron en iFVG
         this.activeFVGs = this.activeFVGs.filter(fvg => !fvg.mitigated || fvg.is_ifvg);
 
+        // 🆕 Cap duro: el filtro anterior retiene iFVGs mitigados para siempre;
+        // sin límite, el array crece indefinidamente en ejecución 24/7.
+        const MAX_ACTIVE_FVGS = 50;
+        if (this.activeFVGs.length > MAX_ACTIVE_FVGS) {
+            this.activeFVGs.splice(0, this.activeFVGs.length - MAX_ACTIVE_FVGS);
+        }
+
         // 2. Detección de nuevos FVGs (Requiere al menos 3 velas)
         if (this.history.length >= 3) {
             const c0 = this.history[this.history.length - 1]; // Vela actual

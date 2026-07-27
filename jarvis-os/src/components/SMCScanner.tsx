@@ -8,7 +8,10 @@ interface SMCScannerProps {
 export const SMCScanner: React.FC<SMCScannerProps> = ({ wsUrl, activeAsset }) => {
     const [scannerStates, setScannerStates] = useState<Record<string, any>>({});
     const [isConnected, setIsConnected] = useState(false);
-    const wsRef = useRef<WebSocket | null>(null);
+    // Ref para leer el activo actual dentro de los handlers del WS
+    // (evita recrear la conexión cada vez que cambia activeAsset)
+    const activeAssetRef = useRef(activeAsset);
+    activeAssetRef.current = activeAsset;
 
     const timeframes = ['M15', 'H1', 'H4', 'D1', 'W1'];
     const indicators = [
@@ -23,50 +26,29 @@ export const SMCScanner: React.FC<SMCScannerProps> = ({ wsUrl, activeAsset }) =>
     ];
 
     useEffect(() => {
-        let isComponentMounted = true;
-        let reconnectTimeout: any;
+        import('../services/wsClient').then(({ wsClient }) => {
+            wsClient.connect(wsUrl);
+            
+            // Suscribirse a los datos del scanner
+            wsClient.send({ type: 'SCANNER_SUBSCRIBE', asset: activeAssetRef.current });
+            setIsConnected(true);
 
-        const connectWs = () => {
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                if (!isComponentMounted) return;
-                setIsConnected(true);
-                // Subscribe to scanner events
-                ws.send(JSON.stringify({ type: 'SCANNER_SUBSCRIBE' }));
-            };
-
-            ws.onmessage = (event) => {
-                if (!isComponentMounted) return;
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'SCANNER_STATE' && data.states) {
-                        setScannerStates(data.states);
-                    }
-                } catch (err) {
-                    console.error('WS Parse Error', err);
+            const unsubscribe = wsClient.subscribe((data: any) => {
+                if (data.type === 'SCANNER_STATE' && data.states) {
+                    setScannerStates(data.states);
                 }
-            };
+            });
 
-            ws.onclose = () => {
-                if (!isComponentMounted) return;
-                setIsConnected(false);
-                reconnectTimeout = setTimeout(connectWs, 3000);
-            };
-        };
-
-        connectWs();
-
-        return () => {
-            isComponentMounted = false;
-            clearTimeout(reconnectTimeout);
-            if (wsRef.current) {
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-            }
-        };
+            return unsubscribe;
+        });
     }, [wsUrl]);
+
+    // Si cambia el activo activo, actualizar el filtro en el servidor sin reconectar
+    useEffect(() => {
+        import('../services/wsClient').then(({ wsClient }) => {
+            wsClient.send({ type: 'SCANNER_SUBSCRIBE', asset: activeAsset });
+        });
+    }, [activeAsset]);
 
     // Helper para obtener el estado de la temporalidad para el activo activo
     const getStateForTf = (tf: string) => {
@@ -93,25 +75,24 @@ export const SMCScanner: React.FC<SMCScannerProps> = ({ wsUrl, activeAsset }) =>
                 );
             }
             case 'ob': {
-                const hasOB = state.activeOBs && state.activeOBs.length > 0;
-                return hasOB ? (
-                    <span title={`${state.activeOBs.length} Order Blocks activos`} style={{ 
+                // DTO slim del scanner: obCount en vez del array completo
+                const count = state.obCount ?? 0;
+                return count > 0 ? (
+                    <span title={`${count} Order Blocks activos`} style={{ 
                         padding: '2px 8px', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', fontWeight: 'bold'
-                    }}>Activo ({state.activeOBs.length})</span>
+                    }}>Activo ({count})</span>
                 ) : <span style={{ color: 'var(--text-tertiary)' }}>-</span>;
             }
             case 'fvg': {
-                const hasFVG = state.activeFVGs && state.activeFVGs.length > 0;
-                return hasFVG ? (
-                    <span title={`${state.activeFVGs.length} FVGs activos`} style={{ 
+                const count = state.fvgCount ?? 0;
+                return count > 0 ? (
+                    <span title={`${count} FVGs activos`} style={{ 
                         padding: '2px 8px', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)', fontWeight: 'bold'
-                    }}>Activo ({state.activeFVGs.length})</span>
+                    }}>Activo ({count})</span>
                 ) : <span style={{ color: 'var(--text-tertiary)' }}>-</span>;
             }
             case 'ifvg': {
-                // IFVGs generally checked via fvg.is_ifvg if supported
-                const hasIFVG = state.activeFVGs?.some((fvg: any) => fvg.is_ifvg);
-                return hasIFVG ? (
+                return state.hasIFVG ? (
                     <span style={{ 
                         padding: '2px 8px', borderRadius: '4px', background: 'rgba(168, 85, 247, 0.2)', color: '#a855f7', border: '1px solid rgba(168, 85, 247, 0.3)', fontWeight: 'bold'
                     }}>Activo</span>

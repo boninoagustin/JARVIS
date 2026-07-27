@@ -15,19 +15,33 @@ export class DivergenceEngine {
 
     public processPivot(
         pivot: Pivot, 
-        rsiHistory: { timestamp: number, value: number }[]
+        rsiByTimestamp: Map<number, number>
     ): DivergenceEvent | null {
-        // Find the RSI value exactly at the pivot's timestamp
-        const rsiPoint = rsiHistory.find(r => r.timestamp === pivot.timestamp);
-        if (!rsiPoint) return null;
+        // Lookup O(1) del RSI exactamente en la vela del pivot.
+        // Si no está (warm-up del RSI o pivot fuera del buffer), no hay
+        // divergencia computable — mejor descartar que adivinar.
+        const rsiValue = rsiByTimestamp.get(pivot.timestamp);
+        if (rsiValue === undefined) return null;
 
-        const currentPoint = { pivot, rsi: rsiPoint.value };
+        const currentPoint = { pivot, rsi: rsiValue };
 
         if (pivot.type === 'High') {
             return this.checkBearishDivergence(currentPoint);
         } else {
             return this.checkBullishDivergence(currentPoint);
         }
+    }
+
+    // 🆕 Push con trim garantizado: antes los caminos con match hacían push
+    // y retornaban sin acotar el array.
+    private recordHigh(p: { pivot: Pivot, rsi: number }) {
+        this.lastHighs.push(p);
+        if (this.lastHighs.length > this.maxLookback * 2) this.lastHighs.shift();
+    }
+
+    private recordLow(p: { pivot: Pivot, rsi: number }) {
+        this.lastLows.push(p);
+        if (this.lastLows.length > this.maxLookback * 2) this.lastLows.shift();
     }
 
     private checkBearishDivergence(current: { pivot: Pivot, rsi: number }): DivergenceEvent | null {
@@ -37,19 +51,18 @@ export class DivergenceEngine {
             
             // Regular Bearish Divergence: Price makes Higher High, RSI makes Lower High
             if (current.pivot.price > prev.pivot.price && current.rsi < prev.rsi) {
-                this.lastHighs.push(current);
+                this.recordHigh(current);
                 return { direction: 'Bearish', type: 'Regular', timestamp: current.pivot.timestamp };
             }
             
             // Hidden Bearish Divergence: Price makes Lower High, RSI makes Higher High
             if (current.pivot.price < prev.pivot.price && current.rsi > prev.rsi) {
-                this.lastHighs.push(current);
+                this.recordHigh(current);
                 return { direction: 'Bearish', type: 'Hidden', timestamp: current.pivot.timestamp };
             }
         }
         
-        this.lastHighs.push(current);
-        if (this.lastHighs.length > this.maxLookback * 2) this.lastHighs.shift();
+        this.recordHigh(current);
         return null;
     }
 
@@ -60,19 +73,18 @@ export class DivergenceEngine {
             
             // Regular Bullish Divergence: Price makes Lower Low, RSI makes Higher Low
             if (current.pivot.price < prev.pivot.price && current.rsi > prev.rsi) {
-                this.lastLows.push(current);
+                this.recordLow(current);
                 return { direction: 'Bullish', type: 'Regular', timestamp: current.pivot.timestamp };
             }
             
             // Hidden Bullish Divergence: Price makes Higher Low, RSI makes Lower Low
             if (current.pivot.price > prev.pivot.price && current.rsi < prev.rsi) {
-                this.lastLows.push(current);
+                this.recordLow(current);
                 return { direction: 'Bullish', type: 'Hidden', timestamp: current.pivot.timestamp };
             }
         }
         
-        this.lastLows.push(current);
-        if (this.lastLows.length > this.maxLookback * 2) this.lastLows.shift();
+        this.recordLow(current);
         return null;
     }
 }
