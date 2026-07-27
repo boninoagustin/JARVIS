@@ -20,6 +20,11 @@ async function main() {
     startScreenshotWorker();
     startCleanupTimer();
 
+    // Inicializar WebSocket Server para la Interfaz Jarvis-OS
+    import('./services/ws_server.js').then(({ initWebSocketServer }) => {
+        initWebSocketServer(8081);
+    }).catch(err => console.error('[WS] Error inicializando WebSocket:', err));
+
     if (!db) {
         console.error('[FATAL] Firebase is disabled or missing credentials. Hybrid Cloud Mode needs Firebase to receive messages.');
         process.exit(1);
@@ -76,11 +81,13 @@ async function main() {
         tradingModule.startWatchdog();
 
         // 🔌 Pre-conectar a cTrader para eliminar latencia en la primera operación
-        import('./services/ctrader.js').then(async ({ connectCTrader, getCTraderStatus }) => {
+        import('./services/ctrader.js').then(async ({ connectCTrader, getCTraderStatus, initializeScanner }) => {
             const connected = await connectCTrader();
             const status = getCTraderStatus();
             if (connected) {
                 console.log(`[CTRADER] 🟢 Pre-conectado al inicio. Modo: ${status.demo ? 'DEMO' : 'LIVE'}`);
+                // Iniciar el escáner SMC de todos los activos y temporalidades en background
+                initializeScanner().catch(err => console.error('[CTRADER] Error en initializeScanner:', err));
             } else if (status.configured) {
                 console.warn(`[CTRADER] ⚠️ Configurado pero no se pudo conectar al inicio. Se reintentará en la primera operación.`);
             } else {

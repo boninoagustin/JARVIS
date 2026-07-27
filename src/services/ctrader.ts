@@ -13,8 +13,9 @@
  */
 
 import { config } from '../config.js';
-import { TrendbarPeriod } from 'ctrader-ts';
+import { TrendbarPeriod, SpotEvent } from 'ctrader-ts';
 import { db } from '../db/memory.js';
+import { addCandles, OHLCV } from '../db/market_data.js';
 
 // ─── Types ───
 
@@ -218,6 +219,247 @@ function setupCTraderEvents(client: any) {
     });
     
     console.log('[CTRADER-EVENT] ✅ Listener de ExecutionEvent registrado.');
+
+    // Listener para Live Trendbars y Ticks (SpotEvent payloadType 2131)
+    if (client.connection) {
+        client.connection.on(2131, (msg: any) => {
+            try {
+                const symbolId = msg.symbolId;
+                const divider = 100000; // cTrader Open API always multiplies prices by 100000
+                
+                // 1. Process real-time ticks (msg.bid) for visual chart animation
+                if (msg.bid) {
+                    const currentPrice = msg.bid / divider;
+                    
+                    // Buscar si tenemos el activo en buffer para actualizar visualmente
+                    for (const [key, subSymbolId] of subscribedSymbols.entries()) {
+                        if (subSymbolId === symbolId) {
+                            const [baseTicker, periodStr] = key.split(':');
+                            
+                            // Import dinámico para evitar ciclos si los hay (market_data es seguro)
+                            import('../db/market_data.js').then(({ getCandles }) => {
+                                const candles = getCandles(baseTicker, periodStr);
+                                if (candles && candles.length > 0) {
+                                    const lastCandle = { ...candles[candles.length - 1] }; // Clonamos para no mutar el buffer directamente de forma sucia
+                                    let updated = false;
+                                    
+                                    if (currentPrice !== lastCandle.close) {
+                                        lastCandle.close = currentPrice;
+                                        updated = true;
+                                    }
+                                    if (currentPrice > lastCandle.high) {
+                                        lastCandle.high = currentPrice;
+                                        updated = true;
+                                    }
+                                    if (currentPrice < lastCandle.low) {
+                                        lastCandle.low = currentPrice;
+                                        updated = true;
+                                    }
+                                    
+                                    if (updated) {
+                                        // Broadcast tick to UI without triggering heavy SMC Engine logic
+                                        import('./ws_server.js').then(({ broadcastCandle }) => {
+                                            broadcastCandle(key, lastCandle);
+                                        }).catch(err => console.error("Error broadcast tick:", err));
+                                    }
+                                }
+                            }).catch(err => console.error("Error import market_data:", err));
+                        }
+                    }
+                }
+
+                // 2. Process trendbars (closed or periodically updated bars by broker)
+                if (msg.trendbar && msg.trendbar.length > 0) {
+                    const tickerObj = Array.from(subscribedSymbols.entries()).find(([k, v]) => v === symbolId);
+                    
+                    if (tickerObj) {
+                        const ticker = tickerObj[0]; // e.g. "EURUSD:M5"
+                        
+                        const newCandles = msg.trendbar.map((tb: any) => {
+                            const lowRaw = tb.low || 0;
+                            return {
+                                timestamp: (tb.utcTimestampInMinutes || 0) * 60000,
+                                open: (lowRaw + (tb.deltaOpen || 0)) / divider,
+                                high: (lowRaw + (tb.deltaHigh || 0)) / divider,
+                                low: lowRaw / divider,
+                                close: (lowRaw + (tb.deltaClose || 0)) / divider,
+                                volume: tb.volume || 0
+                            };
+                        });
+                        
+                        // Agregar o actualizar las velas en el buffer
+                        const [baseTicker, period] = ticker.split(':');
+                        import('../db/market_data.js').then(({ addCandles }) => {
+                            addCandles(baseTicker, period, newCandles);
+                            
+                            // Enviar al motor SMC (heavy processing)
+                            import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
+                                smcManager.processLiveCandles(baseTicker, period, newCandles);
+                            }).catch(err => console.error('[CTRADER] Error procesando SMC:', err));
+                        });
+                    }
+                }
+            } catch (err: any) {
+                console.error('[CTRADER-EVENT] Error procesando SpotEvent:', err.message);
+            }
+        });
+        console.log('[CTRADER-EVENT] ✅ Listener de Live Trendbars registrado.');
+    }
+}
+
+// Mapa para asociar "TICKER:PERIOD" -> symbolId de cTrader
+const subscribedSymbols = new Map<string, number>();
+
+/**
+ * Suscribe a un activo y temporalidad para recibir Live Trendbars.
+ */
+export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarPeriod, periodStr: string) {
+    if (!isConnected || !ctClient) {
+        const connected = await connectCTrader();
+        if (!connected) throw new Error("No se pudo conectar a cTrader para suscripción.");
+    }
+
+    const ctraderSymbol = mapToCTraderSymbol(ticker);
+    try {
+        const info = await ctClient.getSymbolInfo(ctraderSymbol);
+        if (!info || !info.symbolId) throw new Error(`Symbol no encontrado: ${ctraderSymbol}`);
+
+        const symbolId = info.symbolId;
+        // MUST use periodStr to match frontend expects like "EURUSD:M15" instead of "EURUSD:7"
+        const key = `${ticker}:${periodStr}`;
+        
+        // Guardamos la relación para cuando llegue el SpotEvent
+        subscribedSymbols.set(key, symbolId);
+        
+        // Suscribirse vía la API de bajo nivel
+        // REQUIRES subscribing to Spots first!
+        await ctClient.raw.market.subscribeSpots([symbolId]);
+        await ctClient.raw.market.subscribeLiveTrendbar(symbolId, period);
+        console.log(`[CTRADER] 📡 Suscrito exitosamente a Live Trendbars para ${ctraderSymbol} (${periodStr})`);
+        
+    } catch (err: any) {
+        console.error(`[CTRADER] ❌ Error suscribiendo a Live Trendbars para ${ctraderSymbol}:`, err.message);
+        throw err;
+    }
+}
+
+/**
+ * Inicializa el escáner global suscribiéndose a todos los activos y temporalidades.
+ */
+export async function initializeScanner() {
+    console.log('[CTRADER] 🚀 Inicializando Escáner Global SMC...');
+    
+    if (!isConnected || !ctClient) {
+        const connected = await connectCTrader();
+        if (!connected) {
+            console.error('[CTRADER] No se pudo iniciar el escáner por falta de conexión.');
+            return;
+        }
+    }
+
+    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'USOIL'];
+    const timeframes = [
+        { p: TrendbarPeriod.M15, str: 'M15' },
+        { p: TrendbarPeriod.H1, str: 'H1' },
+        { p: TrendbarPeriod.H4, str: 'H4' },
+        { p: TrendbarPeriod.D1, str: 'D1' },
+        { p: TrendbarPeriod.W1, str: 'W1' }
+    ];
+
+    let successCount = 0;
+    
+    for (const asset of assets) {
+        for (const tf of timeframes) {
+            try {
+                // 1. Obtener historial (que automáticamente alimenta al SMC Engine)
+                await getHistoricalCandles(asset, tf.p, 500);
+                
+                // 2. Suscribirse a ticks en vivo
+                await subscribeToLiveTrendbars(asset, tf.p, tf.str);
+                
+                successCount++;
+                
+                // Pequeño delay para no saturar la API
+                await new Promise(r => setTimeout(r, 100));
+            } catch (err) {
+                console.error(`[CTRADER] ⚠️ Error inicializando escáner para ${asset}:${tf.str}`);
+            }
+        }
+    }
+    
+    console.log(`[CTRADER] ✅ Escáner SMC Global inicializado. (${successCount}/${assets.length * timeframes.length} streams activos)`);
+}
+
+/**
+ * Recupera el historial de velas y las inyecta en el motor SMC.
+ */
+export async function getHistoricalCandles(ticker: string, period: TrendbarPeriod, count: number = 500): Promise<OHLCV[]> {
+    if (!isConnected || !ctClient) {
+        const connected = await connectCTrader();
+        if (!connected) return [];
+    }
+
+    const ctraderSymbol = mapToCTraderSymbol(ticker);
+    try {
+        const info = await ctClient.getSymbolInfo(ctraderSymbol);
+        if (!info || !info.symbolId) throw new Error(`Symbol no encontrado: ${ctraderSymbol}`);
+        
+        // Obtener historial desde hace X minutos dependiendo del timeframe
+        // En cTrader la API raw acepta fromTimestamp y toTimestamp
+        const now = Date.now();
+        function getPeriodDuration(period: TrendbarPeriod): number {
+    switch (period) {
+        case TrendbarPeriod.M1: return 60000;
+        case TrendbarPeriod.M5: return 300000;
+        case TrendbarPeriod.M15: return 900000;
+        case TrendbarPeriod.H1: return 3600000;
+        case TrendbarPeriod.H4: return 14400000;
+        case TrendbarPeriod.D1: return 86400000;
+        case TrendbarPeriod.W1: return 604800000;
+        default: return 300000;
+    }
+}
+        const periodMs = getPeriodDuration(period);
+        
+        const fromTimestamp = now - (periodMs * count);
+        const toTimestamp = now;
+
+        const res = await ctClient.raw.market.getTrendbars({
+            symbolId: info.symbolId,
+            period: period,
+            fromTimestamp,
+            toTimestamp
+        });
+        
+        if (res && res.trendbars) {
+            const divider = 100000;
+            const newCandles: OHLCV[] = res.trendbars.map((tb: any) => {
+                const lowRaw = tb.low || 0;
+                return {
+                    timestamp: (tb.utcTimestampInMinutes || 0) * 60000,
+                    open: (lowRaw + (tb.deltaOpen || 0)) / divider,
+                    high: (lowRaw + (tb.deltaHigh || 0)) / divider,
+                    low: lowRaw / divider,
+                    close: (lowRaw + (tb.deltaClose || 0)) / divider,
+                    volume: tb.volume || 0
+                };
+            });
+            const periodStr = TrendbarPeriod[period];
+            
+            // Llenar buffer inicial
+            addCandles(ticker, periodStr, newCandles);
+            
+            // Inicializar el SMC con este historial
+            import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
+                smcManager.processLiveCandles(ticker, periodStr, newCandles);
+            });
+            
+            return newCandles;
+        }
+    } catch (err: any) {
+        console.error(`[CTRADER] ❌ Error obteniendo historial para ${ctraderSymbol}:`, err.message);
+    }
+    return [];
 }
 
 // ─── Lot Size Calculator ───
@@ -681,12 +923,14 @@ function mapToCTraderSymbol(ticker: string): string {
         'USDJPY': 'USDJPY',
         'USDCAD': 'USDCAD',
         'AUDUSD': 'AUDUSD',
+        'AUDCAD': 'AUDCAD',
         'NZDUSD': 'NZDUSD',
         'USDCHF': 'USDCHF',
         'EURJPY': 'EURJPY',
         'GBPJPY': 'GBPJPY',
         'EURGBP': 'EURGBP',
         'XAUUSD': 'XAUUSD',
+        'USOIL': 'USOIL',
         'BTCUSD': 'BTCUSD',
         'US100': 'US TECH 100',   // Usuario reporta que su broker lo llama 'US TECH 100'
         'NAS100': 'US TECH 100',
