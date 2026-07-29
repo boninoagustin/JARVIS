@@ -1,0 +1,10 @@
+--- src/engine/smc/modules/divergence.ts
++++ src/engine/smc/modules/divergence.ts
+@@ -53,6 +53,7 @@
+         // 🆕 Gate 2: contexto de liquidez (en Pine, la liquidez es un requisito OBLIGATORIO)
+         const hasSweep = context?.hasLiquidityContext ? context.hasLiquidityContext(pivot) : true;
+         
++        console.log("DIV_GATE2:", pivot.timestamp, pivot.type, hasSweep, rsiValue);
+         if (!hasSweep) {
+             if (pivot.type === 'High') this.recordHigh(currentPoint);
+             else this.recordLow(currentPoint);

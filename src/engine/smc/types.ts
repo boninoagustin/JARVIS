@@ -27,6 +27,7 @@ export interface SMCPreset {
     valid_bos_displacement?: boolean;
     choch_require_sweep?: boolean;
     choch_require_momentum?: boolean;
+    choch_require_bos_prior?: boolean;  // 🆕 E6: exige al menos un BOS antes de validar un CHoCH
     
     // Engine Optimization Parameters
     max_ob_age?: number;
@@ -42,8 +43,8 @@ export interface SMCPreset {
 }
 
 export interface SMCEvents {
-    EVENT_BOS: { direction: Direction; price: number; timestamp: number };
-    EVENT_CHOCH: { direction: Direction; price: number; timestamp: number };
+    EVENT_BOS: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean };
+    EVENT_CHOCH: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean };
     EVENT_OB_CREATED: { ob: OrderBlock };
     EVENT_BREAKER_CREATED: { ob: OrderBlock };
     EVENT_SWEEP: { direction: Direction; price: number; sweepType: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number };

@@ -1,5 +1,6 @@
 import { OHLCV, Pivot, SMCEvents } from '../types.js';
 import { PivotEngine } from './pivots.js';
+import { ZScoreCalculator } from '../math/zscore.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ASIA_START_HOUR = 18; // inclusive (18:00 NY)
@@ -59,6 +60,15 @@ export class LiquidityEngine {
     // Last swept levels to prevent duplicate triggers on the EXACT same level
     private lastSweptHigh: number = NaN;
     private lastSweptLow: number = NaN;
+    private zscore: ZScoreCalculator;
+
+    // 🆕 FP2 Fix: Buffer de sweeps pendientes de confirmación de cierre.
+    // En tiempo real, la vela actual no tiene close definitivo. Un sweep
+    // detectado intrabarra podría invalidarse si el close final retrocede
+    // por debajo del nivel barrido. Diferir la emisión 1 barra elimina
+    // el repainting: solo se emite cuando el close ES definitivo.
+    private pendingSweepBull: { price: number; sweepType: 'CRT' | 'LIQ_GRAB'; candle: OHLCV } | null = null;
+    private pendingSweepBear: { price: number; sweepType: 'CRT' | 'LIQ_GRAB'; candle: OHLCV } | null = null;
 
     public get sweepBullActive(): boolean {
         return (this.barCount - this.lastSweepDirBar.Bullish) < LiquidityEngine.SWEEP_COOLDOWN_BARS;
@@ -70,16 +80,106 @@ export class LiquidityEngine {
     
     private prevCandle: OHLCV | null = null;
 
-    constructor(strBars: number = 5) {
+    // 🆕 E3: Ventana deslizante para el modelo CRT estricto de 3 velas.
+    // La teoría define:
+    //   Vela 1 (Referencia)  — define el rango [low..high]
+    //   Vela 2 (Purga)       — barre un extremo de Vela 1
+    //   Vela 3 (Re-entrada)  — cierra dentro del rango de Vela 1, cuerpo opuesto
+    //   Regla intermedia: ninguna vela entre Vela 1 y Vela 2 puede cerrar
+    //   su cuerpo fuera de los límites de Vela 1.
+    private crtWindow: OHLCV[] = [];
+    private static readonly CRT_MAX_WINDOW = 10; // máximo de velas intermedias entre V1 y V2
+
+    public constructor(zscore: ZScoreCalculator, strBars: number = 5) {
+        this.zscore = zscore;
         this.swingPivots = new PivotEngine(strBars, strBars);
     }
 
+    /**
+     * 🆕 E1: Detecta si las últimas 3 velas forman un patrón CRT válido.
+     * Usado por SMCEngine para etiquetar BOS/CHoCH con crtOrigin=true.
+     */
+    public hasActiveCRTPattern(): boolean {
+        const w = this.crtWindow;
+        if (w.length < 3) return false;
+        const v1 = w[w.length - 3], v2 = w[w.length - 2], v3 = w[w.length - 1];
+        const v1BodyHigh = Math.max(v1.open, v1.close);
+        const v1BodyLow = Math.min(v1.open, v1.close);
+        // CRT alcista: V2 barre low de V1, V3 cierra dentro del cuerpo
+        const bullCRT = v2.low < v1.low && v3.close >= v1BodyLow && v3.close <= v1BodyHigh && v3.close > v3.open;
+        // CRT bajista: V2 barre high de V1, V3 cierra dentro del cuerpo
+        const bearCRT = v2.high > v1.high && v3.close >= v1BodyLow && v3.close <= v1BodyHigh && v3.close < v3.open;
+        return bullCRT || bearCRT;
+    }
+
     public hasNearbyLevel(price: number, type: 'High' | 'Low', tolerance: number): boolean {
-        const levels = type === 'High' 
-            ? [this.lastSwingHigh, this.dailyHigh, this.h4High, this.asiaHigh]
-            : [this.lastSwingLow, this.dailyLow, this.h4Low, this.asiaLow];
-            
-        return levels.some(l => !Number.isNaN(l) && Math.abs(l - price) <= tolerance);
+        if (type === 'High') {
+            return (!Number.isNaN(this.dailyHigh) && Math.abs(price - this.dailyHigh) <= tolerance) ||
+                   (!Number.isNaN(this.h4High) && Math.abs(price - this.h4High) <= tolerance) ||
+                   (!Number.isNaN(this.asiaHigh) && Math.abs(price - this.asiaHigh) <= tolerance) ||
+                   (!Number.isNaN(this.lastSwingHigh) && Math.abs(price - this.lastSwingHigh) <= tolerance);
+        } else {
+            return (!Number.isNaN(this.dailyLow) && Math.abs(price - this.dailyLow) <= tolerance) ||
+                   (!Number.isNaN(this.h4Low) && Math.abs(price - this.h4Low) <= tolerance) ||
+                   (!Number.isNaN(this.asiaLow) && Math.abs(price - this.asiaLow) <= tolerance) ||
+                   (!Number.isNaN(this.lastSwingLow) && Math.abs(price - this.lastSwingLow) <= tolerance);
+        }
+    }
+
+    /**
+     * 🆕 E3: Validador CRT estricto según teoría (Regla de las Tres Velas).
+     *
+     * @param candle    Vela actual = Vela 3 (Re-entrada)
+     * @param isBullish true para patrón CRT alcista, false para bajista
+     * @returns true si el patrón CRT de 3 velas se cumple estrictamente
+     *
+     * Estructura:
+     *   Vela 1 (Referencia): la más antigua del trío — define [low, high]
+     *   Vela 2 (Purga): barre el extremo de Vela 1 (low si alcista, high si bajista)
+     *   Vela 3 (Re-entrada = candle): cierra su cuerpo dentro del rango de Vela 1
+     *
+     *   Regla intermedia: ninguna vela entre V1 y V2 cierra su cuerpo
+     *   fuera de [V1.low, V1.high]. Si lo hace, la estructura se invalida.
+     */
+    private validateCRT(candle: OHLCV, isBullish: boolean): boolean {
+        const w = this.crtWindow;
+        if (w.length < 3) return false;
+
+        // Vela 1 es la más antigua del trío
+        const v1 = w[w.length - 3];
+        const v2 = w[w.length - 2];
+        // candle es Vela 3 (pasada como parámetro)
+        const v1High = v1.high, v1Low = v1.low;
+        const v1BodyHigh = Math.max(v1.open, v1.close);
+        const v1BodyLow = Math.min(v1.open, v1.close);
+
+        // Filtro de cierre intermedio: ninguna barra entre V1 y V2
+        // (exclusive) puede cerrar su cuerpo fuera de [V1.low, V1.high]
+        // En el caso mínimo (3 velas en ventana), no hay barras intermedias.
+        if (w.length > 3) {
+            for (let i = 0; i < w.length - 3; i++) {
+                const mid = w[i];
+                const midBodyHigh = Math.max(mid.open, mid.close);
+                const midBodyLow = Math.min(mid.open, mid.close);
+                if (midBodyHigh > v1High || midBodyLow < v1Low) {
+                    return false; // cierre de cuerpo fuera del rango de Vela 1
+                }
+            }
+        }
+
+        if (isBullish) {
+            // CRT Alcista: V2 barre el LOW de V1, V3 cierra cuerpo DENTRO del rango
+            const v2Sweeps = v2.low < v1Low;
+            const v3BodyInside = candle.close >= v1BodyLow && candle.close <= v1BodyHigh;
+            const v3BullishBody = candle.close > candle.open;
+            return v2Sweeps && v3BodyInside && v3BullishBody;
+        } else {
+            // CRT Bajista: V2 barre el HIGH de V1, V3 cierra cuerpo DENTRO del rango
+            const v2Sweeps = v2.high > v1High;
+            const v3BodyInside = candle.close >= v1BodyLow && candle.close <= v1BodyHigh;
+            const v3BearishBody = candle.close < candle.open;
+            return v2Sweeps && v3BodyInside && v3BearishBody;
+        }
     }
 
     private sweepCooldownOk(direction: 'Bullish' | 'Bearish'): boolean {
@@ -178,15 +278,40 @@ export class LiquidityEngine {
     public processCandle(
         candle: OHLCV,
         currentAtr: number,
-        preset: any
+        preset: any,
+        zScoreVal: number | null = null  // 🆕 Bug 2 Fix: recibido de SMCEngine, no calculado internamente
     ): Array<{ type: 'EVENT_SWEEP' } & SMCEvents['EVENT_SWEEP']> {
         const events: any[] = [];
         this.barCount++;
+
+        // 🆕 FP2 Fix: Flush de sweeps pendientes de la barra ANTERIOR.
+        // Ahora que estamos en la barra N+1, el close de la barra N es definitivo.
+        // Solo emitimos el sweep si el close final REALMENTE validó el barrido.
+        if (this.pendingSweepBull) {
+            const p = this.pendingSweepBull;
+            if (p.candle.close > p.price) {
+                events.push({
+                    type: 'EVENT_SWEEP', direction: 'Bullish',
+                    price: p.price, sweepType: p.sweepType,
+                    timestamp: p.candle.timestamp
+                });
+            }
+            this.pendingSweepBull = null;
+        }
+        if (this.pendingSweepBear) {
+            const p = this.pendingSweepBear;
+            if (p.candle.close < p.price) {
+                events.push({
+                    type: 'EVENT_SWEEP', direction: 'Bearish',
+                    price: p.price, sweepType: p.sweepType,
+                    timestamp: p.candle.timestamp
+                });
+            }
+            this.pendingSweepBear = null;
+        }
         
         const totalRange = candle.high - candle.low;
         if (totalRange === 0) {
-            // 🆕 N3: aunque no se evalúen sweeps con rango 0, la vela debe
-            // alimentar los niveles (Pivots/rollover diario/Asia) igual que las demás
             this.updateLevels(candle);
             this.prevCandle = candle;
             return events;
@@ -195,19 +320,9 @@ export class LiquidityEngine {
         const topWickPct = (candle.high - Math.max(candle.open, candle.close)) / totalRange;
         const bottomWickPct = (Math.min(candle.open, candle.close) - candle.low) / totalRange;
 
-        // 3-Candle Model logic (ICT Purist)
-        let validRangeCandle = false;
-        let closeInsidePrevBull = false;
-        let closeInsidePrevBear = false;
-
-        if (this.prevCandle) {
-            const v1Range = this.prevCandle.high - this.prevCandle.low;
-            const v1Body = Math.abs(this.prevCandle.open - this.prevCandle.close);
-            validRangeCandle = v1Range > 0 ? (v1Body / v1Range) < 0.75 : false;
-            
-            closeInsidePrevBull = candle.close >= this.prevCandle.low && candle.close <= this.prevCandle.high && candle.close > candle.open;
-            closeInsidePrevBear = candle.close >= this.prevCandle.low && candle.close <= this.prevCandle.high && candle.close < candle.open;
-        }
+        // 🆕 E3: Alimentar la ventana CRT antes de evaluar
+        this.crtWindow.push(candle);
+        if (this.crtWindow.length > LiquidityEngine.CRT_MAX_WINDOW) this.crtWindow.shift();
 
         // PineScript Sweep checks
         const sweepDl = !Number.isNaN(this.dailyLow) && candle.low < this.dailyLow && candle.close > this.dailyLow;
@@ -224,38 +339,31 @@ export class LiquidityEngine {
             const currentSweepL = sweepDl ? this.dailyLow : sweepM4l ? this.h4Low : sweepAsiaL ? this.asiaLow : sweepSwingL ? this.lastSwingLow : NaN;
             const currentSweepH = sweepDh ? this.dailyHigh : sweepM4h ? this.h4High : sweepAsiaH ? this.asiaHigh : sweepSwingH ? this.lastSwingHigh : NaN;
 
-            // 🆕 Fix: usar ?? en lugar de || para permitir configurar 0
             const minWickPct = preset?.min_sweep_wick_pct ?? 0.5;
             const EPSILON = 0.0001;
-            // 🆕 Fix: acceso null-safe con ?. en todas las propiedades de preset
             const crt3CandleModel = preset?.crt_3candle_model ?? false;
-            const crtCloseInside = preset?.crt_close_inside ?? false;
 
         // Bullish Sweep (Sweeping a Low)
         if (!Number.isNaN(currentSweepL) && (Number.isNaN(this.lastSweptLow) || this.lastSweptLow !== currentSweepL)) {
             const isCrtBigEnough = totalRange >= (currentAtr * 0.5);
             const validBullRej = candle.close > candle.open;
             
-            const crt3CandleOk = !crt3CandleModel || (validRangeCandle && (!crtCloseInside || closeInsidePrevBull));
+            // 🆕 E3: CRT estricto con ventana de 3 velas + filtro intermedio
+            const crt3CandleOk = !crt3CandleModel || this.validateCRT(candle, true);
             const isFreshSweep = !Number.isNaN(currentSweepL) && currentSweepL !== this.lastSweptLow;
 
-            // 🆕 LIQ_GRAB: mecha dominante (>= grabWickPct) + tamaño suficiente
             const isGrab = isCrtBigEnough && bottomWickPct >= this.grabWickPct && totalRange >= (currentAtr * this.grabAtrMin);
-
             const isCrtTrap = isFreshSweep && validBullRej && isCrtBigEnough && (bottomWickPct + EPSILON) >= minWickPct && this.sweepCooldownOk('Bullish') && crt3CandleOk;
             
-            // 🆕 N4: el LIQ_GRAB también respeta el cooldown (pero no el rechazo de cuerpo, que es ajeno a su definición)
-            if (isCrtTrap || (isGrab && this.sweepCooldownOk('Bullish'))) {
+            const isInstitutional = zScoreVal !== null && Math.abs(zScoreVal) >= 2.0;
+
+            if ((isCrtTrap || isGrab) && isInstitutional && this.sweepCooldownOk('Bullish')) {
                 this.lastSweptLow = currentSweepL;
                 this.lastSweepDirBar.Bullish = this.barCount;
                 const sweepType: 'CRT' | 'LIQ_GRAB' = isGrab ? 'LIQ_GRAB' : 'CRT';
-                events.push({
-                    type: 'EVENT_SWEEP',
-                    direction: 'Bullish',
-                    price: currentSweepL,
-                    sweepType,
-                    timestamp: candle.timestamp
-                });
+                // 🆕 FP2 Fix: NO emitir inmediatamente. Almacenar como pendiente.
+                // Se emitirá en la PRÓXIMA barra cuando el close sea definitivo.
+                this.pendingSweepBull = { price: currentSweepL, sweepType, candle };
             }
         }
 
@@ -264,26 +372,20 @@ export class LiquidityEngine {
             const isCrtBigEnough = totalRange >= (currentAtr * 0.5);
             const validBearRej = candle.close < candle.open;
             
-            const crt3CandleOk = !crt3CandleModel || (validRangeCandle && (!crtCloseInside || closeInsidePrevBear));
+            const crt3CandleOk = !crt3CandleModel || this.validateCRT(candle, false);
             const isFreshSweep = !Number.isNaN(currentSweepH) && currentSweepH !== this.lastSweptHigh;
 
-            // 🆕 LIQ_GRAB: mecha dominante (>= grabWickPct) + tamaño suficiente
             const isGrab = isCrtBigEnough && topWickPct >= this.grabWickPct && totalRange >= (currentAtr * this.grabAtrMin);
-
             const isCrtTrap = isFreshSweep && validBearRej && isCrtBigEnough && (topWickPct + EPSILON) >= minWickPct && this.sweepCooldownOk('Bearish') && crt3CandleOk;
             
-            // 🆕 N4: el LIQ_GRAB también respeta el cooldown (pero no el rechazo de cuerpo, que es ajeno a su definición)
-            if (isCrtTrap || (isGrab && this.sweepCooldownOk('Bearish'))) {
+            const isInstitutional2 = zScoreVal !== null && Math.abs(zScoreVal) >= 2.0;
+
+            if ((isCrtTrap || isGrab) && isInstitutional2 && this.sweepCooldownOk('Bearish')) {
                 this.lastSweptHigh = currentSweepH;
                 this.lastSweepDirBar.Bearish = this.barCount;
                 const sweepType: 'CRT' | 'LIQ_GRAB' = isGrab ? 'LIQ_GRAB' : 'CRT';
-                events.push({
-                    type: 'EVENT_SWEEP',
-                    direction: 'Bearish',
-                    price: currentSweepH,
-                    sweepType,
-                    timestamp: candle.timestamp
-                });
+                // 🆕 FP2 Fix: diferir emisión a la barra siguiente
+                this.pendingSweepBear = { price: currentSweepH, sweepType, candle };
             }
         }
         } // Close if (currentAtr > 0)
@@ -294,4 +396,6 @@ export class LiquidityEngine {
         this.prevCandle = candle;
         return events;
     }
+
+
 }

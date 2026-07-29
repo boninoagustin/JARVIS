@@ -26,6 +26,7 @@ export class MarketStructureEngine {
      */
     private chochReqSweep: boolean = false;
     private chochReqMom: boolean = false;
+    private chochReqBosPrior: boolean = false;  // 🆕 E6: exige BOS previo para CHoCH
 
     constructor() {
         // Gates are now read from preset in processCandle
@@ -83,16 +84,18 @@ export class MarketStructureEngine {
         pivotsLow: Pivot[], 
         preset: SMCPreset,
         currentAtr: number = 0,
-        options: { zScore?: { zUp: number; zDn: number } | null; sweepEscapeDir?: Direction | null } = {}
+        options: { zScore?: number | null; sweepEscapeDir?: Direction | null; crtValid?: boolean } = {}
     ): Array<(SMCEvents['EVENT_BOS'] & { type: 'EVENT_BOS' }) | (SMCEvents['EVENT_CHOCH'] & { type: 'EVENT_CHOCH' })> {
         
         const events: any[] = [];
         const zScore = options.zScore ?? null;
         const sweepEscapeDir = options.sweepEscapeDir ?? null;
+        const crtOrigin = options.crtValid ?? false;     // 🆕 E1
         
         // 🆕 S9: sincronizar gates desde preset en cada llamada
         this.chochReqSweep = preset.choch_require_sweep ?? false;
         this.chochReqMom = preset.choch_require_momentum ?? false;
+        this.chochReqBosPrior = preset.choch_require_bos_prior ?? false;  // 🆕 E6
         
         // 🆕 Alimentar el buffer de historia para origin/extreme
         this.history.push(candle);
@@ -120,19 +123,21 @@ export class MarketStructureEngine {
             }
 
             if (applyH && this.activeSwingHigh) {
-                // 🆕 S2/N1: solo marcamos roto el swing GANADOR del desempate;
-                // el perdedor queda intacto para futuras evaluaciones
+                const breakBar = this.findFirstBreakBar(this.activeSwingHigh.timestamp, this.activeSwingHigh.price, true) || candle;
+                const coiled = this.detectCoiled(this.activeSwingHigh.timestamp);  // 🆕 E2
                 this.activeSwingHigh.isBroken = true;
                 this.currentTrend = 'Bullish';
-                this.trendExtreme = candle.high;
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
-                events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                this.trendExtreme = breakBar.high;
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, breakBar);
+                events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
             } else if (applyL && this.activeSwingLow) {
+                const breakBar = this.findFirstBreakBar(this.activeSwingLow.timestamp, this.activeSwingLow.price, false) || candle;
+                const coiled = this.detectCoiled(this.activeSwingLow.timestamp);  // 🆕 E2
                 this.activeSwingLow.isBroken = true;
                 this.currentTrend = 'Bearish';
-                this.trendExtreme = candle.low;
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
-                events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                this.trendExtreme = breakBar.low;
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, breakBar);
+                events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
             }
             return events;
         }
@@ -153,28 +158,35 @@ export class MarketStructureEngine {
             }
 
             if (applyH && this.activeSwingHigh) {
-                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bullish')) applyH = false;
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, zScore, 'Bullish')) applyH = false;
             }
             if (applyL && this.activeSwingLow) {
-                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bearish')) applyL = false;
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, zScore, 'Bearish')) applyL = false;
             }
 
             if (applyH && this.activeSwingHigh) {
-                // 🆕 N1: solo ahora marcamos el swing como roto (se emite el BOS)
+                // 🆕 FP1 Fix: timestamp real del primer break, no de la confirmación del pivote
+                const breakBar = this.findFirstBreakBar(this.activeSwingHigh.timestamp, this.activeSwingHigh.price, true) || candle;
+                const coiled = this.detectCoiled(this.activeSwingHigh.timestamp);  // 🆕 E2
                 this.activeSwingHigh.isBroken = true;
                 this.lastBOS = this.activeSwingHigh;
-                this.trendExtreme = candle.high;
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
-                events.push({ type: 'EVENT_BOS', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                this.trendExtreme = breakBar.high;
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, breakBar);
+                events.push({ type: 'EVENT_BOS', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
             } else if (applyL && this.activeSwingLow) {
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
+                const breakBar = this.findFirstBreakBar(this.activeSwingLow.timestamp, this.activeSwingLow.price, false) || candle;
+                const coiled = this.detectCoiled(this.activeSwingLow.timestamp);  // 🆕 E2
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, breakBar);
                 if (this.passesChochGates(origin, false, zScore, sweepEscapeDir)) {
                     // 🆕 S9: solo ahora marcamos el swing como roto (gate pasó)
                     this.activeSwingLow.isBroken = true;
                     this.lastCHoCH = this.activeSwingLow;
                     this.currentTrend = 'Bearish';
-                    this.trendExtreme = candle.low;
-                    events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                    this.trendExtreme = breakBar.low;
+                    events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
+                    // 🆕 Disc 4 Fix: al revertir tendencia, el BOS previo pertenecía a la tendencia anterior.
+                    // Para el próximo CHoCH se necesita un NUEVO BOS en la tendencia actual.
+                    this.lastBOS = null;
                 }
                 // Si el gate falla, el swing LOW NO se marca como roto → puede re-evaluarse
             }
@@ -193,28 +205,34 @@ export class MarketStructureEngine {
             }
 
             if (applyL && this.activeSwingLow) {
-                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bearish')) applyL = false;
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, zScore, 'Bearish')) applyL = false;
             }
             if (applyH && this.activeSwingHigh) {
-                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bullish')) applyH = false;
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, zScore, 'Bullish')) applyH = false;
             }
 
             if (applyL && this.activeSwingLow) {
-                // 🆕 N1: solo ahora marcamos el swing como roto (se emite el BOS)
+                // 🆕 FP1 Fix: timestamp real del primer break
+                const breakBar = this.findFirstBreakBar(this.activeSwingLow.timestamp, this.activeSwingLow.price, false) || candle;
+                const coiled = this.detectCoiled(this.activeSwingLow.timestamp);  // 🆕 E2
                 this.activeSwingLow.isBroken = true;
                 this.lastBOS = this.activeSwingLow;
-                this.trendExtreme = candle.low;
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
-                events.push({ type: 'EVENT_BOS', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                this.trendExtreme = breakBar.low;
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, breakBar);
+                events.push({ type: 'EVENT_BOS', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
             } else if (applyH && this.activeSwingHigh) {
-                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
+                const breakBar = this.findFirstBreakBar(this.activeSwingHigh.timestamp, this.activeSwingHigh.price, true) || candle;
+                const coiled = this.detectCoiled(this.activeSwingHigh.timestamp);  // 🆕 E2
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, breakBar);
                 if (this.passesChochGates(origin, true, zScore, sweepEscapeDir)) {
                     // 🆕 S9: solo ahora marcamos el swing como roto (gate pasó)
                     this.activeSwingHigh.isBroken = true;
                     this.lastCHoCH = this.activeSwingHigh;
                     this.currentTrend = 'Bullish';
-                    this.trendExtreme = candle.high;
-                    events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+                    this.trendExtreme = breakBar.high;
+                    events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: breakBar.timestamp, origin, extreme, originTs, extremeTs, crtOrigin, isCoiled: coiled });
+                    // 🆕 Disc 4 Fix: resetear BOS previo al revertir tendencia
+                    this.lastBOS = null;
                 }
                 // Si el gate falla, el swing HIGH NO se marca como roto → puede re-evaluarse
             }
@@ -229,7 +247,17 @@ export class MarketStructureEngine {
      *   O hubo un sweep reciente en la dirección de la reversa (sweep_active del Pine).
      * - Momentum: Z-Score con signo a favor ≥ 1.5.
      */
-    private passesChochGates(origin: number, isBullishReversal: boolean, zScore: { zUp: number, zDn: number } | null, sweepEscapeDir: Direction | null): boolean {
+    private passesChochGates(origin: number, isBullishReversal: boolean, zScore: number | null, sweepEscapeDir: Direction | null): boolean {
+        // 🆕 Disc 4 Fix: compuerta secuencial — exige BOS previo en la tendencia que se revierte.
+        // Un CHoCH alcista (revierte Bearish → Bullish) requiere un BOS bajista previo.
+        // Un CHoCH bajista (revierte Bullish → Bearish) requiere un BOS alcista previo.
+        if (this.chochReqBosPrior) {
+            if (this.lastBOS === null) return false;
+            const bosDir: Direction = this.lastBOS.type === 'High' ? 'Bullish' : 'Bearish';
+            const expectedBosDir: Direction = isBullishReversal ? 'Bearish' : 'Bullish';
+            if (bosDir !== expectedBosDir) return false;
+        }
+
         if (this.chochReqSweep && this.trendExtreme !== null) {
             const sweptExtreme = isBullishReversal ? origin <= this.trendExtreme : origin >= this.trendExtreme;
             const sweepActive = sweepEscapeDir === (isBullishReversal ? 'Bullish' : 'Bearish');
@@ -238,10 +266,8 @@ export class MarketStructureEngine {
             if (!sweptLiq) return false;
         }
         if (this.chochReqMom) {
-            const hasMom = isBullishReversal
-                ? (zScore !== null && zScore.zUp >= 1.5)
-                : (zScore !== null && zScore.zDn >= 1.5);
-            if (!hasMom) return false;
+            const hasMomentum = zScore !== null && Math.abs(zScore) >= 1.5;
+            if (!hasMomentum) return false;
         }
         return true;
     }
@@ -277,22 +303,92 @@ export class MarketStructureEngine {
     }
     */
 
-    private isDisplacement(candle: OHLCV, atr: number, direction: 'Bullish' | 'Bearish'): boolean {
-        const bodySize = Math.abs(candle.close - candle.open);
-        const minBody = atr * 1.2;
-        if (bodySize < minBody) return false;
-        
-        if (direction === 'Bullish') return candle.close > candle.open;
-        if (direction === 'Bearish') return candle.close < candle.open;
-        
+    /**
+     * 🆕 FP4 Fix: Validación de desplazamiento institucional por Z-Score.
+     * La teoría (Sección 3) define el desplazamiento como una desviación
+     * estadística ≥ 2.0σ del valor justo (VWAP), no como un umbral fijo
+     * de ATR. El ATR*1.2 se mantiene como fallback si no hay Z-Score
+     * disponible (warm-up del calculador).
+     */
+    /**
+     * 🆕 E2: Detector de Rangos Comprimidos (Coiled Range).
+     * Si antes de la ruptura encontramos ≥ 3 velas consecutivas cuyos cuerpos
+     * están completamente contenidos dentro del rango [low, high] de una vela
+     * "madre", el rompimiento tiene tasa de fakeout casi nula.
+     *
+     * @param pivotTs timestamp del pivote roto (para delimitar la ventana)
+     * @returns true si el rango previo a la ruptura está comprimido
+     */
+    private detectCoiled(pivotTs: number): boolean {
+        const window = this.history.filter(c => c.timestamp >= pivotTs);
+        if (window.length < 4) return false; // mínimo 1 madre + 3 contenidas
+
+        // La vela madre es la primera del rango (la que contiene a las demás)
+        const mother = window[0];
+        const motherHigh = mother.high;
+        const motherLow = mother.low;
+        let containedCount = 0;
+
+        for (let i = 1; i < window.length; i++) {
+            const c = window[i];
+            const cBodyHigh = Math.max(c.open, c.close);
+            const cBodyLow = Math.min(c.open, c.close);
+            if (cBodyHigh <= motherHigh && cBodyLow >= motherLow) {
+                containedCount++;
+                if (containedCount >= 3) return true;
+            } else {
+                containedCount = 0; // reset si una vela rompe el rango
+            }
+        }
         return false;
     }
 
-    private checkBreak(candle: OHLCV, priceLevel: number, isUp: boolean, confirmClose: boolean): boolean {
-        if (isUp) {
-            return confirmClose ? candle.close > priceLevel : candle.high > priceLevel;
-        } else {
-            return confirmClose ? candle.close < priceLevel : candle.low < priceLevel;
+    private isDisplacement(candle: OHLCV, atr: number, zScore: number | null, direction: 'Bullish' | 'Bearish'): boolean {
+        // Si hay Z-Score, es el filtro primario (teoría)
+        if (zScore !== null) {
+            const absZ = Math.abs(zScore);
+            const correctDirection = direction === 'Bullish' ? zScore > 0 : zScore < 0;
+            return absZ >= 2.0 && correctDirection;
         }
+        // Fallback: ATR*1.2 solo durante warm-up del Z-Score
+        const bodySize = Math.abs(candle.close - candle.open);
+        if (bodySize < atr * 1.2) return false;
+        if (direction === 'Bullish') return candle.close > candle.open;
+        if (direction === 'Bearish') return candle.close < candle.open;
+        return false;
+    }
+
+    private checkBreak(candle: OHLCV, priceLevel: number, isUp: boolean, _confirmClose: boolean): boolean {
+        // La teoría exige CIERRE, no mecha, independientemente de confirm_close
+        return isUp ? candle.close > priceLevel : candle.close < priceLevel;
+    }
+
+    /**
+     * 🆕 FP1 Fix: Cuando un pivote se confirmó con retraso (rightLen barras),
+     * busca la PRIMERA barra en la ventana de confirmación que rompió el nivel.
+     * Así el BOS/CHoCH recibe el timestamp correcto del break original,
+     * no el de la vela actual (que puede estar 5 barras después).
+     *
+     * Esto elimina el "lag estructural": el evento se ancla temporalmente
+     * donde realmente ocurrió la ruptura, no donde se confirmó el pivote.
+     */
+    private findFirstBreakBar(
+        pivotTs: number,
+        priceLevel: number,
+        isBullishBreak: boolean
+    ): OHLCV | null {
+        // Buscar desde la barra posterior al pivote hasta la actual (exclusive)
+        const candidates = this.history.filter(
+            c => c.timestamp > pivotTs
+        );
+
+        for (const c of candidates) {
+            const broke = isBullishBreak
+                ? c.close > priceLevel
+                : c.close < priceLevel;
+            if (broke) return c; // primera barra que rompe
+        }
+
+        return null; // no debería pasar si checkBreak ya dio true
     }
 }

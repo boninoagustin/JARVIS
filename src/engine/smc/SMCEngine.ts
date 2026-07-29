@@ -40,8 +40,7 @@ export class SMCEngine {
     private lastVwapValue: number = 0;
     private prevVwapValue: number = 0;
     private lastVwapStatus?: 'OVER' | 'UNDER';
-    private lastZScoreUp: number | null = null;
-    private lastZScoreDn: number | null = null;
+    private lastZScore: number | null = null;
     
     private simpleTrend: 'Bullish' | 'Bearish' | 'Neutral' = 'Neutral';
     public weeklyBias: string = 'Neutral';
@@ -78,7 +77,8 @@ export class SMCEngine {
         this.atr = new ATRCalculator(14);
         this.rsi = new RSICalculator(this.preset.rsi_len ?? 14);
         this.vwap = new VWAPCalculator();
-        this.zscore = new ZScoreCalculator(this.preset.z_score_window ?? 20);
+        // Inicialización de Z-Score (V2, no requiere window/decay explícito)
+        this.zscore = new ZScoreCalculator();
 
         this.updateStrBars(period, this.preset);
 
@@ -89,7 +89,7 @@ export class SMCEngine {
         this.structure = new MarketStructureEngine();
         this.orderBlocks = new OrderBlockEngine();
         this.imbalances = new ImbalanceEngine();
-        this.liquidity = new LiquidityEngine();
+        this.liquidity = new LiquidityEngine(this.zscore);
         this.divergence = new DivergenceEngine(this.periodMs);
     }
 
@@ -108,7 +108,7 @@ export class SMCEngine {
         // Se pierde el estado interno (p.ej. el RMA de Wilder del RSI): esperado al cambiar de preset.
         this.pivots = new PivotEngine(this.strBars, this.strBars);
         this.rsi = new RSICalculator(this.preset.rsi_len ?? 14);
-        this.zscore = new ZScoreCalculator(this.preset.z_score_window ?? 20);
+        this.zscore = new ZScoreCalculator();
         const divLen = this.preset.div_pivot_len || 5;
         this.rsiPivotEngine = new PivotEngine(divLen, divLen);
     }
@@ -220,7 +220,7 @@ export class SMCEngine {
                 open: rsiVal, high: rsiVal, low: rsiVal, close: rsiVal, volume: 0
             });
             if (rsiPivot) {
-                const divEvent = this.divergence.addRsiPivot(rsiPivot);
+                const divEvent = this.divergence.addRsiPivot(rsiPivot, this.liquidity, this.currentAtrValue);
                 if (divEvent) {
                     events.push({
                         type: 'EVENT_DIVERGENCE',
@@ -240,11 +240,13 @@ export class SMCEngine {
         
         this.prevVwapValue = this.lastVwapValue;
         this.lastVwapValue = this.vwap.nextValue(candle);
-        const zs = this.zscore.nextValue(candle);
-        if (zs) {
-            this.lastZScoreUp = zs.zUp;
-            this.lastZScoreDn = zs.zDn;
-        }
+        
+        // 🆕 Bug 2 Fix: una sola llamada a zscore por vela, resultado compartido
+        const zsResult = this.zscore.nextValue(candle);
+        const zScoreVal = zsResult?.zScore ?? null;
+        const anchoredVwap = zsResult?.vwap ?? this.lastVwapValue;
+        const anchoredSigma = zsResult?.sigma ?? 0;
+        if (zsResult) this.lastZScore = zsResult.zScore;
 
         // 2. Pivots Update
         const newPivot = this.pivots.nextCandle(candle);
@@ -258,7 +260,7 @@ export class SMCEngine {
             this.liquidity.registerPivot(newPivot, this.currentAtrValue);
             
             // Evaluar Divergencias
-            const divEvent = this.divergence.processPricePivot(newPivot);
+            const divEvent = this.divergence.processPricePivot(newPivot, this.liquidity, this.currentAtrValue);
             if (divEvent) {
                 events.push({
                     type: 'EVENT_DIVERGENCE',
@@ -287,23 +289,24 @@ export class SMCEngine {
         else if (!Number.isNaN(this.lastPivotLow33) && candle.close < this.lastPivotLow33) this.simpleTrend = 'Bearish';
 
         // 3. Market Structure Update
-        const zScoreForGates = this.lastZScoreUp !== null && this.lastZScoreDn !== null
-            ? { zUp: this.lastZScoreUp, zDn: this.lastZScoreDn }
-            : null;
+        const zScoreForGates = this.lastZScore !== null ? this.lastZScore : null;
         const sweepEscapeDir = this.liquidity.sweepBullActive ? 'Bullish' as const
             : this.liquidity.sweepBearActive ? 'Bearish' as const
             : null;
         const structEvents = this.structure.processCandle(
             candle, this.state.pivotsHigh, this.state.pivotsLow, this.preset, this.currentAtrValue,
-            { zScore: zScoreForGates, sweepEscapeDir }
+            { zScore: zScoreForGates, sweepEscapeDir, crtValid: this.liquidity.hasActiveCRTPattern() }
         );
         events.push(...structEvents);
 
-        // Reset VWAP en BOS o CHoCH
+        // Reset VWAP y Z-Score en BOS o CHoCH (Disc 3: anclaje real del Z-Score)
         if (structEvents.length > 0) {
             this.vwap.reset();
-            // E9: re-anclar con la vela del evento para no publicar un VWAP stale
+            this.zscore.reset();
+            // Re-anclar con la vela del evento
             this.lastVwapValue = this.vwap.nextValue(candle);
+            const reanchored = this.zscore.nextValue(candle);
+            if (reanchored) this.lastZScore = reanchored.zScore;
         }
 
         // 4. Order Blocks & Imbalances Update
@@ -317,12 +320,13 @@ export class SMCEngine {
         }
 
         const prevHl2 = this.previousCandle ? (this.previousCandle.high + this.previousCandle.low) / 2 : (candle.high + candle.low) / 2;
-        const zScoreObj = this.lastZScoreUp !== null && this.lastZScoreDn !== null 
-            ? { zUp: this.lastZScoreUp, zDn: this.lastZScoreDn } 
-            : null;
-            
+        const zScoreObj = zScoreVal;  // reutiliza zScoreVal declarado arriba (Bug 2 Fix)
+
         // B3: guardar el estatus calculado esta vela (undefined durante warm-up)
         this.lastVwapStatus = this.prevVwapValue > 0 ? (prevHl2 > this.prevVwapValue ? 'OVER' : 'UNDER') : undefined;
+
+        // 🆕 E5: exhaustion zone = |Z| ≥ 2.0 (banda K=2 del VWAP adaptativo)
+        const isExhaustionZone = zScoreVal !== null && Math.abs(zScoreVal) >= 2.0;
 
         const obContext = {
             vwapStatus: this.lastVwapStatus,
@@ -332,6 +336,7 @@ export class SMCEngine {
                 f => f.is_ifvg && f.direction === (isBull ? 'Bullish' : 'Bearish') && !(top < f.bottom || bottom > f.top)
             ),
             zScore: zScoreObj,
+            isExhaustionZone,  // 🆕 E5
             htfTrend: this.htfTrend,
             weeklyBias: this.weeklyBias,
             htfAligned: (isBull: boolean) => {
@@ -370,7 +375,7 @@ export class SMCEngine {
 
 
         // 5. Liquidity Sweeps Update
-        const liqEvents = this.liquidity.processCandle(candle, this.currentAtrValue, this.preset);
+        const liqEvents = this.liquidity.processCandle(candle, this.currentAtrValue, this.preset, zScoreVal);
         events.push(...liqEvents);
         
         for (const ev of liqEvents) {

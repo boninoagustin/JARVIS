@@ -1,0 +1,14 @@
+--- src/engine/smc/modules/divergence.ts
++++ src/engine/smc/modules/divergence.ts
+@@ -36,7 +36,10 @@
+         // Si no está (warm-up del RSI o pivot fuera del buffer), no hay
+         // divergencia computable — mejor descartar que adivinar.
+         const rsiValue = rsiByTimestamp.get(pivot.timestamp);
+-        if (rsiValue === undefined) return null;
++        if (rsiValue === undefined) {
++            console.log("DIV_EVAL_MISSING:", new Date(pivot.timestamp).toISOString());
++            return null;
++        }
+         // console.log("DIV_EVAL:", pivot.timestamp, pivot.type, rsiValue);
+ 
+         const currentPoint = { pivot, rsi: rsiValue };

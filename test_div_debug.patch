@@ -1,0 +1,49 @@
+--- src/engine/smc/modules/divergence.ts
++++ src/engine/smc/modules/divergence.ts
+@@ -40,7 +40,7 @@
+             console.log("DIV_EVAL_MISSING:", new Date(pivot.timestamp).toISOString());
+             return null;
+         }
+-        // console.log("DIV_EVAL:", pivot.timestamp, pivot.type, rsiValue);
++        console.log("DIV_EVAL:", new Date(pivot.timestamp).toISOString(), pivot.type, rsiValue.toFixed(2));
+ 
+         const currentPoint = { pivot, rsi: rsiValue };
+ 
+@@ -51,10 +51,12 @@
+         if (pivot.type === 'High' && rsiValue <= RSI_BEAR_MIN) {
+             this.recordHigh(currentPoint);
++            console.log("  => REJECTED High: rsi <= 60");
+             return null;
+         }
+         if (pivot.type === 'Low' && rsiValue >= RSI_BULL_MAX) {
+             this.recordLow(currentPoint);
++            console.log("  => REJECTED Low: rsi >= 40");
+             return null;
+         }
+ 
+@@ -62,6 +64,7 @@
+         const hasSweep = context?.hasLiquidityContext ? context.hasLiquidityContext(pivot) : true;
+         
+         if (!hasSweep) {
++            console.log("  => REJECTED: No Sweep Context");
+             if (pivot.type === 'High') this.recordHigh(currentPoint);
+             else this.recordLow(currentPoint);
+             return null;
+@@ -69,12 +72,15 @@
+ 
+         // 🆕 Gate 3: divergencia clásica (higher high en precio, lower high en RSI)
+         if (pivot.type === 'High' && this.state.lastPivotHigh) {
++            console.log(`  => CHECK HIGH: currP=${currentPoint.pivot.price} prevP=${this.state.lastPivotHigh.pivot.price} | currRsi=${currentPoint.rsi} prevRsi=${this.state.lastPivotHigh.rsi}`);
+             if (currentPoint.pivot.price > this.state.lastPivotHigh.pivot.price && 
+                 currentPoint.rsi < this.state.lastPivotHigh.rsi) {
++                console.log("  => BEARISH DIVERGENCE FOUND!");
+                 this.recordHigh(currentPoint);
+                 return { type: 'Bearish', direction: 'Bearish', timestamp: pivot.timestamp };
+             }
+         } else if (pivot.type === 'Low' && this.state.lastPivotLow) {
++            console.log(`  => CHECK LOW: currP=${currentPoint.pivot.price} prevP=${this.state.lastPivotLow.pivot.price} | currRsi=${currentPoint.rsi} prevRsi=${this.state.lastPivotLow.rsi}`);
+             if (currentPoint.pivot.price < this.state.lastPivotLow.pivot.price && 
+                 currentPoint.rsi > this.state.lastPivotLow.rsi) {
++                console.log("  => BULLISH DIVERGENCE FOUND!");
+                 this.recordLow(currentPoint);
+                 return { type: 'Bullish', direction: 'Bullish', timestamp: pivot.timestamp };

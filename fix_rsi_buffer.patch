@@ -1,0 +1,11 @@
+--- src/engine/smc/SMCEngine.ts
++++ src/engine/smc/SMCEngine.ts
+@@ -232,7 +232,7 @@
+         this.volatilityByTimestamp.set(candle.timestamp, atrVal);
+ 
+         // Limitar historial
+-        if (this.rsiByTimestamp.size > SMCEngine.RSI_BUFFER_SIZE) {
++        if (this.rsiByTimestamp.size > 2000) {
+             const oldestKey = this.rsiByTimestamp.keys().next().value!;
+             this.rsiByTimestamp.delete(oldestKey);
+         }

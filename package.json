@@ -6,7 +6,7 @@
   "scripts": {
     "upload:campaign": "tsx scripts/upload-campaign.ts",
     "meta:optimize": "tsx scripts/meta-optimize.ts",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npx tsx test_smc_engine.ts",
     "dev": "tsx watch src/index.ts",
     "deploy-webhook": "tsx scripts/deploy-webhook.ts"
   },

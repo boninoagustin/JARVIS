@@ -1,4 +1,5 @@
 import { Pivot, Direction } from '../types.js';
+import { LiquidityEngine } from './liquidity.js';
 
 export interface DivergenceEvent {
     direction: Direction;
@@ -27,33 +28,38 @@ export class DivergenceEngine {
         this.periodMs = periodMs;
     }
 
-    public addRsiPivot(pivot: Pivot): DivergenceEvent | null {
+    public addRsiPivot(pivot: Pivot, liquidityEngine?: LiquidityEngine, currentAtr?: number): DivergenceEvent | null {
         if (pivot.type === 'High') {
             this.lastRsiHighs.push(pivot);
             if (this.lastRsiHighs.length > this.maxLookback) this.lastRsiHighs.shift();
+            return this.matchAndCheck('High', this.lastPriceHighs, this.lastRsiHighs, this.matchedHighs, liquidityEngine, currentAtr);
         } else {
             this.lastRsiLows.push(pivot);
             if (this.lastRsiLows.length > this.maxLookback) this.lastRsiLows.shift();
+            return this.matchAndCheck('Low', this.lastPriceLows, this.lastRsiLows, this.matchedLows, liquidityEngine, currentAtr);
         }
-        return this.matchAndCheck(pivot.type);
     }
 
-    public processPricePivot(pivot: Pivot): DivergenceEvent | null {
+    public processPricePivot(pivot: Pivot, liquidityEngine?: LiquidityEngine, currentAtr?: number): DivergenceEvent | null {
         if (pivot.type === 'High') {
             this.lastPriceHighs.push(pivot);
             if (this.lastPriceHighs.length > this.maxLookback) this.lastPriceHighs.shift();
+            return this.matchAndCheck('High', this.lastPriceHighs, this.lastRsiHighs, this.matchedHighs, liquidityEngine, currentAtr);
         } else {
             this.lastPriceLows.push(pivot);
             if (this.lastPriceLows.length > this.maxLookback) this.lastPriceLows.shift();
+            return this.matchAndCheck('Low', this.lastPriceLows, this.lastRsiLows, this.matchedLows, liquidityEngine, currentAtr);
         }
-        return this.matchAndCheck(pivot.type);
     }
 
-    private matchAndCheck(type: 'High' | 'Low'): DivergenceEvent | null {
-        const pricePivots = type === 'High' ? this.lastPriceHighs : this.lastPriceLows;
-        const rsiPivots = type === 'High' ? this.lastRsiHighs : this.lastRsiLows;
-        const matched = type === 'High' ? this.matchedHighs : this.matchedLows;
-
+    private matchAndCheck(
+        type: 'High' | 'Low',
+        pricePivots: Pivot[],
+        rsiPivots: Pivot[],
+        matched: { price: Pivot, rsi: Pivot }[],
+        liquidityEngine?: LiquidityEngine,
+        currentAtr?: number
+    ): DivergenceEvent | null {
         if (pricePivots.length === 0 || rsiPivots.length === 0) return null;
 
         // Take the latest un-matched price pivot and find its RSI pivot
@@ -88,20 +94,35 @@ export class DivergenceEngine {
                 const prev = matched[matched.length - 2];
                 const curr = newMatch;
                 
+                let result: DivergenceEvent | null = null;
+                
                 if (type === 'High') {
                     if (curr.price.price > prev.price.price && curr.rsi.price < prev.rsi.price) {
-                        return { direction: 'Bearish', type: 'Regular', timestamp: curr.price.timestamp, price: curr.price.price };
+                        result = { direction: 'Bearish', type: 'Regular', timestamp: curr.price.timestamp, price: curr.price.price };
                     }
-                    if (curr.price.price < prev.price.price && curr.rsi.price > prev.rsi.price) {
-                        return { direction: 'Bearish', type: 'Hidden', timestamp: curr.price.timestamp, price: curr.price.price };
+                    else if (curr.price.price < prev.price.price && curr.rsi.price > prev.rsi.price) {
+                        result = { direction: 'Bearish', type: 'Hidden', timestamp: curr.price.timestamp, price: curr.price.price };
                     }
                 } else {
                     if (curr.price.price < prev.price.price && curr.rsi.price > prev.rsi.price) {
-                        return { direction: 'Bullish', type: 'Regular', timestamp: curr.price.timestamp, price: curr.price.price };
+                        result = { direction: 'Bullish', type: 'Regular', timestamp: curr.price.timestamp, price: curr.price.price };
                     }
-                    if (curr.price.price > prev.price.price && curr.rsi.price < prev.rsi.price) {
-                        return { direction: 'Bullish', type: 'Hidden', timestamp: curr.price.timestamp, price: curr.price.price };
+                    else if (curr.price.price > prev.price.price && curr.rsi.price < prev.rsi.price) {
+                        result = { direction: 'Bullish', type: 'Hidden', timestamp: curr.price.timestamp, price: curr.price.price };
                     }
+                }
+                
+                if (result && liquidityEngine && currentAtr !== undefined) {
+                    const tolerance = currentAtr * 0.3;
+                    const sweepActive = type === 'High' ? liquidityEngine.sweepBearActive : liquidityEngine.sweepBullActive;
+                    const nearLevel = liquidityEngine.hasNearbyLevel(curr.price.price, type, tolerance);
+                    
+                    if (!nearLevel && !sweepActive) {
+                        return null; // Spatial filter failed
+                    }
+                    return result;
+                } else if (result) {
+                    return result;
                 }
             }
         }

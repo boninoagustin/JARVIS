@@ -1,0 +1,19 @@
+--- src/engine/smc/modules/divergence.ts
++++ src/engine/smc/modules/divergence.ts
+@@ -37,6 +37,7 @@
+         // divergencia computable — mejor descartar que adivinar.
+         const rsiValue = rsiByTimestamp.get(pivot.timestamp);
+         if (rsiValue === undefined) return null;
++        // console.log("DIV_EVAL:", pivot.timestamp, pivot.type, rsiValue);
+ 
+         const currentPoint = { pivot, rsi: rsiValue };
+ 
+@@ -53,6 +54,8 @@
+         // 🆕 Gate 2: contexto de liquidez (en Pine, la liquidez es un requisito OBLIGATORIO)
+         const hasSweep = context?.hasLiquidityContext ? context.hasLiquidityContext(pivot) : true;
+         
++        // console.log("DIV_GATE2:", pivot.timestamp, pivot.type, hasSweep, rsiValue);
++
+         if (!hasSweep) {
+             if (pivot.type === 'High') this.recordHigh(currentPoint);
+             else this.recordLow(currentPoint);

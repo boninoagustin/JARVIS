@@ -1,12 +1,15 @@
 import { OHLCV, OrderBlock, SMCPreset } from '../types.js';
-
 export interface OBContext {
     vwapStatus?: 'OVER' | 'UNDER';
     currentTrend?: 'Bullish' | 'Bearish' | 'Neutral';
     simpleTrend?: 'Bullish' | 'Bearish' | 'Neutral';
     hasIFVGOverlap?: (top: number, bottom: number, isBull: boolean) => boolean;
-    zScore?: { zUp: number, zDn: number } | null;
+    zScore?: number | null;
+    isExhaustionZone?: boolean;  // 🆕 E5: |Z| ≥ 2.0 → precio en banda K=2 del VWAP
+    crtOrigin?: boolean;         // 🆕 E1: patrón CRT de 3 velas en origen del BOS/CHoCH
+    isCoiled?: boolean;          // 🆕 E2: rango comprimido antes de la ruptura
     htfTrend?: 'Bullish' | 'Bearish' | 'Neutral';
+    weeklyBias?: 'Bullish' | 'Bearish' | 'Neutral';
     isLegacy?: boolean;
     isChoch?: boolean;
     hasFvgNear?: boolean;
@@ -178,6 +181,15 @@ export class OrderBlockEngine {
         const obRange = obCandle.high - obCandle.low;
         const obBody = Math.abs(obCandle.close - obCandle.open);
         if (obRange <= 0 || obBody / obRange < (preset?.min_ob_body_pct ?? 0.1)) return [];
+        
+        // VWAP Hard Filter
+        const vwapZoneValid = isBull
+            ? context?.vwapStatus === 'UNDER'   // Discount para longs
+            : context?.vwapStatus === 'OVER';   // Premium para shorts
+
+        if (context?.vwapStatus && !vwapZoneValid) {
+            return []; // No crear OB fuera de zona VWAP correcta
+        }
         const useBodyForOB = preset.use_body_for_ob !== undefined ? preset.use_body_for_ob : true;
         const obTop = isBull ? (useBodyForOB ? Math.max(obCandle.open, obCandle.close) : obCandle.high) : obCandle.high;
         const obBtm = isBull ? obCandle.low : (useBodyForOB ? Math.min(obCandle.open, obCandle.close) : obCandle.low);
@@ -237,9 +249,16 @@ export class OrderBlockEngine {
             const c = this.history[i];
             const isOpposite = isBull ? c.close < c.open : c.close > c.open;
             if (isOpposite) {
-                if (c.volume > maxObVol) {
-                    maxObVol = c.volume;
-                    obCandleIdx = i;
+                const bodySize = Math.abs(c.close - c.open);
+                const totalSize = c.high - c.low;
+                const bodyPct = totalSize > 0 ? bodySize / totalSize : 0;
+                
+                // DeepSeek Fix D6: Aplicar min_ob_body_pct a Legacy OBs
+                if (!preset.min_ob_body_pct || bodyPct >= preset.min_ob_body_pct) {
+                    if (c.volume > maxObVol) {
+                        maxObVol = c.volume;
+                        obCandleIdx = i;
+                    }
                 }
             }
         }
@@ -250,6 +269,15 @@ export class OrderBlockEngine {
         const obRange = obCandle.high - obCandle.low;
         const obBody = Math.abs(obCandle.close - obCandle.open);
         if (obRange <= 0 || obBody / obRange < (preset?.min_ob_body_pct ?? 0.1)) return [];
+
+        // VWAP Hard Filter
+        const vwapZoneValid = isBull
+            ? context?.vwapStatus === 'UNDER'
+            : context?.vwapStatus === 'OVER';
+
+        if (context?.vwapStatus && !vwapZoneValid) {
+            return [];
+        }
         const useBodyForOB = preset.use_body_for_ob !== undefined ? preset.use_body_for_ob : true;
         const obTop = isBull ? (useBodyForOB ? Math.max(obCandle.open, obCandle.close) : obCandle.high) : obCandle.high;
         const obBtm = isBull ? obCandle.low : (useBodyForOB ? Math.min(obCandle.open, obCandle.close) : obCandle.low);
@@ -312,6 +340,11 @@ export class OrderBlockEngine {
         if (swp) { score += 2; }
         if (context?.hasFvgNear) { score += 1; }
         if (obCandle.volume > avgVol * 1.5) { score += 1; }
+
+        // 🆕 Disc 5 Fix: las anotaciones estructurales ahora impactan el score
+        if (context?.crtOrigin) { score += 2; }   // CRT: alta probabilidad direccional
+        if (context?.isCoiled)  { score += 3; }    // Coiled: tasa de fakeout casi nula
+        if (context?.isExhaustionZone) { score += 1; } // Banda K=2: agotamiento institucional
         
         if (context?.vwapStatus) {
             if ((isBull && context.vwapStatus === 'UNDER') || (!isBull && context.vwapStatus === 'OVER')) {
