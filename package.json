@@ -33,12 +33,12 @@
     "puppeteer": "^24.39.1",
     "tradingview-mcp": "github:tradesdontlie/tradingview-mcp",
     "ws": "^8.21.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@types/ws": "^8.18.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.0",
-    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
