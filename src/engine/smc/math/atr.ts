@@ -29,7 +29,12 @@ export class ATRCalculator {
      * Agrega una nueva vela y retorna el ATR actualizado.
      */
     public nextValue(current: OHLCV, previous?: OHLCV): number | null {
-        const tr = calculateTR(current, previous);
+        // E4: ignorar velas no finitas sin corromper el RMA de Wilder
+        if (!Number.isFinite(current.high) || !Number.isFinite(current.low) || !Number.isFinite(current.close)) {
+            return this.rma;
+        }
+        const prev = previous && Number.isFinite(previous.close) ? previous : undefined;
+        const tr = calculateTR(current, prev);
         
         if (this.rma === null) {
             this.history.push(tr);

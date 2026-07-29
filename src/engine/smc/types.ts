@@ -23,8 +23,13 @@ export interface SMCPreset {
     use_body_for_ob?: boolean;
     fvg_min_atr_factor?: number;
     fvg_min_atr?: number;
+    wick_invalidates_ob?: boolean;
+    valid_bos_displacement?: boolean;
+    choch_require_sweep?: boolean;
+    choch_require_momentum?: boolean;
     
     // Engine Optimization Parameters
+    max_ob_age?: number;
     pivot_len?: number;
     div_pivot_len?: number;
     rsi_len?: number;
@@ -40,12 +45,15 @@ export interface SMCEvents {
     EVENT_BOS: { direction: Direction; price: number; timestamp: number };
     EVENT_CHOCH: { direction: Direction; price: number; timestamp: number };
     EVENT_OB_CREATED: { ob: OrderBlock };
-    EVENT_SWEEP: { direction: Direction; price: number; type: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number };
+    EVENT_BREAKER_CREATED: { ob: OrderBlock };
+    EVENT_SWEEP: { direction: Direction; price: number; sweepType: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number };
     EVENT_IFVG_CREATED: { fvg: Imbalance };
-    EVENT_DIVERGENCE: { direction: Direction; divergenceType: 'Regular' | 'Hidden'; timestamp: number; divergence?: any };
+    EVENT_DIVERGENCE: { direction: Direction; divergenceType: 'Regular' | 'Hidden'; timestamp: number; pivotTimestamp: number; divergence?: any };
     ZONE_TOUCHED: { direction: Direction; category: string; score: number; top: number; bottom: number };
     ZONE_BROKEN: { direction: Direction; category: string; score: number; top: number; bottom: number };
 }
+
+export type SMCEvent = { [K in keyof SMCEvents]: { type: K } & SMCEvents[K] }[keyof SMCEvents];
 
 export interface Pivot {
     index: number;
@@ -83,6 +91,8 @@ export interface Imbalance {
     direction: Direction;
     top: number;
     bottom: number;
+    originalTop?: number;
+    originalBottom?: number;
     mitigated: boolean;
     is_ifvg: boolean;
 }
@@ -99,7 +109,7 @@ export interface SMCState {
     // Market Structure
     lastBOS?: Pivot;
     lastCHoCH?: Pivot;
-    lastDivergence?: { direction: Direction; type: 'Regular' | 'Hidden'; timestamp: number; price: number; top?: number; bottom?: number; score?: number; rsiDiff?: number; };
+    lastDivergence?: { direction: Direction; type: 'Regular' | 'Hidden'; timestamp: number; pivotTimestamp: number; price: number; top?: number; bottom?: number; score?: number; rsiDiff?: number; };
     lastSweep?: { direction: Direction; type: string; timestamp: number };
     
     // VWAP & Liquidity

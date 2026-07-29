@@ -13,12 +13,20 @@ export class ZScoreCalculator {
     private upHistory: number[] = [];
     private dnHistory: number[] = [];
 
+    // E4: último z válido para devolverlo cuando llega una vela no finita
+    private lastZ: { zUp: number, zDn: number } | null = null;
+
     constructor(length: number = 50, decay: number = 0.85) {
         this.length = length;
         this.decay = Math.max(0, Math.min(0.99, decay));
     }
 
     public nextValue(candle: OHLCV): { zUp: number, zDn: number } | null {
+        // E4: ignorar velas no finitas sin pushear a la ventana ni corromper los acumuladores
+        if (!Number.isFinite(candle.open) || !Number.isFinite(candle.close)) {
+            return this.lastZ;
+        }
+
         const updistRaw = candle.close > candle.open ? (candle.close - candle.open) : 0;
         const downdistRaw = candle.close < candle.open ? (candle.open - candle.close) : 0;
 
@@ -45,6 +53,7 @@ export class ZScoreCalculator {
         const stdDevDn = Math.sqrt(varDn);
         const zDn = stdDevDn === 0 ? 0 : (this.downdistSmooth - meanDn) / stdDevDn;
 
-        return { zUp, zDn };
+        this.lastZ = { zUp, zDn };
+        return this.lastZ;
     }
 }

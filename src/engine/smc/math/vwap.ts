@@ -10,6 +10,13 @@ export class VWAPCalculator {
      */
     public nextValue(candle: OHLCV): number {
         const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+
+        // E4: NaN no lo captura el check volume === 0; ignorar la vela sin acumular
+        // y devolver el último VWAP válido
+        if (!Number.isFinite(typicalPrice) || !Number.isFinite(candle.volume)) {
+            return this.cumulativeVolume !== 0 ? this.cumulativePriceVolume / this.cumulativeVolume : 0;
+        }
+
         this.cumulativePriceVolume += typicalPrice * candle.volume;
         this.cumulativeVolume += candle.volume;
 

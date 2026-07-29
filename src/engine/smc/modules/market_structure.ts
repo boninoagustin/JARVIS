@@ -27,12 +27,11 @@ export class MarketStructureEngine {
      *   del extremo de la tendencia). En el Pine aplica a 1h/4h/D (o riesgo ≤2).
      * - chochReqMom: exige momentum Z-Score. En el Pine aplica a 4h/D (o riesgo 1).
      */
-    private chochReqSweep: boolean;
-    private chochReqMom: boolean;
+    private chochReqSweep: boolean = false;
+    private chochReqMom: boolean = false;
 
-    constructor(chochReqSweep: boolean = false, chochReqMom: boolean = false) {
-        this.chochReqSweep = chochReqSweep;
-        this.chochReqMom = chochReqMom;
+    constructor() {
+        // Gates are now read from preset in processCandle
     }
 
     /**
@@ -86,12 +85,17 @@ export class MarketStructureEngine {
         pivotsHigh: Pivot[], 
         pivotsLow: Pivot[], 
         preset: SMCPreset,
+        currentAtr: number = 0,
         options: { zScore?: { zUp: number; zDn: number } | null; sweepEscapeDir?: Direction | null } = {}
     ): Array<(SMCEvents['EVENT_BOS'] & { type: 'EVENT_BOS' }) | (SMCEvents['EVENT_CHOCH'] & { type: 'EVENT_CHOCH' })> {
         
         const events: any[] = [];
         const zScore = options.zScore ?? null;
         const sweepEscapeDir = options.sweepEscapeDir ?? null;
+        
+        // 🆕 S9: sincronizar gates desde preset en cada llamada
+        this.chochReqSweep = preset.choch_require_sweep ?? false;
+        this.chochReqMom = preset.choch_require_momentum ?? false;
         
         // 🆕 Alimentar el buffer de historia para origin/extreme
         this.history.push(candle);
@@ -108,16 +112,28 @@ export class MarketStructureEngine {
         this.updateActiveSwings(pivotsHigh, pivotsLow);
 
         if (this.currentTrend === 'Neutral') {
-            if (this.activeSwingHigh && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close)) {
+            const breakH = this.activeSwingHigh && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close);
+            const breakL = this.activeSwingLow && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close);
+
+            let applyH = breakH;
+            let applyL = breakL;
+            if (breakH && breakL) {
+                if (candle.close > candle.open) applyL = false;
+                else applyH = false;
+            }
+
+            if (applyH && this.activeSwingHigh) {
+                // 🆕 S2/N1: solo marcamos roto el swing GANADOR del desempate;
+                // el perdedor queda intacto para futuras evaluaciones
+                this.activeSwingHigh.isBroken = true;
                 this.currentTrend = 'Bullish';
                 this.trendExtreme = candle.high;
-                this.activeSwingHigh.isBroken = true;
                 const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
                 events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
-            } else if (this.activeSwingLow && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close)) {
+            } else if (applyL && this.activeSwingLow) {
+                this.activeSwingLow.isBroken = true;
                 this.currentTrend = 'Bearish';
                 this.trendExtreme = candle.low;
-                this.activeSwingLow.isBroken = true;
                 const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
                 events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
             }
@@ -126,46 +142,84 @@ export class MarketStructureEngine {
 
         // Evaluar BOS y CHoCH si ya tenemos tendencia
         if (this.currentTrend === 'Bullish') {
-            // BOS: Romper Swing High hacia arriba
-            if (this.activeSwingHigh && !this.activeSwingHigh.isBroken && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close)) {
+            const breakH = this.activeSwingHigh && !this.activeSwingHigh.isBroken && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close);
+            const breakL = this.activeSwingLow && !this.activeSwingLow.isBroken && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close);
+
+            // 🆕 S9/N1: el swing de BOS también se difiere hasta pasar el
+            // desempate y el filtro de displacement (antes quedaba consumido sin evento).
+            let applyH = breakH; // BOS
+            let applyL = breakL; // CHoCH
+
+            if (breakH && breakL) {
+                if (candle.close > candle.open) applyL = false;
+                else applyH = false;
+            }
+
+            if (applyH && this.activeSwingHigh) {
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bullish')) applyH = false;
+            }
+            if (applyL && this.activeSwingLow) {
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bearish')) applyL = false;
+            }
+
+            if (applyH && this.activeSwingHigh) {
+                // 🆕 N1: solo ahora marcamos el swing como roto (se emite el BOS)
                 this.activeSwingHigh.isBroken = true;
                 this.lastBOS = this.activeSwingHigh;
-                this.trendExtreme = candle.high; // reset del extremo como en el Pine
+                this.trendExtreme = candle.high;
                 const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
                 events.push({ type: 'EVENT_BOS', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
-            }
-            // CHoCH: Romper Swing Low hacia abajo (Cambio a Bajista)
-            if (this.activeSwingLow && !this.activeSwingLow.isBroken && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close)) {
-                this.activeSwingLow.isBroken = true; // Consumido incluso si falla los gates
-                    const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
-                    if (this.passesChochGates(origin, false, zScore, sweepEscapeDir)) {
-                        this.lastCHoCH = this.activeSwingLow;
-                        this.currentTrend = 'Bearish';
-                        if(false) console.error(`[TREND CHANGE] ${new Date(candle.timestamp).toISOString()} -> Bearish (CHOCH SELL)`);
-                        this.trendExtreme = candle.low;
-                        events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
+            } else if (applyL && this.activeSwingLow) {
+                const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
+                if (this.passesChochGates(origin, false, zScore, sweepEscapeDir)) {
+                    // 🆕 S9: solo ahora marcamos el swing como roto (gate pasó)
+                    this.activeSwingLow.isBroken = true;
+                    this.lastCHoCH = this.activeSwingLow;
+                    this.currentTrend = 'Bearish';
+                    this.trendExtreme = candle.low;
+                    events.push({ type: 'EVENT_CHOCH', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
                 }
+                // Si el gate falla, el swing LOW NO se marca como roto → puede re-evaluarse
             }
         } else if (this.currentTrend === 'Bearish') {
-            // BOS: Romper Swing Low hacia abajo
-            if (this.activeSwingLow && !this.activeSwingLow.isBroken && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close)) {
+            const breakH = this.activeSwingHigh && !this.activeSwingHigh.isBroken && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close);
+            const breakL = this.activeSwingLow && !this.activeSwingLow.isBroken && this.checkBreak(candle, this.activeSwingLow.price, false, preset.confirm_close);
+
+            // 🆕 S9/N1: el swing de BOS también se difiere hasta pasar el
+            // desempate y el filtro de displacement (antes quedaba consumido sin evento).
+            let applyH = breakH; // CHoCH
+            let applyL = breakL; // BOS
+
+            if (breakH && breakL) {
+                if (candle.close < candle.open) applyH = false;
+                else applyL = false;
+            }
+
+            if (applyL && this.activeSwingLow) {
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bearish')) applyL = false;
+            }
+            if (applyH && this.activeSwingHigh) {
+                if (preset.valid_bos_displacement && !this.isDisplacement(candle, currentAtr, 'Bullish')) applyH = false;
+            }
+
+            if (applyL && this.activeSwingLow) {
+                // 🆕 N1: solo ahora marcamos el swing como roto (se emite el BOS)
                 this.activeSwingLow.isBroken = true;
                 this.lastBOS = this.activeSwingLow;
                 this.trendExtreme = candle.low;
                 const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingLow.timestamp, false, candle);
                 events.push({ type: 'EVENT_BOS', direction: 'Bearish', price: this.activeSwingLow.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
-            }
-            // CHoCH: Romper Swing High hacia arriba (Cambio a Alcista)
-            if (this.activeSwingHigh && !this.activeSwingHigh.isBroken && this.checkBreak(candle, this.activeSwingHigh.price, true, preset.confirm_close)) {
-                this.activeSwingHigh.isBroken = true; // Consumido incluso si falla los gates
+            } else if (applyH && this.activeSwingHigh) {
                 const { origin, extreme, originTs, extremeTs } = this.computeOriginExtreme(this.activeSwingHigh.timestamp, true, candle);
                 if (this.passesChochGates(origin, true, zScore, sweepEscapeDir)) {
+                    // 🆕 S9: solo ahora marcamos el swing como roto (gate pasó)
+                    this.activeSwingHigh.isBroken = true;
                     this.lastCHoCH = this.activeSwingHigh;
                     this.currentTrend = 'Bullish';
-                    if(false) console.error(`[TREND CHANGE] ${new Date(candle.timestamp).toISOString()} -> Bullish (CHOCH BUY)`);
                     this.trendExtreme = candle.high;
                     events.push({ type: 'EVENT_CHOCH', direction: 'Bullish', price: this.activeSwingHigh.price, timestamp: candle.timestamp, origin, extreme, originTs, extremeTs });
                 }
+                // Si el gate falla, el swing HIGH NO se marca como roto → puede re-evaluarse
             }
         }
 
@@ -216,6 +270,23 @@ export class MarketStructureEngine {
                 this.activeSwingLow = null;
             }
         }
+    }
+
+    private getActiveSweepEscapeDir(candle: OHLCV, preset: SMCPreset): Direction | null {
+        // En una implementación real, esto leería del módulo de liquidez
+        // Por ahora lo simplificamos a null ya que se maneja a nivel superior
+        return null;
+    }
+
+    private isDisplacement(candle: OHLCV, atr: number, direction: 'Bullish' | 'Bearish'): boolean {
+        const bodySize = Math.abs(candle.close - candle.open);
+        const minBody = atr * 1.2;
+        if (bodySize < minBody) return false;
+        
+        if (direction === 'Bullish') return candle.close > candle.open;
+        if (direction === 'Bearish') return candle.close < candle.open;
+        
+        return false;
     }
 
     private checkBreak(candle: OHLCV, priceLevel: number, isUp: boolean, confirmClose: boolean): boolean {

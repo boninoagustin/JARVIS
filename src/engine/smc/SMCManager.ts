@@ -7,6 +7,7 @@ class SMCManager {
 
     // 🆕 Fase 1: listeners de eventos del motor (SMCBridge los usa para alimentar a JARVIS)
     private listeners: Array<(key: string, candle: OHLCV, events: any[]) => void> = [];
+    private forming = new Map<string, OHLCV>();
 
     public addListener(fn: (key: string, candle: OHLCV, events: any[]) => void) {
         this.listeners.push(fn);
@@ -82,26 +83,30 @@ class SMCManager {
 
         // Process each candle
         for (const candle of newCandles) {
-            const events = engine.nextCandle(candle);
+            const prev = this.forming.get(key);
+            if (prev && candle.timestamp > prev.timestamp) {
+                const events = engine.nextCandle(prev); // prev ya cerró
+                
+                // 🆕 Notificar a los listeners (SMCBridge → JARVIS)
+                if (events.length > 0) {
+                    for (const listener of this.listeners) {
+                        try {
+                            listener(key, prev, events);
+                        } catch (err: any) {
+                            console.error('[SMC-MANAGER] Error en listener:', err.message);
+                        }
+                    }
+                }
+
+                // Si se dispararon eventos, retransmitirlos todos
+                for (const event of events) {
+                    broadcastEvent(key, event);
+                }
+            }
+            this.forming.set(key, candle);
             
             // Broadcast live candle (para actualizar el gráfico)
             broadcastCandle(key, candle);
-
-            // 🆕 Notificar a los listeners (SMCBridge → JARVIS)
-            if (events.length > 0) {
-                for (const listener of this.listeners) {
-                    try {
-                        listener(key, candle, events);
-                    } catch (err: any) {
-                        console.error('[SMC-MANAGER] Error en listener:', err.message);
-                    }
-                }
-            }
-
-            // Si se dispararon eventos, retransmitirlos todos
-            for (const event of events) {
-                broadcastEvent(key, event);
-            }
         }
         
         // Retransmitir el estado actualizado si hubo un cierre de vela o un evento importante

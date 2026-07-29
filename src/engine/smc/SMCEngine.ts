@@ -1,5 +1,5 @@
 // src/engine/smc/SMCEngine.ts
-import { OHLCV, SMCState, SMCPreset } from './types.js';
+import { OHLCV, SMCPreset, SMCState, OrderBlock, Imbalance, SMCEvent } from './types.js';
 import { getPreset } from './smc_config.js';
 import { ATRCalculator } from './math/atr.js';
 import { RSICalculator } from './math/rsi.js';
@@ -24,6 +24,7 @@ export class SMCEngine {
     private zscore: ZScoreCalculator;
 
     private pivots: PivotEngine;
+    private rsiPivotEngine: PivotEngine;
     private preset: SMCPreset;
     public period: string;
     
@@ -38,6 +39,7 @@ export class SMCEngine {
     private currentAtrValue: number = 0;
     private lastVwapValue: number = 0;
     private prevVwapValue: number = 0;
+    private lastVwapStatus?: 'OVER' | 'UNDER';
     private lastZScoreUp: number | null = null;
     private lastZScoreDn: number | null = null;
     
@@ -49,6 +51,7 @@ export class SMCEngine {
     private lastPivotHigh33: number = NaN;
     private lastPivotLow33: number = NaN;
     private strBars: number = 5;
+    private periodMs: number; // E3/E10: duración nominal del período en ms (timestamps OHLCV están en ms)
     // 🆕 RSI indexado por timestamp de vela (lookup O(1) para divergencias).
     // Reemplaza al array rsiHistory: elimina la ambigüedad de timestamps duplicados
     // y el find() lineal sobre el buffer.
@@ -62,6 +65,7 @@ export class SMCEngine {
             this.preset = preset;
         }
         this.period = period;
+        this.periodMs = SMCEngine.parsePeriodMinutes(period) * 60000;
 
         this.state = {
             pivotsHigh: [],
@@ -73,19 +77,21 @@ export class SMCEngine {
         };
 
         this.atr = new ATRCalculator(14);
-        this.rsi = new RSICalculator(14);
+        this.rsi = new RSICalculator(this.preset.rsi_len ?? 14);
         this.vwap = new VWAPCalculator();
-        this.zscore = new ZScoreCalculator(20);
+        this.zscore = new ZScoreCalculator(this.preset.z_score_window ?? 20);
 
         this.updateStrBars(period, this.preset);
 
         this.pivots = new PivotEngine(this.strBars, this.strBars);
+        const divLen = this.preset.div_pivot_len || 5;
+        this.rsiPivotEngine = new PivotEngine(divLen, divLen);
         this.pivotEngine33 = new PivotEngine(3, 3);
         this.structure = new MarketStructureEngine();
         this.orderBlocks = new OrderBlockEngine();
         this.imbalances = new ImbalanceEngine();
         this.liquidity = new LiquidityEngine();
-        this.divergence = new DivergenceEngine();
+        this.divergence = new DivergenceEngine(this.periodMs);
     }
 
     /**
@@ -99,23 +105,50 @@ export class SMCEngine {
     public setPreset(presetName: string) {
         this.preset = getPreset(presetName);
         this.updateStrBars(this.period, this.preset);
-        // We might need to re-initialize pivot engine if str_bars changes, but usually preset is set once at startup.
+        // C8: reconstruir todo lo que depende de parámetros del preset.
+        // Se pierde el estado interno (p.ej. el RMA de Wilder del RSI): esperado al cambiar de preset.
         this.pivots = new PivotEngine(this.strBars, this.strBars);
+        this.rsi = new RSICalculator(this.preset.rsi_len ?? 14);
+        this.zscore = new ZScoreCalculator(this.preset.z_score_window ?? 20);
+        const divLen = this.preset.div_pivot_len || 5;
+        this.rsiPivotEngine = new PivotEngine(divLen, divLen);
+    }
+
+    // E10: parser único de período — acepta 'M5','H4','D1','W1' (SMCManager) y '5m','4h','1d'
+    private static parsePeriodMinutes(period: string): number {
+        let m = /^([MHDW])(\d+)$/i.exec(period);          // 'H4', 'D1', 'M15'
+        if (m) {
+            const n = parseInt(m[2], 10);
+            switch (m[1].toUpperCase()) {
+                case 'M': return n;
+                case 'H': return n * 60;
+                case 'D': return n * 1440;
+                case 'W': return n * 10080;
+            }
+        }
+        m = /^(\d+)([mhdw])$/i.exec(period);              // '4h', '1d', '15m'
+        if (m) {
+            const n = parseInt(m[1], 10);
+            switch (m[2].toLowerCase()) {
+                case 'm': return n;
+                case 'h': return n * 60;
+                case 'd': return n * 1440;
+                case 'w': return n * 10080;
+            }
+        }
+        return 60; // default 1h
     }
 
     private updateStrBars(period: string, preset: SMCPreset) {
         // Auto-detect timeframe multiplier
-        let isIntraday = true;
-        let multiplier = 60; // default 1h
-        if (period.endsWith('m')) multiplier = parseInt(period.replace('m', ''));
-        else if (period.endsWith('h')) multiplier = parseInt(period.replace('h', '')) * 60;
-        else if (period.endsWith('d') || period.endsWith('D')) {
-            multiplier = 1440;
-            isIntraday = false;
-        }
+        const multiplier = SMCEngine.parsePeriodMinutes(period);
+        const isIntraday = multiplier < 1440;
 
-        let dynStrBars = 6;
-        if (isIntraday) {
+        let dynStrBars: number;
+        if (preset.pivot_len !== undefined) {
+            // C8: pivot_len del preset sustituye al default por timeframe
+            dynStrBars = preset.pivot_len;
+        } else if (isIntraday) {
             if (multiplier <= 5) dynStrBars = 6;
             else if (multiplier <= 30) dynStrBars = 6;
             else if (multiplier <= 120) dynStrBars = 8;
@@ -146,6 +179,12 @@ export class SMCEngine {
         this.state.atr = this.currentAtrValue;
         this.state.lastBOS = this.structure.lastBOS || undefined;
         this.state.lastCHoCH = this.structure.lastCHoCH || undefined;
+        // B3: exponer niveles de liquidez y estatus VWAP (NaN -> undefined)
+        this.state.dailyHigh = Number.isNaN(this.liquidity.dailyHigh) ? undefined : this.liquidity.dailyHigh;
+        this.state.dailyLow = Number.isNaN(this.liquidity.dailyLow) ? undefined : this.liquidity.dailyLow;
+        this.state.asianHigh = Number.isNaN(this.liquidity.asiaHigh) ? undefined : this.liquidity.asiaHigh;
+        this.state.asianLow = Number.isNaN(this.liquidity.asiaLow) ? undefined : this.liquidity.asiaLow;
+        this.state.vwapStatus = this.lastVwapStatus;
         return this.state;
     }
 
@@ -153,14 +192,14 @@ export class SMCEngine {
      * Punto de entrada principal. Se llama con cada nueva vela (histórica o en vivo).
      * Devuelve una lista de todos los eventos SMC disparados en esta vela.
      */
-    public nextCandle(candle: OHLCV): any[] {
-        const events: any[] = [];
+    public nextCandle(candle: OHLCV): SMCEvent[] {
+        const events: SMCEvent[] = [];
 
         // 🆕 Dedupe: el stream en vivo reenvía la vela en formación con el mismo
         // timestamp varias veces. Reprocesarla corrompe RSI/ATR (Wilder) y puede
         // duplicar pivots/eventos. La actualización visual de la vela viva va por
         // broadcastCandle en SMCManager, no necesita pasar por el motor.
-        if (this.previousCandle && candle.timestamp === this.previousCandle.timestamp) {
+        if (this.previousCandle && candle.timestamp <= this.previousCandle.timestamp) {
             return events;
         }
 
@@ -175,6 +214,28 @@ export class SMCEngine {
                 // Map preserva orden de inserción: borrar el más viejo
                 const oldestKey = this.rsiByTimestamp.keys().next().value!;
                 this.rsiByTimestamp.delete(oldestKey);
+            }
+            // Feed RSI Pivot Engine
+            const rsiPivot = this.rsiPivotEngine.nextCandle({
+                timestamp: candle.timestamp,
+                open: rsiVal, high: rsiVal, low: rsiVal, close: rsiVal, volume: 0
+            });
+            if (rsiPivot) {
+                const divEvent = this.divergence.addRsiPivot(rsiPivot);
+                if (divEvent) {
+                    events.push({
+                        type: 'EVENT_DIVERGENCE',
+                        direction: divEvent.direction,
+                        divergenceType: divEvent.type,
+                        timestamp: candle.timestamp,
+                        pivotTimestamp: divEvent.timestamp
+                    });
+                    this.state.lastDivergence = {
+                        ...divEvent,
+                        timestamp: candle.timestamp,
+                        pivotTimestamp: divEvent.timestamp
+                    };
+                }
             }
         }
         
@@ -198,15 +259,20 @@ export class SMCEngine {
             this.liquidity.registerPivot(newPivot, this.currentAtrValue);
             
             // Evaluar Divergencias
-            const divEvent = this.divergence.processPivot(newPivot, this.rsiByTimestamp);
+            const divEvent = this.divergence.processPricePivot(newPivot);
             if (divEvent) {
                 events.push({
                     type: 'EVENT_DIVERGENCE',
                     direction: divEvent.direction,
                     divergenceType: divEvent.type,
-                    timestamp: divEvent.timestamp
+                    timestamp: candle.timestamp,
+                    pivotTimestamp: divEvent.timestamp
                 });
-                this.state.lastDivergence = divEvent;
+                this.state.lastDivergence = {
+                    ...divEvent,
+                    timestamp: candle.timestamp,
+                    pivotTimestamp: divEvent.timestamp
+                };
             }
         }
 
@@ -215,35 +281,52 @@ export class SMCEngine {
         if (pivot33) {
             if (pivot33.type === 'High') this.lastPivotHigh33 = pivot33.price;
             else this.lastPivotLow33 = pivot33.price;
-            
-            if (!Number.isNaN(this.lastPivotHigh33) && !Number.isNaN(this.lastPivotLow33)) {
-                if (candle.close > this.lastPivotHigh33) this.simpleTrend = 'Bullish';
-                else if (candle.close < this.lastPivotLow33) this.simpleTrend = 'Bearish';
-            }
         }
+        // A5: el close se compara contra los últimos niveles 3/3 en CADA vela,
+        // no solo en las que confirman un pivote
+        if (!Number.isNaN(this.lastPivotHigh33) && candle.close > this.lastPivotHigh33) this.simpleTrend = 'Bullish';
+        else if (!Number.isNaN(this.lastPivotLow33) && candle.close < this.lastPivotLow33) this.simpleTrend = 'Bearish';
 
         // 3. Market Structure Update
-        const structEvents = this.structure.processCandle(candle, this.state.pivotsHigh, this.state.pivotsLow, this.preset);
+        const zScoreForGates = this.lastZScoreUp !== null && this.lastZScoreDn !== null
+            ? { zUp: this.lastZScoreUp, zDn: this.lastZScoreDn }
+            : null;
+        const sweepEscapeDir = this.liquidity.sweepBullActive ? 'Bullish' as const
+            : this.liquidity.sweepBearActive ? 'Bearish' as const
+            : null;
+        const structEvents = this.structure.processCandle(
+            candle, this.state.pivotsHigh, this.state.pivotsLow, this.preset, this.currentAtrValue,
+            { zScore: zScoreForGates, sweepEscapeDir }
+        );
         events.push(...structEvents);
 
         // Reset VWAP en BOS o CHoCH
         if (structEvents.length > 0) {
             this.vwap.reset();
+            // E9: re-anclar con la vela del evento para no publicar un VWAP stale
+            this.lastVwapValue = this.vwap.nextValue(candle);
         }
 
         // 4. Order Blocks & Imbalances Update
         this.orderBlocks.updateHistory(candle);
         
-        const fvgEvents = this.imbalances.processCandle(candle, this.currentAtrValue, this.preset);
-        events.push(...fvgEvents);
+        let fvgEvents: any[] = [];
+        
+        if (this.currentAtrValue > 0) {
+            fvgEvents = this.imbalances.processCandle(candle, this.currentAtrValue, this.preset, this.periodMs);
+            events.push(...fvgEvents);
+        }
 
         const prevHl2 = this.previousCandle ? (this.previousCandle.high + this.previousCandle.low) / 2 : (candle.high + candle.low) / 2;
         const zScoreObj = this.lastZScoreUp !== null && this.lastZScoreDn !== null 
             ? { zUp: this.lastZScoreUp, zDn: this.lastZScoreDn } 
             : null;
             
+        // B3: guardar el estatus calculado esta vela (undefined durante warm-up)
+        this.lastVwapStatus = this.prevVwapValue > 0 ? (prevHl2 > this.prevVwapValue ? 'OVER' : 'UNDER') : undefined;
+
         const obContext = {
-            vwapStatus: this.prevVwapValue > 0 ? (prevHl2 > this.prevVwapValue ? 'OVER' : 'UNDER') : undefined,
+            vwapStatus: this.lastVwapStatus,
             currentTrend: this.structure.currentTrend,
             simpleTrend: this.simpleTrend,
             hasIFVGOverlap: (top: number, bottom: number, isBull: boolean) => this.imbalances.activeFVGs.some(
@@ -265,22 +348,24 @@ export class SMCEngine {
             }
         };
 
-        const obEvents = this.orderBlocks.evaluateZones(candle, this.currentAtrValue, this.preset);
-        events.push(...obEvents);
-        
-        // Generate Structural OBs on BOS or CHoCH
-        for (const ev of structEvents) {
-            if (ev.type === 'EVENT_BOS' || ev.type === 'EVENT_CHOCH') {
-                const newOBs = this.orderBlocks.createStructuralOB(ev, this.currentAtrValue, this.preset, obContext as any);
-                events.push(...newOBs);
+        if (this.currentAtrValue > 0) {
+            const obEvents = this.orderBlocks.evaluateZones(candle, this.currentAtrValue, this.preset, this.preset.max_active_obs ?? 50, this.preset.max_ob_touches ?? 4);
+            events.push(...obEvents);
+            
+            // Generate Structural OBs on BOS or CHoCH
+            for (const ev of structEvents) {
+                if (ev.type === 'EVENT_BOS' || ev.type === 'EVENT_CHOCH') {
+                    const newOBs = this.orderBlocks.createStructuralOB(ev, this.currentAtrValue, this.preset, obContext as any);
+                    events.push(...newOBs.map(ob => ({ type: 'EVENT_OB_CREATED' as const, ob })));
+                }
             }
-        }
 
-        // Generate Legacy OBs for new FVGs
-        for (const ev of fvgEvents) {
-            if (ev.type === 'EVENT_FVG_CREATED') {
-                const newOBs = this.orderBlocks.createLegacyOB(ev.fvg, this.currentAtrValue, this.preset, obContext as any);
-                events.push(...newOBs);
+            // Generate Legacy OBs for new FVGs
+            for (const ev of fvgEvents) {
+                if (ev.type === 'EVENT_FVG_CREATED') {
+                    const newOBs = this.orderBlocks.createLegacyOB(ev.fvg, this.currentAtrValue, this.preset, obContext as any);
+                    events.push(...newOBs.map(ob => ({ type: 'EVENT_OB_CREATED' as const, ob })));
+                }
             }
         }
 
@@ -292,7 +377,7 @@ export class SMCEngine {
         for (const ev of liqEvents) {
             this.state.lastSweep = {
                 direction: ev.direction,
-                type: ev.type,
+                type: ev.sweepType ?? 'CRT',
                 timestamp: ev.timestamp
             };
         }

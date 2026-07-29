@@ -3,9 +3,22 @@ import { PivotEngine } from './pivots.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const H4_MS = 4 * 60 * 60 * 1000;
-const ART_OFFSET_HOURS = -3;
-const ASIA_START_HOUR = 18; // inclusive (18:00 Local/NY)
-const ASIA_END_HOUR = 0;    // exclusive (00:00 Local/NY)
+const ASIA_START_HOUR = 18; // inclusive (18:00 NY)
+const ASIA_END_HOUR = 0;    // exclusive (00:00 NY)
+
+// E7: formatter cacheado para extraer la fecha/hora NY sin reparsear strings
+// (el reparseo con new Date(str) dependía del TZ del servidor y derivaba con DST)
+const NY_FORMATTER = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+});
+
+function getNyParts(timestamp: number): { year: number, month: number, day: number, hour: number, minute: number } {
+    const parts = NY_FORMATTER.formatToParts(timestamp);
+    const get = (type: string) => parseInt(parts.find(p => p.type === type)!.value, 10);
+    return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute') };
+}
 
 export class LiquidityEngine {
     private grabWickPct: number = 0.6;
@@ -49,11 +62,11 @@ export class LiquidityEngine {
     private lastSweptLow: number = NaN;
 
     public get sweepBullActive(): boolean {
-        return (this.barCount - this.lastSweepDirBar.Bullish) <= LiquidityEngine.SWEEP_COOLDOWN_BARS;
+        return (this.barCount - this.lastSweepDirBar.Bullish) < LiquidityEngine.SWEEP_COOLDOWN_BARS;
     }
 
     public get sweepBearActive(): boolean {
-        return (this.barCount - this.lastSweepDirBar.Bearish) <= LiquidityEngine.SWEEP_COOLDOWN_BARS;
+        return (this.barCount - this.lastSweepDirBar.Bearish) < LiquidityEngine.SWEEP_COOLDOWN_BARS;
     }
     
     private prevCandle: OHLCV | null = null;
@@ -87,11 +100,10 @@ export class LiquidityEngine {
         }
 
         // Daily - TradingView aligns forex to NY 17:00
-        const d = new Date(candle.timestamp);
-        const nyTimeStr = d.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
-        const nyDate = new Date(nyTimeStr);
-        nyDate.setHours(nyDate.getHours() + 7);
-        const dayIdx = Math.floor(nyDate.getTime() / DAY_MS);
+        // E7: pseudo-epoch UTC construido desde las partes NY (+7h) — independiente del TZ del host
+        const ny = getNyParts(candle.timestamp);
+        const nyShiftedMs = Date.UTC(ny.year, ny.month - 1, ny.day, ny.hour + 7, ny.minute);
+        const dayIdx = Math.floor(nyShiftedMs / DAY_MS);
 
         if (this.curDayIdx === -1) {
             this.curDayIdx = dayIdx;
@@ -119,7 +131,7 @@ export class LiquidityEngine {
         }
 
         // 4H - aligned to NY daily open (17:00 NY)
-        const inH4 = Math.floor(nyDate.getHours() / 4);
+        const inH4 = Math.floor(new Date(nyShiftedMs).getUTCHours() / 4);
         if (this.cur4HIdx === -1) {
             this.cur4HIdx = inH4;
             this.current4HHigh = candle.high;
@@ -145,9 +157,8 @@ export class LiquidityEngine {
             this.current4HClose = candle.close;
         }
 
-        // Asia
-        const artHour = ((candle.timestamp / 3600000 + ART_OFFSET_HOURS) % 24 + 24) % 24;
-        const inAsia = artHour >= ASIA_START_HOUR || artHour < ASIA_END_HOUR;
+        // Asia: ventana 18:00-00:00 hora NY (getNyParts ya aplica DST correctamente)
+        const inAsia = ny.hour >= ASIA_START_HOUR || ny.hour < ASIA_END_HOUR;
         if (inAsia && !this.wasInAsia) {
             this.currentAsiaHigh = candle.high;
             this.currentAsiaLow = candle.low;
@@ -169,14 +180,15 @@ export class LiquidityEngine {
         candle: OHLCV,
         currentAtr: number,
         preset: any
-    ): Array<SMCEvents['EVENT_SWEEP']> {
+    ): Array<{ type: 'EVENT_SWEEP' } & SMCEvents['EVENT_SWEEP']> {
         const events: any[] = [];
         this.barCount++;
         
-        this.updateLevels(candle);
-        
         const totalRange = candle.high - candle.low;
         if (totalRange === 0) {
+            // 🆕 N3: aunque no se evalúen sweeps con rango 0, la vela debe
+            // alimentar los niveles (Pivots/rollover diario/Asia) igual que las demás
+            this.updateLevels(candle);
             this.prevCandle = candle;
             return events;
         }
@@ -208,33 +220,41 @@ export class LiquidityEngine {
         const sweepSwingL = !Number.isNaN(this.lastSwingLow) && candle.low < this.lastSwingLow && candle.close > this.lastSwingLow;
         const sweepSwingH = !Number.isNaN(this.lastSwingHigh) && candle.high > this.lastSwingHigh && candle.close < this.lastSwingHigh;
 
-        // Resolve highest priority sweep
-        const currentSweepL = sweepDl ? this.dailyLow : sweepM4l ? this.h4Low : sweepAsiaL ? this.asiaLow : sweepSwingL ? this.lastSwingLow : NaN;
-        const currentSweepH = sweepDh ? this.dailyHigh : sweepM4h ? this.h4High : sweepAsiaH ? this.asiaHigh : sweepSwingH ? this.lastSwingHigh : NaN;
+        if (currentAtr > 0) {
+            // Resolve highest priority sweep
+            const currentSweepL = sweepDl ? this.dailyLow : sweepM4l ? this.h4Low : sweepAsiaL ? this.asiaLow : sweepSwingL ? this.lastSwingLow : NaN;
+            const currentSweepH = sweepDh ? this.dailyHigh : sweepM4h ? this.h4High : sweepAsiaH ? this.asiaHigh : sweepSwingH ? this.lastSwingHigh : NaN;
+
+            // 🆕 Fix: usar ?? en lugar de || para permitir configurar 0
+            const minWickPct = preset?.min_sweep_wick_pct ?? 0.5;
+            const EPSILON = 0.0001;
+            // 🆕 Fix: acceso null-safe con ?. en todas las propiedades de preset
+            const crt3CandleModel = preset?.crt_3candle_model ?? false;
+            const crtCloseInside = preset?.crt_close_inside ?? false;
 
         // Bullish Sweep (Sweeping a Low)
         if (!Number.isNaN(currentSweepL) && (Number.isNaN(this.lastSweptLow) || this.lastSweptLow !== currentSweepL)) {
             const isCrtBigEnough = totalRange >= (currentAtr * 0.5);
-            const isGrabBigEnough = totalRange >= (currentAtr * 0.5);
-
-            const isGrab = isGrabBigEnough && bottomWickPct >= this.grabWickPct;
-            const validBullRej = candle.close > candle.open; // CRT Trap needs rejection body
+            const validBullRej = candle.close > candle.open;
             
-            const minWickPct = preset?.min_sweep_wick_pct || 0 || 0.5;
-            const EPSILON = 0.0001;
-            const crt3CandleOk = !preset.crt_3candle_model || (validRangeCandle && (!preset.crt_close_inside || closeInsidePrevBull));
+            const crt3CandleOk = !crt3CandleModel || (validRangeCandle && (!crtCloseInside || closeInsidePrevBull));
             const isFreshSweep = !Number.isNaN(currentSweepL) && currentSweepL !== this.lastSweptLow;
+
+            // 🆕 LIQ_GRAB: mecha dominante (>= grabWickPct) + tamaño suficiente
+            const isGrab = isCrtBigEnough && bottomWickPct >= this.grabWickPct && totalRange >= (currentAtr * this.grabAtrMin);
+
             const isCrtTrap = isFreshSweep && validBullRej && isCrtBigEnough && (bottomWickPct + EPSILON) >= minWickPct && this.sweepCooldownOk('Bullish') && crt3CandleOk;
             
-            if(false) console.error(`[SWEEP ATTEMPT BULL] ${new Date(candle.timestamp).toISOString()} isCrtTrap=${isCrtTrap} (validRej=${validBullRej} bigEnough=${isCrtBigEnough} wickPct=${bottomWickPct.toFixed(2)} cooldownOk=${this.sweepCooldownOk('Bullish')} crt3CandleOk=${crt3CandleOk} validRange=${validRangeCandle} closeInside=${closeInsidePrevBull} sweptLevel=${currentSweepL})`);
-            if (isCrtTrap) {
+            // 🆕 N4: el LIQ_GRAB también respeta el cooldown (pero no el rechazo de cuerpo, que es ajeno a su definición)
+            if (isCrtTrap || (isGrab && this.sweepCooldownOk('Bullish'))) {
                 this.lastSweptLow = currentSweepL;
                 this.lastSweepDirBar.Bullish = this.barCount;
+                const sweepType: 'CRT' | 'LIQ_GRAB' = isGrab ? 'LIQ_GRAB' : 'CRT';
                 events.push({
                     type: 'EVENT_SWEEP',
                     direction: 'Bullish',
                     price: currentSweepL,
-                    sweepType: 'CRT',
+                    sweepType,
                     timestamp: candle.timestamp
                 });
             }
@@ -243,32 +263,31 @@ export class LiquidityEngine {
         // Bearish Sweep (Sweeping a High)
         if (!Number.isNaN(currentSweepH) && (Number.isNaN(this.lastSweptHigh) || this.lastSweptHigh !== currentSweepH)) {
             const isCrtBigEnough = totalRange >= (currentAtr * 0.5);
-            const isGrabBigEnough = totalRange >= (currentAtr * 0.5);
-
-            const isGrab = isGrabBigEnough && topWickPct >= this.grabWickPct;
-            const validBearRej = candle.close < candle.open; // CRT Trap needs rejection body
+            const validBearRej = candle.close < candle.open;
             
-            const minWickPct = preset?.min_sweep_wick_pct || 0 || 0.5;
-            const EPSILON = 0.0001; // Allow for JS float imprecision compared to PineScript
-            const crt3CandleOk = !preset.crt_3candle_model || (validRangeCandle && (!preset.crt_close_inside || closeInsidePrevBear));
+            const crt3CandleOk = !crt3CandleModel || (validRangeCandle && (!crtCloseInside || closeInsidePrevBear));
             const isFreshSweep = !Number.isNaN(currentSweepH) && currentSweepH !== this.lastSweptHigh;
+
+            // 🆕 LIQ_GRAB: mecha dominante (>= grabWickPct) + tamaño suficiente
+            const isGrab = isCrtBigEnough && topWickPct >= this.grabWickPct && totalRange >= (currentAtr * this.grabAtrMin);
+
             const isCrtTrap = isFreshSweep && validBearRej && isCrtBigEnough && (topWickPct + EPSILON) >= minWickPct && this.sweepCooldownOk('Bearish') && crt3CandleOk;
             
-            if(false) console.error(`[SWEEP ATTEMPT BEAR] ${new Date(candle.timestamp).toISOString()} isCrtTrap=${isCrtTrap} (validRej=${validBearRej} bigEnough=${isCrtBigEnough} wickPct=${topWickPct.toFixed(2)} minWickPct=${minWickPct} cooldownOk=${this.sweepCooldownOk('Bearish')} crt3CandleOk=${crt3CandleOk} preset3=${preset.crt_3candle_model} validRange=${validRangeCandle} closeInside=${closeInsidePrevBear} sweptLevel=${currentSweepH})`);
-            
-            if (isCrtTrap) {
+            // 🆕 N4: el LIQ_GRAB también respeta el cooldown (pero no el rechazo de cuerpo, que es ajeno a su definición)
+            if (isCrtTrap || (isGrab && this.sweepCooldownOk('Bearish'))) {
                 this.lastSweptHigh = currentSweepH;
                 this.lastSweepDirBar.Bearish = this.barCount;
-
+                const sweepType: 'CRT' | 'LIQ_GRAB' = isGrab ? 'LIQ_GRAB' : 'CRT';
                 events.push({
                     type: 'EVENT_SWEEP',
                     direction: 'Bearish',
                     price: currentSweepH,
-                    sweepType: 'CRT',
+                    sweepType,
                     timestamp: candle.timestamp
                 });
             }
         }
+        } // Close if (currentAtr > 0)
 
         // Update levels AFTER processing sweeps (PineScript updates ta.pivothigh at the end)
         this.updateLevels(candle);

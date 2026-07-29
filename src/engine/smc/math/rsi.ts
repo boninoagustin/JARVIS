@@ -18,6 +18,11 @@ export class RSICalculator {
     public nextValue(currentClose: number, previousClose?: number): number | null {
         if (previousClose === undefined) return null;
 
+        // E4: ignorar cierres no finitos sin corromper los RMA; devolver el último RSI válido
+        if (!Number.isFinite(currentClose) || !Number.isFinite(previousClose)) {
+            return this.rmaUp !== null && this.rmaDown !== null ? this.calculateRSI() : null;
+        }
+
         const change = currentClose - previousClose;
         const up = Math.max(change, 0);
         const down = -Math.min(change, 0);
@@ -43,7 +48,8 @@ export class RSICalculator {
     }
 
     private calculateRSI(): number {
-        if (this.rmaDown === 0) return 100;
+        // E5: mercado plano (rmaUp y rmaDown en 0) es RSI 50, no overbought
+        if (this.rmaDown === 0) return this.rmaUp === 0 ? 50 : 100;
         if (this.rmaUp === 0) return 0;
         const rs = this.rmaUp! / this.rmaDown!;
         return 100 - (100 / (1 + rs));
