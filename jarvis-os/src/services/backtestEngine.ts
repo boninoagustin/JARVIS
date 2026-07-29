@@ -1302,7 +1302,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const frictionResult = evaluateNetTrade(activeLike, nowMs, customFriction);
   if (!frictionResult.approved) {
     // Si la fricción lo rechaza (ej. spread mayor al 40% del SL, o RR Neto < 0.2)
-    console.log('REJECTED BY FRICTION:', frictionResult.reason);
+    // console.log('REJECTED BY FRICTION:', frictionResult.reason);
     return;
   }
   

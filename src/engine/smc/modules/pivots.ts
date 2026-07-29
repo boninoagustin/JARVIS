@@ -33,12 +33,22 @@ export class PivotEngine {
         let isHigh = true;
         let isLow = true;
 
-        for (let i = 0; i < requiredLength; i++) {
+        const startIndex = pivotCandleIndex - this.leftLen;
+        const endIndex = pivotCandleIndex + this.rightLen;
+
+        for (let i = startIndex; i <= endIndex; i++) {
             if (i === pivotCandleIndex) continue;
             const current = this.history[i];
             
-            if (current.high >= pivotCandle.high) isHigh = false;
-            if (current.low <= pivotCandle.low) isLow = false;
+            if (i < pivotCandleIndex) {
+                // Left bars: current must be < pivot (so pivot is strictly > current)
+                if (current.high >= pivotCandle.high) isHigh = false;
+                if (current.low <= pivotCandle.low) isLow = false;
+            } else {
+                // Right bars: current must be < pivot (so pivot is strictly > current)
+                if (current.high >= pivotCandle.high) isHigh = false;
+                if (current.low <= pivotCandle.low) isLow = false;
+            }
         }
 
         // Mantener el historial acotado a lo estrictamente necesario
@@ -52,7 +62,11 @@ export class PivotEngine {
                 timestamp: pivotCandle.timestamp,
                 price: pivotCandle.high,
                 type: 'High',
-                isBroken: false
+                isBroken: false,
+                bodyMin: Math.min(pivotCandle.open, pivotCandle.close),
+                bodyMax: Math.max(pivotCandle.open, pivotCandle.close),
+                high: pivotCandle.high,
+                low: pivotCandle.low
             };
         }
 
@@ -62,7 +76,11 @@ export class PivotEngine {
                 timestamp: pivotCandle.timestamp,
                 price: pivotCandle.low,
                 type: 'Low',
-                isBroken: false
+                isBroken: false,
+                bodyMin: Math.min(pivotCandle.open, pivotCandle.close),
+                bodyMax: Math.max(pivotCandle.open, pivotCandle.close),
+                high: pivotCandle.high,
+                low: pivotCandle.low
             };
         }
 

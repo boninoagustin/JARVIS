@@ -700,13 +700,13 @@ int cooldown_bars = timeframe.isintraday and timeframe.multiplier <= 5 ? 3 : 8
 bool bear_cooldown = (bar_index - last_crt_bear_bar) > cooldown_bars 
 bool bull_cooldown = (bar_index - last_crt_bull_bar) > cooldown_bars
 
-if is_crt_bear and valid_bear_rej and valid_crt_size and bear_cooldown
+bool bear_absorption = (bear_wick / math.max(total_range, syminfo.mintick) >= 0.5)
+if is_crt_bear and valid_bear_rej and valid_crt_size and bear_cooldown and bear_absorption
     last_crt_bear_bar := bar_index
     if not sweep_bear_active 
         int eval_bias = crt_bias != 0 ? crt_bias : active_trend
         bool is_aligned = is_bias_off ? true : (eval_bias <= 0)
         bool allowed_to_sell = is_aligned or use_scalp
-        bool bear_absorption = is_high_vol and (bear_wick / total_range > 0.5) 
         
         string final_lbl = bear_absorption ? "▼ CRT SELL + 🩸ABSORB" : "▼ CRT SELL"
         if sweep_asia_h
@@ -738,18 +738,20 @@ if is_crt_bear and valid_bear_rej and valid_crt_size and bear_cooldown
             string asia_tag = sweep_asia_h ? " + ASIA_SWEEP" : ""
             string swg_tag = sweep_swing_h ? " + SWING_SWEEP" : ""
             f_ia_alert("EVENTO_SWEEP", syminfo.ticker, "TF: " + timeframe.period + " | Dir: SELL | Nivel Reclamado" + abs_tag + asia_tag + swg_tag)
+            if export_logs and in_log_window
+                log.info("ESTRUCTURA | EVENTO_SWEEP | BEARISH | " + str.tostring(high))
             
     sweep_bear_active := true
     active_bear_sweep_high := high 
     last_swept_h := current_sweep_h 
 
-if is_crt_bull and valid_bull_rej and valid_crt_size and bull_cooldown
+bool bull_absorption = (bull_wick / math.max(total_range, syminfo.mintick) >= 0.5)
+if is_crt_bull and valid_bull_rej and valid_crt_size and bull_cooldown and bull_absorption
     last_crt_bull_bar := bar_index
     if not sweep_bull_active 
         int eval_bias = crt_bias != 0 ? crt_bias : active_trend
         bool is_aligned = is_bias_off ? true : (eval_bias >= 0)
         bool allowed_to_buy = is_aligned or use_scalp
-        bool bull_absorption = is_high_vol and (bull_wick / total_range > 0.5) 
         
         string final_lbl = bull_absorption ? "▲ CRT BUY + 🟢ABSORB" : "▲ CRT BUY"
         if sweep_asia_l
@@ -781,6 +783,8 @@ if is_crt_bull and valid_bull_rej and valid_crt_size and bull_cooldown
             string asia_tag = sweep_asia_l ? " + ASIA_SWEEP" : ""
             string swg_tag = sweep_swing_l ? " + SWING_SWEEP" : ""
             f_ia_alert("EVENTO_SWEEP", syminfo.ticker, "TF: " + timeframe.period + " | Dir: BUY | Nivel Reclamado" + abs_tag + asia_tag + swg_tag)
+            if export_logs and in_log_window
+                log.info("ESTRUCTURA | EVENTO_SWEEP | BULLISH | " + str.tostring(low))
             
     sweep_bull_active := true
     active_bull_sweep_low := low

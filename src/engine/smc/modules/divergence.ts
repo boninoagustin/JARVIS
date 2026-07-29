@@ -4,6 +4,7 @@ export interface DivergenceEvent {
     direction: Direction;
     type: 'Regular' | 'Hidden';
     timestamp: number;
+    price: number;
 }
 
 export class DivergenceEngine {
@@ -52,13 +53,13 @@ export class DivergenceEngine {
             // Regular Bearish Divergence: Price makes Higher High, RSI makes Lower High
             if (current.pivot.price > prev.pivot.price && current.rsi < prev.rsi) {
                 this.recordHigh(current);
-                return { direction: 'Bearish', type: 'Regular', timestamp: current.pivot.timestamp };
+                return { direction: 'Bearish', type: 'Regular', timestamp: current.pivot.timestamp, price: current.pivot.price };
             }
             
             // Hidden Bearish Divergence: Price makes Lower High, RSI makes Higher High
             if (current.pivot.price < prev.pivot.price && current.rsi > prev.rsi) {
                 this.recordHigh(current);
-                return { direction: 'Bearish', type: 'Hidden', timestamp: current.pivot.timestamp };
+                return { direction: 'Bearish', type: 'Hidden', timestamp: current.pivot.timestamp, price: current.pivot.price };
             }
         }
         
@@ -74,13 +75,13 @@ export class DivergenceEngine {
             // Regular Bullish Divergence: Price makes Lower Low, RSI makes Higher Low
             if (current.pivot.price < prev.pivot.price && current.rsi > prev.rsi) {
                 this.recordLow(current);
-                return { direction: 'Bullish', type: 'Regular', timestamp: current.pivot.timestamp };
+                return { direction: 'Bullish', type: 'Regular', timestamp: current.pivot.timestamp, price: current.pivot.price };
             }
             
             // Hidden Bullish Divergence: Price makes Higher Low, RSI makes Lower Low
             if (current.pivot.price > prev.pivot.price && current.rsi < prev.rsi) {
                 this.recordLow(current);
-                return { direction: 'Bullish', type: 'Hidden', timestamp: current.pivot.timestamp };
+                return { direction: 'Bullish', type: 'Hidden', timestamp: current.pivot.timestamp, price: current.pivot.price };
             }
         }
         

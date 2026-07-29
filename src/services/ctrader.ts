@@ -257,6 +257,10 @@ function setupCTraderEvents(client: any) {
                                     }
                                     
                                     if (updated) {
+                                        // 🆕 Hook para SMCBridge: PING de precio nativo hacia JARVIS
+                                        // (el bridge throttlear por ticker; reemplaza al PING de TradingView)
+                                        spotTickListener?.(baseTicker, lastCandle);
+
                                         // Broadcast tick to UI without triggering heavy SMC Engine logic
                                         import('./ws_server.js').then(({ broadcastCandle }) => {
                                             broadcastCandle(key, lastCandle);
@@ -309,6 +313,14 @@ function setupCTraderEvents(client: any) {
 
 // Mapa para asociar "TICKER:PERIOD" -> symbolId de cTrader
 const subscribedSymbols = new Map<string, number>();
+
+// 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
+// Se invoca con (baseTicker, vela actualizada por el tick) desde el handler de SpotEvent.
+type SpotTickListener = (baseTicker: string, candle: OHLCV) => void;
+let spotTickListener: SpotTickListener | null = null;
+export function setSpotTickListener(fn: SpotTickListener | null) {
+    spotTickListener = fn;
+}
 
 /**
  * Suscribe a un activo y temporalidad para recibir Live Trendbars.

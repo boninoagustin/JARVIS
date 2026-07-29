@@ -1,15 +1,44 @@
 import { SMCEngine } from './SMCEngine.js';
 import { OHLCV } from './types.js';
 import { broadcastCandle, broadcastEvent, broadcastState } from '../../services/ws_server.js';
-
+import { loadOptimizedPreset } from './smc_config.js';
 class SMCManager {
     private engines: Map<string, SMCEngine> = new Map();
+
+    // 🆕 Fase 1: listeners de eventos del motor (SMCBridge los usa para alimentar a JARVIS)
+    private listeners: Array<(key: string, candle: OHLCV, events: any[]) => void> = [];
+
+    public addListener(fn: (key: string, candle: OHLCV, events: any[]) => void) {
+        this.listeners.push(fn);
+    }
+
+    public getEngines(): ReadonlyMap<string, SMCEngine> {
+        return this.engines;
+    }
 
     public getEngine(ticker: string, period: string): SMCEngine {
         const key = `${ticker}:${period}`;
         if (!this.engines.has(key)) {
-            // Default preset
-            this.engines.set(key, new SMCEngine('Forex - 3. Balanceado'));
+            // Asignar el preset correcto según la temporalidad indicada por el usuario
+            let basePresetName = 'Forex - 3. Balanceado';
+            if (['H1', 'H4', 'D1', 'W1'].includes(period) || ['60', '240', 'D'].includes(period)) {
+                basePresetName = 'Forex - 5. Ultra Agresivo';
+            }
+            
+            // Load the preset directly, overriding with optimized json if available
+            const preset = loadOptimizedPreset(ticker, period, basePresetName);
+            
+            const engine = new SMCEngine(preset, period);
+            
+            // 🆕 Fase 1: Inyectar sesgo HTF inicial si es un marco menor
+            if (['M5', 'M15', 'M30', 'H1', 'H4'].includes(period)) {
+                const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
+                const targetHTF = period === 'H1' ? 'D1' : period === 'M15' || period === 'M30' ? 'H4' : 'W1';
+                const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
+                engine.setHTFContext(htfTrend, wBias);
+            }
+            
+            this.engines.set(key, engine);
         }
         return this.engines.get(key)!;
     }
@@ -58,6 +87,17 @@ class SMCManager {
             // Broadcast live candle (para actualizar el gráfico)
             broadcastCandle(key, candle);
 
+            // 🆕 Notificar a los listeners (SMCBridge → JARVIS)
+            if (events.length > 0) {
+                for (const listener of this.listeners) {
+                    try {
+                        listener(key, candle, events);
+                    } catch (err: any) {
+                        console.error('[SMC-MANAGER] Error en listener:', err.message);
+                    }
+                }
+            }
+
             // Si se dispararon eventos, retransmitirlos todos
             for (const event of events) {
                 broadcastEvent(key, event);
@@ -67,6 +107,26 @@ class SMCManager {
         // Retransmitir el estado actualizado si hubo un cierre de vela o un evento importante
         const state = engine.getState();
         broadcastState(key, state);
+
+        // 🆕 Fase 1: Propagar el sesgo HTF según el mapeo de temporalidades de Pine
+        const htfMap: Record<string, string[]> = {
+            'W1': ['D1', 'H4', 'H1', 'M30', 'M15', 'M5'], // WBias se propaga a todos
+            'D1': ['H1'], // D1 es HTF para H1
+            'H4': ['M30', 'M15'] // H4 es HTF para M15/M30
+        };
+
+        if (htfMap[period]) {
+            for (const tf of htfMap[period]) {
+                const targetEngine = this.engines.get(`${ticker}:${tf}`);
+                if (targetEngine) {
+                    const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
+                    const targetHTF = tf === 'H1' ? 'D1' : tf === 'M15' || tf === 'M30' ? 'H4' : 'W1';
+                    const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
+                    
+                    targetEngine.setHTFContext(htfTrend, wBias);
+                }
+            }
+        }
     }
 }
 

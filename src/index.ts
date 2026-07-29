@@ -88,6 +88,10 @@ async function main() {
                 console.log(`[CTRADER] 🟢 Pre-conectado al inicio. Modo: ${status.demo ? 'DEMO' : 'LIVE'}`);
                 // Iniciar el escáner SMC de todos los activos y temporalidades en background
                 initializeScanner().catch(err => console.error('[CTRADER] Error en initializeScanner:', err));
+                // 🌉 Fase 1: conectar el motor SMC nativo con JARVIS (reemplaza alertas de TradingView)
+                import('./engine/smc/SMCBridge.js').then(({ initSMCBridge }) =>
+                    initSMCBridge().catch(err => console.error('[SMC-BRIDGE] Error iniciando bridge:', err))
+                ).catch(err => console.error('[SMC-BRIDGE] Error importando bridge:', err));
             } else if (status.configured) {
                 console.warn(`[CTRADER] ⚠️ Configurado pero no se pudo conectar al inicio. Se reintentará en la primera operación.`);
             } else {
@@ -122,7 +126,14 @@ async function main() {
                 if (!db) {
                     try {
                         const { processTradingAlert } = await import('./db/trading.js');
-                        await processTradingAlert(alertText);
+                        const { config } = await import('./config.js');
+                        if (config.SHADOW_MODE_SMC) {
+                            const { shadowComparator } = await import('./engine/smc/ShadowComparator.js');
+                            shadowComparator.recordPineAlert(alertText);
+                            await processTradingAlert(alertText);
+                        } else {
+                            console.log('[SMC CUTOVER] Ignorando alerta de TV:', alertText);
+                        }
                     } catch (e) {
                         console.error(e);
                     }
@@ -147,7 +158,16 @@ async function main() {
 
                 try {
                     const { processTradingAlert } = await import('./db/trading.js');
-                    await processTradingAlert(alertText);
+                    const { config } = await import('./config.js');
+                    
+                    if (config.SHADOW_MODE_SMC) {
+                        const { shadowComparator } = await import('./engine/smc/ShadowComparator.js');
+                        shadowComparator.recordPineAlert(alertText);
+                        await processTradingAlert(alertText);
+                    } else {
+                        console.log('[SMC CUTOVER] Ignorando alerta de TV porque SMC Engine nativo está a cargo:', alertText);
+                    }
+                    
                     await ref.delete();
                 } catch (err: any) {
                     console.error('[LOCAL TRADING ERROR] Error procesando update:', err.message);

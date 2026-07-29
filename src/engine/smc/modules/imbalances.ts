@@ -16,7 +16,7 @@ export class ImbalanceEngine {
         candle: OHLCV, 
         currentAtr: number,
         preset: SMCPreset
-    ): Array<SMCEvents['EVENT_IFVG_CREATED']> {
+    ): Array<any> {
         const events: any[] = [];
         this.history.push(candle);
 
@@ -70,13 +70,14 @@ export class ImbalanceEngine {
             const c1 = this.history[this.history.length - 2]; // Vela del medio (desplazamiento)
             const c2 = this.history[this.history.length - 3]; // Vela anterior
 
-            const minGapSize = currentAtr * this.fvgAtrMultiplier;
+            const fvgAtrMult = preset.fvg_min_atr_factor !== undefined ? preset.fvg_min_atr_factor : 0.5;
+            const minGapSize = currentAtr * fvgAtrMult;
 
             // Detección FVG Alcista
             if (c0.low > c2.high) {
                 const gapSize = c0.low - c2.high;
                 if (gapSize >= minGapSize && (preset.require_displacement ? c1.close > c1.open : true)) {
-                    this.activeFVGs.push({
+                    const fvg: Imbalance = {
                         id: `FVG-BULL-${c1.timestamp}`,
                         timestamp: c1.timestamp,
                         direction: 'Bullish',
@@ -84,7 +85,9 @@ export class ImbalanceEngine {
                         bottom: c2.high,
                         mitigated: false,
                         is_ifvg: false
-                    });
+                    };
+                    this.activeFVGs.push(fvg);
+                    events.push({ type: 'EVENT_FVG_CREATED', fvg });
                 }
             }
 
@@ -92,7 +95,7 @@ export class ImbalanceEngine {
             if (c0.high < c2.low) {
                 const gapSize = c2.low - c0.high;
                 if (gapSize >= minGapSize && (preset.require_displacement ? c1.close < c1.open : true)) {
-                    this.activeFVGs.push({
+                    const fvg: Imbalance = {
                         id: `FVG-BEAR-${c1.timestamp}`,
                         timestamp: c1.timestamp,
                         direction: 'Bearish',
@@ -100,7 +103,9 @@ export class ImbalanceEngine {
                         bottom: c0.high,
                         mitigated: false,
                         is_ifvg: false
-                    });
+                    };
+                    this.activeFVGs.push(fvg);
+                    events.push({ type: 'EVENT_FVG_CREATED', fvg });
                 }
             }
         }
