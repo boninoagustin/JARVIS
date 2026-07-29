@@ -1,4 +1,4 @@
-import { OHLCV, OrderBlock, SMCPreset, SMCEvents } from '../types.js';
+import { OHLCV, OrderBlock, SMCPreset } from '../types.js';
 
 export interface OBContext {
     vwapStatus?: 'OVER' | 'UNDER';
@@ -306,30 +306,30 @@ export class OrderBlockEngine {
         return 'Plata';
     }
 
-    private calculateScore(obCandle: any, dispCandle: any, swp: boolean, isBull: boolean, avgVol: number, context?: OBContext): number {
+    private calculateScore(obCandle: any, _dispCandle: any, swp: boolean, isBull: boolean, avgVol: number, context?: OBContext): number {
         let score = (context?.isLegacy || context?.isChoch) ? 0 : 2; 
         
-        let d_swp=0, d_fvg=0, d_vol=0, d_vwap=0, d_htf=0, d_ifvg=0;
-
-        if (swp) { score += 2; d_swp=2; }
-        if (context?.hasFvgNear) { score += 1; d_fvg=1; }
-        if (obCandle.volume > avgVol * 1.5) { score += 1; d_vol=1; }
+        if (swp) { score += 2; }
+        if (context?.hasFvgNear) { score += 1; }
+        if (obCandle.volume > avgVol * 1.5) { score += 1; }
         
         if (context?.vwapStatus) {
             if ((isBull && context.vwapStatus === 'UNDER') || (!isBull && context.vwapStatus === 'OVER')) {
-                score += 1; d_vwap=1;
+                score += 1;
             }
         }
 
-        if (context?.htfAligned) {
-            if (context.htfAligned(isBull)) { score += 2; d_htf=2; }
+        if (context?.htfTrend) {
+            // Se debe verificar cómo se evalúa htfAligned, o usar htfTrend directamente
+            if (isBull && context.htfTrend === 'Bullish') { score += 2; }
+            else if (!isBull && context.htfTrend === 'Bearish') { score += 2; }
         }
 
         if (context?.hasIFVGOverlap) {
             const obTop = isBull ? obCandle.high : Math.max(obCandle.open, obCandle.close);
             const obBtm = isBull ? Math.min(obCandle.open, obCandle.close) : obCandle.low;
             if (context.hasIFVGOverlap(obTop, obBtm, isBull)) {
-                score += 2; d_ifvg=2;
+                score += 2;
             }
         }
 

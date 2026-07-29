@@ -2,7 +2,6 @@ import { OHLCV, Pivot, SMCEvents } from '../types.js';
 import { PivotEngine } from './pivots.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const H4_MS = 4 * 60 * 60 * 1000;
 const ASIA_START_HOUR = 18; // inclusive (18:00 NY)
 const ASIA_END_HOUR = 0;    // exclusive (00:00 NY)
 
@@ -87,7 +86,7 @@ export class LiquidityEngine {
         return (this.barCount - this.lastSweepDirBar[direction]) >= LiquidityEngine.SWEEP_COOLDOWN_BARS;
     }
 
-    public registerPivot(pivot: Pivot, currentAtr: number) {
+    public registerPivot(_pivot: Pivot, _currentAtr: number) {
         // Deprecated: Swings are now tracked internally via ta.pivothigh(5,5) logic
     }
 

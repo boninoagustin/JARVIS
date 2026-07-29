@@ -2,9 +2,6 @@
 import { OHLCV, Pivot, Direction, SMCPreset, SMCEvents } from '../types.js';
 
 const HISTORY_CAP = 150;
-// 🆕 Fase 2.1: lookback máximo para buscar el origin del impulso (como el Pine: min(max(1, bars_since_pivot), 100))
-const ORIGIN_LOOKBACK = 100;
-
 export class MarketStructureEngine {
     public currentTrend: Direction | 'Neutral' = 'Neutral';
     public lastBOS: Pivot | null = null;
@@ -272,11 +269,13 @@ export class MarketStructureEngine {
         }
     }
 
-    private getActiveSweepEscapeDir(candle: OHLCV, preset: SMCPreset): Direction | null {
+    /*
+    private getActiveSweepEscapeDir(_candle: OHLCV, _preset: SMCPreset): Direction | null {
         // En una implementación real, esto leería del módulo de liquidez
         // Por ahora lo simplificamos a null ya que se maneja a nivel superior
         return null;
     }
+    */
 
     private isDisplacement(candle: OHLCV, atr: number, direction: 'Bullish' | 'Bearish'): boolean {
         const bodySize = Math.abs(candle.close - candle.open);

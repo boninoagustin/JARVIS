@@ -1,13 +1,9 @@
 // src/engine/smc/modules/imbalances.ts
-import { OHLCV, Imbalance, SMCPreset, SMCEvents } from '../types.js';
+import { OHLCV, Imbalance, SMCPreset } from '../types.js';
 
 export class ImbalanceEngine {
     private history: OHLCV[] = [];
     public activeFVGs: Imbalance[] = [];
-    
-    // Configuración
-    private fvgAtrMultiplier: number = 0.5; // Tamaño mínimo del FVG basado en ATR
-
     /**
      * Procesa la vela entrante para detectar nuevos FVGs, 
      * mitigar los existentes o convertirlos en iFVG (God Zones).

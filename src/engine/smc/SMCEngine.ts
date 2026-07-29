@@ -1,5 +1,5 @@
 // src/engine/smc/SMCEngine.ts
-import { OHLCV, SMCPreset, SMCState, OrderBlock, Imbalance, SMCEvent } from './types.js';
+import { OHLCV, SMCPreset, SMCState, SMCEvent } from './types.js';
 import { getPreset } from './smc_config.js';
 import { ATRCalculator } from './math/atr.js';
 import { RSICalculator } from './math/rsi.js';
@@ -43,7 +43,6 @@ export class SMCEngine {
     private lastZScoreUp: number | null = null;
     private lastZScoreDn: number | null = null;
     
-    private currentTrend: 'Bullish' | 'Bearish' | 'Neutral' = 'Neutral';
     private simpleTrend: 'Bullish' | 'Bearish' | 'Neutral' = 'Neutral';
     public weeklyBias: string = 'Neutral';
     private htfTrend: 'Bullish' | 'Bearish' | 'Neutral' = 'Neutral';
