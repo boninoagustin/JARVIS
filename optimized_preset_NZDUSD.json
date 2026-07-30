@@ -1,36 +1,36 @@
 {
     "M15": {
         "pivot_len": 13,
-        "wick_pct": 0.3,
-        "div_len": 2,
-        "z_window": 20
+        "wick_pct": 0.7,
+        "div_len": 5,
+        "z_window": 14
     },
     "H1": {
-        "pivot_len": 8,
-        "wick_pct": 0.3,
-        "div_len": 2,
-        "z_window": 20
+        "pivot_len": 21,
+        "wick_pct": 0.1,
+        "div_len": 3,
+        "z_window": 14
     },
     "H4": {
-        "pivot_len": 8,
-        "wick_pct": 0.3,
+        "pivot_len": 13,
+        "wick_pct": 0.1,
         "div_len": 2,
-        "z_window": 20
+        "z_window": 14
     },
     "D1": {
-        "pivot_len": 13,
-        "wick_pct": 0.3,
+        "pivot_len": 3,
+        "wick_pct": 0.1,
         "div_len": 2,
-        "z_window": 20
+        "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 10,
-        "fixedRR": 4,
-        "minRR": 1
+        "slBufferPercent": 0,
+        "fixedRR": 5,
+        "minRR": 2
     },
     "Metrics": {
-        "PnL_R": "4.69",
-        "Trades": 110,
-        "WinRate": "60.00%"
+        "PnL_R": "6.19",
+        "Trades": 121,
+        "WinRate": "63.64%"
     }
 }
