@@ -3,7 +3,7 @@ import { takeTradingViewScreenshot } from './screenshot.js';
 
 const POLL_INTERVAL_MS = 5000;
 const VERCEL_SEND_URL = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}/api/send-screenshot`
+    ? `https://${process.env.VERCEL_URL}/api/proxy?method=sendPhoto`
     : null;
 
 let workerInterval: NodeJS.Timeout | null = null;
@@ -37,27 +37,37 @@ async function processPendingRequest(): Promise<void> {
         return;
     }
 
-    // Enviar directo a Vercel como base64 (sin pasar por Firebase Storage)
-    const imageBase64 = screenshotBuffer.toString('base64');
-    console.log(`[SCREENSHOT WORKER] Imagen capturada (${screenshotBuffer.length} bytes). Enviando a Vercel...`);
+    // Enviar directo a Telegram a través del proxy de Vercel
+    const form = new FormData();
+    form.append('chat_id', process.env.TELEGRAM_ALLOWED_USER_IDS?.split(',')[0]?.trim() || '');
+    
+    const imageBlob = new Blob([new Uint8Array(screenshotBuffer)], { type: 'image/jpeg' });
+    form.append('photo', imageBlob, `${data.ticker}_screenshot.jpg`);
+
+    if (data.message) {
+        form.append('caption', data.message);
+        form.append('parse_mode', 'Markdown');
+    }
+
+    console.log(`[SCREENSHOT WORKER] Imagen capturada (${screenshotBuffer.length} bytes). Enviando vía Proxy...`);
 
     const response = await fetch(VERCEL_SEND_URL!, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            requestId,
-            imageBase64,
-            ticker: data.ticker,
-            message: data.message
-        })
+        body: form
     });
 
     if (response.ok) {
-        console.log(`[SCREENSHOT WORKER] Vercel procesó OK para ${requestId}`);
-        await doc.ref.update({ status: 'sent', sent_at: Date.now() });
+        const tgResult = await response.json() as any;
+        if (tgResult.ok) {
+            console.log(`[SCREENSHOT WORKER] Proxy procesó OK para ${requestId}`);
+            await doc.ref.update({ status: 'sent', sent_at: Date.now() });
+        } else {
+            console.error(`[SCREENSHOT WORKER] Telegram devolvió error:`, tgResult);
+            await doc.ref.update({ status: 'telegram_error', error: JSON.stringify(tgResult) });
+        }
     } else {
         const errText = await response.text();
-        console.error(`[SCREENSHOT WORKER] Vercel respondió ${response.status}: ${errText}`);
+        console.error(`[SCREENSHOT WORKER] Proxy respondió ${response.status}: ${errText}`);
         await doc.ref.update({ status: 'vercel_error', error: errText });
     }
 }

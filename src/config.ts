@@ -28,6 +28,11 @@ export const config = {
   CTRADER_DEMO: (process.env.CTRADER_DEMO || 'true').toLowerCase() === 'true',
   CTRADER_RISK_PERCENT: parseFloat(process.env.CTRADER_RISK_PERCENT || '1'),
   CTRADER_MAX_POSITIONS: parseInt(process.env.CTRADER_MAX_POSITIONS || '3', 10),
+  // 🛡️ Market-Range: orden de mercado con cap de slippage nativo de cTrader.
+  // Si falla por rechazo (no por timeout), cae al MARKET clásico.
+  CTRADER_MARKET_RANGE: (process.env.CTRADER_MARKET_RANGE || 'true').toLowerCase() === 'true',
+  // Techo del cap de slippage en pips (el cap efectivo es max(2×spread estructural, 0.2 pip), acotado por este valor)
+  CTRADER_MAX_SLIPPAGE_PIPS: parseFloat(process.env.CTRADER_MAX_SLIPPAGE_PIPS || '1'),
 };
 
 // Security Validations

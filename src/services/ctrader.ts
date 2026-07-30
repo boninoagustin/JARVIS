@@ -16,6 +16,7 @@ import { config } from '../config.js';
 import { TrendbarPeriod } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
+import { tickFlow } from '../engine/TickFlow.js';
 
 // ─── Types ───
 
@@ -230,6 +231,13 @@ function setupCTraderEvents(client: any) {
                 // 1. Process real-time ticks (msg.bid) for visual chart animation
                 if (msg.bid) {
                     const currentPrice = msg.bid / divider;
+                    const askPrice = msg.ask ? msg.ask / divider : NaN;
+
+                    // 🌊 TickFlow: micro-estructura (velocidad, spread, sweeps) — 1 vez por tick
+                    const flowTicker = symbolToTicker.get(symbolId);
+                    if (flowTicker) {
+                        try { tickFlow.onTick(flowTicker, Date.now(), currentPrice, askPrice); } catch { /* nunca romper el feed */ }
+                    }
                     
                     // Buscar si tenemos el activo en buffer para actualizar visualmente
                     for (const [key, subSymbolId] of subscribedSymbols.entries()) {
@@ -313,6 +321,8 @@ function setupCTraderEvents(client: any) {
 
 // Mapa para asociar "TICKER:PERIOD" -> symbolId de cTrader
 const subscribedSymbols = new Map<string, number>();
+// Mapa inverso symbolId -> baseTicker (para tickFlow: 1 llamada por tick, no por TF)
+const symbolToTicker = new Map<number, string>();
 
 // 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
 // Se invoca con (baseTicker, vela actualizada por el tick) desde el handler de SpotEvent.
@@ -342,6 +352,7 @@ export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarP
         
         // Guardamos la relación para cuando llegue el SpotEvent
         subscribedSymbols.set(key, symbolId);
+        symbolToTicker.set(symbolId, ticker);
         
         // Suscribirse vía la API de bajo nivel
         // REQUIRES subscribing to Spots first!
@@ -655,44 +666,113 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 
         console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
 
-        // Execute order
-        let position: any;
-        if (direction === 'BUY') {
-            position = await ctClient.buy(ctraderSymbol, { lots });
-        } else {
-            position = await ctClient.sell(ctraderSymbol, { lots });
-        }
+        // ─── Ejecución con cap de slippage + telemetría (arrival vs fill) ───
+        const digits = info?.digits ?? 5;
+        const roundTo = (val: number, d: number) => Number(val.toFixed(d));
+        // pipSize derivado de digits: 5d→0.0001, 4d→0.0001, 3d→0.01, 2d→0.01, 1d→1 punto
+        const pipSize = digits % 2 === 1 ? 10 * Math.pow(10, -digits) : Math.pow(10, -digits);
 
-        const rawPositionId = position?.positionId ?? position?.id;
-        if (rawPositionId === undefined || rawPositionId === null) {
-            throw new Error('Orden ejecutada pero sin positionId en la respuesta.');
-        }
-        const positionId = String(rawPositionId);
-        const executedPrice = position?.entryPrice || position?.price || currentPrice;
+        const arrivalPrice = currentPrice; // precio al decidir (proxy de arrival)
+        const t0 = Date.now();
+        const tp = tp2Price || tp1Price;
+        const formattedSl = roundTo(slPrice, digits);
+        const formattedTp = tp ? roundTo(tp, digits) : undefined;
 
-        // SL/TP ABSOLUTOS sobre la posición ya abierta
-        try {
-            const digits = info?.digits ?? 5;
-            const roundTo = (val: number, d: number) => Number(val.toFixed(d));
-            
-            const formattedSl = roundTo(slPrice, digits);
-            const tp = tp2Price || tp1Price;
-            const formattedTp = tp ? roundTo(tp, digits) : undefined;
+        let positionId = '';
+        let executedPrice = arrivalPrice;
+        let orderType: 'MARKET_RANGE' | 'MARKET' = 'MARKET';
+        let sltpAttached = false;
 
-            await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
-                stopLoss: formattedSl,
-                ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {})
-            });
-        } catch (amendErr: any) {
-            console.error(`[CTRADER] 🚨 Error al establecer SL/TP en posID ${positionId}:`, amendErr.message);
-            console.error(`[CTRADER] 🔴 Cerrando posición de emergencia para evitar riesgo no acotado...`);
+        // 🛡️ MARKET_RANGE: mercado con cap de slippage nativo de cTrader + SL/TP atómico.
+        // Cap adaptativo: max(2 × spread estructural, 0.2 pip), techo CTRADER_MAX_SLIPPAGE_PIPS.
+        if (config.CTRADER_MARKET_RANGE && info?.symbolId) {
             try {
-                await ctClient.close(Number(positionId));
-                console.log(`[CTRADER] ✅ Posición ${positionId} cerrada de emergencia exitosamente.`);
-            } catch (closeErr: any) {
-                console.error(`[CTRADER] ❌ FATAL: No se pudo cerrar la posición ${positionId} de emergencia!`, closeErr.message);
+                const structuralSpread = tickFlow.getStructuralSpread(ticker) ?? tickFlow.getSpread(ticker) ?? 0;
+                let capDist = Math.max(2 * structuralSpread, 0.2 * pipSize);
+                capDist = Math.min(capDist, config.CTRADER_MAX_SLIPPAGE_PIPS * pipSize);
+                const slippageInPoints = Math.max(1, Math.round(capDist * Math.pow(10, digits)));
+
+                const ev: any = await (ctClient as any).raw.trading.marketRangeOrder({
+                    symbolId: info.symbolId,
+                    tradeSide: direction === 'BUY' ? 1 : 2, // TradeSide.BUY=1, SELL=2
+                    volume: correctVolumeCents, // unidades de protocolo (1 lote = 100.000)
+                    baseSlippagePrice: arrivalPrice,
+                    slippageInPoints,
+                    stopLoss: formattedSl,
+                    ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
+                    label: params.tradeId,
+                });
+
+                if (ev?.errorCode) {
+                    // Rechazo limpio del servidor → NO se llenó nada, es seguro el fallback
+                    throw Object.assign(new Error(`MARKET_RANGE rechazada (${ev.errorCode})`), { rejected: true });
+                }
+                const rawPid = ev?.position?.positionId ?? ev?.order?.positionId;
+                if (rawPid === undefined || rawPid === null) {
+                    throw new Error('MARKET_RANGE ejecutada sin positionId en el ExecutionEvent.');
+                }
+                positionId = String(rawPid);
+                executedPrice = Number(ev?.deal?.executionPrice ?? ev?.position?.price ?? arrivalPrice) || arrivalPrice;
+                orderType = 'MARKET_RANGE';
+                sltpAttached = true;
+            } catch (mrErr: any) {
+                if (!mrErr.rejected) {
+                    // Timeout/ambigüedad: la orden PUDO haberse llenado. No reintentar → posible doble fill.
+                    throw mrErr;
+                }
+                console.warn(`[CTRADER] ⚠️ ${mrErr.message}. Fallback a MARKET clásico (sin cap de slippage).`);
             }
-            throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
+        }
+
+        if (orderType === 'MARKET') {
+            const position: any = direction === 'BUY'
+                ? await ctClient.buy(ctraderSymbol, { lots })
+                : await ctClient.sell(ctraderSymbol, { lots });
+
+            const rawPositionId = position?.positionId ?? position?.id;
+            if (rawPositionId === undefined || rawPositionId === null) {
+                throw new Error('Orden ejecutada pero sin positionId en la respuesta.');
+            }
+            positionId = String(rawPositionId);
+            executedPrice = position?.entryPrice || position?.price || currentPrice;
+        }
+
+        // SL/TP ABSOLUTOS sobre la posición ya abierta (skip si MARKET_RANGE ya los adjuntó)
+        if (!sltpAttached) {
+            try {
+                await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
+                    stopLoss: formattedSl,
+                    ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {})
+                });
+            } catch (amendErr: any) {
+                console.error(`[CTRADER] 🚨 Error al establecer SL/TP en posID ${positionId}:`, amendErr.message);
+                console.error(`[CTRADER] 🔴 Cerrando posición de emergencia para evitar riesgo no acotado...`);
+                try {
+                    await ctClient.close(Number(positionId));
+                    console.log(`[CTRADER] ✅ Posición ${positionId} cerrada de emergencia exitosamente.`);
+                } catch (closeErr: any) {
+                    console.error(`[CTRADER] ❌ FATAL: No se pudo cerrar la posición ${positionId} de emergencia!`, closeErr.message);
+                }
+                throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
+            }
+        }
+
+        // 📈 Telemetría de ejecución: slippage (arrival vs fill) y latencia decisión→ack
+        const ackLatencyMs = Date.now() - t0;
+        const signedSlippage = direction === 'BUY' ? executedPrice - arrivalPrice : arrivalPrice - executedPrice;
+        const slippagePips = signedSlippage / pipSize;
+        console.log(`[EXEC] ${orderType} ${direction} ${ticker} | arrival=${arrivalPrice} fill=${executedPrice} | slip=${slippagePips.toFixed(2)} pips | ack=${ackLatencyMs}ms | posID=${positionId}`);
+        if (db) {
+            db.collection('execution_metrics').add({
+                ticker, direction, orderType,
+                arrivalPrice, executedPrice,
+                slippagePips: Number(slippagePips.toFixed(3)),
+                ackLatencyMs,
+                lots,
+                tradeId: params.tradeId,
+                demo: config.CTRADER_DEMO,
+                timestamp: Date.now(),
+            }).catch(() => {});
         }
 
         console.log(`[CTRADER] ✅ Orden ejecutada: ${direction} ${ticker} | ${lots} lotes @ ${executedPrice} | posID: ${positionId}`);

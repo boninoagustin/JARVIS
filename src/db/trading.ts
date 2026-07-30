@@ -19,11 +19,73 @@ import {
 
 import { evaluateNetTrade } from '../engine/FrictionModel.js';
 
+import { tickFlow } from '../engine/TickFlow.js';
+
 import { 
     evaluateGlobalRisk, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
 } from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
+
+
+// 🔄 v7.0: Firestore Write Buffers (Debouncing & Batching)
+const dirtyStates = new Map<string, RadarState>();
+let stateFlushTimeout: NodeJS.Timeout | null = null;
+
+function scheduleStateSave(ticker: string, state: RadarState) {
+    // Shallow clone to capture state at the moment or just keep ref (since JS objects are by ref, state will be the latest)
+    dirtyStates.set(ticker, { ...state }); 
+    if (!stateFlushTimeout) {
+        stateFlushTimeout = setTimeout(() => {
+            stateFlushTimeout = null;
+            if (dirtyStates.size === 0) return;
+            if (!db) return;
+            const batch = db.batch();
+            let count = 0;
+            const toSave = new Map(dirtyStates);
+            dirtyStates.clear();
+            
+            for (const [t, s] of toSave.entries()) {
+                const ref = db.collection('radar_states').doc(t);
+                batch.set(ref, s, { merge: true });
+                count++;
+            }
+            if (count > 0) {
+                batch.commit().catch((e: any) => console.error('[FIREBASE] Error in state batch commit:', e.message));
+            }
+        }, 1000);
+    }
+}
+
+let rawSignalsBuffer: any[] = [];
+let signalFlushTimeout: NodeJS.Timeout | null = null;
+
+function scheduleRawSignalSave(data: any) {
+    rawSignalsBuffer.push(data);
+    if (!signalFlushTimeout) {
+        signalFlushTimeout = setTimeout(() => {
+            signalFlushTimeout = null;
+            if (rawSignalsBuffer.length === 0) return;
+            if (!db) return;
+            
+            // Limit to 490 per batch to avoid Firestore limits
+            const chunks = [];
+            while (rawSignalsBuffer.length > 0) {
+                chunks.push(rawSignalsBuffer.splice(0, 490));
+            }
+            
+            for (const chunk of chunks) {
+                const batch = db.batch();
+                for (const sig of chunk) {
+                    const ref = db.collection('raw_signals').doc();
+                    batch.set(ref, sig);
+                }
+                batch.commit().catch((e: any) => console.error('[FIREBASE] Error in signals batch commit:', e.message));
+            }
+        }, 2000);
+    }
+}
+
 export const getActiveTradeCount = () => globalState.activeTrades.size;
 export const getLastPingTime = () => globalState.lastPingTime;
 
@@ -414,6 +476,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
     const ticker = parts[1].replace(/"/g, '');
     const upperText = alertText.toUpperCase();
 
+    // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
+    // Al moverlo aquí arriba prevenimos el TOCTOU de ordenamiento en el backtester 
+    // causado por el yield del event loop en el `await import`.
+    const previousLock = store.tickerLocks.get(ticker) || Promise.resolve();
+    let releaseLock: (() => void) | undefined;
+    const newLock = new Promise<void>(resolve => { releaseLock = resolve; });
+    store.tickerLocks.set(ticker, newLock);
+    
+    // 🧹 Limpieza: borrar el lock del mapa si no ha sido sobrescrito
+    newLock.finally(() => {
+        if (store.tickerLocks.get(ticker) === newLock) {
+            store.tickerLocks.delete(ticker);
+        }
+    });
+    
+    await previousLock; // Esperar procesamiento anterior de este ticker
+
     // 🕒 El Bypass Temporal (Bar Replay Histórico)
     const tsMatch = alertText.match(/TS:\s*([0-9]+)/i);
     const nowMs = tsMatch ? parseInt(tsMatch[1], 10) : Date.now();
@@ -452,11 +531,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
     // 🧠 FASE 1 - MACHINE LEARNING: Guardar la señal cruda para la Fase 2 (Auto-Tune)
     if (!isBacktest) { // Solo guardamos las señales reales en vivo
-        db.collection('raw_signals').add({
+        scheduleRawSignalSave({
             timestamp: nowMs,
             alertText,
             createdAt: new Date(nowMs).toISOString()
-        }).catch(() => {});
+        });
     }
 
     // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
@@ -472,26 +551,6 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         return;
     }
 
-    // 🛡️ v5.4: Lock por ticker — evita race conditions que causan alertas duplicadas
-    // Dos PINGs del mismo ticker se procesan secuencialmente, no en paralelo
-    const previousLock = store.tickerLocks.get(ticker) || Promise.resolve();
-    let releaseLock: () => void;
-    const newLock = new Promise<void>(resolve => { releaseLock = resolve; });
-    store.tickerLocks.set(ticker, newLock);
-    
-    // 🧹 Limpieza: borrar el lock del mapa si no ha sido sobrescrito por uno más nuevo
-    newLock.finally(() => {
-        if (store.tickerLocks.get(ticker) === newLock) {
-            store.tickerLocks.delete(ticker);
-        }
-    });
-    
-    try {
-        await previousLock; // Esperar que termine el procesamiento anterior de este ticker
-    } catch (e: any) {
-        // Error en el lock secuencial (raro, pero manejado)
-        console.error(`[RADAR] Error en lock para ${ticker}:`, e.message);
-    }
 
     // 🔧 v5.5: SOLO tickers reales (no prefijos de eventos como HEARTBEAT, EVENTO_CHOCH...)
     // Los prefijos de eventos llegan porque TradingView usa el prefijo como "ticker" en algunas alertas.
@@ -615,7 +674,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
             // 🛡️ CRÍTICO: Verificar killswitches ANTES de evaluateImpulse() para evitar trades huérfanos
             const config = getConfigForTicker(ticker, nowMs);
-            const isKillswitched = nowMs < store.streakKillswitchUntil || nowMs < store.vixKillswitchUntil || !config.sessionEnabled;
+            // 🌊 TickFlow: spread anómalo (noticia/iliquidez) bloquea evaluación de entradas
+            const spreadAnomalous = tickFlow.isSpreadAnomalous(ticker);
+            const isKillswitched = spreadAnomalous || nowMs < store.streakKillswitchUntil || nowMs < store.vixKillswitchUntil || !config.sessionEnabled;
             
             // ⚙️ Gestión de trades configurada por activo (asset_configs en Firestore).
             // Defaults = comportamiento histórico (parcial 50%, SL al 50% del riesgo, TP1.5 y trail ATR activos).
@@ -1291,7 +1352,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             }
             else if (prefix === 'EVENTO_SMC_DIV') {
                 if (!activeScore.events.includes(`DIV_${readableTf}`)) {
-                    const dynamicScoreMatch = alertText.match(/(?:Score:|S:)\s*([0-9]+)/i);
+                    const dynamicScoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
                     addedPoints = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1]) : 4;
                     activeScore.events.push(`DIV_${readableTf}`); 
                 }
@@ -1300,6 +1361,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 const eventName = `🩸_LIQ_GRAB_${readableTf}`;
                 if (!activeScore.events.includes(eventName)) {
                     addedPoints = 4 * (TF_WEIGHT[eventTf] || 1); // Falsa ruptura base score
+
+                    // 🌊 TickFlow: clasificar el barrido con micro-estructura de ticks
+                    // (institucional = ruptura veloz + absorción + reclaim rápido)
+                    const nivelMatch = alertText.match(/Nivel:\s*([0-9.,]+)/i);
+                    if (nivelMatch && currentDirection) {
+                        try {
+                            const sweepLevel = parseTVPrice(nivelMatch[1]);
+                            const analysis = tickFlow.analyzeSweep(ticker, sweepLevel, currentDirection, nowMs);
+                            console.log(`[TICKFLOW] ${ticker} sweep @${sweepLevel} → ${analysis.classification} (${analysis.reason})`);
+                            if (analysis.classification === 'INSTITUTIONAL') {
+                                addedPoints = 5 * (TF_WEIGHT[eventTf] || 1);
+                            } else if (analysis.classification === 'RETAIL') {
+                                addedPoints = Math.max(1, addedPoints - (TF_WEIGHT[eventTf] || 1)); // penalizar sweep débil
+                            }
+                        } catch { /* nunca bloquear scoring por analítica de ticks */ }
+                    }
+
                     activeScore.events.push(eventName);
                 }
             }
@@ -1338,6 +1416,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             // FIX: Handler ZONE_TOUCHED duplicado eliminado (ya se procesa en línea 1437)
 
             if (addedPoints > 0) {
+                // 🛡️ Clamp de seguridad: ningún evento individual puede sumar más de MAX_EVENT_POINTS.
+                // Mata toda la clase de bugs de parsing (timestamps, regex) en el punto de suma.
+                const MAX_EVENT_POINTS = 50;
+                if (addedPoints > MAX_EVENT_POINTS) {
+                    console.error(`[RADAR] 🚨 addedPoints anómalo (${addedPoints}) en "${alertText.substring(0, 80)}" → clamp a ${MAX_EVENT_POINTS}`);
+                    addedPoints = MAX_EVENT_POINTS;
+                }
                 activeScore.points += addedPoints;
                 activeScore.lastUpdate = nowMs;
                 
@@ -1874,14 +1959,14 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             dispatchData = oteData;
         }
 
+        if (dispatchData) {
+            await dispatchOteSignal(dispatchData, state, docRef, { ticker, nowMs, isBacktest, sessionThresholds, store });
+        }
+
     } catch (e: any) {
         console.error(`[RADAR] Error crítico en memoria/Firebase:`, e.message);
     } finally {
-        releaseLock!(); // 🛡️ v5.4: Liberar lock del ticker
-    }
-
-    if (dispatchData) {
-        await dispatchOteSignal(dispatchData, state, docRef, { ticker, nowMs, isBacktest, sessionThresholds, store });
+        releaseLock!(); // 🛡️ v5.4: Liberar lock del ticker tras despachar la orden (previene doble entrada TOCTOU)
     }
 }
 
@@ -2441,6 +2526,8 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 if (await evaluateGlobalKillswitch(nowLive, store, isBacktest)) return 'BLOCKED_GLOBAL';
                                 if (nowLive < store.streakKillswitchUntil) return 'BLOCKED_RACHA';
                                 if (nowLive < store.vixKillswitchUntil) return 'BLOCKED_VIX';
+                                // 🌊 TickFlow: spread anómalo = probable noticia/iliquidez → no ejecutar
+                                if (tickFlow.isSpreadAnomalous(ticker)) return 'BLOCKED_SPREAD';
                                 return null;
                             };
 

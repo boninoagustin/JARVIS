@@ -92,7 +92,7 @@ function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, e
             }
             case 'EVENT_DIVERGENCE': {
                 const dir = dirToBot(ev.direction);
-                alert = `EVENTO_SMC_DIV | ${ticker} | TF: ${tf} | Dir: ${dir} | TS: ${ts}`;
+                alert = `EVENTO_SMC_DIV | ${ticker} | TF: ${tf} | Dir: ${dir} | Score: 4 | TS: ${ts}`;
                 break;
             }
             case 'ZONE_TOUCHED':
@@ -213,5 +213,5 @@ export async function initSMCBridge() {
     // 3. PING de precio desde ticks spot (reemplaza al PING de cierre de vela de TradingView)
     setSpotTickListener((baseTicker, candle) => handleSpotTick(processTradingAlert, baseTicker, candle));
 
-    if(false) console.log('[SMC-BRIDGE] 🌉 Bridge SMC → JARVIS activo (eventos + SYNC + HEARTBEAT + PING por ticks)');
+    console.log('[SMC-BRIDGE] 🌉 Bridge SMC → JARVIS activo (eventos + SYNC + HEARTBEAT + PING por ticks)');
 }
