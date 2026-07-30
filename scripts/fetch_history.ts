@@ -8,18 +8,18 @@ function mapToCTraderSymbol(ticker: string): string {
     const map: any = {
         'EURUSD': 'EURUSD',
         'GBPUSD': 'GBPUSD',
-        'US500': 'US500',
+        'US500': 'US 500',
         'XAUUSD': 'XAUUSD',
         'USDCAD': 'USDCAD',
         'USDJPY': 'USDJPY',
         'AUDCAD': 'AUDCAD',
         'NZDUSD': 'NZDUSD',
-        'USOIL': 'USOIL'
+        'USOIL': 'XTIUSD'
     };
     return map[ticker] || ticker;
 }
 
-const OUT_DIR = path.join(process.cwd(), 'logs', 'eurusd', 'history');
+
 
 async function fetchHistoricalData(ticker: string, period: TrendbarPeriod, periodStr: string, fromTimestamp: number, toTimestamp: number) {
     console.log(`[Fetch] Fetching ${ticker} ${periodStr} from ${new Date(fromTimestamp).toISOString()} to ${new Date(toTimestamp).toISOString()}`);
@@ -68,8 +68,9 @@ async function fetchHistoricalData(ticker: string, period: TrendbarPeriod, perio
         await new Promise(r => setTimeout(r, 200));
     }
 
-    if (!fs.existsSync(OUT_DIR)) {
-        fs.mkdirSync(OUT_DIR, { recursive: true });
+    const outDir = path.join(process.cwd(), 'logs', ticker.toLowerCase(), 'history');
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
     }
 
     // Sort uniquely by timestamp just in case
@@ -77,7 +78,7 @@ async function fetchHistoricalData(ticker: string, period: TrendbarPeriod, perio
     allCandles.forEach(c => uniqueMap.set(c.timestamp, c));
     const sortedCandles = Array.from(uniqueMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
-    const outPath = path.join(OUT_DIR, `history_${periodStr}.csv`);
+    const outPath = path.join(outDir, `history_${periodStr}.csv`);
     
     // Generate CSV
     const csvLines = ['timestamp,open,high,low,close,volume'];
@@ -108,8 +109,16 @@ async function main() {
         { p: TrendbarPeriod.D1, str: 'D1' }
     ];
 
-    for (const tf of timeframes) {
-        await fetchHistoricalData('EURUSD', tf.p, tf.str, fromDate, toDate);
+    const tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL'];
+
+    for (const ticker of tickers) {
+        for (const tf of timeframes) {
+            try {
+                await fetchHistoricalData(ticker, tf.p, tf.str, fromDate, toDate);
+            } catch (err) {
+                console.error(`Error fetching ${ticker} ${tf.str}:`, err);
+            }
+        }
     }
     
     console.log('Done fetching history.');

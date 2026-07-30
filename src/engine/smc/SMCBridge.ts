@@ -50,20 +50,12 @@ let bridgeStarted = false;
 const lastSyncSent = new Map<string, number>();
 const lastPingSent = new Map<string, number>();
 
-import { shadowComparator } from './ShadowComparator.js';
-import { config } from '../../config.js';
-
 type AlertFn = (alertText: string) => Promise<any>;
 
 function dispatch(processAlert: AlertFn, alertText: string) {
-    if (config.SHADOW_MODE_SMC) {
-        // Send to comparator and do not trigger actual trades via processAlert
-        shadowComparator.recordSMCAlert(alertText);
-    } else {
-        processAlert(alertText).catch((err: any) =>
-            console.error(`[SMC-BRIDGE] Error procesando "${alertText.substring(0, 60)}...":`, err.message)
-        );
-    }
+    processAlert(alertText).catch((err: any) =>
+        console.error(`[SMC-BRIDGE] Error procesando "${alertText.substring(0, 60)}...":`, err.message)
+    );
 }
 
 // ─── Traducción de eventos por vela ─────────────────────────────────────────

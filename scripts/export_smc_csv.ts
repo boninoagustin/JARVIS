@@ -344,7 +344,7 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                 case 'EVENT_BOS': {
                     const prefix = ev.type === 'EVENT_CHOCH' ? 'EVENTO_CHOCH' : 'EVENTO_BOS';
                     const dir = dirToBot(ev.direction);
-                    const origin = ev.origin !== undefined ? ` | ORIGIN: ${fmt(ev.origin)}` : '';
+                    const origin = (ev as any).origin !== undefined ? ` | ORIGIN: ${fmt((ev as any).origin)}` : '';
                     alertMsg = `${prefix} | TF: ${tf} | Dir: ${dir} | Precio: ${fmt(candle.close)}${vwapTag}${origin} | CONFIRMED | TS: ${candle.timestamp}`;
                     break;
                 }
@@ -367,7 +367,7 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                 case 'ZONE_TOUCHED':
                 case 'ZONE_BROKEN': {
                     const dir = dirToBot(ev.direction);
-                    const medal = MEDAL_MAP[ev.medal] ?? ev.medal;
+                    const medal = MEDAL_MAP[ev.category] ?? ev.category;
                     alertMsg = `${ev.type} | TF: ${tf} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)} | TS: ${candle.timestamp}`;
                     break;
                 }
@@ -398,8 +398,14 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
 }
 
 async function main() {
-    const inputDir = path.join(process.cwd(), 'logs', 'history');
-    const outputDir = path.join(process.cwd(), 'logs', 'history_exported');
+    const ticker = (process.argv[2] || 'EURUSD').toUpperCase();
+    const inputDir = path.join(process.cwd(), 'logs', ticker.toLowerCase(), 'history');
+    const outputDir = path.join(process.cwd(), 'logs', ticker.toLowerCase(), 'history_exported');
+    
+    if (!fs.existsSync(inputDir)) {
+        console.error(`Input directory not found: ${inputDir}`);
+        process.exit(1);
+    }
 
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
@@ -413,8 +419,8 @@ async function main() {
             const period = match[1];
             const inFile = path.join(inputDir, file);
             const outFile = path.join(outputDir, `pine-logs-SMC Master_${period}.csv`);
-            const htfManager = await loadHTFContext(inputDir, period, 'EURUSD');
-            await processHistoryFile(inFile, outFile, 'EURUSD', period, htfManager);
+            const htfManager = await loadHTFContext(inputDir, period, ticker);
+            await processHistoryFile(inFile, outFile, ticker, period, htfManager);
         }
     }
 }

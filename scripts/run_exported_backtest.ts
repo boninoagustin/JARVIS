@@ -4,8 +4,8 @@ import fs from 'fs';
 import path from 'path';
 
 async function main() {
-    console.log("Loading exported logs...");
-    const baseDir = path.resolve(process.cwd(), 'logs', 'history_exported');
+    const ticker = (process.argv[2] || 'EURUSD').toUpperCase();
+    const baseDir = path.resolve(process.cwd(), 'logs', ticker.toLowerCase(), 'history_exported');
     
     function loadLogs(tf: string) {
         const file = path.join(baseDir, `pine-logs-SMC Master_${tf}.csv`);
@@ -25,8 +25,8 @@ async function main() {
     logsMap.set('240', logsH4);
     logsMap.set('D', logsD1);
 
-    const config: BacktestConfig = {
-        ticker: 'eurusd',
+    const config: any = {
+        ticker: ticker.toLowerCase(),
         timeframe: '15',
         startBalance: 100000,
         riskPerTradePct: 1, // 1%
@@ -43,7 +43,7 @@ async function main() {
     };
     
     const { getOptimizedRisk } = await import('../src/engine/smc/smc_config.js');
-    const optimizedRisk = getOptimizedRisk('EURUSD');
+    const optimizedRisk = getOptimizedRisk(ticker);
     if (optimizedRisk) {
         if (optimizedRisk.slBufferPercent) config.slBufferPercent = optimizedRisk.slBufferPercent;
         if (optimizedRisk.fixedRR) config.fixedRR = optimizedRisk.fixedRR;

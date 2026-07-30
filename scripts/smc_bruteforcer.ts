@@ -5,6 +5,7 @@ import { SMCEngine } from '../src/engine/smc/SMCEngine.js';
 import { runBacktest } from '../jarvis-os/src/services/backtestEngine.js';
 import { BacktestConfig } from '../jarvis-os/src/services/backtestTypes.js';
 import { parse as parseCsv } from 'csv-parse/sync';
+const ticker = (process.argv[2] || 'EURUSD').toUpperCase();
 
 function loadCandles(filePath: string): OHLCV[] {
     console.log(`Loading candles from ${filePath}...`);
@@ -72,7 +73,7 @@ function evaluateConfig(logsMap: Map<string, string[]>, activeTriggers: string[]
     }
 
     const config: BacktestConfig = {
-        ticker: 'EURUSD',
+        ticker: ticker,
         entryTrigger: 'SMART',
         minBuyPoints: 4,
         minSellPoints: 4,
@@ -114,7 +115,7 @@ function evaluateConfigWithDetails(logsMap: Map<string, string[]>, activeTrigger
     }
     
     const config: BacktestConfig = {
-        ticker: 'EURUSD',
+        ticker: ticker,
         entryTrigger: 'SMART',
         minBuyPoints: 4,
         minSellPoints: 4,
@@ -140,7 +141,7 @@ function getGeneName(gene: SMCGene) {
 }
 
 async function runOptimization() {
-    const inputDir = path.join(process.cwd(), 'logs', 'history');
+    const inputDir = path.join(process.cwd(), 'logs', ticker.toLowerCase(), 'history');
     
     const historyM15 = loadCandles(path.join(inputDir, 'history_M15.csv'));
     const historyH1 = loadCandles(path.join(inputDir, 'history_H1.csv'));
@@ -149,11 +150,11 @@ async function runOptimization() {
     
     console.log(`Loaded M15: ${historyM15.length}, H1: ${historyH1.length}, H4: ${historyH4.length}, D1: ${historyD1.length}`);
 
-    // Generate grid of SMC Genes
-    const pivot_lens = [5, 8, 13]; 
-    const min_sweep_wick_pcts = [0.3, 0.5];
-    const div_pivot_lens = [2, 3];
-    const z_score_windows = [20, 50];
+    // Generate grid of SMC Genes (Expanded for deep brute force)
+    const pivot_lens = [3, 5, 8, 13, 21]; 
+    const min_sweep_wick_pcts = [0.1, 0.3, 0.5, 0.7];
+    const div_pivot_lens = [2, 3, 5];
+    const z_score_windows = [14, 20, 50, 100];
 
     const smcGrid: SMCGene[] = [];
     for (const p of pivot_lens) {
@@ -229,7 +230,7 @@ async function runOptimization() {
                         case 'EVENT_BOS': {
                             const prefix = ev.type === 'EVENT_CHOCH' ? 'EVENTO_CHOCH' : 'EVENTO_BOS';
                             const dir = dirToBot(ev.direction);
-                            const origin = ev.origin !== undefined ? ` | ORIGIN: ${fmt(ev.origin)}` : '';
+                            const origin = (ev as any).origin !== undefined ? ` | ORIGIN: ${fmt((ev as any).origin)}` : '';
                             alertMsg = `${prefix} | TF: ${tfCode} | Dir: ${dir} | Precio: ${fmt(candle.close)}${origin} | CONFIRMED | TS: ${candle.timestamp}`;
                             break;
                         }
@@ -244,14 +245,16 @@ async function runOptimization() {
                         }
                         case 'EVENT_DIVERGENCE': {
                             const dir = dirToBot(ev.direction);
-                            const rsiDiff = Math.round(ev.divergence.rsiDiff * 10) / 10;
-                            alertMsg = `EVENTO_SMC_DIV | TF: ${tfCode} | Dir: ${dir} | Score: ${ev.divergence.score} | RSI_Diff: ${rsiDiff} | TS: ${candle.timestamp}`;
+                            const rsiDiff = Math.round(((ev as any).divergence?.rsiDiff ?? 0) * 10) / 10;
+                            const score = (ev as any).divergence?.score ?? 0;
+                            alertMsg = `EVENTO_SMC_DIV | TF: ${tfCode} | Dir: ${dir} | Score: ${score} | RSI_Diff: ${rsiDiff} | TS: ${candle.timestamp}`;
                             break;
                         }
                         case 'ZONE_TOUCHED':
                         case 'ZONE_BROKEN': {
                             const dir = dirToBot(ev.direction);
-                            const medal = MEDAL_MAP[ev.medal] ?? ev.medal;
+                            const category = (ev as any).category ?? (ev as any).medal;
+                            const medal = MEDAL_MAP[category] ?? category;
                             alertMsg = `${ev.type} | TF: ${tfCode} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)} | TS: ${candle.timestamp}`;
                             break;
                         }
@@ -335,10 +338,9 @@ async function runOptimization() {
     // --- PHASE 3: Risk Management Optimization ---
     console.log(`\n\n=== PHASE 3: RISK MANAGEMENT OPTIMIZATION ===`);
     
-    const slBuffers = [0, 10, 20]; // 0%, 10%, 20%
-    const tp2Multipliers = [2, 3, 4]; // Fixed RR 2, 3, 4
-    const minRRs = [1.0, 1.5, 2.0]; // Min RR to take trade
-
+    const slBuffers = [0, 5, 10, 15, 20, 25]; 
+    const tp2Multipliers = [1.5, 2, 3, 4, 5]; 
+    const minRRs = [1.0, 1.5, 2.0, 2.5, 3.0]; 
     let bestPhase3Metric = -Infinity;
     let bestRisk: RiskGene = defaultRisk;
     
@@ -382,7 +384,7 @@ async function runOptimization() {
     
     console.log(JSON.stringify(finalPreset, null, 2));
 
-    const outPath = path.join(process.cwd(), 'optimized_preset_EURUSD.json');
+    const outPath = path.join(process.cwd(), `optimized_preset_${ticker}.json`);
     fs.writeFileSync(outPath, JSON.stringify(finalPreset, null, 4));
     console.log(`\nSaved optimized preset to ${outPath}`);
 }

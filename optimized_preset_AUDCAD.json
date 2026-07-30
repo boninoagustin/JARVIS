@@ -1,0 +1,36 @@
+{
+    "M15": {
+        "pivot_len": 5,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 20
+    },
+    "H1": {
+        "pivot_len": 5,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 20
+    },
+    "H4": {
+        "pivot_len": 5,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 20
+    },
+    "D1": {
+        "pivot_len": 5,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 20
+    },
+    "Risk": {
+        "slBufferPercent": 20,
+        "fixedRR": 4,
+        "minRR": 1
+    },
+    "Metrics": {
+        "PnL_R": "1.72",
+        "Trades": 233,
+        "WinRate": "57.08%"
+    }
+}

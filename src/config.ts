@@ -28,7 +28,6 @@ export const config = {
   CTRADER_DEMO: (process.env.CTRADER_DEMO || 'true').toLowerCase() === 'true',
   CTRADER_RISK_PERCENT: parseFloat(process.env.CTRADER_RISK_PERCENT || '1'),
   CTRADER_MAX_POSITIONS: parseInt(process.env.CTRADER_MAX_POSITIONS || '3', 10),
-  SHADOW_MODE_SMC: (process.env.SHADOW_MODE_SMC || 'false').toLowerCase() === 'true',
 };
 
 // Security Validations

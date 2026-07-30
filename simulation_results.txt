@@ -1,0 +1,101 @@
+Starting Simulation of Backtests for all assets...
+=================================================
+
+=== EURUSD ===
+Using optimized risk params: { slBufferPercent: 0, fixedRR: 3, minRR: 1.5 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 122
+WIN RATE: 53.28%
+TOTAL PNL ($): $2.02
+TOTAL PNL (R): 8.49R
+============================
+
+=== GBPUSD ===
+Using optimized risk params: { slBufferPercent: 10, fixedRR: 3, minRR: 2 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 209
+WIN RATE: 57.42%
+TOTAL PNL ($): $3.47
+TOTAL PNL (R): 24.05R
+============================
+
+=== US500 ===
+Using optimized risk params: { slBufferPercent: 0, fixedRR: 2, minRR: 1.5 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 206
+WIN RATE: 69.42%
+TOTAL PNL ($): $34.35
+TOTAL PNL (R): 16.28R
+============================
+
+=== XAUUSD ===
+Using optimized risk params: { slBufferPercent: 10, fixedRR: 2, minRR: 2 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 112
+WIN RATE: 66.07%
+TOTAL PNL ($): $50.50
+TOTAL PNL (R): 36.67R
+============================
+
+=== USDCAD ===
+Using optimized risk params: { slBufferPercent: 0, fixedRR: 2, minRR: 2 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 243
+WIN RATE: 65.02%
+TOTAL PNL ($): $8.26
+TOTAL PNL (R): 55.60R
+============================
+
+=== USDJPY ===
+Using optimized risk params: { slBufferPercent: 20, fixedRR: 4, minRR: 2 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 115
+WIN RATE: 63.48%
+TOTAL PNL ($): $4.94
+TOTAL PNL (R): 34.75R
+============================
+
+=== AUDCAD ===
+Using optimized risk params: { slBufferPercent: 20, fixedRR: 4, minRR: 1 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 252
+WIN RATE: 64.68%
+TOTAL PNL ($): $16.60
+TOTAL PNL (R): 49.84R
+============================
+
+=== NZDUSD ===
+Using optimized risk params: { slBufferPercent: 10, fixedRR: 4, minRR: 1 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 105
+WIN RATE: 53.33%
+TOTAL PNL ($): $2.97
+TOTAL PNL (R): 9.41R
+============================
+
+=== USOIL ===
+Using optimized risk params: { slBufferPercent: 0, fixedRR: 2, minRR: 1.5 }
+Running Backtest (SMART Strategy)...
+
+============================
+TOTAL TRADES: 109
+WIN RATE: 58.72%
+TOTAL PNL ($): $123.53
+TOTAL PNL (R): 22.01R
+============================
