@@ -927,25 +927,22 @@ function processAlert(
     const is1HAgainst = mb60 !== undefined && mb60 !== currentDirection && mb60 !== 'NEUTRAL';
     const baseBiasPoints = isMacroAligned ? 5 : 0;
 
-    let vwapBonus = 0;
+    // Los bonus VWAP / Macro OTE entran como eventos (pts incluidos en computePoints), igual que en live
+    if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: 2, tf: eventTf, ts: nowMs });
+    else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: 2, tf: eventTf, ts: nowMs });
+
+    // Penalización VWAP multi-TF: NO existe en live → se mantiene inline (no es evento)
     let vwapPenalty = 0;
 
     const VWAP_TTL: Record<string, number> = { '15': 2*3600e3, '60': 8*3600e3, '240': 48*3600e3 };
     const freshVwap = (tf: string) => (nowMs - (state.vwapTs?.[tf] ?? 0) < (VWAP_TTL[tf] ?? 4*3600e3)) ? state.vwapStatus?.[tf] : undefined;
     
-    const vwap15m = freshVwap('15') || (upperText.match(/VWAP:\s*(UNDER|OVER)/)?.[1]);
     const vwap1H = freshVwap('60');
     const vwap4H = freshVwap('240');
 
     if (currentDirection === 'BUY') {
-      if (vwap15m === 'UNDER') vwapBonus += 2;
-      if (vwap1H === 'UNDER') vwapBonus += 3;
-      if (vwap4H === 'UNDER') vwapBonus += 4;
       if (vwap1H === 'OVER' && vwap4H === 'OVER') vwapPenalty += 5;
     } else if (currentDirection === 'SELL') {
-      if (vwap15m === 'OVER') vwapBonus += 2;
-      if (vwap1H === 'OVER') vwapBonus += 3;
-      if (vwap4H === 'OVER') vwapBonus += 4;
       if (vwap1H === 'UNDER' && vwap4H === 'UNDER') vwapPenalty += 5;
     }
 
@@ -1024,15 +1021,14 @@ function processAlert(
       }
     }
 
-    // Macro OTE bonus (ported from live)
-    let macroOteBonus = 0;
+    // Macro OTE bonus (ported from live): entra como evento (pts incluidos en computePoints)
     const activeMacroLeg = currentDirection === 'BUY' ? state.activeMacroImpulseBuy : state.activeMacroImpulseSell;
     const chExtremePriceForMacro = chExtreme ?? state.lastPrice ?? 0;
     if (isInsideMacroOteZone(activeMacroLeg, chExtremePriceForMacro)) {
-      macroOteBonus = 6;
+      addScoreEvent(activeScore, { id: 'Macro_OTE_Confluence', pts: 6, tf: eventTf, ts: nowMs });
     }
 
-    let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2 + vwapBonus - vwapPenalty + macroOteBonus;
+    let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2 - vwapPenalty;
 
     // Trap Zone penalty (Caso C - ported from live)
     if (chOrigin && chExtreme) {
