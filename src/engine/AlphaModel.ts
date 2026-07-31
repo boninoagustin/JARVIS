@@ -71,8 +71,8 @@ export const TF_WEIGHT: Record<string, number> = {
     '5': 0.75,   // 5M: tres cuartos
     '15': 1.0,   // 15M: base (gatillo principal)
     '60': 1.5,   // 1H: 50% más
-    '240': 2.0,  // 4H: doble
-    'D': 3.0,    // Daily: triple
+    '240': 2.5,  // 4H: x2.5 basado en estadística
+    'D': 4.0,    // Daily: x4.0 dominante
 };
 
 export const emptyState = (): RadarState => ({

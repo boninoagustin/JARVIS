@@ -1287,7 +1287,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
                 }
                 // 🆕 HÍBRIDO: Ponderar score por TF
-                const basePoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
+                const basePoints = prefix === 'EVENTO_CHOCH' ? 3 : 2; // BOS era 1, ahora es 2 (edge > 85%)
                 addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
                 addedEventId = `${prefix === 'EVENTO_CHOCH' ? 'CHoCH' : 'BOS'}_${readableTf}`;
             }
@@ -1360,6 +1360,14 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 if (!activeScore.events.some((e: any) => e.id === `DIV_${readableTf}`)) {
                     const dynamicScoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
                     addedPoints = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1]) : 4;
+                    
+                    // Penalización estadística para SMC_DIV en TF Altos (Estadísticamente tóxico en Daily)
+                    if (eventTf === 'D') {
+                        addedPoints = 0; // 0 puntos por toxicidad (14% winrate)
+                    } else if (eventTf === '240') {
+                        addedPoints = Math.min(addedPoints, 2); // Cap de 2 puntos en 4H
+                    }
+
                     addedEventId = `DIV_${readableTf}`; 
                 }
             }
@@ -1379,7 +1387,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (analysis.classification === 'INSTITUTIONAL') {
                                 addedPoints = 5 * (TF_WEIGHT[eventTf] || 1);
                             } else if (analysis.classification === 'RETAIL') {
-                                addedPoints = Math.max(1, addedPoints - (TF_WEIGHT[eventTf] || 1)); // penalizar sweep débil
+                                addedPoints = 0; // Penalización total para sweeps retail
                             }
                         } catch { /* nunca bloquear scoring por analítica de ticks */ }
                     }
