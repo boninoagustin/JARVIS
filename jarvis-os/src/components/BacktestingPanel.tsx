@@ -314,6 +314,8 @@ interface TriggerSettingsPanelProps {
   tradeFilter: string;
   setTradeFilter: (f: string) => void;
   filterKey: string;
+  onOptimize?: () => void;
+  isOptimizing?: boolean;
 }
 
 const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey, triggerKey, title, config, updateTrigger, onSimulate, isRunning, isOte, tradeFilter, setTradeFilter, filterKey, onOptimize, isOptimizing }) => {
@@ -577,6 +579,7 @@ export default function BacktestingPanel() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
   const [tradeFilter, setTradeFilter] = useState<string>('ALL');
+  const [optimizingTrigger, setOptimizingTrigger] = useState<string | null>(null);
 
   const optimizeSwitches = false;
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
@@ -795,8 +798,10 @@ export default function BacktestingPanel() {
   }, []);
 
   
-  const handleOptimizeTrigger = (sessionKey: string, triggerKey: string) => {
+  const handleOptimizeTrigger = async (sessionKey: string, triggerKey: string) => {
     if (optimizingTrigger) return;
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    
     setOptimizingTrigger(`${sessionKey}-${triggerKey}`);
     
     // Values to test
@@ -847,13 +852,21 @@ export default function BacktestingPanel() {
     
     baseConfig[sessionKey][triggerKey].enabled = true;
     
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+    const logsArray = Array.from(logs.entries());
+
     const CHUNK_SIZE = 50;
     let i = 0;
 
-    const processChunk = () => {
+    const processChunk = async () => {
       const end = Math.min(i + CHUNK_SIZE, combinations.length);
+      const chunkConfigs = [];
+      const chunkMgmts = [];
+      
       for (; i < end; i++) {
         const testMgmt = combinations[i];
+        chunkMgmts.push(testMgmt);
         
         const testSessionTriggers = JSON.parse(JSON.stringify(baseConfig));
         testSessionTriggers[sessionKey][triggerKey] = {
@@ -861,41 +874,58 @@ export default function BacktestingPanel() {
           ...testMgmt
         };
 
-        const finalOte = oteEntryPercent;
         const configToRun = {
-          ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger: 'SMART' as const,
-          maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR,
+          ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger: 'SMART' as const,
+          maxDailyLossR: maxDailyLossR || undefined,
+          dailyProfitTargetR: dailyProfitTargetR || undefined,
+          maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+          maxTradesPerDay: maxTradesPerDay || undefined,
+          maxTradesPerSession: maxTradesPerSession || undefined,
+          trailingDrawdownR: trailingDrawdownR || undefined,
           sessions: testSessionTriggers,
           sessionFilter: [sessionKey],
           enabled: true,
           spreadPips,
           commissionPerLot,
-          maxTradesPerSession
+          partialClosePct: testMgmt.partialClosePct,
+          slAfterTp1: testMgmt.slAfterTp1,
+          tp15BeEnabled: testMgmt.tp15BeEnabled,
+          atrTrailEnabled: testMgmt.atrTrailEnabled,
+          structuralTrailEnabled: testMgmt.structuralTrailEnabled,
+          tp1StructuralMinRR: tp1StructuralMinRR
         };
+        chunkConfigs.push(configToRun);
+      }
 
-        const result = runBacktest(csvData, configToRun);
+      try {
+        const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray, configs: chunkConfigs });
         
-        let pnlR = 0;
-        let wins = 0;
-        let total = 0;
-        result.trades.forEach(t => {
-           if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
-               pnlR += t.rMultiple;
-               total++;
-               if (t.rMultiple > 0) wins++;
-           }
-        });
-        const wr = total > 0 ? wins / total : 0;
-        
-        if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {
-          bestScore = pnlR;
-          bestWinRate = wr;
-          bestConfig = testMgmt;
+        for (let j = 0; j < chunkResults.length; j++) {
+            const res = chunkResults[j];
+            let pnlR = 0;
+            let wins = 0;
+            let total = 0;
+            res.trades.forEach((t: any) => {
+               if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+                   pnlR += t.rMultiple;
+                   total++;
+                   if (t.rMultiple > 0) wins++;
+               }
+            });
+            const wr = total > 0 ? wins / total : 0;
+            
+            if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {
+              bestScore = pnlR;
+              bestWinRate = wr;
+              bestConfig = chunkMgmts[j];
+            }
         }
+      } catch (err) {
+        console.error("Batch error:", err);
       }
 
       if (i < combinations.length) {
-        requestAnimationFrame(processChunk);
+        requestAnimationFrame(() => { processChunk(); });
       } else {
         setSessionTriggers(prev => {
           const next = JSON.parse(JSON.stringify(prev));
@@ -905,6 +935,7 @@ export default function BacktestingPanel() {
             ...next[sessionKey][triggerKey],
             ...bestConfig
           };
+          localStorage.setItem('bt_session_triggers', JSON.stringify(next));
           return next;
         });
         toast(`Optimización completada. PnL Máximo: ${bestScore.toFixed(2)}R`, 'success');
@@ -912,7 +943,7 @@ export default function BacktestingPanel() {
       }
     };
 
-    requestAnimationFrame(processChunk);
+    processChunk();
   };
 
   const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>, isAutoRun: boolean = false) => {
