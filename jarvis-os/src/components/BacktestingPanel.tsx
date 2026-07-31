@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useBacktestWorker } from '../features/backtesting/hooks/useBacktestWorker';
 import { ShieldAlert, BarChart2, Zap, TrendingUp, BookOpen, Wand2, Upload, Briefcase, Play, Trash2, FileText, Download, RotateCcw, Loader2 } from 'lucide-react';
 
 function AdvancedDashboardMetrics({ metrics }: { metrics: any }) {
@@ -592,40 +593,7 @@ export default function BacktestingPanel() {
   const { toast } = useToast();
 
   // 🚀 WORKER PARA BACKTESTING (Desbloquea la UI en operaciones pesadas)
-  const workerRef = useRef<Worker | null>(null);
-
-  useEffect(() => {
-    workerRef.current = new Worker(new URL('../services/backtest.worker.ts', import.meta.url), { type: 'module' });
-    return () => {
-      workerRef.current?.terminate();
-    };
-  }, []);
-
-  const runWorkerTask = useCallback((type: string, payload: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      if (!workerRef.current) return reject('Worker no inicializado');
-      const id = Date.now() + Math.random();
-      
-      let timeoutId: ReturnType<typeof setTimeout>;
-      
-      const handler = (e: MessageEvent) => {
-        if (e.data.id === id) {
-          clearTimeout(timeoutId);
-          workerRef.current?.removeEventListener('message', handler);
-          if (e.data.type === 'DONE') resolve(e.data.result);
-          else reject(e.data.error);
-        }
-      };
-      
-      timeoutId = setTimeout(() => {
-        workerRef.current?.removeEventListener('message', handler);
-        reject(new Error('Worker Task Timeout (5m)'));
-      }, 300000);
-
-      workerRef.current.addEventListener('message', handler);
-      workerRef.current.postMessage({ type, id, payload });
-    });
-  }, []);
+  const { runWorkerTask } = useBacktestWorker();
 
   // 🗂️ TABS PRINCIPALES (INDIVIDUAL VS PORTAFOLIO GLOBAL)
   const [activeTab, setActiveTab] = useState<'individual' | 'portfolio'>('individual');
