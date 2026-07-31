@@ -80,19 +80,18 @@ export function* parseCSVLines(content: string): Generator<LogEntry> {
     const firstComma = r.indexOf(',');
     const line = firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
     
-    // Guardamos una subcadena o hash simple en memoria en vez de la línea completa de 300 chars
-    // para reducir drásticamente el uso de RAM del Set. 
-    // Como las duplicaciones suelen ser exactas, un prefijo + TS suele bastar.
-    const dedupKey = line.substring(0, 60);
-    if (seen.has(dedupKey)) continue;
-    seen.add(dedupKey);
-
     const tsMatch = line.match(/TS:\s*(\d+)/i);
     const tfMatch = line.match(/TF:\s*([a-zA-Z0-9]+)/i);
+    const ts = tsMatch ? parseInt(tsMatch[1], 10) : 0;
+    const tf = tfMatch ? tfMatch[1].toUpperCase() : '3';
+    // Clave compuesta TS+TF+prefijo para evitar colisiones silenciosas
+    const dedupKey = `${ts}-${tf}-${line.substring(0, 40)}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
     yield {
       line,
-      ts: tsMatch ? parseInt(tsMatch[1], 10) : 0,
-      tf: tfMatch ? tfMatch[1].toUpperCase() : '3',
+      ts,
+      tf,
       parsed: preParseAlert(line)
     };
   }
@@ -125,11 +124,28 @@ export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | '
 }
 
 
+// --- ENTRY PREPARATION (hoisted from runBacktest for reuse across many configs) ---
+export function prepareEntries(logs: Map<string, (string | LogEntry)[]>): LogEntry[] {
+  const allEntries: LogEntry[] = [];
+  for (const [tf, items] of logs.entries()) {
+    for (const item of items) {
+      if (typeof item === 'string') {
+        const tsMatch = item.match(/TS:\s*(\d+)/i);
+        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line: item, tf, parsed: preParseAlert(item) });
+      } else {
+        allEntries.push(item as LogEntry);
+      }
+    }
+  }
+  return allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
+}
+
 // --- MAIN BACKTEST RUNNER ---
 export function runBacktest(
   logs: Map<string, (string | LogEntry)[]>,
   config: BacktestConfig,
-  onProgress?: (pct: number, trades: BacktestTrade[]) => void
+  onProgress?: (pct: number, trades: BacktestTrade[]) => void,
+  prepared?: LogEntry[]
 ): BacktestResult {
   const state = emptyState();
   const trades: BacktestTrade[] = [];
@@ -147,20 +163,8 @@ export function runBacktest(
     sessionTradeCount: 0
   };
 
-  // 1. Parse all entries with timestamps
-  const allEntries: LogEntry[] = [];
-  for (const [tf, items] of logs.entries()) {
-    for (const item of items) {
-      if (typeof item === 'string') {
-        const tsMatch = item.match(/TS:\s*(\d+)/i);
-        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line: item, tf, parsed: preParseAlert(item) });
-      } else {
-        allEntries.push(item as LogEntry);
-      }
-    }
-  }
-  // 2. Sort chronologically
-  const validEntries = allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
+  // 1. Parse all entries with timestamps (or use pre-prepared)
+  const validEntries = prepared ?? prepareEntries(logs);
   
   if (validEntries.length === 0) {
     return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '' };
@@ -1363,6 +1367,16 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     tf: oteData.tf,
     riskMult: oteData.riskMult,
   };
+
+  // Clasificar triggerType al crear el trade (único punto de verdad)
+  const events = trade.events;
+  const hasOte = events.some((e: string) => e.includes('OTE_Retracement'));
+  const isBos = events.some((e: string) => e.includes('EVENTO_BOS'));
+  const isChoch = events.some((e: string) => e.includes('EVENTO_CHOCH'));
+  if (hasOte && isBos) trade.triggerType = 'oteBos15m';
+  else if (hasOte && isChoch) trade.triggerType = 'oteChoch15m';
+  else if (isBos && !hasOte) trade.triggerType = 'bos15m';
+  else if (isChoch && !hasOte) trade.triggerType = 'choch15m';
 
   // --- FRICTION MODEL INTERCEPTION ---
   const clsFriction = getAssetClass(config.ticker);
