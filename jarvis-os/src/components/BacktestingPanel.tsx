@@ -2282,25 +2282,25 @@ export default function BacktestingPanel() {
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="choch15m" title="💥 CHOCH (Ruptura) (15m)"
                 config={sessionTriggers[sessionFilter]?.choch15m} updateTrigger={updateSessionTrigger}
-                onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={false}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
                 tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "choch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-choch15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="bos15m" title="🚀 BOS (Continuación) (15m)"
                 config={sessionTriggers[sessionFilter]?.bos15m} updateTrigger={updateSessionTrigger}
-                onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={false}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
                 tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "bos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-bos15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteChoch15m" title="📉 OTE CHOCH (15m)"
                 config={sessionTriggers[sessionFilter]?.oteChoch15m} updateTrigger={updateSessionTrigger}
-                onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={true}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
                 tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteChoch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteChoch15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteBos15m" title="📈 OTE BOS (15m)"
                 config={sessionTriggers[sessionFilter]?.oteBos15m} updateTrigger={updateSessionTrigger}
-                onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={true}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
                 tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos15m`}
               />
 
