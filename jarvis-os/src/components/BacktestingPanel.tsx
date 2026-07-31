@@ -804,7 +804,6 @@ export default function BacktestingPanel() {
     
     setOptimizingTrigger(`${sessionKey}-${triggerKey}`);
     
-    // Values to test
     const slBuffVals = [0, 0.05, 0.1, 0.2];
     const tp2Vals = [1.5, 2.0, 3.0, 4.0];
     const partialClosePctVals = [0, 0.5, 0.8];
@@ -812,19 +811,22 @@ export default function BacktestingPanel() {
     const tp15BeEnabledVals = [true, false];
     const atrTrailEnabledVals = [true, false];
     const structuralTrailEnabledVals = [true, false];
+    const minScoreVals = [4, 8, 12, 16, 20];
 
     const combinations: any[] = [];
-    for (const sb of slBuffVals) {
-      for (const t2 of tp2Vals) {
-        for (const pcp of partialClosePctVals) {
-          for (const sATp1 of slAfterTp1Vals) {
-            for (const t15 of tp15BeEnabledVals) {
-              for (const atr of atrTrailEnabledVals) {
-                for (const str of structuralTrailEnabledVals) {
-                  combinations.push({
-                    slBuff: sb, tp2: t2, partialClosePct: pcp, slAfterTp1: sATp1,
-                    tp15BeEnabled: t15, atrTrailEnabled: atr, structuralTrailEnabled: str
-                  });
+    for (const ms of minScoreVals) {
+      for (const sb of slBuffVals) {
+        for (const t2 of tp2Vals) {
+          for (const pcp of partialClosePctVals) {
+            for (const sATp1 of slAfterTp1Vals) {
+              for (const t15 of tp15BeEnabledVals) {
+                for (const atr of atrTrailEnabledVals) {
+                  for (const str of structuralTrailEnabledVals) {
+                    combinations.push({
+                      minScore: ms, slBuff: sb, tp2: t2, partialClosePct: pcp, slAfterTp1: sATp1,
+                      tp15BeEnabled: t15, atrTrailEnabled: atr, structuralTrailEnabled: str
+                    });
+                  }
                 }
               }
             }
