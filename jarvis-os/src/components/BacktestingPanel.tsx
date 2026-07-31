@@ -812,8 +812,8 @@ export default function BacktestingPanel() {
         sessionKey, triggerKey,
         strategy: 'ga', budget: 600, seed: Date.now() % 100000,
         trainFraction: 0.7, minTrades: 15,
-      }, (_evaluated: number, _budget: number, _bestFitness: number) => {
-        // progress handled via the third arg; NOT supported in legacy runWorkerTask
+      }, (evaluated: number, budget: number) => {
+        setOptimizeProgress(budget > 0 ? evaluated / budget : 0);
       });
 
       if (!optResult?.best) throw new Error("No optimization result");
