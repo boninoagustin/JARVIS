@@ -759,13 +759,38 @@ export default function BacktestingPanel() {
 
       if (!isAutoRun) {
         // Save to history
-        const closed = res.trades.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
+        const filteredForMetrics = res.trades.filter((t: BacktestTrade) => {
+          const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
+          const isBos = t.events?.some(e => e.includes('EVENTO_BOS'));
+          const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
+
+          const tfEvent = t.events?.find(e => e.includes('EVENTO_BOS') || e.includes('EVENTO_CHOCH') || e.includes('OTE_Retracement'));
+          const is15m = tfEvent?.includes('15M') || tfEvent?.includes('15');
+          const tfSuffix = is15m ? '15m' : '5m';
+
+          let triggerType: string | null = null;
+          if (hasOte && isBos) triggerType = `oteBos${tfSuffix}`;
+          else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}`;
+          else if (isBos && !hasOte) triggerType = `bos${tfSuffix}`;
+          else if (isChoch && !hasOte) triggerType = `choch${tfSuffix}`;
+
+          const sessionName = getSessionForTimestamp(t.timestamp);
+          const config = finalSessions[sessionName];
+          if (config && triggerType) {
+            const triggerConfig = config[triggerType as keyof typeof config] as any;
+            if (!triggerConfig || !triggerConfig.enabled) return false;
+            if ((t.points || 0) < triggerConfig.minScore) return false;
+          }
+          return true;
+        });
+
+        const closed = filteredForMetrics.filter((t: BacktestTrade) => t.result && t.result !== 'TIMEOUT');
         const wins = closed.filter((t: BacktestTrade) => t.result === 'WIN').length;
         const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0';
         const pnl = closed.reduce((acc: number, t: BacktestTrade) => acc + (t.rMultiple || 0), 0).toFixed(2);
         const session: SessionHistory = {
           id: `BT_${Date.now()}`, ticker, date: res.startDate + ' → ' + res.endDate,
-          trades: res.trades.length, winRate: wr, pnl, status: 'completed',
+          trades: filteredForMetrics.length, winRate: wr, pnl, status: 'completed',
           tradeData: res.trades,
           config: { 
             minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger,
