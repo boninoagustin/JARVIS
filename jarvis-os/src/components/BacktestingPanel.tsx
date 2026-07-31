@@ -709,10 +709,23 @@ export default function BacktestingPanel() {
         updatedAt: new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'asset_configs', configDoc), JSON.parse(JSON.stringify(payload)), { merge: true });
+      const finalPayload = JSON.parse(JSON.stringify(payload));
+
+      // 1. Descargar archivo localmente (Fallback por si hay límite de cuota en Firebase)
+      const dataStr = "data:text/json;charset=utf-act," + encodeURIComponent(JSON.stringify(finalPayload, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `asset_config_${configDoc}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+      toast(`✅ Archivo descargado localmente`, 'success');
+
+      // 2. Intentar subir a Firebase
+      await setDoc(doc(db, 'asset_configs', configDoc), finalPayload, { merge: true });
       toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
     } catch (err: any) {
-      toast(`❌ Error guardando: ${err.message}`, 'error');
+      toast(`⚠️ Archivo descargado, pero fallo al subir a Firebase: ${err.message}`, 'warning');
     }
   };
 
