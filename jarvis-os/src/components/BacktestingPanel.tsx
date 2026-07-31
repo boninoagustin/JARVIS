@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { ShieldAlert, BarChart2, Zap, TrendingUp, BookOpen, Wand2, Upload, Briefcase, Play, Trash2, FileText, Download, RotateCcw } from 'lucide-react';
+import { ShieldAlert, BarChart2, Zap, TrendingUp, BookOpen, Wand2, Upload, Briefcase, Play, Trash2, FileText, Download, RotateCcw, Loader2 } from 'lucide-react';
 
 function AdvancedDashboardMetrics({ metrics }: { metrics: any }) {
   if (!metrics) return null;
@@ -316,7 +316,7 @@ interface TriggerSettingsPanelProps {
   filterKey: string;
 }
 
-const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey, triggerKey, title, config, updateTrigger, onSimulate, isRunning, isOte, tradeFilter, setTradeFilter, filterKey }) => {
+const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey, triggerKey, title, config, updateTrigger, onSimulate, isRunning, isOte, tradeFilter, setTradeFilter, filterKey, onOptimize, isOptimizing }) => {
   if (!config) return null;
   const isActive = tradeFilter === filterKey;
   
@@ -335,17 +335,33 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
           />
           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
         </label>
-        <button 
-          onClick={(e) => { e.stopPropagation(); onSimulate(); }}
-          disabled={isRunning || !config.enabled}
-          style={{
-            padding: '4px 8px', backgroundColor: 'var(--accent-gold)', color: '#000', border: 'none', borderRadius: '4px',
-            fontWeight: 700, fontSize: '0.6rem', cursor: (isRunning || !config.enabled) ? 'not-allowed' : 'pointer',
-            opacity: (isRunning || !config.enabled) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: '4px'
-          }}
-        >
-          <Play size={10} /> Simular
-        </button>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {onOptimize && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onOptimize(); }}
+              disabled={isOptimizing || isRunning || !config.enabled}
+              style={{
+                padding: '4px 8px', backgroundColor: 'transparent', color: 'var(--accent-gold)', border: '1px solid var(--accent-gold)', borderRadius: '4px',
+                fontWeight: 700, fontSize: '0.6rem', cursor: (isOptimizing || isRunning || !config.enabled) ? 'not-allowed' : 'pointer',
+                opacity: (isOptimizing || isRunning || !config.enabled) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: '4px'
+              }}
+            >
+              {isOptimizing ? <Loader2 size={10} className="spin" /> : <Wand2 size={10} />}
+              {isOptimizing ? 'Optimizando...' : 'Optimizar'}
+            </button>
+          )}
+          <button 
+            onClick={(e) => { e.stopPropagation(); onSimulate(); }}
+            disabled={isRunning || isOptimizing || !config.enabled}
+            style={{
+              padding: '4px 8px', backgroundColor: 'var(--accent-gold)', color: '#000', border: 'none', borderRadius: '4px',
+              fontWeight: 700, fontSize: '0.6rem', cursor: (isRunning || isOptimizing || !config.enabled) ? 'not-allowed' : 'pointer',
+              opacity: (isRunning || isOptimizing || !config.enabled) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: '4px'
+            }}
+          >
+            <Play size={10} /> Simular
+          </button>
+        </div>
       </div>
       
       {config.enabled && (
@@ -777,6 +793,127 @@ export default function BacktestingPanel() {
       return next;
     });
   }, []);
+
+  
+  const handleOptimizeTrigger = (sessionKey: string, triggerKey: string) => {
+    if (optimizingTrigger) return;
+    setOptimizingTrigger(`${sessionKey}-${triggerKey}`);
+    
+    // Values to test
+    const slBuffVals = [0, 0.05, 0.1, 0.2];
+    const tp2Vals = [1.5, 2.0, 3.0, 4.0];
+    const partialClosePctVals = [0, 0.5, 0.8];
+    const slAfterTp1Vals: ('midpoint' | 'breakeven' | 'none')[] = ['none', 'midpoint', 'breakeven'];
+    const tp15BeEnabledVals = [true, false];
+    const atrTrailEnabledVals = [true, false];
+    const structuralTrailEnabledVals = [true, false];
+
+    const combinations: any[] = [];
+    for (const sb of slBuffVals) {
+      for (const t2 of tp2Vals) {
+        for (const pcp of partialClosePctVals) {
+          for (const sATp1 of slAfterTp1Vals) {
+            for (const t15 of tp15BeEnabledVals) {
+              for (const atr of atrTrailEnabledVals) {
+                for (const str of structuralTrailEnabledVals) {
+                  combinations.push({
+                    slBuff: sb, tp2: t2, partialClosePct: pcp, slAfterTp1: sATp1,
+                    tp15BeEnabled: t15, atrTrailEnabled: atr, structuralTrailEnabled: str
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let bestConfig = combinations[0];
+    let bestScore = -Infinity;
+    let bestWinRate = -1;
+
+    const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
+    
+    Object.keys(baseConfig).forEach(sk => {
+      Object.keys(baseConfig[sk]).forEach(tk => {
+        if (typeof baseConfig[sk][tk] === 'object' && baseConfig[sk][tk] !== null) {
+           baseConfig[sk][tk].enabled = false;
+        }
+      });
+    });
+
+    if (!baseConfig[sessionKey]) baseConfig[sessionKey] = {};
+    if (!baseConfig[sessionKey][triggerKey]) baseConfig[sessionKey][triggerKey] = { enabled: true, minScore: 4 };
+    
+    baseConfig[sessionKey][triggerKey].enabled = true;
+    
+    const CHUNK_SIZE = 50;
+    let i = 0;
+
+    const processChunk = () => {
+      const end = Math.min(i + CHUNK_SIZE, combinations.length);
+      for (; i < end; i++) {
+        const testMgmt = combinations[i];
+        
+        const testSessionTriggers = JSON.parse(JSON.stringify(baseConfig));
+        testSessionTriggers[sessionKey][triggerKey] = {
+          ...testSessionTriggers[sessionKey][triggerKey],
+          ...testMgmt
+        };
+
+        const finalOte = oteEntryPercent;
+        const configToRun = {
+          ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent: finalOte, entryTrigger: 'SMART' as const,
+          maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses, maxTradesPerDay, trailingDrawdownR,
+          sessions: testSessionTriggers,
+          sessionFilter: [sessionKey],
+          enabled: true,
+          spreadPips,
+          commissionPerLot,
+          maxTradesPerSession
+        };
+
+        const result = runBacktest(csvData, configToRun);
+        
+        let pnlR = 0;
+        let wins = 0;
+        let total = 0;
+        result.trades.forEach(t => {
+           if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+               pnlR += t.rMultiple;
+               total++;
+               if (t.rMultiple > 0) wins++;
+           }
+        });
+        const wr = total > 0 ? wins / total : 0;
+        
+        if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {
+          bestScore = pnlR;
+          bestWinRate = wr;
+          bestConfig = testMgmt;
+        }
+      }
+
+      if (i < combinations.length) {
+        requestAnimationFrame(processChunk);
+      } else {
+        setSessionTriggers(prev => {
+          const next = JSON.parse(JSON.stringify(prev));
+          if (!next[sessionKey]) next[sessionKey] = {};
+          if (!next[sessionKey][triggerKey]) next[sessionKey][triggerKey] = { enabled: true };
+          next[sessionKey][triggerKey] = {
+            ...next[sessionKey][triggerKey],
+            ...bestConfig
+          };
+          return next;
+        });
+        toast(`Optimización completada. PnL Máximo: ${bestScore.toFixed(2)}R`, 'success');
+        setOptimizingTrigger(null);
+      }
+    };
+
+    requestAnimationFrame(processChunk);
+  };
 
   const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>, isAutoRun: boolean = false) => {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
@@ -2115,25 +2252,25 @@ export default function BacktestingPanel() {
                 sessionKey={sessionFilter} triggerKey="choch15m" title="💥 CHOCH (Ruptura) (15m)"
                 config={sessionTriggers[sessionFilter]?.choch15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={false}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_15M"
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "choch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-choch15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="bos15m" title="🚀 BOS (Continuación) (15m)"
                 config={sessionTriggers[sessionFilter]?.bos15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={false}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_15M"
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "bos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-bos15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteChoch15m" title="📉 OTE CHOCH (15m)"
                 config={sessionTriggers[sessionFilter]?.oteChoch15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={true}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_15M"
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteChoch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteChoch15m`}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteBos15m" title="📈 OTE BOS (15m)"
                 config={sessionTriggers[sessionFilter]?.oteBos15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, false)} isRunning={isRunning} isOte={true}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M"
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos15m`}
               />
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '12px', backgroundColor: 'rgba(255,165,0,0.03)', borderRadius: '6px', border: '1px solid rgba(255,165,0,0.08)' }}>
