@@ -902,7 +902,7 @@ if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const adjustedSL = currentDirection === 'BUY'
           ? activeLeg.origin - structuralBuffer
           : activeLeg.origin + structuralBuffer;
-        const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
+        const activeFixedRR = 2.0; // fallback or logic changed
         const stopLoss = adjustedSL.toFixed(decimals);
         const currentPrice = state.lastPrice || (currentDirection === 'BUY' ? activeLeg.extreme : activeLeg.extreme);
         const riskDist = Math.abs(currentPrice - adjustedSL);

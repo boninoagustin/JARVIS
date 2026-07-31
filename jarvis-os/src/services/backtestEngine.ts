@@ -417,14 +417,29 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
-      // Gestión diferenciada por tipo de entrada: OTE (retroceso fibo) vs directa (CHOCH/BOS)
-      const isOteTrade = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
-      const mgmt = (isOteTrade ? config.oteManagement : config.directManagement) ?? {};
-      const partialPct = mgmt.partialClosePct ?? config.partialClosePct ?? 0.5; // fracción cerrada en TP1
+      // Gestión por gatillo
+      let finalTriggerType = '';
+      const isBos = trade.events?.some(e => e.includes('BOS'));
+      const isChoch = trade.events?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
+      const hasOte = trade.events?.some(e => e.includes('OTE_Retracement'));
+      
+      // Siempre usamos 15m
+      const tfSuffix = '15m';
+
+      if (hasOte && isBos) finalTriggerType = `oteBos${tfSuffix}`;
+      else if (hasOte && isChoch) finalTriggerType = `oteChoch${tfSuffix}`;
+      else if (isBos && !hasOte) finalTriggerType = `bos${tfSuffix}`;
+      else if (isChoch && !hasOte) finalTriggerType = `choch${tfSuffix}`;
+
+      const sessionName = getSessionForTimestamp(trade.timestamp);
+      const localMgmt = config.sessions?.[sessionName]?.[finalTriggerType as keyof typeof config.sessions[typeof sessionName]] as any;
+
+      const partialPct = localMgmt?.partialClosePct ?? 0; // fracción cerrada en TP1
       const remainderPct = 1 - partialPct;
-      const slAfterTp1Mode = mgmt.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint';
-      const tp15BeEnabled = mgmt.tp15BeEnabled ?? config.tp15BeEnabled ?? true;
-      const atrTrailEnabled = mgmt.atrTrailEnabled ?? config.atrTrailEnabled ?? true;
+      const slAfterTp1Mode = localMgmt?.slAfterTp1 ?? 'none';
+      const tp15BeEnabled = localMgmt?.tp15BeEnabled ?? false;
+      const atrTrailEnabled = localMgmt?.atrTrailEnabled ?? false;
+
 
       const MAX_HOLD_MS = config.maxHoldMin ? config.maxHoldMin * 60000 : Infinity;
       if (tradeAge >= MAX_HOLD_MS) {
@@ -717,8 +732,18 @@ function processAlert(
             state.activeImpulseBuy = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
-              const stOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
-              const stEnabled = ((stOte ? config.oteManagement : config.directManagement)?.structuralTrailEnabled) ?? config.structuralTrailEnabled ?? true;
+              const sn = getSessionForTimestamp(trade.timestamp);
+              const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
+              const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
+              const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
+              let ft = '';
+              const tfSuffix = trade.tf === '5' ? '5m' : '15m';
+              if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
+              else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
+              else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
+              else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
+              const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
+              const stEnabled = lm?.structuralTrailEnabled ?? false;
               if (!stEnabled) continue;
               if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
@@ -732,8 +757,18 @@ function processAlert(
             state.activeImpulseSell = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
-              const stOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
-              const stEnabled = ((stOte ? config.oteManagement : config.directManagement)?.structuralTrailEnabled) ?? config.structuralTrailEnabled ?? true;
+              const sn = getSessionForTimestamp(trade.timestamp);
+              const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
+              const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
+              const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
+              let ft = '';
+              const tfSuffix = trade.tf === '5' ? '5m' : '15m';
+              if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
+              else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
+              else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
+              else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
+              const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
+              const stEnabled = lm?.structuralTrailEnabled ?? false;
               if (!stEnabled) continue;
               if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
@@ -1045,14 +1080,19 @@ function processAlert(
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
+        const tfKey = prefix === 'EVENTO_CHOCH' ? `choch15m` : `bos15m`;
+        const tfConfig = sessionConfig?.[tfKey as keyof typeof sessionConfig] as any;
+        const slBuff = tfConfig?.slBuff ?? 0;
+        const activeFixedRR = tfConfig?.tp2 ?? 1.5;
+
         const structuralBuffer = Math.max(
-          2 * (config.spreadPips ?? 0.1) * pipSize,
+          (slBuff > 0 ? slBuff : 2 * (config.spreadPips ?? 0.1)) * pipSize,
           (state.atr14 ?? 0) * 0.5
         );
         const adjustedSL = currentDirection === 'BUY'
           ? activeLeg.origin - structuralBuffer
           : activeLeg.origin + structuralBuffer;
-        const activeFixedRR = sessionConfig?.fixedRR ?? config.fixedRR ?? 2.0;
+        
         const stopLoss = adjustedSL.toFixed(decimals);
         const currentPrice = state.lastPrice ?? activeLeg.extreme;
         const riskDist = Math.abs(currentPrice - adjustedSL);
@@ -1240,7 +1280,18 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
         const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
         const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
         
-        const partialPct = config.partialClosePct ?? 0.5;
+        const isChoch = existingTradeForTicker.events?.some(e => e.includes('EVENTO_CHOCH'));
+        const isBos = existingTradeForTicker.events?.some(e => e.includes('EVENTO_BOS'));
+        const hasOte = existingTradeForTicker.events?.some(e => e.includes('OTE_Retracement'));
+        const tfSuffix = existingTradeForTicker.tf === '5' ? '5m' : '15m';
+        let ft = '';
+        if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
+        else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
+        else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
+        else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
+        const sn = getSessionForTimestamp(existingTradeForTicker.timestamp);
+        const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
+        const partialPct = lm?.partialClosePct ?? 0.5;
         const remainderPct = 1 - partialPct;
         const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * partialPct : 0;
         const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? remainderPct : 1.0);

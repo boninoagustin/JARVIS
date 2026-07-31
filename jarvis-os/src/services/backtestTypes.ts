@@ -18,45 +18,36 @@ export interface BacktestTrade {
   vwapStatus?: Record<string, string>;
 }
 
-export interface TriggerConfig {
+export interface BaseTriggerConfig {
   enabled: boolean;
   minScore: number;
+  slBuff: number;
+  tp2: number;
+  partialClosePct: number;
+  slAfterTp1: 'midpoint' | 'breakeven' | 'none';
+  tp15BeEnabled: boolean;
+  atrTrailEnabled: boolean;
+  structuralTrailEnabled: boolean;
+  tp1StructuralMinRR: number;
 }
 
-export interface OteConfig {
-  enabled: boolean;
-  minScore: number;
-}
+export interface TriggerConfig extends BaseTriggerConfig {}
+
+export interface OteConfig extends BaseTriggerConfig {}
 
 export interface SessionConfig {
-  choch5m: TriggerConfig;
   choch15m: TriggerConfig;
-  bos5m: TriggerConfig;
   bos15m: TriggerConfig;
-  oteChoch5m?: OteConfig;
   oteChoch15m?: OteConfig;
-  oteBos5m?: OteConfig;
   oteBos15m?: OteConfig;
-  slBufferPercent: number;
-  fixedRR: number;
   maxSellLosses?: number;
   maxBuyLosses?: number;
-}
-
-export interface ManagementConfig {
-  partialClosePct?: number;
-  slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
-  tp15BeEnabled?: boolean;
-  atrTrailEnabled?: boolean;
-  structuralTrailEnabled?: boolean;
 }
 
 export interface BacktestConfig {
   ticker: string;
   minBuyPoints: number;
   minSellPoints: number;
-  slBufferPercent: number;
-  fixedRR: number;
   minRR?: number; // Minimum RR required to take a trade
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
@@ -78,15 +69,6 @@ export interface BacktestConfig {
   commissionPerLot?: number;
   maxHoldMin?: number;
   latencyMs?: number;
-  partialClosePct?: number; // Fracción de la posición cerrada en TP1 (default 0.5)
-  tp1StructuralMinRR?: number; // Mínimo R del TP1 estructural (extremo del impulso) para preferirlo sobre el 1:1 fijo (default 1.2)
-  slAfterTp1?: 'midpoint' | 'breakeven' | 'none'; // Ajuste del SL al tocar TP1 (default 'midpoint')
-  tp15BeEnabled?: boolean; // BE diferido al alcanzar TP1.5 (default true)
-  atrTrailEnabled?: boolean; // Trailing ATR continuo post-TP1 (default true)
-  structuralTrailEnabled?: boolean; // Trailing estructural post-TP1 detrás de nuevos impulsos CHOCH/BOS (default true)
-  // Gestión diferenciada por tipo de entrada (override de los flags globales)
-  oteManagement?: ManagementConfig;    // Trades OTE (retroceso fibo)
-  directManagement?: ManagementConfig; // Trades directos CHOCH/BOS
 }
 
 export interface BacktestResult {

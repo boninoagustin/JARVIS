@@ -162,12 +162,16 @@ export function evaluateImpulseCore(
         let triggerTf = triggerTfStr.toLowerCase(); // "5m" or "15m"
 
         let activeOteEntryPercent = config.oteEntryPercent || 50;
+        let slBuff = 0;
+        let tp2RR = 1.5;
         if (sessionConfig) {
             if (isChoch) {
                 const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
                 const tfConfig = sessionConfig[tfKey] as any;
                 if (tfConfig) {
                     activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+                    slBuff = tfConfig.slBuff ?? 0;
+                    tp2RR = tfConfig.tp2 ?? 1.5;
                 } else if ((sessionConfig as any).oteChoch) {
                     activeOteEntryPercent = (sessionConfig as any).oteChoch.entryPercent ?? config.oteEntryPercent ?? 50;
                 }
@@ -176,6 +180,8 @@ export function evaluateImpulseCore(
                 const tfConfig = sessionConfig[tfKey] as any;
                 if (tfConfig) {
                     activeOteEntryPercent = tfConfig.entryPercent ?? config.oteEntryPercent ?? 50;
+                    slBuff = tfConfig.slBuff ?? 0;
+                    tp2RR = tfConfig.tp2 ?? 1.5;
                 } else if ((sessionConfig as any).oteBos) {
                     activeOteEntryPercent = (sessionConfig as any).oteBos.entryPercent ?? config.oteEntryPercent ?? 50;
                 }
@@ -265,15 +271,14 @@ export function evaluateImpulseCore(
 
             const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
             const decimals = getDecimals(ticker);
-            const fixedBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
+            const fixedBuffer = slBuff > 0 ? calculateDynamicSlBuffer(ticker, leg.origin, slBuff) : calculateDynamicSlBuffer(ticker, leg.origin, 0.1);
             const slBuffer = Math.max(fixedBuffer, (state.atr14 ?? 0) * 0.5); // piso: 0.5×ATR real
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
-            // TP2 del OTE: respeta config.fixedRR sin truncar a la extensión -0.27 (alineado con la ruta live)
             const fixedTP2 = leg.dir === 'BUY'
-                ? entryFill + (risk * config.fixedRR)
-                : entryFill - (risk * config.fixedRR);
+                ? entryFill + (risk * tp2RR)
+                : entryFill - (risk * tp2RR);
             const reward = Math.abs(fixedTP2 - entryFill); // Se evalúa el R:R contra el TP2 real de la orden
             const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
 
