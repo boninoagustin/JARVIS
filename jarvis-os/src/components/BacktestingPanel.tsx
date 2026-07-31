@@ -582,6 +582,8 @@ export default function BacktestingPanel() {
   const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
   const [tradeFilter, setTradeFilter] = useState<string>('ALL');
   const [optimizingTrigger, setOptimizingTrigger] = useState<string | null>(null);
+  const [isGlobalAutoTuning, setIsGlobalAutoTuning] = useState(false);
+  const [globalAutoTuneProgress, setGlobalAutoTuneProgress] = useState({ current: 0, total: 0 });
   const [optimizeProgress, setOptimizeProgress] = useState<number>(0);
   const [optimizingSessionLosses, setOptimizingSessionLosses] = useState<string | null>(null);
 
@@ -848,6 +850,106 @@ export default function BacktestingPanel() {
       setOptimizeProgress(0);
     }
   };
+
+  const handleGlobalAutoTune = async () => {
+    if (isGlobalAutoTuning || optimizingTrigger || optimizingSessionLosses || isRunning) return;
+    
+    // First, verify logs are uploaded
+    if (uploadedFiles.length === 0) {
+      toast('Sube datos primero para poder optimizar.', 'error');
+      return;
+    }
+
+    setIsGlobalAutoTuning(true);
+    
+    try {
+      toast('🚀 Iniciando Auto-Tune Global... (esto puede tardar unos minutos)', 'info');
+
+      // 1. Send logs to all workers
+      const logCache = new Map<string, string[]>();
+      uploadedFiles.forEach(f => logCache.set(f.tf, f.lines));
+      await runWorkerTask('SET_LOGS', { logsArray: Array.from(logCache.entries()) });
+
+      const sessionsToOptimize = ['OFF', 'LONDON', 'NY', 'ASIA'];
+      const triggersToOptimize = ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
+      
+      const tasks: { sessionKey: string, triggerKey: string }[] = [];
+      for (const sessionKey of sessionsToOptimize) {
+        for (const triggerKey of triggersToOptimize) {
+          const config = (sessionTriggers as any)[sessionKey]?.[triggerKey] || { enabled: true };
+          if (config.enabled) {
+            tasks.push({ sessionKey, triggerKey });
+          }
+        }
+      }
+
+      setGlobalAutoTuneProgress({ current: 0, total: tasks.length });
+
+      let completed = 0;
+      const promises = tasks.map(async ({ sessionKey, triggerKey }) => {
+        const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
+        Object.keys(baseConfig).forEach(sk => {
+          Object.keys(baseConfig[sk]).forEach(tk => {
+            if (typeof baseConfig[sk][tk] === 'object' && baseConfig[sk][tk] !== null) {
+               baseConfig[sk][tk].enabled = false;
+            }
+          });
+        });
+        if (!baseConfig[sessionKey]) baseConfig[sessionKey] = {};
+        if (!baseConfig[sessionKey][triggerKey]) baseConfig[sessionKey][triggerKey] = { enabled: true, minScore: 4 };
+        baseConfig[sessionKey][triggerKey].enabled = true;
+
+        try {
+          const optResult = await runWorkerTask('RUN_OPTIMIZATION', {
+            ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent,
+            maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses,
+            maxTradesPerDay, maxTradesPerSession, trailingDrawdownR,
+            spreadPips, commissionPerLot, tp1StructuralMinRR,
+            baseConfig: { sessions: baseConfig },
+            sessionKey, triggerKey,
+            strategy: 'ga', budget: 600, seed: Date.now() % 100000,
+            trainFraction: 1.0, minTrades: 5,
+          });
+
+          if (optResult?.best) {
+            setSessionTriggers(prev => {
+              const next = JSON.parse(JSON.stringify(prev));
+              if (!next[sessionKey]) next[sessionKey] = {};
+              if (!next[sessionKey][triggerKey]) next[sessionKey][triggerKey] = { enabled: true };
+              next[sessionKey][triggerKey] = {
+                ...next[sessionKey][triggerKey],
+                minScore: optResult.best.minScore,
+                slBuff: optResult.best.slBuff,
+                tp2: optResult.best.tp2,
+                partialClosePct: optResult.best.partialClosePct,
+                slAfterTp1: optResult.best.slAfterTp1,
+                tp15BeEnabled: optResult.best.tp15BeEnabled,
+                atrTrailEnabled: optResult.best.atrTrailEnabled,
+                structuralTrailEnabled: optResult.best.structuralTrailEnabled,
+              };
+              localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+              return next;
+            });
+          }
+        } catch (e) {
+          console.error(`Failed auto-tune for ${sessionKey}-${triggerKey}`, e);
+        } finally {
+          completed++;
+          setGlobalAutoTuneProgress(prev => ({ ...prev, current: completed }));
+        }
+      });
+
+      await Promise.all(promises);
+      toast(`✅ Auto-Tune Global completado (${tasks.length} gatillos)`, 'success');
+      
+    } catch (err: any) {
+      toast(`❌ Auto-Tune Global falló: ${err.message}`, 'error');
+    } finally {
+      setIsGlobalAutoTuning(false);
+      setGlobalAutoTuneProgress({ current: 0, total: 0 });
+    }
+  };
+
 
   const handleOptimizeMaxLosses = async (sessionKey: string) => {
     if (optimizingSessionLosses) return;
@@ -1885,14 +1987,20 @@ export default function BacktestingPanel() {
             )}
 
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="button" onClick={() => handleRun()} disabled={uploadedFiles.length === 0 || isRunning}
-                style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+              <button type="button" onClick={() => handleRun()} disabled={uploadedFiles.length === 0 || isRunning || isGlobalAutoTuning}
+                style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning && !isGlobalAutoTuning ? '#7c4dff' : 'var(--bg-secondary)', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning && !isGlobalAutoTuning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Play size={14} /> SIMULAR
               </button>
 
-              <button type="button" onClick={handleResetConfig}
+              <button type="button" onClick={handleGlobalAutoTune} disabled={uploadedFiles.length === 0 || isRunning || isGlobalAutoTuning}
+                style={{ flex: 1, padding: '10px', backgroundColor: uploadedFiles.length > 0 && !isRunning && !isGlobalAutoTuning ? 'var(--accent-gold)' : 'var(--bg-secondary)', color: 'black', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: uploadedFiles.length > 0 && !isRunning && !isGlobalAutoTuning ? 'pointer' : 'not-allowed', opacity: uploadedFiles.length > 0 ? 1 : 0.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                {isGlobalAutoTuning ? <Loader2 size={14} className="spin" /> : <Wand2 size={14} />} 
+                {isGlobalAutoTuning ? `AUTO-TUNE (${globalAutoTuneProgress.current}/${globalAutoTuneProgress.total})` : '🚀 AUTO-TUNE GLOBAL'}
+              </button>
+
+              <button type="button" onClick={handleResetConfig} disabled={isGlobalAutoTuning}
                 title="Resetear Configuración a Valores por Defecto (Score 4)"
-                style={{ padding: '10px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                style={{ padding: '10px', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-tertiary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: isGlobalAutoTuning ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <RotateCcw size={14} />
               </button>
             </div>

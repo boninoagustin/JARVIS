@@ -6,36 +6,89 @@ interface PendingTask {
   cancelId: number;
 }
 
-/**
- * Hook que gestiona el ciclo de vida del Web Worker de backtesting.
- * Soporta cancelación cooperativa de tareas RUN_OPTIMIZATION.
- */
+const POOL_SIZE = Math.min(navigator.hardwareConcurrency || 4, 8);
+
 export function useBacktestWorker() {
-  const workerRef = useRef<Worker | null>(null);
+  const workersRef = useRef<Worker[]>([]);
+  const nextWorkerIndex = useRef(0);
   const pendingRef = useRef<Map<number, PendingTask>>(new Map());
   const cancelledRef = useRef<Set<number>>(new Set());
+  
+  // Track logs set per worker
+  const logsSetRef = useRef<boolean[]>(Array(POOL_SIZE).fill(false));
+  const currentLogsArrayRef = useRef<any[] | null>(null);
 
-  const getWorker = useCallback((): Worker => {
-    if (!workerRef.current) {
-      workerRef.current = new Worker(
-        new URL('../../../services/backtest.worker.ts', import.meta.url),
-        { type: 'module' }
-      );
+  const initWorkers = useCallback(() => {
+    if (workersRef.current.length === 0) {
+      for (let i = 0; i < POOL_SIZE; i++) {
+        workersRef.current.push(new Worker(
+          new URL('../../../services/backtest.worker.ts', import.meta.url),
+          { type: 'module' }
+        ));
+      }
     }
-    return workerRef.current;
   }, []);
 
-  /**
-   * Encola una tarea al worker y devuelve una promesa.
-   * Soporta callbacks: 'DONE', 'ERROR', 'CANCELLED', 'PROGRESS'.
-   */
+  useEffect(() => {
+    initWorkers();
+    return () => {
+      workersRef.current.forEach(w => w.terminate());
+      workersRef.current = [];
+    };
+  }, [initWorkers]);
+
   const runWorkerTask = useCallback((
     type: string,
     payload: any,
     onProgress?: (evaluated: number, budget: number, bestFitness: number) => void
   ): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const worker = getWorker();
+    return new Promise(async (resolve, reject) => {
+      initWorkers();
+
+      // Ensure SET_LOGS is dispatched to ALL workers
+      if (type === 'SET_LOGS') {
+        currentLogsArrayRef.current = payload.logsArray;
+        const promises = workersRef.current.map((w, idx) => {
+          return new Promise((res, rej) => {
+            const tempId = Date.now() + Math.random();
+            const h = (e: MessageEvent) => {
+              if (e.data.id === tempId) {
+                w.removeEventListener('message', h);
+                if (e.data.type === 'DONE') {
+                  logsSetRef.current[idx] = true;
+                  res(e.data.result);
+                } else {
+                  rej(e.data.error);
+                }
+              }
+            };
+            w.addEventListener('message', h);
+            w.postMessage({ type: 'SET_LOGS', id: tempId, payload });
+          });
+        });
+        try {
+          const results = await Promise.all(promises);
+          resolve(results[0]);
+        } catch (err) {
+          reject(err);
+        }
+        return;
+      }
+
+      // Round robin selection
+      const workerIdx = nextWorkerIndex.current;
+      nextWorkerIndex.current = (nextWorkerIndex.current + 1) % POOL_SIZE;
+      const worker = workersRef.current[workerIdx];
+
+      // Auto-set logs if missing on this worker (failsafe)
+      if (!logsSetRef.current[workerIdx] && currentLogsArrayRef.current && type !== 'SET_LOGS') {
+        try {
+          await runWorkerTask('SET_LOGS', { logsArray: currentLogsArrayRef.current });
+        } catch(e) {
+          console.error("Failed auto-setting logs on worker", workerIdx, e);
+        }
+      }
+
       const id = Date.now() + Math.random();
       let timeoutId: ReturnType<typeof setTimeout>;
 
@@ -51,7 +104,7 @@ export function useBacktestWorker() {
           clearTimeout(timeoutId);
           worker.removeEventListener('message', handler);
           pendingRef.current.delete(id);
-          resolve(e.data.result); // Resolver (no rechazar) con lo mejor hasta ahora
+          resolve(e.data.result);
         } else if (e.data.type === 'ERROR') {
           clearTimeout(timeoutId);
           worker.removeEventListener('message', handler);
@@ -65,39 +118,31 @@ export function useBacktestWorker() {
       timeoutId = setTimeout(() => {
         worker.removeEventListener('message', handler);
         pendingRef.current.delete(id);
-        reject(new Error('Worker Task Timeout (5m)'));
-      }, 300000);
+        reject(new Error('Worker Task Timeout (10m)'));
+      }, 600000);
 
       pendingRef.current.set(id, { resolve, reject, cancelId: id });
       worker.addEventListener('message', handler);
       worker.postMessage({ type, id, payload });
     });
-  }, [getWorker]);
+  }, [initWorkers]);
 
-  /**
-   * Cancela una tarea RUN_OPTIMIZATION en curso. El worker responde
-   * con CANCELLED conteniendo el mejor resultado hasta el momento.
-   */
   const cancelOptimization = useCallback((taskId: number) => {
     cancelledRef.current.add(taskId);
-    getWorker().postMessage({ type: 'CANCEL', id: taskId, payload: {} });
-  }, [getWorker]);
+    workersRef.current.forEach(w => w.postMessage({ type: 'CANCEL', id: taskId, payload: {} }));
+  }, []);
 
-  /**
-   * Termina el worker y rechaza todas las promesas pendientes.
-   */
   const terminate = useCallback(() => {
-    // Rechazar todas las promesas pendientes
     for (const [, task] of pendingRef.current) {
       task.reject(new Error('Worker terminated'));
     }
     pendingRef.current.clear();
     cancelledRef.current.clear();
-    workerRef.current?.terminate();
-    workerRef.current = null;
+    workersRef.current.forEach(w => w.terminate());
+    workersRef.current = [];
+    logsSetRef.current = Array(POOL_SIZE).fill(false);
   }, []);
 
-  // Limpiar al desmontar
   useEffect(() => {
     return () => {
       terminate();
