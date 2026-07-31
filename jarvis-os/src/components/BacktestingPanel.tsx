@@ -775,41 +775,6 @@ export default function BacktestingPanel() {
     
     setOptimizingTrigger(`${sessionKey}-${triggerKey}`);
     setOptimizeProgress(0);
-    
-    const slBuffVals = [0, 0.05, 0.1, 0.2];
-    const tp2Vals = [1.5, 2.0, 3.0, 4.0];
-    const partialClosePctVals = [0, 0.5, 0.8];
-    const slAfterTp1Vals: ('midpoint' | 'breakeven' | 'none')[] = ['none', 'midpoint', 'breakeven'];
-    const tp15BeEnabledVals = [true, false];
-    const atrTrailEnabledVals = [true, false];
-    const structuralTrailEnabledVals = [true, false];
-    const minScoreVals = [4, 8, 12, 16, 20];
-
-    const combinations: any[] = [];
-    for (const ms of minScoreVals) {
-      for (const sb of slBuffVals) {
-        for (const t2 of tp2Vals) {
-          for (const pcp of partialClosePctVals) {
-            for (const sATp1 of slAfterTp1Vals) {
-              for (const t15 of tp15BeEnabledVals) {
-                for (const atr of atrTrailEnabledVals) {
-                  for (const str of structuralTrailEnabledVals) {
-                    combinations.push({
-                      minScore: ms, slBuff: sb, tp2: t2, partialClosePct: pcp, slAfterTp1: sATp1,
-                      tp15BeEnabled: t15, atrTrailEnabled: atr, structuralTrailEnabled: str
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    let bestConfig = combinations[0];
-    let bestScore = -Infinity;
-    let bestWinRate = -1;
 
     const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
     
@@ -823,125 +788,65 @@ export default function BacktestingPanel() {
 
     if (!baseConfig[sessionKey]) baseConfig[sessionKey] = {};
     if (!baseConfig[sessionKey][triggerKey]) baseConfig[sessionKey][triggerKey] = { enabled: true, minScore: 4 };
-    
     baseConfig[sessionKey][triggerKey].enabled = true;
     
     const logs = new Map<string, string[]>();
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
     const logsArray = Array.from(logs.entries());
 
-    // Send logs to worker once to avoid serializing them 115 times during chunks
     try {
         await runWorkerTask('SET_LOGS', { logsArray });
     } catch (e) {
         console.error("Error setting logs in worker", e);
+        setOptimizingTrigger(null);
+        return;
     }
 
-    const CHUNK_SIZE = 50;
-    let i = 0;
+    try {
+      const optResult = await runWorkerTask('RUN_OPTIMIZATION', {
+        ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent,
+        maxDailyLossR, dailyProfitTargetR, maxConsecutiveLosses,
+        maxTradesPerDay, maxTradesPerSession, trailingDrawdownR,
+        spreadPips, commissionPerLot, tp1StructuralMinRR,
+        baseConfig: { sessions: baseConfig },
+        sessionKey, triggerKey,
+        strategy: 'ga', budget: 600, seed: Date.now() % 100000,
+        trainFraction: 0.7, minTrades: 15,
+      }, (_evaluated: number, _budget: number, _bestFitness: number) => {
+        // progress handled via the third arg; NOT supported in legacy runWorkerTask
+      });
 
-    const processChunk = async () => {
-      const end = Math.min(i + CHUNK_SIZE, combinations.length);
-      const chunkConfigs: any[] = [];
-      const chunkMgmts: any[] = [];
-      
-      for (; i < end; i++) {
-        const testMgmt = combinations[i];
-        chunkMgmts.push(testMgmt);
-        
-        const testSessionTriggers = JSON.parse(JSON.stringify(baseConfig));
-        testSessionTriggers[sessionKey][triggerKey] = {
-          ...testSessionTriggers[sessionKey][triggerKey],
-          ...testMgmt
+      if (!optResult?.best) throw new Error("No optimization result");
+
+      setSessionTriggers(prev => {
+        const next = JSON.parse(JSON.stringify(prev));
+        if (!next[sessionKey]) next[sessionKey] = {};
+        if (!next[sessionKey][triggerKey]) next[sessionKey][triggerKey] = { enabled: true };
+        next[sessionKey][triggerKey] = {
+          ...next[sessionKey][triggerKey],
+          minScore: optResult.best.minScore,
+          slBuff: optResult.best.slBuff,
+          tp2: optResult.best.tp2,
+          partialClosePct: optResult.best.partialClosePct,
+          slAfterTp1: optResult.best.slAfterTp1,
+          tp15BeEnabled: optResult.best.tp15BeEnabled,
+          atrTrailEnabled: optResult.best.atrTrailEnabled,
+          structuralTrailEnabled: optResult.best.structuralTrailEnabled,
         };
+        localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+        return next;
+      });
 
-        const configToRun = {
-          ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger: 'SMART' as const,
-          maxDailyLossR: maxDailyLossR || undefined,
-          dailyProfitTargetR: dailyProfitTargetR || undefined,
-          maxConsecutiveLosses: maxConsecutiveLosses || undefined,
-          maxTradesPerDay: maxTradesPerDay || undefined,
-          maxTradesPerSession: maxTradesPerSession || undefined,
-          trailingDrawdownR: trailingDrawdownR || undefined,
-          sessions: testSessionTriggers,
-          sessionFilter: [sessionKey],
-          enabled: true,
-          spreadPips,
-          commissionPerLot,
-          partialClosePct: testMgmt.partialClosePct,
-          slAfterTp1: testMgmt.slAfterTp1,
-          tp15BeEnabled: testMgmt.tp15BeEnabled,
-          atrTrailEnabled: testMgmt.atrTrailEnabled,
-          structuralTrailEnabled: testMgmt.structuralTrailEnabled,
-          tp1StructuralMinRR: tp1StructuralMinRR
-        };
-        chunkConfigs.push(configToRun);
-      }
-
-      try {
-        const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
-        
-        for (let j = 0; j < chunkResults.length; j++) {
-            const res = chunkResults[j];
-            let pnlR = 0;
-            let wins = 0;
-            let total = 0;
-            res.trades.forEach((t: any) => {
-               const hasOte = t.events?.some((e: any) => e.includes('OTE_Retracement'));
-               const isBos = t.events?.some((e: any) => e.includes('EVENTO_BOS'));
-               const isChoch = t.events?.some((e: any) => e.includes('EVENTO_CHOCH'));
-
-               let tradeTriggerType = null;
-               if (hasOte && isBos) tradeTriggerType = 'oteBos15m';
-               else if (hasOte && isChoch) tradeTriggerType = 'oteChoch15m';
-               else if (isBos && !hasOte) tradeTriggerType = 'bos15m';
-               else if (isChoch && !hasOte) tradeTriggerType = 'choch15m';
-
-               // Solo sumar al PnL si el trade es del gatillo que estamos optimizando y cumple el puntaje
-               const tMinScore = chunkMgmts[j].minScore || chunkConfigs[j].sessions[sessionKey]?.[triggerKey]?.minScore || 4;
-               
-               if (tradeTriggerType === triggerKey && (t.points || 0) >= tMinScore) {
-                   if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
-                       pnlR += t.rMultiple;
-                       total++;
-                       if (t.rMultiple > 0) wins++;
-                   }
-               }
-            });
-            const wr = total > 0 ? wins / total : 0;
-            
-            if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {
-              bestScore = pnlR;
-              bestWinRate = wr;
-              bestConfig = chunkMgmts[j];
-            }
-        }
-      } catch (err) {
-        console.error("Batch error:", err);
-      }
-
-      setOptimizeProgress(i / combinations.length);
-
-      if (i < combinations.length) {
-        setTimeout(() => { processChunk(); }, 0);
-      } else {
-        setSessionTriggers(prev => {
-          const next = JSON.parse(JSON.stringify(prev));
-          if (!next[sessionKey]) next[sessionKey] = {};
-          if (!next[sessionKey][triggerKey]) next[sessionKey][triggerKey] = { enabled: true };
-          next[sessionKey][triggerKey] = {
-            ...next[sessionKey][triggerKey],
-            ...bestConfig
-          };
-          localStorage.setItem('bt_session_triggers', JSON.stringify(next));
-          return next;
-        });
-        toast(`Optimización completada. PnL Máximo: ${bestScore.toFixed(2)}R`, 'success');
-        setOptimizingTrigger(null);
-      }
-    };
-
-    processChunk();
+      const oosInfo = optResult.oosPnlR !== null 
+        ? ` (OOS: ${optResult.oosPnlR > 0 ? '+' : ''}${optResult.oosPnlR}R / ${optResult.oosTrades} trades)` 
+        : '';
+      toast(`✅ Optimizado (${optResult.evaluated} evals) → Train: ${optResult.trainPnlR > 0 ? '+' : ''}${optResult.trainPnlR}R${oosInfo}`, 'success');
+    } catch (err: any) {
+      toast(`❌ Optimización fallida: ${err.message}`, 'error');
+    } finally {
+      setOptimizingTrigger(null);
+      setOptimizeProgress(0);
+    }
   };
 
   const handleOptimizeMaxLosses = async (sessionKey: string) => {
