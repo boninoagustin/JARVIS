@@ -18,7 +18,7 @@ export function useBacktestWorker() {
   const getWorker = useCallback((): Worker => {
     if (!workerRef.current) {
       workerRef.current = new Worker(
-        new URL('../../services/backtest.worker.ts', import.meta.url),
+        new URL('../../../services/backtest.worker.ts', import.meta.url),
         { type: 'module' }
       );
     }
