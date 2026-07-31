@@ -1,10 +1,70 @@
-import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade } from './Types.js';
+import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreEvent } from './Types.js';
 
 const DEBUG = false;
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
 
 
-export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core)
+export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core) — LEGACY: sustituido por EVENT_TTL_MS por timeframe
+
+// ⏳ TTL de cada evento de scoring según su timeframe (alineado con MAX_ZONE_AGE_MS de trading.ts).
+// Los puntos caducan cuando nowMs - ts >= EVENT_TTL_MS[tf]. Fallback: 4h (igual que el de zonas).
+export const EVENT_TTL_MS: Record<string, number> = {
+    '3': 1800000, '5': 3600000, '15': 21600000,
+    '60': 28800000, '240': 86400000, 'D': 604800000,
+};
+const EVENT_TTL_FALLBACK_MS = 14400000; // 4h para tf fuera de la tabla
+
+// Jerarquía de timeframes para la invalidación estructural (CHoCH/BOS contrario)
+export const TF_RANK: Record<string, number> = { '3': 1, '5': 2, '15': 3, '60': 4, '240': 5, 'D': 6 };
+
+const isValidScoreEvent = (e: any): e is ScoreEvent =>
+    !!e && typeof e === 'object' && typeof e.id === 'string' &&
+    typeof e.pts === 'number' && typeof e.tf === 'string' && typeof e.ts === 'number';
+
+const eventTtl = (tf: string): number => EVENT_TTL_MS[tf] ?? EVENT_TTL_FALLBACK_MS;
+
+// Puntos vivos del score: suma de pts de eventos no caducados, capado a 35
+export function computePoints(score: ScoreState, nowMs: number): number {
+    let total = 0;
+    for (const e of score.events || []) {
+        if (isValidScoreEvent(e) && (nowMs - e.ts) < eventTtl(e.tf)) total += e.pts;
+    }
+    return Math.min(35, total);
+}
+
+// Recalcula la caché derivada `points` (no toca lastUpdate)
+export function refreshScoreCache(score: ScoreState, nowMs: number): void {
+    score.points = computePoints(score, nowMs);
+}
+
+// 🧹 Garbage collector: descarta eventos caducados por TTL y entradas legacy inválidas
+// (p.ej. strings del formato antiguo persistido en Firebase) y refresca la caché.
+export function gcScore(score: ScoreState, nowMs: number): void {
+    if (!Array.isArray(score.events)) { score.events = []; score.points = 0; return; }
+    score.events = score.events.filter(e => isValidScoreEvent(e) && (nowMs - e.ts) < eventTtl(e.tf));
+    refreshScoreCache(score, nowMs);
+}
+
+// Añade un evento: gc + dedupe por id + push + refresh de caché points/lastUpdate.
+// Devuelve true si el evento se añadió (false si ya existía el id).
+export function addScoreEvent(score: ScoreState, ev: ScoreEvent): boolean {
+    gcScore(score, ev.ts);
+    if (score.events.some(e => e.id === ev.id)) { refreshScoreCache(score, ev.ts); return false; }
+    score.events.push(ev);
+    score.lastUpdate = ev.ts;
+    refreshScoreCache(score, ev.ts);
+    return true;
+}
+
+// 💥 Invalidación estructural acotada: un CHoCH/BOS en `chochTf` borra del score CONTRARIO
+// los eventos de TF de igual o menor jerarquía (TF_RANK[tf] <= TF_RANK[chochTf]).
+export function structuralInvalidate(oppositeScore: ScoreState, chochTf: string, nowMs: number): void {
+    const rank = TF_RANK[chochTf] ?? 0;
+    oppositeScore.events = (oppositeScore.events || []).filter(e =>
+        isValidScoreEvent(e) && (TF_RANK[e.tf] ?? 0) > rank
+    );
+    refreshScoreCache(oppositeScore, nowMs);
+}
 
 export const TF_WEIGHT: Record<string, number> = {
     '3': 0.5,    // 3M: medio punto (mucho ruido)
@@ -116,16 +176,17 @@ export function evaluateImpulseCore(
     const oppositeScore = leg.dir === 'BUY' ? state.scoreSell : state.scoreBuy;
     const minOppositeScore = sessionConfig?.choch5m?.minScore ?? sessionConfig?.choch15m?.minScore ?? 9;
     
-    const ownStrength = Math.max(legScore.points, leg.chochPoints ?? 0);
+    const ownStrength = Math.max(computePoints(legScore, nowMs), leg.chochPoints ?? 0);
     const dominanceThreshold = Math.max(ownStrength * 3, minOppositeScore * 2);
+    const oppositePoints = computePoints(oppositeScore, nowMs);
     
-    if (oppositeScore.points >= dominanceThreshold && (nowMs - oppositeScore.lastUpdate) < 900000) {
-        dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositeScore.points} pts vs propio histórico ${ownStrength} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+    if (oppositePoints >= dominanceThreshold && (nowMs - oppositeScore.lastUpdate) < 900000) {
+        dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositePoints} pts vs propio histórico ${ownStrength} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
         leg.oteScored = true; return { updatedLeg: leg };
     }
 
     // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
-    const contraryChochFound = oppositeScore.events?.some((e: string) => e.includes('CHOCH') || e.includes('CHoCH'));
+    const contraryChochFound = oppositeScore.events?.some(e => e.id.includes('CHOCH') || e.id.includes('CHoCH'));
     if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
         leg.oteScored = true; return { updatedLeg: leg };
@@ -291,11 +352,9 @@ export function evaluateImpulseCore(
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
             const tfFormatted = triggerTf.toUpperCase() || '5M';
             const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
+            const eventTfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';
             
-            if (!activeScore.events.includes(eventName)) {
-                activeScore.events.push(eventName);
-                activeScore.points += 4;
-                activeScore.lastUpdate = nowMs;
+            if (addScoreEvent(activeScore, { id: eventName, pts: 4, tf: eventTfKey, ts: nowMs })) {
                 leg.oteScored = true;
                 
                 const stopLoss = adjustedSL.toFixed(decimals);

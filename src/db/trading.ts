@@ -14,7 +14,8 @@ export const globalState = createStateStore();
 
 
 import {
-    emptyState, normalizeZone, SETUP_MEMORY_WINDOW_MS, TF_WEIGHT, evaluateImpulseCore, getDecimals, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone
+    emptyState, normalizeZone, TF_WEIGHT, evaluateImpulseCore, getDecimals, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone,
+    gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
 import { evaluateNetTrade } from '../engine/FrictionModel.js';
@@ -602,8 +603,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
         if (!state.marketBias) state.marketBias = emptyState().marketBias;
 
-        if (nowMs - state.scoreBuy.lastUpdate > SETUP_MEMORY_WINDOW_MS) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
-        if (nowMs - state.scoreSell.lastUpdate > SETUP_MEMORY_WINDOW_MS) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
+        // 🧹 GC por TTL por timeframe (sustituye al reset de 48h): caduca eventos viejos
+        // y descarta entradas legacy inválidas (strings del formato antiguo en Firebase)
+        gcScore(state.scoreBuy, nowMs);
+        gcScore(state.scoreSell, nowMs);
 
         if (prefix === 'SYNC_ZONES') {
             if (!alertText.includes('Payload:')) return;
@@ -1148,11 +1151,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     let tfMultiplier = zTf === '4H' ? 2 : zTf === '1H' ? 1.5 : 1;
                     let pts = Math.floor(basePts * tfMultiplier * confluenceMultiplier);
 
-                    if (!activeScore.events.includes(eventName)) {
-                        activeScore.events.push(eventName);
-                        activeScore.points += pts;
-                        activeScore.points = Math.min(activeScore.points, 35);
-                        activeScore.lastUpdate = nowMs;
+                    if (addScoreEvent(activeScore, { id: eventName, pts, tf: zone.tf || eventTf, ts: nowMs })) {
                         touchedThisPing.push({ zone, eventName, pts });
                                            
                         if (confluenceMultiplier > 1.0) {
@@ -1183,12 +1182,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }).join('+');
                     
                     const eventName = `🧲_CONFLUENCIA_${tfCount}TF_${tfList}`;
-                    if (!activeScore.events.includes(eventName)) {
-                        activeScore.events.push(eventName);
-                        activeScore.points += confluenceBonus;
-                        activeScore.points = Math.min(activeScore.points, 35);
-                        activeScore.lastUpdate = nowMs;
-                    }
+                    // TF del evento = el de mayor jerarquía entre las zonas en confluencia
+                    const confTf = [...uniqueTFs].reduce((best, t) => (TF_RANK[t || ''] ?? 0) > (TF_RANK[best || ''] ?? 0) ? t : best, [...uniqueTFs][0] || eventTf);
+                    addScoreEvent(activeScore, { id: eventName, pts: confluenceBonus, tf: confTf || eventTf, ts: nowMs });
                 }
             }
         }
@@ -1196,9 +1192,14 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             const activeScore = currentDirection === 'BUY' ? state.scoreBuy : state.scoreSell;
             const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
             let addedPoints = 0;
+            let addedEventId: string | null = null;
 
             if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
                 state.marketBias[eventTf] = currentDirection;
+                
+                // 💥 Invalidación estructural acotada: el CHoCH/BOS borra del score CONTRARIO
+                // los eventos de TF de igual o menor jerarquía que el gatillo
+                structuralInvalidate(oppositeScore, eventTf, nowMs);
                 
                 const priceMatchChoch = alertText.match(/Precio:\s*([0-9.,]+)/i);
                 const actualPrice = priceMatchChoch ? parseTVPrice(priceMatchChoch[1]) : state.lastPrice;
@@ -1287,28 +1288,24 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 }
                 // 🆕 HÍBRIDO: Ponderar score por TF
                 const basePoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
-                addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1); 
+                addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
+                addedEventId = `${prefix === 'EVENTO_CHOCH' ? 'CHoCH' : 'BOS'}_${readableTf}`;
             }
 
             if (prefix === 'ZONE_BROKEN') {
-                let pointsToDeduct = 0;
-                const initialLength = activeScore.events.length;
+                // Filtrado por id de evento: los puntos se recalculan solos vía caché derivado
                 activeScore.events = activeScore.events.filter((e: any) => {
-                    if (typeof e === 'string' && e.includes(`_${readableTf}`) && (
-                        e.startsWith('OB_') || e.startsWith('💎_GOD_ZONE_') || 
-                        e.startsWith('🎯_Silver_Bullet_') || e.startsWith('♻️_Breaker_') || 
-                        e.startsWith('POC_Volume_') || e.startsWith('🎯_ZoneTouched_') ||
-                        e.startsWith('Breaker_')
+                    if (e.id.includes(`_${readableTf}`) && (
+                        e.id.startsWith('OB_') || e.id.startsWith('💎_GOD_ZONE_') || 
+                        e.id.startsWith('🎯_Silver_Bullet_') || e.id.startsWith('♻️_Breaker_') || 
+                        e.id.startsWith('POC_Volume_') || e.id.startsWith('🎯_ZoneTouched_') ||
+                        e.id.startsWith('Breaker_')
                     )) {
-                        if (e.includes('GOD_ZONE') || e.includes('Silver_Bullet') || e.includes('Breaker')) pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1);
-                        else if (e.includes('POC_Volume')) pointsToDeduct += 4 * (TF_WEIGHT[eventTf] || 1);
-                        else if (e.includes('ZoneTouched')) pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1);
-                        else pointsToDeduct += 2 * (TF_WEIGHT[eventTf] || 1);
                         return false;
                     }
                     return true;
                 });
-                if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
+                refreshScoreCache(activeScore, nowMs);
                 // 🔧 FIX: Limpiar las zonas CONTRARIAS rotas del mapa de zonas en RAM
                 // ZONE_BROKEN dir=BUY → presión alcista rompió zonas SELL (soportes/supply)
                 // ZONE_BROKEN dir=SELL → presión bajista rompió zonas BUY (demanda/demand)
@@ -1322,23 +1319,20 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             }
 
             if (prefix === 'DIV_BROKEN') {
-                const initialLength = activeScore.events.length;
-                activeScore.events = activeScore.events.filter((e: any) => typeof e !== 'string' || !e.startsWith(`DIV_${readableTf}`));
-                if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - 4);
+                activeScore.events = activeScore.events.filter((e: any) => !e.id.startsWith(`DIV_${readableTf}`));
+                refreshScoreCache(activeScore, nowMs);
                 return;
             }
 
             if (prefix === 'SWEEP_BROKEN') {
-                let pointsToDeduct = 0;
-                const initialLength = activeScore.events.length;
                 activeScore.events = activeScore.events.filter((e: any) => {
-                    if (typeof e === 'string' && (e === `🩸_V-Shape_Absorb_${readableTf}` || e === `Sweep_${readableTf}_Absorcion`)) { pointsToDeduct += 6 * (TF_WEIGHT[eventTf] || 1); return false; }
-                    if (typeof e === 'string' && e === `Sweep_${readableTf}`) { pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1); return false; }
-                    if (typeof e === 'string' && e === `📉_TL_Sweep_${readableTf}`) { pointsToDeduct += 2; return false; }
-                    if (typeof e === 'string' && e === `🩸_LIQ_GRAB_${readableTf}`) { pointsToDeduct += 4 * (TF_WEIGHT[eventTf] || 1); return false; }
+                    if (e.id === `🩸_V-Shape_Absorb_${readableTf}` || e.id === `Sweep_${readableTf}_Absorcion`) return false;
+                    if (e.id === `Sweep_${readableTf}`) return false;
+                    if (e.id === `📉_TL_Sweep_${readableTf}`) return false;
+                    if (e.id === `🩸_LIQ_GRAB_${readableTf}`) return false;
                     return true;
                 });
-                if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
+                refreshScoreCache(activeScore, nowMs);
                 return;
             }
 
@@ -1346,32 +1340,32 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 const ptMatch = alertText.match(/Puntos:\s*(\d+)/i);
                 const dynamicPts = ptMatch ? parseInt(ptMatch[1], 10) : 0;
                 if (upperText.includes('BREAKER')) {
-                    if (!activeScore.events.includes(`Breaker_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; activeScore.events.push(`Breaker_${readableTf}`); }
+                    if (!activeScore.events.some((e: any) => e.id === `Breaker_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; addedEventId = `Breaker_${readableTf}`; }
                 } else if (upperText.includes('PLATINO') || upperText.includes('POC')) {
-                    if (!activeScore.events.includes(`POC_Volume_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 4; activeScore.events.push(`POC_Volume_${readableTf}`); }
+                    if (!activeScore.events.some((e: any) => e.id === `POC_Volume_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 4; addedEventId = `POC_Volume_${readableTf}`; }
                 } else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
-                    if (!activeScore.events.includes(`OB_Gold_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; activeScore.events.push(`OB_Gold_${readableTf}`); }
+                    if (!activeScore.events.some((e: any) => e.id === `OB_Gold_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; addedEventId = `OB_Gold_${readableTf}`; }
                 } else {
-                    if (!activeScore.events.includes(`OB_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 2; activeScore.events.push(`OB_${readableTf}`); }
+                    if (!activeScore.events.some((e: any) => e.id === `OB_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 2; addedEventId = `OB_${readableTf}`; }
                 }
             }
             else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
-                if (!activeScore.events.includes(`Sweep_${readableTf}`) && !activeScore.events.includes(`🩸_V-Shape_Absorb_${readableTf}`)) {
+                if (!activeScore.events.some((e: any) => e.id === `Sweep_${readableTf}` || e.id === `🩸_V-Shape_Absorb_${readableTf}`)) {
                     const basePoints = upperText.includes('ABSORCION') ? 6 : 3;
                     addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
-                    activeScore.events.push(upperText.includes('ABSORCION') ? `🩸_V-Shape_Absorb_${readableTf}` : `Sweep_${readableTf}`);
+                    addedEventId = upperText.includes('ABSORCION') ? `🩸_V-Shape_Absorb_${readableTf}` : `Sweep_${readableTf}`;
                 }
             }
             else if (prefix === 'EVENTO_SMC_DIV') {
-                if (!activeScore.events.includes(`DIV_${readableTf}`)) {
+                if (!activeScore.events.some((e: any) => e.id === `DIV_${readableTf}`)) {
                     const dynamicScoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
                     addedPoints = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1]) : 4;
-                    activeScore.events.push(`DIV_${readableTf}`); 
+                    addedEventId = `DIV_${readableTf}`; 
                 }
             }
             else if (prefix === 'LIQ_GRAB') {
                 const eventName = `🩸_LIQ_GRAB_${readableTf}`;
-                if (!activeScore.events.includes(eventName)) {
+                if (!activeScore.events.some((e: any) => e.id === eventName)) {
                     addedPoints = 4 * (TF_WEIGHT[eventTf] || 1); // Falsa ruptura base score
 
                     // 🌊 TickFlow: clasificar el barrido con micro-estructura de ticks
@@ -1390,7 +1384,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         } catch { /* nunca bloquear scoring por analítica de ticks */ }
                     }
 
-                    activeScore.events.push(eventName);
+                    addedEventId = eventName;
                 }
             }
             // NOTA: EVENTO_BOS ya se procesa en el bloque principal (líneas 1271-1360)
@@ -1412,22 +1406,22 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 const zoneMedal = alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i)?.[1] || 'OB';
                 const zoneScore = parseInt(alertText.match(/Score:\s*([0-9]+)/i)?.[1] || '2');
                 const eventName = `🎯_ZoneTouched_${zoneMedal}_${readableTf}`;
-                if (!activeScore.events.includes(eventName)) {
+                if (!activeScore.events.some((e: any) => e.id === eventName)) {
                     const basePoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
                     addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
-                    activeScore.events.push(eventName);
+                    addedEventId = eventName;
                 }
             }
             else if (prefix === 'EVENTO_SWEEP_TL') {
-                if (!activeScore.events.includes(`📉_TL_Sweep_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`📉_TL_Sweep_${readableTf}`); }
-                if (oppositeScore.events.includes(`📉_TL_Sweep_${readableTf}`)) {
-                    oppositeScore.events = oppositeScore.events.filter((e: any) => e !== `📉_TL_Sweep_${readableTf}`);
-                    oppositeScore.points = Math.max(0, oppositeScore.points - 2);
+                if (!activeScore.events.some((e: any) => e.id === `📉_TL_Sweep_${readableTf}`)) { addedPoints = 2; addedEventId = `📉_TL_Sweep_${readableTf}`; }
+                if (oppositeScore.events.some((e: any) => e.id === `📉_TL_Sweep_${readableTf}`)) {
+                    oppositeScore.events = oppositeScore.events.filter((e: any) => e.id !== `📉_TL_Sweep_${readableTf}`);
+                    refreshScoreCache(oppositeScore, nowMs);
                 }
             }
             // FIX: Handler ZONE_TOUCHED duplicado eliminado (ya se procesa en línea 1437)
 
-            if (addedPoints > 0) {
+            if (addedPoints > 0 && addedEventId) {
                 // 🛡️ Clamp de seguridad: ningún evento individual puede sumar más de MAX_EVENT_POINTS.
                 // Mata toda la clase de bugs de parsing (timestamps, regex) en el punto de suma.
                 const MAX_EVENT_POINTS = 50;
@@ -1435,23 +1429,21 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     console.error(`[RADAR] 🚨 addedPoints anómalo (${addedPoints}) en "${alertText.substring(0, 80)}" → clamp a ${MAX_EVENT_POINTS}`);
                     addedPoints = MAX_EVENT_POINTS;
                 }
-                activeScore.points += addedPoints;
-                activeScore.points = Math.min(activeScore.points, 35);
-                activeScore.lastUpdate = nowMs;
+                addScoreEvent(activeScore, { id: addedEventId, pts: addedPoints, tf: eventTf, ts: nowMs });
                 
                 // 🔄 Re-validación tardía: si hay un leg pendiente sin confluencia de zona,
                 // ahora que llegó un evento de zona, re-evaluar si ya se puede validar
                 if (prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS') {
                     const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
-                        const hasZoneNow = activeScore.events.some((e: any) => 
-                            e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
-                            e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
-                            e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
+                        const hasZoneNow = activeScore.events.some((e: any) =>
+                            e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') || 
+                            e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('TL_Sweep_') ||
+                            e.id.includes('ZoneTouched_') || e.id.includes('Silver_Bullet_')
                         );
                         if (hasZoneNow) {
                             pendingLeg.isValidated = true;
-                            pendingLeg.chochEvents = [...activeScore.events, `CHoCH_${readableTf}`];
+                            pendingLeg.chochEvents = [...activeScore.events.map((e: any) => e.id), `CHoCH_${readableTf}`];
                             console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO tardíamente con confluencia: ${addedPoints} pts de ${prefix}`);
 
                             // 🔧 FIX: Disparar trade INMEDIATAMENTE si el leg tiene puntos suficientes
@@ -1494,7 +1486,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
                                         stopLoss: adjSL.toFixed(dec), tp1: fTP1.toFixed(dec), tp2: fTP2.toFixed(dec),
                                         entryPrice: curPrice,
-                                        points: lateTotalPts, events: pendingLeg.chochEvents || [...activeScore.events],
+                                        points: lateTotalPts, events: pendingLeg.chochEvents || activeScore.events.map((e: any) => e.id),
                                         confluenceReport: (pendingLeg.chochReport || '') + `\n🔄 <b>Re-validación Tardía:</b> Leg validado por ${prefix} (+${addedPoints} pts).`,
                                         bestZone: pendingLeg.bestZone || null,
                                         marketBias: { ...state.marketBias },
@@ -1503,9 +1495,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     };
                                     triggerOte = true;
                                     state.lastSniperAlert = nowMs;
-                                    activeScore.points = 0; activeScore.events = [];
+                                    activeScore.events = []; refreshScoreCache(activeScore, nowMs);
                                     const oppScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
-                                    oppScore.points = 0; oppScore.events = [];
+                                    oppScore.events = []; refreshScoreCache(oppScore, nowMs);
                                     if (lateConfig.entryTrigger === 'CHOCH' || lateConfig.entryTrigger === 'SMART') pendingLeg.oteScored = true;
                                     console.log(`[RADAR] 🎯 Re-validación tardía: trade INMEDIATO ${ticker} ${currentDirection} (${lateTotalPts} pts)`);
                                 }
@@ -1524,7 +1516,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 // Durante el cooldown, NO reseteamos el score — se acumula para el siguiente CHoCH.
                 const config = getConfigForTicker(ticker, nowMs);
                 if (nowMs - (state.lastSniperAlert ?? 0) < config.sniperCooldownMs) {
-                    console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${activeScore.points} pts).`);
+                    console.log(`[RADAR] ${triggerType} ignorado por Cooldown en ${ticker} (score preservado: ${computePoints(activeScore, nowMs)} pts).`);
                     return;
                 }
 
@@ -1581,12 +1573,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                 // El respaldo viene del mapa espacial Y/O de la mochila secuencial
                 const hasSpatialBacking = caseA_OriginInZone || caseB_PathTouchedZone;
-                const hasSequentialBacking = activeScore.events.some((e: any) => 
-                    e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
-                    e.includes('ZoneTouched_') || e.includes('OTE_') ||
-                    (e.includes('DIV_') && !e.includes('_3')) || 
-                    (e.includes('Sweep_') && !e.includes('_3')) ||
-                    (e.includes('TL_Sweep_') && !e.includes('_3'))
+                const hasSequentialBacking = activeScore.events.some((e: any) =>
+                    e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') || 
+                    e.id.includes('ZoneTouched_') || e.id.includes('OTE_') ||
+                    (e.id.includes('DIV_') && !e.id.includes('_3')) || 
+                    (e.id.includes('Sweep_') && !e.id.includes('_3')) ||
+                    (e.id.includes('TL_Sweep_') && !e.id.includes('_3'))
                 );
                 const hasHTFBacking = hasSpatialBacking || hasSequentialBacking;
                 
@@ -1602,21 +1594,19 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 
                 let baseBiasPoints = isMacroAligned ? 5 : 0;
                 
-                let vwapBonus = 0;
-                if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') { vwapBonus = 2; activeScore.events.push('VWAP_Discount'); } 
-                else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') { vwapBonus = 2; activeScore.events.push('VWAP_Premium'); }
+                // Los bonus VWAP / Macro OTE entran como eventos (pts incluidos en computePoints)
+                if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: 2, tf: eventTf, ts: nowMs });
+                else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: 2, tf: eventTf, ts: nowMs });
 
                 // Sumamos todo el puntaje bruto inicial
                 let macroOteBonus = 0;
                 const activeMacroLeg = currentDirection === 'BUY' ? state.activeMacroImpulseBuy : state.activeMacroImpulseSell;
                 if (activeMacroLeg && isInsideMacroOteZone(activeMacroLeg, chExtreme ?? state.lastPrice ?? 0)) {
                     macroOteBonus = 6; // +6 Puntos de confluencia por OTE macro activa
+                    addScoreEvent(activeScore, { id: 'Macro_OTE_Confluence', pts: 6, tf: eventTf, ts: nowMs });
                 }
 
-                let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus + macroOteBonus;
-                if (macroOteBonus > 0) {
-                    activeScore.events.push('Macro_OTE_Confluence');
-                }
+                let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2;
                 let orphanPenalty = 0;
                 let rawPenalty = 0;
 
@@ -1738,10 +1728,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
                     if (activeLeg) {
                         // 🛡️ Requiere al menos 1 evento de zona real O respaldo espacial del mapa de zonas
-                        const hasZoneConfluence = activeScore.events.some((e: any) => 
-                            e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || 
-                            e.includes('Sweep_') || e.includes('DIV_') || e.includes('TL_Sweep_') ||
-                            e.includes('ZoneTouched_') || e.includes('Silver_Bullet_')
+                        const hasZoneConfluence = activeScore.events.some((e: any) =>
+                            e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') || 
+                            e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('TL_Sweep_') ||
+                            e.id.includes('ZoneTouched_') || e.id.includes('Silver_Bullet_')
                         );
                         
                         // El respaldo espacial (Caso A/B) también valida: si el CHoCH nació en zona macro
@@ -1765,7 +1755,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         }
                         
                         activeLeg.chochPoints = totalPoints;
-                        activeLeg.chochEvents = [...activeScore.events, `${triggerType}_${readableTf}`];
+                        activeLeg.chochEvents = [...activeScore.events.map((e: any) => e.id), `${triggerType}_${readableTf}`];
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
 
@@ -1792,7 +1782,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 tradeId, direction: currentDirection,
                                 dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
                                 stopLoss, tp1, tp2, entryPrice: currentPrice,
-                                points: totalPoints, events: [...activeScore.events, `${triggerType}_${readableTf}`],
+                                points: totalPoints, events: [...activeScore.events.map((e: any) => e.id), `${triggerType}_${readableTf}`],
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true,
@@ -1917,8 +1907,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 triggerOte = true;
                                 // ✅ Cooldown y reset SOLO cuando el trade realmente se dispara
                                 state.lastSniperAlert = nowMs;
-                                activeScore.points = 0; activeScore.events = [];
-                                oppositeScore.points = 0; oppositeScore.events = [];
+                                activeScore.events = []; refreshScoreCache(activeScore, nowMs);
+                                oppositeScore.events = []; refreshScoreCache(oppositeScore, nowMs);
                             }
 
                             if (disableOte) {
@@ -1948,6 +1938,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         // 💾 3. GUARDAR EN FIREBASE (BACKUP INTELIGENTE CADA 5 MINUTOS O EN EVENTOS)
         const timeSinceLastSave = nowMs - (store.lastFirebaseSave.get(ticker) || 0);
         const FIREBASE_INTERVAL_MS = 5 * 60 * 1000; // 5 Minutos
+
+        // 🔄 Refrescar la caché derivada `points` antes de persistir (la leen clientes externos)
+        refreshScoreCache(state.scoreBuy, nowMs);
+        refreshScoreCache(state.scoreSell, nowMs);
 
         state.version = (state.version || 0) + 1;
         state.lastModified = nowMs;

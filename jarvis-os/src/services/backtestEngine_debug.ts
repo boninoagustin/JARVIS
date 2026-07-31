@@ -2,7 +2,7 @@ import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
-import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, SETUP_MEMORY_WINDOW_MS } from '../engine/AlphaModel';
+import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache } from '../engine/AlphaModel';
 import { getPipValue } from '../engine/FrictionModel';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
@@ -316,8 +316,9 @@ function processAlert(
 
   if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
   if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
-  if (nowMs - state.scoreBuy.lastUpdate > SETUP_MEMORY_WINDOW_MS) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
-  if (nowMs - state.scoreSell.lastUpdate > SETUP_MEMORY_WINDOW_MS) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
+  // 🧹 GC por TTL por timeframe (sustituye al reset de 48h; nowMs es tiempo simulado de vela)
+  gcScore(state.scoreBuy, nowMs);
+  gcScore(state.scoreSell, nowMs);
 
   // --- SYNC_ZONES ---
   if (prefix === 'SYNC_ZONES') {
@@ -505,11 +506,7 @@ function processAlert(
                           zone.medal?.includes('Breaker') ? `♻️_Breaker_${zTf}` :
                           `OB_${zone.medal}_${zTf}`;
         const pts = Math.floor(basePts * tfMult);
-        if (!activeScore.events.includes(eventName)) {
-          activeScore.events.push(eventName);
-          activeScore.points += pts;
-          activeScore.lastUpdate = nowMs;
-        }
+        addScoreEvent(activeScore, { id: eventName, pts, tf: zone.tf || eventTf, ts: nowMs });
       }
     }
     state.zones = validZones;
@@ -519,12 +516,18 @@ function processAlert(
   // --- EVENTS WITH DIRECTION ---
   if (!currentDirection) return;
   const activeScore = currentDirection === 'BUY' ? state.scoreBuy : state.scoreSell;
+  const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
   let addedPoints = 0;
+  let addedEventId: string | null = null;
 
   if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
     if (!state.biasTs) state.biasTs = {};
     state.marketBias[eventTf] = currentDirection;
     state.biasTs[eventTf] = nowMs;
+
+    // 💥 Invalidación estructural acotada: el CHoCH/BOS borra del score CONTRARIO
+    // los eventos de TF de igual o menor jerarquía que el gatillo
+    structuralInvalidate(oppositeScore, eventTf, nowMs);
 
     if (eventTf === '5' || eventTf === '15') {
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
@@ -532,12 +535,9 @@ function processAlert(
       const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice || 0;
       
       // 🆕 FIX 2.5: Registrar explícitamente el CHOCH/BOS contrario en el score opuesto para permitir invalidación
-      const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+      // (pts 0: es un marcador estructural, no puntúa; se añade tras structuralInvalidate para sobrevivir)
       const eventKey = `${prefix}_${readableTf}`;
-      if (!oppositeScore.events.includes(eventKey)) {
-        oppositeScore.events.push(eventKey);
-        oppositeScore.lastUpdate = nowMs;
-      }
+      addScoreEvent(oppositeScore, { id: eventKey, pts: 0, tf: eventTf, ts: nowMs });
 
       if (originMatch && actualPrice) {
         const newOrigin = parseFloat(originMatch[1]);
@@ -615,6 +615,7 @@ function processAlert(
       }
     }
     addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
+    addedEventId = `${prefix === 'EVENTO_CHOCH' ? 'CHoCH' : 'BOS'}_${readableTf}`;
   }
   else if (prefix === 'ZONE_BROKEN') {
     state.zones = state.zones.filter(z => {
@@ -626,37 +627,29 @@ function processAlert(
     return;
   }
   else if (prefix === 'SWEEP_BROKEN' || prefix === 'DIV_BROKEN') {
-    // Deduct points from active score
-    let deduct = 0;
-    const initialLen = activeScore.events.length;
+    // Filtrado por id de evento: los puntos se recalculan solos vía caché derivado
     if (prefix === 'SWEEP_BROKEN') {
-      activeScore.events = activeScore.events.filter(e => {
-        if (e.includes(`Sweep_${readableTf}`)) { deduct += 3; return false; }
-        return true;
-      });
+      activeScore.events = activeScore.events.filter(e => !e.id.includes(`Sweep_${readableTf}`));
     } else {
-      activeScore.events = activeScore.events.filter(e => {
-        if (e === `DIV_${readableTf}`) { deduct += 2; return false; }
-        return true;
-      });
+      activeScore.events = activeScore.events.filter(e => e.id !== `DIV_${readableTf}`);
     }
-    if (activeScore.events.length < initialLen) activeScore.points = Math.max(0, activeScore.points - deduct);
+    refreshScoreCache(activeScore, nowMs);
     return;
   }
   else if (prefix === 'EVENTO_SMC_DIV') {
-    if (!activeScore.events.includes(`DIV_${readableTf}`)) { addedPoints = 2; activeScore.events.push(`DIV_${readableTf}`); }
+    if (!activeScore.events.some(e => e.id === `DIV_${readableTf}`)) { addedPoints = 2; addedEventId = `DIV_${readableTf}`; }
   }
   else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
-    if (!activeScore.events.includes(`Sweep_${readableTf}`)) {
+    if (!activeScore.events.some(e => e.id === `Sweep_${readableTf}`)) {
       if (upperText.includes('ABSORCION') && density >= state.densityMedian) { 
         addedPoints = 6; 
-        activeScore.events.push(`🩸_V-Shape_Absorb_${readableTf}`); 
+        addedEventId = `🩸_V-Shape_Absorb_${readableTf}`; 
       } else if (upperText.includes('ABSORCION')) { 
         addedPoints = 3; 
-        activeScore.events.push(`Sweep_${readableTf}`); // sin confirmación de actividad       
+        addedEventId = `Sweep_${readableTf}`; // sin confirmación de actividad       
       } else { 
         addedPoints = 3; 
-        activeScore.events.push(`Sweep_${readableTf}`); 
+        addedEventId = `Sweep_${readableTf}`; 
       }
     }
   }
@@ -665,9 +658,8 @@ function processAlert(
     return;
   }
 
-  if (addedPoints > 0) {
-    activeScore.points += addedPoints;
-    activeScore.lastUpdate = nowMs;
+  if (addedPoints > 0 && addedEventId) {
+    addScoreEvent(activeScore, { id: addedEventId, pts: addedPoints, tf: eventTf, ts: nowMs });
   }
 
   // 🆕 FIX PERF: Limitar tamaño de arrays de eventos para evitar crecimiento infinito O(N)
@@ -679,12 +671,12 @@ function processAlert(
     const pendingLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
     if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
       const hasZoneNow = activeScore.events.some(e =>
-        e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
-        e.includes('Sweep_') || e.includes('DIV_') || e.includes('Silver_Bullet_')
+        e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') ||
+        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('Silver_Bullet_')
       );
       if (hasZoneNow) {
         pendingLeg.isValidated = true;
-        pendingLeg.chochEvents = [...activeScore.events, `CHoCH_${readableTf}`];
+        pendingLeg.chochEvents = [...activeScore.events.map(e => e.id), `CHoCH_${readableTf}`];
       }
     }
   }
@@ -808,7 +800,7 @@ function processAlert(
       macroOteBonus = 6;
     }
 
-    let totalPoints = activeScore.points + baseBiasPoints + 2 + vwapBonus - vwapPenalty + macroOteBonus;
+    let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2 + vwapBonus - vwapPenalty + macroOteBonus;
 
     // Trap Zone penalty (Caso C - ported from live)
     if (chOrigin && chExtreme) {
@@ -824,7 +816,7 @@ function processAlert(
     if (hasSpatialBacking) totalPoints += spatialBonus;
     else {
       const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
-      const hasSeqBacking = activeScore.events.some(e => e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') || e.includes('DIV_') || e.includes('Sweep_'));
+      const hasSeqBacking = activeScore.events.some(e => e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') || e.id.includes('DIV_') || e.id.includes('Sweep_'));
       if (!hasSeqBacking) {
         const penalty = isCrypto ? 1 : 3;
         // Orphan penalty bypass for high score (ported from live)
@@ -883,13 +875,13 @@ function processAlert(
 
     if (activeLeg) {
       const hasZoneConf = activeScore.events.some(e =>
-        e.includes('OB_') || e.includes('GOD_') || e.includes('Breaker_') ||
-        e.includes('Sweep_') || e.includes('DIV_') || e.includes('Silver_Bullet_')
+        e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') ||
+        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('Silver_Bullet_')
       );
       const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
       activeLeg.isValidated = efectiveValidation;
       activeLeg.chochPoints = totalPoints;
-      activeLeg.chochEvents = [...activeScore.events, `${prefix}_${parseTF(eventTf)}`];
+      activeLeg.chochEvents = [...activeScore.events.map(e => e.id), `${prefix}_${parseTF(eventTf)}`];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
       console.log("Validation CHOCH/BOS:", {efectiveValidation, triggerEnabled, totalPoints, minPtsRequired, prefix, currentSession});
@@ -1003,7 +995,7 @@ if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
             const oteData = {
               tradeId, direction: currentDirection,
               entryPrice: currentPrice,
-              stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events, `${prefix}_${readableTf}`],
+              stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events.map(e => e.id), `${prefix}_${readableTf}`],
               tf: readableTf
             };
             createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config, state);
@@ -1014,10 +1006,10 @@ if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
 
       if (totalPoints >= minPtsRequired) {
         const oppositeScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
-        oppositeScore.points = 0; oppositeScore.events = [];
+        oppositeScore.events = []; refreshScoreCache(oppositeScore, nowMs);
       }
       state.lastSniperAlert = nowMs;
-      activeScore.points = 0; activeScore.events = [];
+      activeScore.events = []; refreshScoreCache(activeScore, nowMs);
     }
   }
 }

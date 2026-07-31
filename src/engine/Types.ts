@@ -50,10 +50,21 @@ export function normalizeRadarZone(raw: any): RadarZone {
     };
 }
 
+// Evento de scoring: los puntos YA ponderados (pts) con su timeframe (tf) y timestamp (ts).
+// `id` mantiene la semántica de dedupe histórica (un id único por dirección).
+export interface ScoreEvent {
+    id: string;
+    pts: number;
+    tf: string;
+    ts: number;
+}
+
 export interface ScoreState {
+    // Caché derivado de los eventos vivos (se recalcula tras cada mutación);
+    // los lectores externos (RadarHeatmap, snapshots) siguen leyendo este campo.
     points: number;
     lastUpdate: number;
-    events: string[];
+    events: ScoreEvent[];
 }
 
 export interface ImpulseLeg {

@@ -268,10 +268,16 @@ input:checked + .slider:before {
 }
 
 input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  background: transparent;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  width: 100% !important;
+  background: transparent !important;
+  height: 24px !important;
+  margin: 0 !important;
+}
+
+input[type="range"]:focus {
+  outline: none;
 }
 
 input[type="range"]::-webkit-slider-thumb {
