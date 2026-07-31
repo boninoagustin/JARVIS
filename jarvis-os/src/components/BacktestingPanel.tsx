@@ -373,19 +373,19 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
           <div style={{ display: 'flex', gap: '10px' }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>SL BUFF: <strong style={{color:'var(--text-primary)'}}>{config.slBuff}</strong></span>
-              <input type="range" min="0" max="0.5" step="0.01" value={config.slBuff ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'slBuff', parseFloat(e.target.value))} style={{ width: '100%' }} />
+              <input type="range" min="0" max="0.5" step="0.01" value={config.slBuff ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'slBuff', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
             </div>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>TP2 R:R: <strong style={{color:'var(--text-primary)'}}>{config.tp2}x</strong></span>
-              <input type="range" min="1" max="5" step="0.1" value={config.tp2 ?? 1.5} onChange={e => updateTrigger(sessionKey, triggerKey, 'tp2', parseFloat(e.target.value))} style={{ width: '100%' }} />
+              <input type="range" min="1" max="5" step="0.1" value={config.tp2 ?? 1.5} onChange={e => updateTrigger(sessionKey, triggerKey, 'tp2', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
             </div>
           </div>
 
           {/* Parciales & SL after TP1 */}
           <div style={{ display: 'flex', gap: '10px' }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>Parciales %: <strong style={{color:'var(--text-primary)'}}>{config.partialClosePct}%</strong></span>
-              <input type="range" min="0" max="100" step="10" value={config.partialClosePct ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'partialClosePct', parseInt(e.target.value))} style={{ width: '100%' }} />
+              <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>Parciales %: <strong style={{color:'var(--text-primary)'}}>{Math.round((config.partialClosePct ?? 0) * 100)}%</strong></span>
+              <input type="range" min="0" max="1" step="0.05" value={config.partialClosePct ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'partialClosePct', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
             </div>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>Acción post-TP1:</span>
