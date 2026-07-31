@@ -1771,17 +1771,30 @@ export default function BacktestingPanel() {
     const val = e.target.value.toUpperCase();
     setTicker(val);
     
-    if (val === 'XAUUSD' || val === 'GOLD') {
-      setSpreadPips(2.0);
-      setCommissionPerLot(6.0);
-    } else if (val === 'BTCUSD') {
+    if (val.includes('BTC')) {
       setSpreadPips(15.0);
       setCommissionPerLot(6.0);
-    } else if (val === 'US30' || val === 'NAS' || val === 'NDX' || val === 'SPX' || val === 'US500') {
+    } else if (val.includes('ETH')) {
+      setSpreadPips(1.5);
+      setCommissionPerLot(6.0);
+    } else if (val.includes('XAU') || val.includes('GOLD')) {
+      setSpreadPips(1.5);
+      setCommissionPerLot(6.0);
+    } else if (val.includes('XAG') || val.includes('SILVER')) {
+      setSpreadPips(2.0);
+      setCommissionPerLot(6.0);
+    } else if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'UK', 'FRA', 'EU50', 'WS30', 'UT100'].some(i => val.includes(i))) {
       setSpreadPips(1.5);
       setCommissionPerLot(0); // Índices suelen ser commission-free con spread ligeramente más alto en prop firms
-    } else if (val === 'EURUSD' || val === 'GBPUSD' || val === 'USDJPY') {
-      setSpreadPips(0.5);
+    } else if (['EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'USDJPY'].includes(val)) {
+      setSpreadPips(0.2); // Majors tienen spreads bajísimos en raw accounts (cTrader Funding Pips)
+      setCommissionPerLot(6.0); // $3 per side = $6 round turn
+    } else if (['EUR', 'GBP', 'AUD', 'NZD', 'USD', 'CAD', 'CHF', 'JPY'].some(i => val.includes(i))) {
+      setSpreadPips(0.8); // Minors y cruces
+      setCommissionPerLot(6.0);
+    } else {
+      // Default / Desconocido
+      setSpreadPips(1.0);
       setCommissionPerLot(6.0);
     }
   };

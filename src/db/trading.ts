@@ -1151,6 +1151,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     if (!activeScore.events.includes(eventName)) {
                         activeScore.events.push(eventName);
                         activeScore.points += pts;
+                        activeScore.points = Math.min(activeScore.points, 35);
                         activeScore.lastUpdate = nowMs;
                         touchedThisPing.push({ zone, eventName, pts });
                                            
@@ -1185,6 +1186,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     if (!activeScore.events.includes(eventName)) {
                         activeScore.events.push(eventName);
                         activeScore.points += confluenceBonus;
+                        activeScore.points = Math.min(activeScore.points, 35);
                         activeScore.lastUpdate = nowMs;
                     }
                 }
@@ -1292,9 +1294,18 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 let pointsToDeduct = 0;
                 const initialLength = activeScore.events.length;
                 activeScore.events = activeScore.events.filter((e: any) => {
-                    if (e === `POC_Volume_${readableTf}`) { pointsToDeduct += 4; return false; }
-                    if (e === `Breaker_${readableTf}`) { pointsToDeduct += 3; return false; }
-                    if (e === `OB_${readableTf}`) { pointsToDeduct += 3; return false; }
+                    if (typeof e === 'string' && e.includes(`_${readableTf}`) && (
+                        e.startsWith('OB_') || e.startsWith('💎_GOD_ZONE_') || 
+                        e.startsWith('🎯_Silver_Bullet_') || e.startsWith('♻️_Breaker_') || 
+                        e.startsWith('POC_Volume_') || e.startsWith('🎯_ZoneTouched_') ||
+                        e.startsWith('Breaker_')
+                    )) {
+                        if (e.includes('GOD_ZONE') || e.includes('Silver_Bullet') || e.includes('Breaker')) pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1);
+                        else if (e.includes('POC_Volume')) pointsToDeduct += 4 * (TF_WEIGHT[eventTf] || 1);
+                        else if (e.includes('ZoneTouched')) pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1);
+                        else pointsToDeduct += 2 * (TF_WEIGHT[eventTf] || 1);
+                        return false;
+                    }
                     return true;
                 });
                 if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
@@ -1312,8 +1323,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
             if (prefix === 'DIV_BROKEN') {
                 const initialLength = activeScore.events.length;
-                activeScore.events = activeScore.events.filter((e: any) => e !== `DIV_${readableTf}`);
-                if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - 2);
+                activeScore.events = activeScore.events.filter((e: any) => typeof e !== 'string' || !e.startsWith(`DIV_${readableTf}`));
+                if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - 4);
                 return;
             }
 
@@ -1321,9 +1332,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 let pointsToDeduct = 0;
                 const initialLength = activeScore.events.length;
                 activeScore.events = activeScore.events.filter((e: any) => {
-                    if (e === `Sweep_${readableTf}_Absorcion`) { pointsToDeduct += 5; return false; }
-                    if (e === `Sweep_${readableTf}`) { pointsToDeduct += 3; return false; }
-                    if (e === `📉_TL_Sweep_${readableTf}`) { pointsToDeduct += 2; return false; }
+                    if (typeof e === 'string' && (e === `🩸_V-Shape_Absorb_${readableTf}` || e === `Sweep_${readableTf}_Absorcion`)) { pointsToDeduct += 6 * (TF_WEIGHT[eventTf] || 1); return false; }
+                    if (typeof e === 'string' && e === `Sweep_${readableTf}`) { pointsToDeduct += 3 * (TF_WEIGHT[eventTf] || 1); return false; }
+                    if (typeof e === 'string' && e === `📉_TL_Sweep_${readableTf}`) { pointsToDeduct += 2; return false; }
+                    if (typeof e === 'string' && e === `🩸_LIQ_GRAB_${readableTf}`) { pointsToDeduct += 4 * (TF_WEIGHT[eventTf] || 1); return false; }
                     return true;
                 });
                 if (activeScore.events.length < initialLength) activeScore.points = Math.max(0, activeScore.points - pointsToDeduct);
@@ -1424,6 +1436,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     addedPoints = MAX_EVENT_POINTS;
                 }
                 activeScore.points += addedPoints;
+                activeScore.points = Math.min(activeScore.points, 35);
                 activeScore.lastUpdate = nowMs;
                 
                 // 🔄 Re-validación tardía: si hay un leg pendiente sin confluencia de zona,
