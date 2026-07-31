@@ -681,7 +681,7 @@ export default function BacktestingPanel() {
         ASIA
       };
 
-      await setDoc(doc(db, 'asset_configs', configDoc), {
+      const payload = {
         maxDailyLossR,
         dailyProfitTargetR,
         maxConsecutiveLosses,
@@ -707,7 +707,9 @@ export default function BacktestingPanel() {
         tp1StructuralMinRR: tp1StructuralMinRR,
 
         updatedAt: new Date().toISOString()
-      }, { merge: true });
+      };
+
+      await setDoc(doc(db, 'asset_configs', configDoc), JSON.parse(JSON.stringify(payload)), { merge: true });
       toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
     } catch (err: any) {
       toast(`❌ Error guardando: ${err.message}`, 'error');
