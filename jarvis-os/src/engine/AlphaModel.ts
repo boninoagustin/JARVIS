@@ -319,11 +319,6 @@ export function evaluateImpulseCore(
                     return { updatedLeg: leg };
                 }
             } else {
-                const MIN_OTE_POINTS = oteMinScore;
-                if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
-                    dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
-                    return { updatedLeg: leg };
-                }
                 if (!oteEnabled || totalPoints < oteMinScore) {
                     dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
                     return { updatedLeg: leg };
