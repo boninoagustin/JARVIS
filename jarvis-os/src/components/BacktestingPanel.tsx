@@ -858,6 +858,13 @@ export default function BacktestingPanel() {
     uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
     const logsArray = Array.from(logs.entries());
 
+    // Send logs to worker once to avoid serializing them 115 times during chunks
+    try {
+        await runWorkerTask('SET_LOGS', { logsArray });
+    } catch (e) {
+        console.error("Error setting logs in worker", e);
+    }
+
     const CHUNK_SIZE = 50;
     let i = 0;
 
@@ -900,7 +907,7 @@ export default function BacktestingPanel() {
       }
 
       try {
-        const chunkResults = await runWorkerTask('RUN_BATCH', { logsArray, configs: chunkConfigs });
+        const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
         
         for (let j = 0; j < chunkResults.length; j++) {
             const res = chunkResults[j];
