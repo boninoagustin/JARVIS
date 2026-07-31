@@ -580,6 +580,7 @@ export default function BacktestingPanel() {
   const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
   const [tradeFilter, setTradeFilter] = useState<string>('ALL');
   const [optimizingTrigger, setOptimizingTrigger] = useState<string | null>(null);
+  const [optimizingSessionLosses, setOptimizingSessionLosses] = useState<string | null>(null);
 
 
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
@@ -968,6 +969,105 @@ export default function BacktestingPanel() {
     };
 
     processChunk();
+  };
+
+  const handleOptimizeMaxLosses = async (sessionKey: string) => {
+    if (optimizingSessionLosses) return;
+    if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
+    
+    setOptimizingSessionLosses(sessionKey);
+
+    const logs = new Map<string, string[]>();
+    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+    const logsArray = Array.from(logs.entries());
+
+    try {
+        await runWorkerTask('SET_LOGS', { logsArray });
+    } catch (e) {
+        console.error("Error setting logs in worker", e);
+    }
+
+    const lossValues = [0, 1, 2, 3, 4];
+    const combinations: any[] = [];
+    
+    for (const b of lossValues) {
+      for (const s of lossValues) {
+        combinations.push({ maxBuyLosses: b, maxSellLosses: s });
+      }
+    }
+
+    let bestConfig = combinations[0];
+    let bestScore = -Infinity;
+    let bestWinRate = -1;
+
+    const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
+    
+    const chunkConfigs: any[] = [];
+    
+    for (let i = 0; i < combinations.length; i++) {
+        const testMgmt = combinations[i];
+        const testSessionTriggers = JSON.parse(JSON.stringify(baseConfig));
+        
+        if (!testSessionTriggers[sessionKey]) testSessionTriggers[sessionKey] = {};
+        testSessionTriggers[sessionKey].maxBuyLosses = testMgmt.maxBuyLosses;
+        testSessionTriggers[sessionKey].maxSellLosses = testMgmt.maxSellLosses;
+
+        const configToRun = {
+          ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent, entryTrigger: 'SMART' as const,
+          maxDailyLossR: maxDailyLossR || undefined,
+          dailyProfitTargetR: dailyProfitTargetR || undefined,
+          maxConsecutiveLosses: maxConsecutiveLosses || undefined,
+          maxTradesPerDay: maxTradesPerDay || undefined,
+          maxTradesPerSession: maxTradesPerSession || undefined,
+          trailingDrawdownR: trailingDrawdownR || undefined,
+          sessions: testSessionTriggers,
+          sessionFilter: [sessionKey],
+          enabled: true,
+          spreadPips,
+          commissionPerLot
+        };
+        chunkConfigs.push(configToRun);
+    }
+
+    try {
+        const chunkResults = await runWorkerTask('RUN_BATCH', { configs: chunkConfigs });
+        
+        for (let j = 0; j < chunkResults.length; j++) {
+            const res = chunkResults[j];
+            let pnlR = 0;
+            let wins = 0;
+            let total = 0;
+            res.trades.forEach((t: any) => {
+                if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+                    pnlR += t.rMultiple;
+                    total++;
+                    if (t.rMultiple > 0) wins++;
+                }
+            });
+            const wr = total > 0 ? wins / total : 0;
+            
+            if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {
+              bestScore = pnlR;
+              bestWinRate = wr;
+              bestConfig = combinations[j];
+            }
+        }
+        
+        setSessionTriggers(prev => {
+          const next = JSON.parse(JSON.stringify(prev));
+          if (!next[sessionKey]) next[sessionKey] = {};
+          next[sessionKey].maxBuyLosses = bestConfig.maxBuyLosses;
+          next[sessionKey].maxSellLosses = bestConfig.maxSellLosses;
+          localStorage.setItem('bt_session_triggers', JSON.stringify(next));
+          return next;
+        });
+        toast(`Filtro de pérdidas optimizado. PnL Máximo: ${bestScore.toFixed(2)}R`, 'success');
+        
+    } catch (err) {
+        console.error("Batch error:", err);
+    }
+    
+    setOptimizingSessionLosses(null);
   };
 
   const handleRun = useCallback((overrideOte?: number, overrideSessions?: Record<string, any>, isAutoRun: boolean = false) => {
@@ -2044,14 +2144,25 @@ export default function BacktestingPanel() {
                 tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos15m`}
               />
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '12px', backgroundColor: 'rgba(255,165,0,0.03)', borderRadius: '6px', border: '1px solid rgba(255,165,0,0.08)' }}>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS SELLs ({sessionFilter})</label>
-                  <input type="number" min="0" value={sessionTriggers[sessionFilter]?.maxSellLosses ?? 0} onChange={e => updateSessionTrigger(sessionFilter, 'maxSellLosses', '', parseInt(e.target.value) || 0)} style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+              <div style={{ padding: '12px', backgroundColor: 'rgba(255,165,0,0.03)', borderRadius: '6px', border: '1px solid rgba(255,165,0,0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>FILTRO DE PÉRDIDAS ({sessionFilter})</span>
+                  <button type="button" onClick={() => handleOptimizeMaxLosses(sessionFilter)}
+                    disabled={optimizingSessionLosses === sessionFilter || uploadedFiles.length === 0}
+                    style={{ padding: '4px 8px', fontSize: '0.65rem', backgroundColor: optimizingSessionLosses === sessionFilter ? 'transparent' : 'var(--accent-gold)', color: optimizingSessionLosses === sessionFilter ? 'var(--accent-gold)' : 'black', border: optimizingSessionLosses === sessionFilter ? '1px solid var(--accent-gold)' : 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                    {optimizingSessionLosses === sessionFilter ? <Loader2 size={12} className="spin" /> : <Wand2 size={12} />}
+                    {optimizingSessionLosses === sessionFilter ? 'OPTIMIZANDO...' : 'OPTIMIZAR'}
+                  </button>
                 </div>
-                <div>
-                  <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS BUYs ({sessionFilter})</label>
-                  <input type="number" min="0" value={sessionTriggers[sessionFilter]?.maxBuyLosses ?? 0} onChange={e => updateSessionTrigger(sessionFilter, 'maxBuyLosses', '', parseInt(e.target.value) || 0)} style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.6rem', color: 'var(--accent-red)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS SELLs</label>
+                    <input type="number" min="0" value={sessionTriggers[sessionFilter]?.maxSellLosses ?? 0} onChange={e => updateSessionTrigger(sessionFilter, 'maxSellLosses', '', parseInt(e.target.value) || 0)} style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600, display: 'block', marginBottom: '4px' }}>MAX LOSS BUYs</label>
+                    <input type="number" min="0" value={sessionTriggers[sessionFilter]?.maxBuyLosses ?? 0} onChange={e => updateSessionTrigger(sessionFilter, 'maxBuyLosses', '', parseInt(e.target.value) || 0)} style={{ width: '100%', padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} placeholder="Ilimitado (0)" />
+                  </div>
                 </div>
               </div>
 
