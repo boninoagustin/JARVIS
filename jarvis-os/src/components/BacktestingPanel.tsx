@@ -861,8 +861,8 @@ export default function BacktestingPanel() {
 
     const processChunk = async () => {
       const end = Math.min(i + CHUNK_SIZE, combinations.length);
-      const chunkConfigs = [];
-      const chunkMgmts = [];
+      const chunkConfigs: any[] = [];
+      const chunkMgmts: any[] = [];
       
       for (; i < end; i++) {
         const testMgmt = combinations[i];
@@ -917,7 +917,7 @@ export default function BacktestingPanel() {
                else if (isChoch && !hasOte) tradeTriggerType = 'choch15m';
 
                // Solo sumar al PnL si el trade es del gatillo que estamos optimizando y cumple el puntaje
-               const tMinScore = testMgmt.minScore || chunkConfigs[j].sessions[sessionKey]?.[triggerKey]?.minScore || 4;
+               const tMinScore = chunkMgmts[j].minScore || chunkConfigs[j].sessions[sessionKey]?.[triggerKey]?.minScore || 4;
                
                if (tradeTriggerType === triggerKey && (t.points || 0) >= tMinScore) {
                    if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
