@@ -82,6 +82,14 @@ async function main() {
     console.log(`TOTAL PNL ($): $${totalPnl.toFixed(2)}`);
     console.log(`TOTAL PNL (R): ${totalR.toFixed(2)}R`);
     console.log(`============================`);
+
+    const outFile = path.join(process.cwd(), 'logs', `jarvis_bt_${ticker}_${Date.now()}.json`);
+    const outData = {
+        metadata: { ticker, winRate, totalR, totalPnl, tradesCount: result.trades.length },
+        trades: result.trades
+    };
+    fs.writeFileSync(outFile, JSON.stringify(outData, null, 2));
+    console.log(`Saved backtest results to ${outFile}`);
 }
 
 main().catch(console.error);
