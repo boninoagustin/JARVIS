@@ -316,9 +316,10 @@ interface TriggerSettingsPanelProps {
   filterKey: string;
   onOptimize?: () => void;
   isOptimizing?: boolean;
+  optimizeProgress?: number;
 }
 
-const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey, triggerKey, title, config, updateTrigger, onSimulate, isRunning, isOte, tradeFilter, setTradeFilter, filterKey, onOptimize, isOptimizing }) => {
+const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ title, config, updateTrigger, sessionKey, triggerKey, onSimulate, isRunning, isOte, tradeFilter, setTradeFilter, filterKey, onOptimize, isOptimizing, optimizeProgress }) => {
   if (!config) return null;
   const isActive = tradeFilter === filterKey;
   
@@ -340,7 +341,7 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
         <div style={{ display: 'flex', gap: '4px' }}>
           {onOptimize && (
             <button 
-              onClick={(e) => { e.stopPropagation(); onOptimize(); }}
+              onClick={onOptimize} 
               disabled={isOptimizing || isRunning || !config.enabled}
               style={{
                 padding: '4px 8px', backgroundColor: 'transparent', color: 'var(--accent-gold)', border: '1px solid var(--accent-gold)', borderRadius: '4px',
@@ -349,7 +350,7 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
               }}
             >
               {isOptimizing ? <Loader2 size={10} className="spin" /> : <Wand2 size={10} />}
-              {isOptimizing ? 'Optimizando...' : 'Optimizar'}
+              {isOptimizing ? (optimizeProgress ? `${Math.round(optimizeProgress * 100)}%` : 'Optimizando...') : 'Optimizar'}
             </button>
           )}
           <button 
@@ -580,6 +581,7 @@ export default function BacktestingPanel() {
   const [sessionFilter, setSessionFilter] = useState<'GLOBAL' | 'OFF' | 'LONDON' | 'NY' | 'ASIA'>('GLOBAL');
   const [tradeFilter, setTradeFilter] = useState<string>('ALL');
   const [optimizingTrigger, setOptimizingTrigger] = useState<string | null>(null);
+  const [optimizeProgress, setOptimizeProgress] = useState<number>(0);
   const [optimizingSessionLosses, setOptimizingSessionLosses] = useState<string | null>(null);
 
 
@@ -804,6 +806,7 @@ export default function BacktestingPanel() {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     
     setOptimizingTrigger(`${sessionKey}-${triggerKey}`);
+    setOptimizeProgress(0);
     
     const slBuffVals = [0, 0.05, 0.1, 0.2];
     const tp2Vals = [1.5, 2.0, 3.0, 4.0];
@@ -949,8 +952,10 @@ export default function BacktestingPanel() {
         console.error("Batch error:", err);
       }
 
+      setOptimizeProgress(i / combinations.length);
+
       if (i < combinations.length) {
-        requestAnimationFrame(() => { processChunk(); });
+        setTimeout(() => { processChunk(); }, 0);
       } else {
         setSessionTriggers(prev => {
           const next = JSON.parse(JSON.stringify(prev));
@@ -2123,25 +2128,25 @@ export default function BacktestingPanel() {
                 sessionKey={sessionFilter} triggerKey="choch15m" title="💥 CHOCH (Ruptura) (15m)"
                 config={sessionTriggers[sessionFilter]?.choch15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "choch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-choch15m`}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "choch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-choch15m`} optimizeProgress={optimizeProgress}
               />
               <TriggerSettingsPanel
-                sessionKey={sessionFilter} triggerKey="bos15m" title="🚀 BOS (Continuación) (15m)"
+                sessionKey={sessionFilter} triggerKey="bos15m" title="📈 BOS (15m)"
                 config={sessionTriggers[sessionFilter]?.bos15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "bos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-bos15m`}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "bos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-bos15m`} optimizeProgress={optimizeProgress}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteChoch15m" title="📉 OTE CHOCH (15m)"
                 config={sessionTriggers[sessionFilter]?.oteChoch15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteChoch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteChoch15m`}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteChoch15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteChoch15m`} optimizeProgress={optimizeProgress}
               />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="oteBos15m" title="📈 OTE BOS (15m)"
                 config={sessionTriggers[sessionFilter]?.oteBos15m} updateTrigger={updateSessionTrigger}
                 onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
-                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos15m`}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_15M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos15m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos15m`} optimizeProgress={optimizeProgress}
               />
 
               <div style={{ padding: '12px', backgroundColor: 'rgba(255,165,0,0.03)', borderRadius: '6px', border: '1px solid rgba(255,165,0,0.08)' }}>
