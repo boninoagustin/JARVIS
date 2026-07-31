@@ -906,10 +906,25 @@ export default function BacktestingPanel() {
             let wins = 0;
             let total = 0;
             res.trades.forEach((t: any) => {
-               if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
-                   pnlR += t.rMultiple;
-                   total++;
-                   if (t.rMultiple > 0) wins++;
+               const hasOte = t.events?.some((e: any) => e.includes('OTE_Retracement'));
+               const isBos = t.events?.some((e: any) => e.includes('EVENTO_BOS'));
+               const isChoch = t.events?.some((e: any) => e.includes('EVENTO_CHOCH'));
+
+               let tradeTriggerType = null;
+               if (hasOte && isBos) tradeTriggerType = 'oteBos15m';
+               else if (hasOte && isChoch) tradeTriggerType = 'oteChoch15m';
+               else if (isBos && !hasOte) tradeTriggerType = 'bos15m';
+               else if (isChoch && !hasOte) tradeTriggerType = 'choch15m';
+
+               // Solo sumar al PnL si el trade es del gatillo que estamos optimizando y cumple el puntaje
+               const tMinScore = testMgmt.minScore || chunkConfigs[j].sessions[sessionKey]?.[triggerKey]?.minScore || 4;
+               
+               if (tradeTriggerType === triggerKey && (t.points || 0) >= tMinScore) {
+                   if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+                       pnlR += t.rMultiple;
+                       total++;
+                       if (t.rMultiple > 0) wins++;
+                   }
                }
             });
             const wr = total > 0 ? wins / total : 0;
