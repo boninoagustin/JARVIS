@@ -353,7 +353,7 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
           {/* Min Score */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', minWidth: '60px' }}>Mín. Score:</span>
-            <input type="range" min="1" max="30" step="1" value={config.minScore ?? 4} onChange={e => updateTrigger(sessionKey, triggerKey, 'minScore', parseInt(e.target.value))} style={{ flex: 1, accentColor: 'var(--accent-gold)' }} />
+            <input type="range" min="1" max="30" step="1" value={config.minScore ?? 4} onChange={e => updateTrigger(sessionKey, triggerKey, 'minScore', parseInt(e.target.value))} style={{ flex: 1 }} />
             <span className="mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '24px', textAlign: 'right' }}>+{config.minScore}</span>
           </div>
 
@@ -373,11 +373,11 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
           <div style={{ display: 'flex', gap: '10px' }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>SL BUFF: <strong style={{color:'var(--text-primary)'}}>{config.slBuff}</strong></span>
-              <input type="range" min="0" max="0.5" step="0.01" value={config.slBuff ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'slBuff', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
+              <input type="range" min="0" max="0.5" step="0.01" value={config.slBuff ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'slBuff', parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>TP2 R:R: <strong style={{color:'var(--text-primary)'}}>{config.tp2}x</strong></span>
-              <input type="range" min="1" max="5" step="0.1" value={config.tp2 ?? 1.5} onChange={e => updateTrigger(sessionKey, triggerKey, 'tp2', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
+              <input type="range" min="1" max="5" step="0.1" value={config.tp2 ?? 1.5} onChange={e => updateTrigger(sessionKey, triggerKey, 'tp2', parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
           </div>
 
@@ -385,7 +385,7 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ sessionKey,
           <div style={{ display: 'flex', gap: '10px' }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>Parciales %: <strong style={{color:'var(--text-primary)'}}>{Math.round((config.partialClosePct ?? 0) * 100)}%</strong></span>
-              <input type="range" min="0" max="1" step="0.05" value={config.partialClosePct ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'partialClosePct', parseFloat(e.target.value))} style={{ width: '100%', accentColor: 'var(--accent-gold)' }} />
+              <input type="range" min="0" max="1" step="0.05" value={config.partialClosePct ?? 0} onChange={e => updateTrigger(sessionKey, triggerKey, 'partialClosePct', parseFloat(e.target.value))} style={{ width: '100%' }} />
             </div>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)' }}>Acción post-TP1:</span>
@@ -2451,7 +2451,7 @@ export default function BacktestingPanel() {
                   step="0.5"
                   value={globalMDL}
                   onChange={(e) => handleGlobalParamChange('mdl', parseFloat(e.target.value))}
-                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                  style={{ width: '100%' }}
                 />
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Bloquea la cuenta al perder este monto R diario.</span>
               </div>
@@ -2469,7 +2469,7 @@ export default function BacktestingPanel() {
                   step="0.5"
                   value={globalDPT}
                   onChange={(e) => handleGlobalParamChange('dpt', parseFloat(e.target.value))}
-                  style={{ width: '100%', accentColor: 'var(--accent-green)' }}
+                  style={{ width: '100%' }}
                 />
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Asegura ganancias cerrando la sesión al alcanzar esta meta R.</span>
               </div>
@@ -2487,7 +2487,7 @@ export default function BacktestingPanel() {
                   step="1"
                   value={globalMTD}
                   onChange={(e) => handleGlobalParamChange('mtd', parseInt(e.target.value))}
-                  style={{ width: '100%', accentColor: 'var(--accent-gold)' }}
+                  style={{ width: '100%' }}
                 />
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Número máximo de operaciones consolidadas permitidas por día.</span>
               </div>
@@ -2505,7 +2505,7 @@ export default function BacktestingPanel() {
                   step="1"
                   value={globalMCL}
                   onChange={(e) => handleGlobalParamChange('mcl', parseInt(e.target.value))}
-                  style={{ width: '100%', accentColor: 'var(--accent-red)' }}
+                  style={{ width: '100%' }}
                 />
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Racha de pérdidas seguidas permitidas globalmente en el día.</span>
               </div>
@@ -2523,7 +2523,7 @@ export default function BacktestingPanel() {
                   step="0.5"
                   value={globalTDD}
                   onChange={(e) => handleGlobalParamChange('tdd', parseFloat(e.target.value))}
-                  style={{ width: '100%', accentColor: '#f7931a' }}
+                  style={{ width: '100%' }}
                 />
                 <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)' }}>Pérdida máxima admitida desde el punto más alto del PnL consolidado del día.</span>
               </div>
