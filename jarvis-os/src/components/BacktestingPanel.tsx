@@ -1958,52 +1958,7 @@ export default function BacktestingPanel() {
               </select>
             </div>
 
-            {/* ⚙️ GESTIÓN DE TRADES */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💰 PARCIAL TP1</label>
-              <input type="range" min="0" max="1" step="0.05" value={partialClosePct} onChange={e => setPartialClosePct(parseFloat(e.target.value))}
-                style={{ flex: 1, accentColor: 'var(--accent-green)' }} />
-              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--accent-green)', fontWeight: 700, minWidth: '36px', textAlign: 'right' }}>
-                {Math.round(partialClosePct * 100)}%
-              </span>
-            </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,170,0,0.05)', borderRadius: '4px', border: '1px solid rgba(255,170,0,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-gold)', whiteSpace: 'nowrap', fontWeight: 600 }}>🛡️ SL POST-TP1</label>
-              <select value={slAfterTp1} onChange={e => setSlAfterTp1(e.target.value as any)}
-                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
-                <option value="midpoint">Midpoint (50% riesgo)</option>
-                <option value="breakeven">Breakeven (Entrada)</option>
-                <option value="none">Sin cambio</option>
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', padding: '8px 10px', backgroundColor: 'rgba(0,136,255,0.05)', borderRadius: '4px', border: '1px solid rgba(0,136,255,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: '#0088ff', whiteSpace: 'nowrap', fontWeight: 600 }}>🎯 TP1 ESTRUCTURAL</label>
-              <select value={tp1StructuralMinRR} onChange={e => setTp1StructuralMinRR(parseFloat(e.target.value))}
-                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
-                <option value={1.2}>Estructural ≥1.2R</option>
-                <option value={99}>Fijo 1:1</option>
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                <input type="checkbox" checked={tp15BeEnabled} onChange={e => setTp15BeEnabled(e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
-                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>BE TP1.5</span>
-              </label>
-              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                <input type="checkbox" checked={atrTrailEnabled} onChange={e => setAtrTrailEnabled(e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
-                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>TRAIL ATR</span>
-              </label>
-              <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                <input type="checkbox" checked={structuralTrailEnabled} onChange={e => setStructuralTrailEnabled(e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: 'var(--accent-gold)', width: '14px', height: '14px' }} />
-                <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)' }}>TRAIL ESTRUCT.</span>
-              </label>
-            </div>
 
 
 
