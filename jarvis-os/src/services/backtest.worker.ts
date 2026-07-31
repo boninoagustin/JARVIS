@@ -124,16 +124,14 @@ self.onmessage = (e: MessageEvent) => {
           }
         }
 
-        // Penalizar pocos trades severamente
+        // Penalizar pocos trades (umbral bajo para no descartar sesiones válidas)
         if (totalTrades < minTrades) {
           return -1000 + totalTrades;
         }
 
-        // Fitness compuesto: PnL principal, desempate por WR y drawdown estable
+        // Fitness: PnL puro con WR como tiebreaker (idéntico al viejo optimizador)
         const wr = totalTrades > 0 ? wins / totalTrades : 0;
-        // Pequeña penalización por baja cantidad de trades (favorece robustez)
-        const tradeBonus = Math.min((totalTrades - minTrades) / (minTrades * 2), 0.1);
-        return pnlR + wr * 0.01 + tradeBonus;
+        return pnlR + wr * 0.001;
       };
 
       // Ejecutar estrategia

@@ -810,8 +810,8 @@ export default function BacktestingPanel() {
         spreadPips, commissionPerLot, tp1StructuralMinRR,
         baseConfig: { sessions: baseConfig },
         sessionKey, triggerKey,
-        strategy: 'ga', budget: 600, seed: Date.now() % 100000,
-        trainFraction: 0.7, minTrades: 15,
+        strategy: 'grid', budget: 0, seed: Date.now() % 100000,
+        trainFraction: 1.0, minTrades: 5,
       }, (evaluated: number, budget: number) => {
         setOptimizeProgress(budget > 0 ? evaluated / budget : 0);
       });
@@ -838,9 +838,9 @@ export default function BacktestingPanel() {
       });
 
       const oosInfo = optResult.oosPnlR !== null 
-        ? ` (OOS: ${optResult.oosPnlR > 0 ? '+' : ''}${optResult.oosPnlR}R / ${optResult.oosTrades} trades)` 
+        ? ` | OOS: ${optResult.oosPnlR > 0 ? '+' : ''}${optResult.oosPnlR}R / ${optResult.oosTrades} trades` 
         : '';
-      toast(`✅ Optimizado (${optResult.evaluated} evals) → Train: ${optResult.trainPnlR > 0 ? '+' : ''}${optResult.trainPnlR}R${oosInfo}`, 'success');
+      toast(`✅ Optimizado (${optResult.evaluated} evals) → ${optResult.trainPnlR > 0 ? '+' : ''}${optResult.trainPnlR}R / ${optResult.trainTrades} trades${oosInfo}`, 'success');
     } catch (err: any) {
       toast(`❌ Optimización fallida: ${err.message}`, 'error');
     } finally {
