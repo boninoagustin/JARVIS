@@ -410,7 +410,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
                         (netTrade as any).isBacktest = isBacktest;
             store.activeTrades.set(netTrade.tradeId, netTrade);
-            if (db) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => {});
+            if (db && !netTrade.isBacktest) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => {});
         }
     }
 
@@ -739,7 +739,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 trade.slPrice = trade.targetSlPrice!;
                                 trade.targetSlPending = false;
                                 trade.targetSlRetries = 0;
-                                if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
+                                if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ 
                                     slPrice: trade.slPrice,
                                     targetSlPending: false
                                 }).catch(() => {});
@@ -789,7 +789,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const durationStr = durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`;
                             
                             // 💾 Sincronizar actualización de TP1 (SL no cambia internamente hasta que el broker lo acepte en Real)
-                            if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
+                            if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ 
                                 tp1Hit: true,
                                 slPrice: trade.slPrice,
                                 targetSlPrice: trade.targetSlPrice || null,
@@ -800,7 +800,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
                                 if (fireDb) {
-                                    fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                    if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         tp1Hit: true,
                                         tp1Timestamp: nowTrade,
                                         slPrice: trade.slPrice,
@@ -835,7 +835,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
                                         trade.slPrice = trade.targetSlPrice!;
                                         trade.targetSlPending = false;
-                                        if (db) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
+                                        if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
                                     } else {
                                         console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
                                     }
@@ -868,7 +868,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             }
 
                             // Actualizar Firebase
-                            if (db) db.collection('active_trades').doc(trade.tradeId).update({ 
+                            if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ 
                                 slHalfwayHit: true,
                                 slPrice: trade.slPrice,
                                 targetSlPrice: trade.targetSlPrice || null,
@@ -878,7 +878,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
                                 if (fireDb) {
-                                    fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                    if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         slHalfwayHit: true,
                                         slPrice: trade.entryPrice,
                                         closedAt: nowTrade
@@ -902,7 +902,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
                                         trade.slPrice = trade.targetSlPrice!;
                                         trade.targetSlPending = false;
-                                        if (db) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
+                                        if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => {});
                                     } else {
                                         console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
                                     }
@@ -924,7 +924,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     trade.targetSlPrice = parseFloat(atrTrailSL.toFixed(5));
                                     trade.targetSlPending = true;
                                     trade.targetSlRetries = 0;
-                                    if (db) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
+                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
                                 }
                             }
                         } else {
@@ -936,7 +936,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     trade.targetSlPrice = parseFloat(atrTrailSL.toFixed(5));
                                     trade.targetSlPending = true;
                                     trade.targetSlRetries = 0;
-                                    if (db) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
+                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPrice: trade.targetSlPrice, targetSlPending: true }).catch(() => {});
                                 }
                             }
                         }
@@ -954,7 +954,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             // 💾 Eliminar de RAM inmediatamente de forma síncrona
                             store.activeTrades.delete(tradeId);
-                            if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+                            if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                             trade.tp2Hit = true;
                             const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
@@ -969,7 +969,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
                                 if (fireDb) {
-                                    fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                    if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         tp2Hit: true,
                                         tp2Timestamp: nowTrade,
                                         result: 'WIN',
@@ -1027,7 +1027,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         
                         // 💾 Eliminar de RAM inmediatamente de forma síncrona para evitar race conditions
                         store.activeTrades.delete(tradeId);
-                        if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+                        if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
                         const isPartialClose = trade.tp1Hit;
                         const originalSl = trade.originalSlPrice ?? trade.slPrice;
@@ -1042,7 +1042,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         if (trade.journalId) {
                             const { db: fireDb } = await import('./memory.js');
                             if (fireDb) {
-                                fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                     slHit: true,
                                     slTimestamp: nowTrade,
                                     result: finalResult,
@@ -2061,7 +2061,7 @@ export function startWatchdog() {
             // Limpieza de trades huérfanos (7 días)
             if (age > SEVEN_DAYS) {
                 globalState.activeTrades.delete(id);
-                if (db) db.collection('active_trades').doc(id).delete().catch(() => {});
+                if (db && !trade.isBacktest) db.collection('active_trades').doc(id).delete().catch(() => {});
                 console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
             }
         }
@@ -2133,7 +2133,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -2144,7 +2144,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 state.lastGatillo.status = 'BLOCKED_WARMUP';
                 safeSet(state).catch(() => {});
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -2155,7 +2155,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -2166,7 +2166,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
             if (nowMs < store.vixKillswitchUntil) {
@@ -2176,7 +2176,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
             }
 
@@ -2202,7 +2202,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
@@ -2222,7 +2222,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
                         safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `⚠️ <b>[SELL LIMIT]</b> ${ticker} SELL ignorado.\n\n` +
@@ -2250,7 +2250,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                         safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `🚨 <b>[MCL LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
@@ -2270,7 +2270,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
                         safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
                         sendTelegramAlert(
                             `⚠️ <b>[BUY LIMIT]</b> ${ticker} BUY ignorado.\n\n` +
@@ -2328,7 +2328,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const cleanupPrecreatedTrade = () => {
                     if (oteData && oteData.tradeId) {
                         store.activeTrades.delete(oteData.tradeId);
-                        if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                     }
                 };
 
@@ -2520,14 +2520,14 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         timestamp: nowMs, isBacktest: isBacktest
                     };
                     store.activeTrades.set(oteData.tradeId, activeTrade);
-                    if (db) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => {});
+                    if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => {});
                     console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
                 }
 
                 if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
                     activeTrade.journalId = journalId;
                     // 💾 Actualizar el journalId en Firebase
-                    if (db) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
+                    if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => {});
                 }
 
                 // 🤖 cTrader: Send trade with confirmation buttons (semi-automatic mode)
@@ -2557,7 +2557,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 if (state.lastGatillo) state.lastGatillo.status = blockedBy;
                                 safeSet(state).catch(() => {});
                                 store.activeTrades.delete(oteData.tradeId);
-                                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                                 return;
                             }
 
@@ -2584,7 +2584,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                                 await ctrader.closePosition(sarPendingClose.ctraderPositionId);
                                             }
                                             store.activeTrades.delete(sarPendingClose.tradeId);
-                                            if (db) db.collection('active_trades').doc(sarPendingClose.tradeId).delete().catch(() => {});
+                                            if (db && !isBacktest) db.collection('active_trades').doc(sarPendingClose.tradeId).delete().catch(() => {});
                                             if (sarPendingClose.journalId) recordResult(sarPendingClose.journalId, 'REVERSAL').catch(() => {});
                                         } catch (e) {
                                             console.error('[SAR] Error cierre diferido automático:', e);
@@ -2593,7 +2593,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
                                     updateTradePositionId(oteData.tradeId, result.positionId);
                                     if (db && journalId) {
-                                        db.collection('trade_journal').doc(journalId).update({
+                                        if (!isBacktest) db.collection('trade_journal').doc(journalId).update({
                                             ctraderPositionId: result.positionId,
                                             ctraderLots: result.lots,
                                             ctraderExecutedPrice: result.executedPrice,
@@ -2654,7 +2654,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
-                if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
             }
         }
 

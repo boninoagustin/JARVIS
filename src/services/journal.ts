@@ -89,6 +89,11 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
     const id = generateTradeId();
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date(Number(record.timestamp)));
 
+    if (record.mode === 'backtesting') {
+        console.log(`[JOURNAL] ⏭️ Backtest mode: Trade #${id} log skipped for ${record.ticker}`);
+        return id;
+    }
+
     try {
         // Eliminar propiedades undefined para evitar errores en Firestore
         const cleanRecord = Object.fromEntries(
