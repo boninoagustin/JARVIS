@@ -77,7 +77,7 @@ class SMCManager {
         return states;
     }
 
-    public processLiveCandles(ticker: string, period: string, newCandles: OHLCV[]) {
+    public processLiveCandles(ticker: string, period: string, newCandles: OHLCV[], isHistorical: boolean = false) {
         const key = `${ticker}:${period}`;
         const engine = this.getEngine(ticker, period);
 
@@ -88,7 +88,7 @@ class SMCManager {
                 const events = engine.nextCandle(prev); // prev ya cerró
                 
                 // 🆕 Notificar a los listeners (SMCBridge → JARVIS)
-                if (events.length > 0) {
+                if (events.length > 0 && !isHistorical) {
                     for (const listener of this.listeners) {
                         try {
                             listener(key, prev, events);
@@ -99,14 +99,18 @@ class SMCManager {
                 }
 
                 // Si se dispararon eventos, retransmitirlos todos
-                for (const event of events) {
-                    broadcastEvent(key, event);
+                if (!isHistorical) {
+                    for (const event of events) {
+                        broadcastEvent(key, event);
+                    }
                 }
             }
             this.forming.set(key, candle);
             
             // Broadcast live candle (para actualizar el gráfico)
-            broadcastCandle(key, candle);
+            if (!isHistorical) {
+                broadcastCandle(key, candle);
+            }
         }
         
         // Retransmitir el estado actualizado si hubo un cierre de vela o un evento importante

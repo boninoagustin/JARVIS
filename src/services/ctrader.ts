@@ -472,9 +472,9 @@ export async function getHistoricalCandles(ticker: string, period: TrendbarPerio
             // Llenar buffer inicial
             addCandles(ticker, periodStr, newCandles);
             
-            // Inicializar el SMC con este historial
+            // Inicializar el SMC con este historial (isHistorical = true)
             import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
-                smcManager.processLiveCandles(ticker, periodStr, newCandles);
+                smcManager.processLiveCandles(ticker, periodStr, newCandles, true);
             });
             
             return newCandles;
