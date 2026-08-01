@@ -574,6 +574,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
     const isClimaxCandle = alertText.includes('Vol: CLIMAX');
 
     const docRef = db.collection('radar_states').doc(ticker);
+    const safeSet = (data: any, options?: any) => {
+        if (isBacktest) return Promise.resolve();
+        return docRef.set(data, options);
+    };
     // Para ASIA: anclar el día de trading a las 17:00 ART (convención FX: el día cambia al cierre de NY):
     const todayStr = new Date(nowMs - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
 
@@ -1956,7 +1960,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         state.lastModified = nowMs;
 
         if (prefix !== 'PING_PRICE' || timeSinceLastSave > FIREBASE_INTERVAL_MS) {
-            docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando estado ${ticker}: ${err.message}`));
+            safeSet(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando estado ${ticker}: ${err.message}`));
             store.lastFirebaseSave.set(ticker, nowMs);
         }
 
@@ -1971,7 +1975,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             };
             state.version = (state.version || 0) + 1;
             state.lastModified = nowMs;
-            docRef.set(state, { merge: true }).catch(() => {});
+            safeSet(state, { merge: true }).catch(() => {});
             dispatchData = oteData;
         }
 
@@ -2120,13 +2124,13 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             
             state.version = (state.version || 0) + 1;
             state.lastModified = nowMs;
-            docRef.set(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando gatillo ${ticker}: ${err.message}`)); // Update status in UI immediately
+            safeSet(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando gatillo ${ticker}: ${err.message}`)); // Update status in UI immediately
 
             const config = getConfigForTicker(ticker, nowMs);
             if (!config.sessionEnabled) {
                 console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
                 state.lastGatillo.status = 'BLOCKED_SESSION';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
@@ -2138,7 +2142,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             if ((currentSession === 'LONDON' || currentSession === 'NY') && minutesSinceSessionOpen(nowMs) < warmupMin) {
                 console.log(`[RADAR] 🚫 Trading bloqueado por warmup de sesión (${currentSession}) para ${ticker}`);
                 state.lastGatillo.status = 'BLOCKED_WARMUP';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                 return;
@@ -2148,7 +2152,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             if (isGlobalKilled) {
                 console.log(`[GLOBAL KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por riesgo global consolidado de la cuenta.`);
                 state.lastGatillo.status = 'BLOCKED_GLOBAL';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
@@ -2159,7 +2163,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const remainingMin = Math.round((store.streakKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${store.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_RACHA';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
@@ -2169,7 +2173,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const remainingMin = Math.round((store.vixKillswitchUntil - nowMs) / 60000);
                 console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
                 state.lastGatillo.status = 'BLOCKED_VIX';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
@@ -2196,7 +2200,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     if (currentConsecutiveLosses >= sessionConfig.maxSellLosses) {
                         console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
-                        docRef.set(state).catch(() => {});
+                        safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
@@ -2216,7 +2220,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     if (dailySells >= sellConfig.maxSellsPerDay) {
                         console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
-                        docRef.set(state).catch(() => {});
+                        safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
@@ -2244,7 +2248,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     if (currentConsecutiveLosses >= sessionConfig.maxBuyLosses) {
                         console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                         state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
-                        docRef.set(state).catch(() => {});
+                        safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
@@ -2264,7 +2268,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     if (dailyBuys >= buyConfig.maxBuysPerDay) {
                         console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
                         state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
-                        docRef.set(state).catch(() => {});
+                        safeSet(state).catch(() => {});
                         store.activeTrades.delete(oteData.tradeId);
                         if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
 
@@ -2333,7 +2337,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     console.log(`[ANTI-PYRAMID] ⛔ Señal ${oteData.direction} ignorada para ${ticker}: ya hay una operación activa en la misma dirección.`);
                     cleanupPrecreatedTrade();
                     if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_ANTIPYRAMID';
-                    docRef.set(state).catch(() => {});
+                    safeSet(state).catch(() => {});
                     if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL IGNORADA</b> | ${ticker}\nSe detectó una nueva señal <b>${oteData.direction}</b>, pero ya hay una operación abierta en la misma dirección. (Anti-Piramidación)`).catch(() => {});
                     return;
                 } else {
@@ -2346,7 +2350,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         console.log(`[SAR] ⛔ Reversión Denegada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) no supera a la activa (Score: ${existingTradeForTicker.score}).`);
                         cleanupPrecreatedTrade();
                         if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_SAR_DENIED';
-                        docRef.set(state).catch(() => {});
+                        safeSet(state).catch(() => {});
                         if (!isBacktest) sendTelegramAlert(`⚠️ <b>SEÑAL DESCARTADA</b> | ${ticker}\n\nSe detectó una señal <b>${oteData.direction}</b> (Puntaje: ${oteData.points}), pero se mantiene la operación <b>${existingTradeForTicker.direction}</b> actual porque tiene mayor o igual convicción (Puntaje: ${existingTradeForTicker.score}).`).catch(() => {});
                         return;
                     }
@@ -2358,7 +2362,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             if (!isDuplicate(fingerprint, nowMs)) {
                 
                 state.lastGatillo.status = 'PROCESANDO...';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
 
                 let kronosAnnotation = '';
                 let kronosVerdict: string = 'SKIP';
@@ -2551,7 +2555,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             if (blockedBy) {
                                 console.log(`[KILLSWITCH] ⛔ TOCTOU Prevención: Ejecución bloqueada por ${blockedBy} para ${ticker}`);
                                 if (state.lastGatillo) state.lastGatillo.status = blockedBy;
-                                docRef.set(state).catch(() => {});
+                                safeSet(state).catch(() => {});
                                 store.activeTrades.delete(oteData.tradeId);
                                 if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => {});
                                 return;
@@ -2642,11 +2646,11 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 }
                 
                 state.lastGatillo.status = 'ENVIADO';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
             } else {
                 console.log(`[SNIPER] ⚠️ DUPLICADO bloqueado: ${fingerprint}`);
                 state.lastGatillo.status = 'DUPLICADO';
-                docRef.set(state).catch(() => {});
+                safeSet(state).catch(() => {});
                 
                 // Limpiar si se pre-creó en evaluateImpulse (para OTE)
                 store.activeTrades.delete(oteData.tradeId);
