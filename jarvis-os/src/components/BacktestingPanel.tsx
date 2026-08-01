@@ -711,21 +711,23 @@ export default function BacktestingPanel() {
 
       const finalPayload = JSON.parse(JSON.stringify(payload));
 
-      // 1. Descargar archivo localmente (Fallback por si hay límite de cuota en Firebase)
-      const dataStr = "data:text/json;charset=utf-act," + encodeURIComponent(JSON.stringify(finalPayload, null, 2));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", `asset_config_${configDoc}.json`);
-      document.body.appendChild(downloadAnchorNode);
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
-      toast(`✅ Archivo descargado localmente`, 'success');
+      // 1. Descargar archivo localmente si el usuario confirma
+      if (window.confirm(`¿Deseas descargar una copia local de asset_config_${configDoc}.json?`)) {
+        const dataStr = "data:text/json;charset=utf-act," + encodeURIComponent(JSON.stringify(finalPayload, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", `asset_config_${configDoc}.json`);
+        document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+        toast(`✅ Archivo descargado localmente`, 'success');
+      }
 
       // 2. Intentar subir a Firebase
       await setDoc(doc(db, 'asset_configs', configDoc), finalPayload, { merge: true });
       toast(`✅ Configurada ${configDoc} en JARVIS (${enabled ? 'HABILITADA' : 'DESHABILITADA'})`, 'success');
     } catch (err: any) {
-      toast(`⚠️ Archivo descargado, pero fallo al subir a Firebase: ${err.message}`, 'warning');
+      toast(`⚠️ Fallo al subir a Firebase: ${err.message}`, 'warning');
     }
   };
 

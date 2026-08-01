@@ -35,7 +35,7 @@ function getOte50(leg: ImpulseLeg): number {
 
 /** Cantidad de decimales según activo */
 function getDecimals(ticker: string): number {
-  if (/BTC|ETH|US30|NAS/i.test(ticker)) return 2;
+  if (/BTC|ETH|US30|NAS|US500|SPX|XAU/i.test(ticker)) return 2;
   if (/JPY/i.test(ticker)) return 3;
   return 5;
 }

@@ -1132,13 +1132,13 @@ export async function processTradingAlert(alertText: string) {
     }
 
     // 🧠 FASE 1 - MACHINE LEARNING: Guardar la señal cruda para la Fase 2 (Auto-Tune)
-    if (!isBacktest) { // Solo guardamos las señales reales en vivo
-        db.collection('raw_signals').add({
-            timestamp: nowMs,
-            alertText,
-            createdAt: new Date(nowMs).toISOString()
-        }).catch(() => {});
-    }
+    // if (!isBacktest) { // Solo guardamos las señales reales en vivo
+    //     db.collection('raw_signals').add({
+    //         timestamp: nowMs,
+    //         alertText,
+    //         createdAt: new Date(nowMs).toISOString()
+    //     }).catch(() => {});
+    // }
 
     // 🤖 v6.0: Verificación de Apagado Maestro (Master Killswitch)
     console.log("Killswitch check"); if (globalKillswitches["GLOBAL_SYSTEM"]) {

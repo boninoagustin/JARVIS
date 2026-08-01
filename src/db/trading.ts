@@ -62,6 +62,7 @@ let rawSignalsBuffer: any[] = [];
 let signalFlushTimeout: NodeJS.Timeout | null = null;
 
 function scheduleRawSignalSave(data: any) {
+    return; // Disabled to save Firestore quota
     rawSignalsBuffer.push(data);
     if (!signalFlushTimeout) {
         signalFlushTimeout = setTimeout(() => {

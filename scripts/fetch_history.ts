@@ -14,7 +14,8 @@ function mapToCTraderSymbol(ticker: string): string {
         'USDJPY': 'USDJPY',
         'AUDCAD': 'AUDCAD',
         'NZDUSD': 'NZDUSD',
-        'USOIL': 'XTIUSD'
+        'USOIL': 'XTIUSD',
+        'BTCUSD': 'BTCUSD'
     };
     return map[ticker] || ticker;
 }
@@ -109,7 +110,10 @@ async function main() {
         { p: TrendbarPeriod.D1, str: 'D1' }
     ];
 
-    const tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL'];
+    let tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL'];
+    if (process.argv.length > 2) {
+        tickers = [process.argv[2]];
+    }
 
     for (const ticker of tickers) {
         for (const tf of timeframes) {
