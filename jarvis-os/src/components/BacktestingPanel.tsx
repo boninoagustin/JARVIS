@@ -437,7 +437,6 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ title, conf
           <div style={{ marginTop: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>ROI Decay:</span>
             {[0, 30, 60].map(min => {
-              const roiKey = `roi_${min}`;
               const val = ((config as any).minimal_roi?.[String(min)] ?? (min===0?1.5:min===30?0.5:0)) * 100;
               return (
                 <div key={min} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>

@@ -1,5 +1,5 @@
 import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreEvent } from './Types.js';
-import { predict as mlPredict, initMLFilter, isMLActive, type MLPrediction } from './MLFilter.js';
+import { predict as mlPredict, isMLActive } from './MLFilter.js';
 
 const DEBUG = false;
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
