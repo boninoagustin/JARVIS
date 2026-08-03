@@ -60,10 +60,10 @@ function dispatch(processAlert: AlertFn, alertText: string) {
 
 // ─── Traducción de eventos por vela ─────────────────────────────────────────
 
-function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, events: any[]) {
+function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, events: any[], isHistorical: boolean = false) {
     const [ticker, period] = key.split(':');
     const tf = TF_MAP[period] ?? period;
-    const ts = Date.now();
+    const ts = isHistorical ? candle.timestamp : Date.now();
 
     const state = smcManager.getEngine(ticker, period).getState();
     const vwapTag = state.vwapStatus ? ` | VWAP: ${state.vwapStatus}` : '';
@@ -106,7 +106,10 @@ function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, e
             // las zonas llegan al radar del bot vía SYNC_ZONES (igual que en el Pine).
         }
 
-        if (alert) dispatch(processAlert, alert);
+        if (alert) {
+            if (isHistorical) alert += ' | BOOTSTRAP';
+            dispatch(processAlert, alert);
+        }
     }
 }
 
@@ -204,7 +207,7 @@ export async function initSMCBridge() {
     const { setSpotTickListener } = await import('../../services/ctrader.js');
 
     // 1. Eventos del motor (CHoCH/BOS, sweeps, divergencias, zonas)
-    smcManager.addListener((key, candle, events) => handleEngineEvents(processTradingAlert, key, candle, events));
+    smcManager.addListener((key, candle, events, isHistorical) => handleEngineEvents(processTradingAlert, key, candle, events, isHistorical));
 
     // 2. SYNC_ZONES y HEARTBEAT periódicos
     setInterval(() => syncTick(processTradingAlert), SYNC_TICK_MS);

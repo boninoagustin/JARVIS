@@ -6,10 +6,10 @@ class SMCManager {
     private engines: Map<string, SMCEngine> = new Map();
 
     // 🆕 Fase 1: listeners de eventos del motor (SMCBridge los usa para alimentar a JARVIS)
-    private listeners: Array<(key: string, candle: OHLCV, events: any[]) => void> = [];
+    private listeners: Array<(key: string, candle: OHLCV, events: any[], isHistorical: boolean) => void> = [];
     private forming = new Map<string, OHLCV>();
 
-    public addListener(fn: (key: string, candle: OHLCV, events: any[]) => void) {
+    public addListener(fn: (key: string, candle: OHLCV, events: any[], isHistorical: boolean) => void) {
         this.listeners.push(fn);
     }
 
@@ -87,11 +87,13 @@ class SMCManager {
             if (prev && candle.timestamp > prev.timestamp) {
                 const events = engine.nextCandle(prev); // prev ya cerró
                 
-                // 🆕 Notificar a los listeners (SMCBridge → JARVIS)
-                if (events.length > 0 && !isHistorical) {
+                // 🆕 Fase 1: Notificar a los listeners (SMCBridge → JARVIS)
+                // BOOTSTRAP: siempre notificamos, pasando isHistorical para que
+                // el bridge construya estado sin ejecutar trades ni alertas.
+                if (events.length > 0) {
                     for (const listener of this.listeners) {
                         try {
-                            listener(key, prev, events);
+                            listener(key, prev, events, isHistorical);
                         } catch (err: any) {
                             console.error('[SMC-MANAGER] Error en listener:', err.message);
                         }
