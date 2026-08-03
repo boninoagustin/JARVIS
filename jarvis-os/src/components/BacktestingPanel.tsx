@@ -437,7 +437,7 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ title, conf
           <div style={{ marginTop: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>ROI Decay:</span>
             {[0, 30, 60].map(min => {
-              const val = ((config as any).minimal_roi?.[String(min)] ?? (min===0?1.5:min===30?0.5:0)) * 100;
+              const val = ((config as any).minimal_roi?.[String(min)] ?? (min===0?0.015:min===30?0.005:0)) * 100;
               return (
                 <div key={min} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                   <span style={{ fontSize: '0.5rem', color: 'var(--text-tertiary)' }}>{min}m:</span>
@@ -969,7 +969,13 @@ export default function BacktestingPanel() {
                 tp15BeEnabled: optResult.best.tp15BeEnabled,
                 atrTrailEnabled: optResult.best.atrTrailEnabled,
                 structuralTrailEnabled: optResult.best.structuralTrailEnabled,
-                minimal_roi: optResult.best.minimal_roi || undefined,
+                minimal_roi: optResult.best.minimal_roi 
+                  ? Object.fromEntries(
+                      Object.entries(optResult.best.minimal_roi).map(([k, v]) => [
+                        k, (v as number) > 1 ? (v as number) / 100 : v
+                      ])
+                    )
+                  : undefined,
               };
               localStorage.setItem('bt_session_triggers', JSON.stringify(next));
               return next;
