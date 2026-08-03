@@ -1,0 +1,213 @@
+{
+  "study_name": "rider_bt_v1",
+  "ticker": "EURUSD",
+  "n_trials": 5,
+  "new_trials": 5,
+  "elapsed_seconds": 18.195231914520264,
+  "best_value": 12.405422317382651,
+  "best_params": {
+    "pivot_len": 3,
+    "min_sweep_wick_pct": 0.5273078084478353,
+    "div_pivot_len": 3,
+    "z_score_window": 20,
+    "slBufferPercent": 0.18888778463576217,
+    "fixedRR": 2.0694330288681653,
+    "minRR": 1.153959819657586,
+    "oteEntryPercent": 79,
+    "minBuyPoints": 11,
+    "minSellPoints": 9,
+    "partialClosePct": 0.0,
+    "slAfterTp1": "none",
+    "tp15BeEnabled": true,
+    "atrTrailEnabled": false
+  },
+  "best_metrics": {
+    "trade_count": 171,
+    "wins": 147,
+    "losses": 24,
+    "win_rate": 0.8596491228070176,
+    "gross_profit_r": 62.51761726114927,
+    "gross_loss_r": 3.7331801291159454,
+    "net_pnl_r": 58.784437132033325,
+    "profit_factor": 16.746477560394084,
+    "expectancy": 0.3437686381990253,
+    "max_drawdown_r": 2.1514660534156675,
+    "sharpe_simple": 4.860107808501134,
+    "avg_trade_r": 0.3437686381990253,
+    "max_consec_losses": 3,
+    "max_consec_wins": 23
+  },
+  "best_config": {
+    "ticker": "EURUSD",
+    "minBuyPoints": 11,
+    "minSellPoints": 9,
+    "minRR": 1.153959819657586,
+    "slBufferPercent": 0.18888778463576217,
+    "fixedRR": 2.0694330288681653,
+    "oteEntryPercent": 79,
+    "entryTrigger": "SMART",
+    "sessions": {
+      "LONDON": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.18888778463576217,
+        "fixedRR": 2.0694330288681653
+      },
+      "NY": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.18888778463576217,
+        "fixedRR": 2.0694330288681653
+      },
+      "ASIA": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.18888778463576217,
+        "fixedRR": 2.0694330288681653
+      },
+      "OFF": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.18888778463576217,
+        "fixedRR": 2.0694330288681653
+      }
+    },
+    "directManagement": {
+      "partialClosePct": 0.0,
+      "slAfterTp1": "none",
+      "tp15BeEnabled": true,
+      "atrTrailEnabled": false
+    },
+    "minimal_roi": {
+      "0": 0.015,
+      "30": 0.005,
+      "60": 0
+    },
+    "smc_overrides": {
+      "pivot_len": 3,
+      "min_sweep_wick_pct": 0.5273078084478353,
+      "div_pivot_len": 3,
+      "z_score_window": 20
+    }
+  }
+}

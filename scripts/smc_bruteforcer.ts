@@ -1,3 +1,16 @@
+/**
+ * ⚠️ DEPRECATED — Reemplazado por scripts/hyperopt/ (Optuna Bayesian Optimization)
+ *
+ * Este archivo usaba Coordinate Descent secuencial sobre grillas discretas
+ * (pivot_lens=[3,5,8,13,21], wick=[0.1,0.3,0.5,0.7], div=[2,3,5], z=[14,20,50,100])
+ * para cada TF por separado. La nueva arquitectura unifica la búsqueda con TPE
+ * multivariado y evalúa todos los TFs simultáneamente en vez de greedy secuencial.
+ *
+ * Para Hyperopt moderno:   python scripts/hyperopt/run_hyperopt.py <ticker>
+ * Para migrar un preset:   python scripts/hyperopt/load_best_params.py <output.json>
+ *
+ * Keep for backward compatibility (csv-based log generation still useful).
+ */
 import fs from 'fs';
 import path from 'path';
 import { OHLCV, SMCPreset } from '../src/engine/smc/types.js';

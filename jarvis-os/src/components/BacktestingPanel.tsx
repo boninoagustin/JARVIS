@@ -433,6 +433,30 @@ const TriggerSettingsPanel: React.FC<TriggerSettingsPanelProps> = ({ title, conf
             </label>
           </div>
           
+          {/* 🆕 ROI Time-Decay */}
+          <div style={{ marginTop: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>ROI Decay:</span>
+            {[0, 30, 60].map(min => {
+              const roiKey = `roi_${min}`;
+              const val = ((config as any).minimal_roi?.[String(min)] ?? (min===0?1.5:min===30?0.5:0)) * 100;
+              return (
+                <div key={min} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                  <span style={{ fontSize: '0.5rem', color: 'var(--text-tertiary)' }}>{min}m:</span>
+                  <input
+                    type="number" min="0" max="5" step="0.1"
+                    value={val}
+                    onChange={e => {
+                      const roi = { ...((config as any).minimal_roi || {}) };
+                      roi[String(min)] = parseFloat(e.target.value) / 100;
+                      updateTrigger(sessionKey, triggerKey, 'minimal_roi', roi);
+                    }}
+                    style={{ width: '38px', padding: '1px 3px', fontSize: '0.55rem', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '3px', textAlign: 'center' }}
+                  />%
+                </div>
+              );
+            })}
+          </div>
+          
         </div>
       )}
     </div>
@@ -706,6 +730,9 @@ export default function BacktestingPanel() {
         structuralTrailEnabled: structuralTrailEnabled,
         tp1StructuralMinRR: tp1StructuralMinRR,
 
+        // 🆕 ROI Time-Decay & Rider (consumido por trading.ts)
+        minimal_roi: (sessionTriggers as any)?.LONDON?.choch15m?.minimal_roi || {"0":0.015,"30":0.005,"60":0},
+
         updatedAt: new Date().toISOString()
       };
 
@@ -943,6 +970,7 @@ export default function BacktestingPanel() {
                 tp15BeEnabled: optResult.best.tp15BeEnabled,
                 atrTrailEnabled: optResult.best.atrTrailEnabled,
                 structuralTrailEnabled: optResult.best.structuralTrailEnabled,
+                minimal_roi: optResult.best.minimal_roi || undefined,
               };
               localStorage.setItem('bt_session_triggers', JSON.stringify(next));
               return next;

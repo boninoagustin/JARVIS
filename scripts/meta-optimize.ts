@@ -1,3 +1,16 @@
+/**
+ * ⚠️ DEPRECATED — Reemplazado por scripts/hyperopt/ (Optuna Bayesian Optimization)
+ *
+ * Este archivo usaba Grid Search con 5 bucles for anidados (900 combinaciones
+ * hard-coded). La nueva herramienta hyperopt_server.py reduce el espacio de
+ * búsqueda efectivo de O(n^m) a O(k log n) vía TPE y persiste resultados en
+ * SQLite para reanudar entre corridas.
+ *
+ * Para Hyperopt moderno:   python scripts/hyperopt/run_hyperopt.py <ticker>
+ * Para migrar un preset:   python scripts/hyperopt/load_best_params.py <output.json>
+ *
+ * Keep for backward compatibility with existing campaigns.
+ */
 import { getPresetsForCampaign, getPresetLogs, saveJarvisBestResult, updateCampaignStatus, JarvisBestResult } from '../src/db/campaigns.js';
 import { runBacktest } from '../jarvis-os/src/services/backtestEngine.js';
 

@@ -102,6 +102,30 @@ export const getLastPingTime = () => globalState.lastPingTime;
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
 
+/**
+ * 🆕 ROI Time-Decay: devuelve el profit mínimo requerido (%) según la antigüedad del trade.
+ * 
+ * @param tradeAgeMinutes minutos desde apertura
+ * @param roiTable ej: {"0": 1.5, "30": 0.5, "60": 0}
+ * @returns [roiPercent, label] — si tradeAge ≥ threshold, devuelve el ROI correspondiente.
+ *          Si no hay tabla o está vacía, devuelve [0, null] (sin efecto).
+ */
+function getEffectiveROI(tradeAgeMinutes: number, roiTable?: Record<string, number>): [number, string | null] {
+    if (!roiTable || Object.keys(roiTable).length === 0) return [0, null];
+    // Ordenar thresholds de mayor a menor (ej: ["60","30","0"])
+    const thresholds = Object.keys(roiTable)
+        .map(k => parseInt(k, 10))
+        .sort((a, b) => b - a);
+    for (const thresholdMin of thresholds) {
+        if (tradeAgeMinutes >= thresholdMin) {
+            const roi = roiTable[String(thresholdMin)];
+            const label = roi === 0 ? 'breakeven' : `${thresholdMin}m_${(roi * 100).toFixed(1)}%`;
+            return [roi, label];
+        }
+    }
+    return [0, null];
+}
+
 function computeConfluenceTFs(zones: RadarZone[]): Map<RadarZone, string[]> {
     const byDir = new Map<string, RadarZone[]>();
     for (const z of zones) {
@@ -167,6 +191,11 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     atrTrailEnabled?: boolean;
     structuralTrailEnabled?: boolean;
     tp1StructuralMinRR?: number;
+    /** 🆕 ROI time-decay: {"0":0.015,"30":0.005,"60":0} */
+    minimal_roi?: Record<string, number>;
+    /** 🏇 RIDER mode config */
+    riderEnabled?: boolean;
+    riderTf?: string;
     sessions?: Record<string, {
         choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
         choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -217,6 +246,9 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             atrTrailEnabled: config.atrTrailEnabled,
             structuralTrailEnabled: config.structuralTrailEnabled,
             tp1StructuralMinRR: config.tp1StructuralMinRR,
+            minimal_roi: config.minimal_roi as Record<string, number> | undefined,
+            riderEnabled: config.riderEnabled as boolean | undefined,
+            riderTf: config.riderTf as string | undefined,
             sessions: config.sessions as any
         };
     }
@@ -235,6 +267,18 @@ if (db) {
                 globalState.activeTrades.set(doc.id, structuredClone(doc.data() as ActiveTrade));
             });
             console.log(`[RADAR] 🧠 Memoria restaurada: ${globalState.activeTrades.size} trades activos cargados.`);
+
+            // 🏇 Inyectar SMCManager para consultas HTF (RIDER mode y otros usos futuros)
+            import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
+                globalState.smcManager = smcManager;
+                console.log('[RIDER] 🏇 SMCManager inyectado en StateStore — RIDER mode disponible.');
+            }).catch(() => { /* SMCManager no disponible (modo solo Pine logs) */ });
+
+            // 🧠 Inicializar ML Filter (carga modelo específico del ticker si existe)
+            import('../engine/MLFilter.js').then(({ initMLFilter }) => {
+                initMLFilter();
+                console.log('[ML] 🧠 MLFilter inicializado.');
+            }).catch(() => { /* MLFilter no disponible */ });
         });
 
         unsubscribers.push(db.collection('app_settings').doc('global').onSnapshot((snap: any) => {
@@ -733,6 +777,63 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         continue;
                     }
 
+                    // 🆕 ROI TIME-DECAY: si el trade pierde momentum, bajar expectativa de ganancia
+                    // según la tabla minimal_roi del activo/sesión. Inspirado en Freqtrade.
+                    const roiTable = config.minimal_roi;
+                    if (roiTable && Object.keys(roiTable).length > 0 && !trade.tp1Hit) {
+                        const tradeAgeMin = tradeAgeMs / 60000;
+                        const [effectiveROI, roiLabel] = getEffectiveROI(tradeAgeMin, roiTable);
+                        if (effectiveROI > 0 && roiLabel) {
+                            // ROI > 0: si el PnL flotante YA supera el umbral degradado, cerrar como WIN
+                            const currentPnlPct = trade.direction === 'BUY'
+                                ? (currentPrice - trade.entryPrice) / trade.entryPrice * 100
+                                : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
+                            if (currentPnlPct >= effectiveROI) {
+                                if (isDuplicate(`ROI_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                                store.activeTrades.delete(tradeId);
+                                if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                                trade.roiDecayApplied = roiLabel;
+                                const durationMin = Math.round(tradeAgeMs / 60000);
+                                const originalSl = trade.originalSlPrice ?? trade.slPrice;
+                                const slDistPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+                                const rMultiple = slDistPct > 0 ? parseFloat((currentPnlPct / slDistPct).toFixed(4)) : 0;
+                                if (trade.journalId) {
+                                    const { db: fireDb } = await import('./memory.js');
+                                    if (fireDb && !trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                        result: 'WIN', pnl: parseFloat(currentPnlPct.toFixed(2)), rMultiple,
+                                        durationMin, roiDecayApplied: roiLabel,
+                                    }).catch(() => { });
+                                }
+                                const roiMsg = `⏱️ <b>ROI TIME-DECAY | ${ticker} | ${trade.direction}</b>\n\n`
+                                    + `📥 Entrada: ${trade.entryPrice}\n`
+                                    + `💰 PnL: +${currentPnlPct.toFixed(2)}% (umbral ROI: ≥${(effectiveROI).toFixed(2)}%)\n`
+                                    + `⏱️ Duración: ${durationMin}min\n`
+                                    + `🏷️ ROI aplicado: ${roiLabel}\n\n`
+                                    + `💡 El trade alcanzó el objetivo degradado por tiempo.`;
+                                if (!isBacktest) sendTelegramAlert(roiMsg).catch(() => { });
+                                console.log(`[ROI] ⏱️ ${ticker} ${trade.direction} #${tradeId}: ROI exit (${roiLabel}) PnL=+${currentPnlPct.toFixed(2)}%`);
+                                continue;
+                            }
+                        } else if (effectiveROI === 0 && !trade.roiDecayApplied) {
+                            // ROI = 0 (breakeven): ajustar SL a precio de entrada para proteger el trade
+                            trade.roiDecayApplied = 'breakeven';
+                            if (isBacktest) {
+                                trade.slPrice = trade.entryPrice;
+                            } else {
+                                trade.targetSlPrice = trade.entryPrice;
+                                trade.targetSlPending = true;
+                                trade.targetSlRetries = 0;
+                                if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({
+                                    slPrice: trade.entryPrice,
+                                    targetSlPrice: trade.entryPrice,
+                                    targetSlPending: true,
+                                    roiDecayApplied: 'breakeven',
+                                }).catch(() => { });
+                            }
+                            console.log(`[ROI] 🛡️ ${ticker} ${trade.direction} #${tradeId}: ROI breakeven → SL ajustado a entry ${trade.entryPrice}`);
+                        }
+                    }
+
                     // 🔄 REINTENTO DE MODIFICACIÓN DE SL (Si quedó pendiente de un tick anterior)
                     if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId) {
                         trade.targetSlRetries = (trade.targetSlRetries || 0) + 1;
@@ -788,6 +889,18 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     trade.targetSlPending = true;
                                     trade.targetSlRetries = 0;
                                 }
+                            }
+
+                            // 🏇 RIDER TRANSITION (EA31337): si la sesión tiene riderEnabled y SL→breakeven,
+                            // transferir gestión del trade a la temporalidad superior para salida estructural.
+                            const sessionCfg = config.sessions?.[getCurrentSession(nowTrade)] as any;
+                            const riderEnabled = sessionCfg?.riderEnabled ?? config.riderEnabled ?? false;
+                            const riderTf = sessionCfg?.riderTf ?? config.riderTf ?? 'H1';
+                            if (riderEnabled && mgmtSlMode === 'breakeven' && !trade.managementMode) {
+                                trade.managementMode = 'RIDER';
+                                trade.riderTf = riderTf;
+                                trade.tp2Price = 0; // deshabilitar TP2 fijo — la salida es estructural
+                                console.log(`[RIDER] 🏇 ${ticker} ${trade.direction} #${tradeId}: transicionando a RIDER mode (${riderTf}). Salida por estructura HTF.`);
                             }
 
                             const durationSec = Math.round((nowTrade - trade.timestamp) / 1000);
@@ -847,6 +960,51 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
                                 });
+                            }
+                        }
+                    }
+
+                    // 🏇 RIDER EXIT (EA31337): si el trade está en modo RIDER, la salida es estructural.
+                    // Solo se cierra si el SMCEngine del HTF detecta un CHoCH inverso.
+                    // El ATR trailing y SL check siguen activos como protección.
+                    if (trade.managementMode === 'RIDER') {
+                        const riderEngine = store.smcManager?.getEngine(ticker, trade.riderTf || 'H1');
+                        if (riderEngine) {
+                            const riderState = riderEngine.getState();
+                            const lastChoch = riderState.lastCHoCH;
+                            if (lastChoch) {
+                                const inverseDir = trade.direction === 'BUY' ? 'Bearish' : 'Bullish';
+                                if ((lastChoch as any).direction === inverseDir) {
+                                    if (isDuplicate(`RIDER_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                                    store.activeTrades.delete(tradeId);
+                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                                    
+                                    const currentPnlPct = trade.direction === 'BUY'
+                                        ? (currentPrice - trade.entryPrice) / trade.entryPrice * 100
+                                        : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
+                                    const originalSl = trade.originalSlPrice ?? trade.slPrice;
+                                    const slDistPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+                                    const rMultiple = slDistPct > 0 ? parseFloat((currentPnlPct / slDistPct).toFixed(4)) : 0;
+                                    const durationMin = Math.round(tradeAgeMs / 60000);
+                                    
+                                    if (trade.journalId) {
+                                        const { db: fireDb } = await import('./memory.js');
+                                        if (fireDb && !trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
+                                            result: 'WIN', pnl: parseFloat(currentPnlPct.toFixed(2)), rMultiple,
+                                            durationMin, managementMode: 'RIDER', riderTf: trade.riderTf,
+                                        }).catch(() => { });
+                                    }
+                                    
+                                    const riderMsg = `🏇 <b>RIDER EXIT | ${ticker} | ${trade.direction}</b>\n\n`
+                                        + `📥 Entrada: ${trade.entryPrice}\n`
+                                        + `💰 PnL: +${currentPnlPct.toFixed(2)}%\n`
+                                        + `⏱️ Duración: ${durationMin}min\n`
+                                        + `🔍 HTF (${trade.riderTf}): CHoCH ${inverseDir} detectado → salida estructural\n\n`
+                                        + `💡 Trade cerrado por inversión de estructura en temporalidad superior.`;
+                                    if (!isBacktest) sendTelegramAlert(riderMsg).catch(() => { });
+                                    console.log(`[RIDER] 🏇 ${ticker} ${trade.direction} #${tradeId}: EXIT por CHoCH ${inverseDir} en ${trade.riderTf}. PnL=+${currentPnlPct.toFixed(2)}%`);
+                                    continue;
+                                }
                             }
                         }
                     }

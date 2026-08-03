@@ -1,4 +1,5 @@
 import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreEvent } from './Types.js';
+import { predict as mlPredict, initMLFilter, isMLActive, type MLPrediction } from './MLFilter.js';
 
 const DEBUG = false;
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
@@ -307,6 +308,21 @@ export function evaluateImpulseCore(
 
             const totalPoints = (leg.chochPoints || 0) + 4;
 
+            // 🆕 ML FILTER (FreqAI-style): si hay modelo, la predicción reemplaza la heurística
+            const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+            const scorePts = computePoints(activeScore, nowMs);
+            const tfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';
+            const mlPred = mlPredict(state, leg.dir, nowMs, leg.chochPoints || 0, scorePts, tfKey);
+
+            if (isMLActive() && mlPred) {
+                if (!mlPred.approved) {
+                    dbg(`[ML] 🤖 ${ticker} ${leg.dir}: RECHAZADO por ML (prob=${mlPred.probability.toFixed(3)} < ${mlPred.threshold})`);
+                    return { updatedLeg: leg };
+                }
+                dbg(`[ML] 🤖 ${ticker} ${leg.dir}: APROBADO por ML (prob=${mlPred.probability.toFixed(3)} >= ${mlPred.threshold}) [override heurística]`);
+            } else {
+                // Fallback: heurística legacy (solo si ML no está activo)
+
             if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (!oteEnabled || totalPoints < oteMinScore) {
                     dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
@@ -323,6 +339,7 @@ export function evaluateImpulseCore(
                     return { updatedLeg: leg };
                 }
             }
+            } // end ML fallback
 
             const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
             const decimals = getDecimals(ticker);
@@ -344,7 +361,6 @@ export function evaluateImpulseCore(
                 return { updatedLeg: leg };
             }
 
-            const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
             const tfFormatted = triggerTf.toUpperCase() || '5M';
             const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
             const eventTfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';

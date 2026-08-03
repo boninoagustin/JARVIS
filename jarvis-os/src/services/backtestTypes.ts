@@ -17,6 +17,8 @@ export interface BacktestTrade {
   tf?: string;
   marketBias?: Record<string, string>;
   vwapStatus?: Record<string, string>;
+  /** 🆕 ROI time-decay que cerró/ajustó este trade ("30m_0.5%" o "breakeven") */
+  roiDecayApplied?: string;
 }
 
 export interface BaseTriggerConfig {
@@ -70,6 +72,10 @@ export interface BacktestConfig {
   commissionPerLot?: number;
   maxHoldMin?: number;
   latencyMs?: number;
+  
+  /** 🆕 ROI time-decay table: {"0":0.015,"30":0.005,"60":0}
+   *  "0"=1.5% initial target, after 30m→0.5%, after 60m→breakeven */
+  minimal_roi?: Record<string, number>;
 }
 
 export interface BacktestResult {

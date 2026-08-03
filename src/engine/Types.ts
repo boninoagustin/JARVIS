@@ -134,6 +134,12 @@ export interface ActiveTrade {
     ctraderPositionId?: string;
     score: number;
     isBacktest?: boolean;
+    /** 🆕 ROI time-decay: qué umbral del minimal_roi se aplicó ("30m_0.5%" o "breakeven") */
+    roiDecayApplied?: string;
+    /** 🏇 RIDER mode (EA31337): tras TP1+breakeven, el trade se gestiona por HTF estructural */
+    managementMode?: 'SCALP' | 'RIDER';
+    /** Temporalidad del Rider (ej 'H1', 'H4') — el motor HTF que decide la salida */
+    riderTf?: string;
 }
 
 export interface GlobalPortfolioConfig {
@@ -160,7 +166,13 @@ const TriggerSchema = z.object({
     tp15BeEnabled: z.boolean().optional(),
     atrTrailEnabled: z.boolean().optional(),
     structuralTrailEnabled: z.boolean().optional(),
-    tp1StructuralMinRR: z.number().optional()
+    tp1StructuralMinRR: z.number().optional(),
+    /** 🆕 ROI time-decay: {"0":0.015,"30":0.005,"60":0} → min% → at 0m/30m/60m */
+    minimal_roi: z.record(z.string(), z.number()).optional(),
+    /** 🏇 RIDER mode: si true, tras TP1+breakeven se transfiere gestión a HTF estructural */
+    riderEnabled: z.boolean().optional(),
+    /** Temporalidad del Rider (default: 'H1') */
+    riderTf: z.enum(['H1', 'H4', 'D1']).optional(),
 }).passthrough();
 
 export const SessionSchema = z.object({
@@ -202,6 +214,8 @@ export const AssetSessionConfigSchema = z.object({
     atrTrailEnabled: z.boolean().optional(),
     structuralTrailEnabled: z.boolean().optional(),
     tp1StructuralMinRR: nonNegativeNumber.optional(),
+    /** 🆕 ROI time-decay global del activo (ej: {"0":0.015,"30":0.005,"60":0}) */
+    minimal_roi: z.record(z.string(), z.number()).optional(),
     sessions: z.record(z.string(), SessionSchema).optional(),
     // 📊 Campos de portfolio por activo (guardados por AdminPanel)
     maxDailyLossR: nonNegativeNumber.optional(),

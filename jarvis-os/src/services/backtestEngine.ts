@@ -422,6 +422,44 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
+      // 🆕 ROI TIME-DECAY (paralelo a trading.ts: getEffectiveROI)
+      const roiTable = config.minimal_roi;
+      if (roiTable && Object.keys(roiTable).length > 0 && !trade.tp1Hit) {
+        const tradeAgeMin = tradeAge / 60000;
+        const thresholds = Object.keys(roiTable).map(k => parseInt(k, 10)).sort((a, b) => b - a);
+        let effectiveROI = 0;
+        let roiLabel: string | null = null;
+        for (const t of thresholds) {
+          if (tradeAgeMin >= t) {
+            effectiveROI = roiTable[String(t)];
+            roiLabel = effectiveROI === 0 ? 'breakeven' : `${t}m_${(effectiveROI * 100).toFixed(1)}%`;
+            break;
+          }
+        }
+        if (effectiveROI > 0 && roiLabel) {
+          const pnlPct = trade.direction === 'BUY'
+            ? (currentPrice - trade.entryPrice) / trade.entryPrice * 100
+            : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
+          if (pnlPct >= effectiveROI) {
+            (trade as any).roiDecayApplied = roiLabel;
+            const originalSl = trade.originalSlPrice ?? trade.slPrice;
+            const slDistPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
+            const rMultiple = slDistPct > 0 ? parseFloat((pnlPct / slDistPct).toFixed(4)) : 0;
+            trade.result = 'WIN';
+            trade.pnl = pnlPct;
+            trade.rMultiple = rMultiple;
+            trade.closeTimestamp = nowMs;
+            trade.durationMin = Math.round(tradeAge / 60000);
+            activeTrades.delete(tradeId);
+            updateDailyStatsFromClose(trade, dailyStats, config);
+            continue;
+          }
+        } else if (effectiveROI === 0 && !(trade as any).roiDecayApplied) {
+          (trade as any).roiDecayApplied = 'breakeven';
+          trade.slPrice = trade.entryPrice;
+        }
+      }
+
       // Gestión por gatillo
       let finalTriggerType = '';
       const isBos = trade.events?.some(e => e.includes('BOS'));

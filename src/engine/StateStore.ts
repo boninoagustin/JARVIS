@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActiveTrade, RadarState, AssetSessionConfig, GlobalPortfolioConfig } from './Types.js';
 import { AssetSessionConfigSchema } from './Types.js';
+import type { SMCManager } from './smc/SMCManager.js';
 
 type EntryTrigger = NonNullable<z.infer<typeof AssetSessionConfigSchema>['entryTrigger']>;
 
@@ -9,6 +10,9 @@ export class StateStore {
     localRadarStates = new Map<string, RadarState>();
     lastFirebaseSave = new Map<string, number>();
     assetSessionConfigs = new Map<string, AssetSessionConfig>();
+    
+    /** 🏇 Referencia al SMCManager para consultas HTF (RIDER mode) */
+    smcManager?: SMCManager;
 
     lastPingTime = 0;
     consecutiveLosses = 0;
