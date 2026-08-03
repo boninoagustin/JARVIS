@@ -78,6 +78,7 @@ self.onmessage = (e: MessageEvent) => {
           tp15BeEnabled: genome.tp15BeEnabled,
           atrTrailEnabled: genome.atrTrailEnabled,
           structuralTrailEnabled: genome.structuralTrailEnabled,
+          minimal_roi: genome.minimal_roi || undefined,
           enabled: true,
         };
 
@@ -157,7 +158,7 @@ self.onmessage = (e: MessageEvent) => {
         });
       } else {
         // Grid exhaustivo
-        let bestGenome: TriggerGenome = { minScore: 4, slBuff: 0, tp2: 1.5, partialClosePct: 0, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false };
+        let bestGenome: TriggerGenome = { minScore: 4, slBuff: 0, tp2: 1.5, partialClosePct: 0, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, minimal_roi: null };
         let bestFitness = -Infinity;
         const allResults: { genome: TriggerGenome; fitness: number }[] = [];
         const totalGrid = gridCount();
