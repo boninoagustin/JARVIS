@@ -1022,7 +1022,7 @@ function mapToCTraderSymbol(ticker: string): string {
         'GBPJPY': 'GBPJPY',
         'EURGBP': 'EURGBP',
         'XAUUSD': 'XAUUSD',
-        'USOIL': 'USOIL',
+        'USOIL': 'XTIUSD',
         'BTCUSD': 'BTCUSD',
         'US100': 'US TECH 100',   // Usuario reporta que su broker lo llama 'US TECH 100'
         'NAS100': 'US TECH 100',

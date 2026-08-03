@@ -161,7 +161,7 @@ const TriggerSchema = z.object({
     atrTrailEnabled: z.boolean().optional(),
     structuralTrailEnabled: z.boolean().optional(),
     tp1StructuralMinRR: z.number().optional()
-});
+}).passthrough();
 
 export const SessionSchema = z.object({
     choch5m: TriggerSchema.optional(),
@@ -177,7 +177,7 @@ export const SessionSchema = z.object({
     slBufferPercent: z.number().optional(),
     fixedRR: z.number().optional(),
     maxSmartRiskPercent: z.number().optional()
-});
+}).passthrough();
 
 const nonNegativeNumber = z.coerce.number().refine(n => Number.isFinite(n), { message: 'Debe ser un número finito' });
 
@@ -202,7 +202,14 @@ export const AssetSessionConfigSchema = z.object({
     atrTrailEnabled: z.boolean().optional(),
     structuralTrailEnabled: z.boolean().optional(),
     tp1StructuralMinRR: nonNegativeNumber.optional(),
-    sessions: z.record(z.string(), SessionSchema).optional()
-});
+    sessions: z.record(z.string(), SessionSchema).optional(),
+    // 📊 Campos de portfolio por activo (guardados por AdminPanel)
+    maxDailyLossR: nonNegativeNumber.optional(),
+    maxConsecutiveLosses: nonNegativeNumber.optional(),
+    trailingDrawdownR: nonNegativeNumber.optional(),
+    dailyProfitTargetR: nonNegativeNumber.optional(),
+    maxTradesPerDay: nonNegativeNumber.optional(),
+    updatedAt: z.any().optional()
+}).passthrough();
 
 export type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
