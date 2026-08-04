@@ -1389,16 +1389,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (isInsideRange) shouldCreateNew = false;
 
                             // 🛡️ Anti-Pingpong: No crear leg nuevo si el anterior tiene < 3 min
-                            // 🔧 Reducido de 5min a 3min para scalping 3M (vela cierra cada 3 min, 
-                            // un leg puede completarse en 1-2 velas y ya estar listo para el siguiente)
-                            // 🔧 FIX: elapsed puede ser negativo cuando el leg fue creado con un TS
-                            // de bootstrap histórico (candle.timestamp) y el evento actual usa otro TS.
-                            // Solo aplicar cooldown si el elapsed es positivo (timestamps coherentes).
+                            // Solo aplica en tiempo real (no en bootstrap/backtest donde los
+                            // timestamps son sintéticos y múltiples BOS comparten el mismo TS de vela).
                             const LEG_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos
-                            const elapsed = nowMs - activeLeg.createdAt;
-                            if (activeLeg.createdAt && elapsed >= 0 && elapsed < LEG_COOLDOWN_MS) {
-                                shouldCreateNew = false;
-                                console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round(elapsed / 1000)}s (cooldown 3 min)`);
+                            if (!isBootstrap && !isBacktest) {
+                                const elapsed = nowMs - activeLeg.createdAt;
+                                if (activeLeg.createdAt && elapsed >= 0 && elapsed < LEG_COOLDOWN_MS) {
+                                    shouldCreateNew = false;
+                                    console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} ignorado en ${ticker}: leg anterior tiene ${Math.round(elapsed / 1000)}s (cooldown 3 min)`);
+                                }
                             }
                         }
 
