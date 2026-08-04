@@ -1,0 +1,18 @@
+Ejecutadas 12 combinaciones.
+
+--- TOP 5 CONFIGURACIONES (M15) ---
+Rank 1:
+  Config: EMA_F=13, EMA_S=34, Regime=75, VWAP=5, RR=2, Z-Score=2.5, MaxLoss=1
+  Balance Final: $13234.96 | Profit Factor: 1.70 | Win Rate: 62.62% | Max DD: 4.44% | Total Trades: 107
+Rank 2:
+  Config: EMA_F=13, EMA_S=34, Regime=75, VWAP=5, RR=2.5, Z-Score=2.5, MaxLoss=1
+  Balance Final: $13231.12 | Profit Factor: 1.73 | Win Rate: 62.00% | Max DD: 4.44% | Total Trades: 100
+Rank 3:
+  Config: EMA_F=13, EMA_S=34, Regime=75, VWAP=5, RR=3.5, Z-Score=2.5, MaxLoss=3
+  Balance Final: $13224.62 | Profit Factor: 1.72 | Win Rate: 62.14% | Max DD: 4.44% | Total Trades: 103
+Rank 4:
+  Config: EMA_F=13, EMA_S=34, Regime=75, VWAP=5, RR=3.5, Z-Score=2.5, MaxLoss=1
+  Balance Final: $13224.36 | Profit Factor: 1.75 | Win Rate: 61.86% | Max DD: 4.44% | Total Trades: 97
+Rank 5:
+  Config: EMA_F=13, EMA_S=34, Regime=75, VWAP=5, RR=2, Z-Score=2.5, MaxLoss=3
+  Balance Final: $13096.99 | Profit Factor: 1.60 | Win Rate: 61.34% | Max DD: 5.42% | Total Trades: 119
