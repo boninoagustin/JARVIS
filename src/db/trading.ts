@@ -625,7 +625,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
     const docRef = db.collection('radar_states').doc(ticker);
     const safeSet = (data: any, options?: any) => {
         if (isBacktest || isBootstrap) return Promise.resolve();
-        return docRef.set(data, options);
+        scheduleStateSave(ticker, data);
+        return Promise.resolve();
     };
     // Para ASIA: anclar el día de trading a las 17:00 ART (convención FX: el día cambia al cierre de NY):
     const todayStr = new Date(nowMs - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
