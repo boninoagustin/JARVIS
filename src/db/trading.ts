@@ -54,7 +54,7 @@ function scheduleStateSave(ticker: string, state: RadarState) {
             if (count > 0) {
                 batch.commit().catch((e: any) => console.error('[FIREBASE] Error in state batch commit:', e.message));
             }
-        }, 1000);
+        }, 5000); // Modificado a 5000ms para ahorrar cuota de Firebase
     }
 }
 
@@ -275,7 +275,7 @@ if (db) {
             }).catch(() => { /* SMCManager no disponible (modo solo Pine logs) */ });
 
             // 🧠 Inicializar ML Filter (carga modelo específico del ticker si existe)
-            import('../engine/MLFilter.js').then(({ initMLFilter }) => {
+            import('../engine/MLFilterNode.js').then(({ initMLFilter }) => {
                 initMLFilter();
                 console.log('[ML] 🧠 MLFilter inicializado.');
             }).catch(() => { /* MLFilter no disponible */ });
