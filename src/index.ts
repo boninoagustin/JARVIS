@@ -13,6 +13,17 @@ import { startCleanupTimer } from './db/cleanup.js';
 
 console.log('[SYSTEM] --- FINAL CLEAN START (Hybrid Cloud Mode) ---');
 
+// 🛡️ Global error handlers: evitar que errores de red (ECONNRESET de cTrader TLS)
+// maten al proceso. Sin esto, cada desconexión temporal destruye todo el estado SMC
+// acumulado (scores, legs, zonas) y PM2 reinicia desde cero.
+process.on('uncaughtException', (err: Error) => {
+    console.error(`[SYSTEM] ⚠️ Uncaught Exception (proceso NO muere): ${err.message}`);
+    if (err.stack) console.error(err.stack);
+});
+process.on('unhandledRejection', (reason: any) => {
+    console.error(`[SYSTEM] ⚠️ Unhandled Rejection (proceso NO muere):`, reason?.message || reason);
+});
+
 async function main() {
     console.log('[DEBUG] Memory check (Firebase)...');
 

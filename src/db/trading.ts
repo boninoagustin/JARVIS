@@ -54,7 +54,7 @@ function scheduleStateSave(ticker: string, state: RadarState) {
             if (count > 0) {
                 batch.commit().catch((e: any) => console.error('[FIREBASE] Error in state batch commit:', e.message));
             }
-        }, 5000); // Modificado a 5000ms para ahorrar cuota de Firebase
+        }, 60000); // Modificado a 60000ms (1 min) para ahorrar cuota de Firebase (evitar RESOURCE_EXHAUSTED)
     }
 }
 
