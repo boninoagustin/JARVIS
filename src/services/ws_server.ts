@@ -168,6 +168,13 @@ export function broadcastCandle(ticker: string, candle: any) {
     });
 }
 
+export function broadcastRadarState(ticker: string, state: any) {
+    const payload = JSON.stringify({ type: 'RADAR_STATE', ticker, state });
+    clients.forEach(ws => {
+        if (subscriptions.get(ws)?.has(ticker)) safeSend(ws, payload);
+    });
+}
+
 // Apagado limpio: corta el heartbeat y cierra el servidor (para SIGTERM/tests)
 export function closeWebSocketServer() {
     if (heartbeatInterval) {

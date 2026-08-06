@@ -2,6 +2,7 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
+import * as fs from 'fs';
 
 import { z } from 'zod';
 import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema } from '../engine/Types.js';
@@ -43,12 +44,17 @@ function scheduleStateSave(ticker: string, state: RadarState) {
             if (dirtyStates.size === 0) return;
             const toSave = new Map(dirtyStates);
             dirtyStates.clear();
-            // Guardar a archivo JSON local
+            // Guardar a archivo JSON local + broadcast WebSocket al dashboard
             try {
-                const fs = require('fs');
                 for (const [t, s] of toSave.entries()) {
                     fs.writeFileSync(`radar_states_${t}.json`, JSON.stringify(s), 'utf8');
                 }
+                // Broadcast via WebSocket (ya existe en puerto 8081)
+                import('../../services/ws_server.js').then(({ broadcastRadarState }) => {
+                    for (const [t, s] of toSave.entries()) {
+                        broadcastRadarState(t, s);
+                    }
+                }).catch(() => {});
             } catch (e: any) {
                 // Silencioso — si falla el disco, no crashea el bot
             }
@@ -2148,7 +2154,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
         if (dispatchData) {
             if (!isBootstrap) {
-                await dispatchOteSignal(dispatchData, state, docRef, { ticker, nowMs, isBacktest, sessionThresholds, store });
+                await dispatchOteSignal(dispatchData, state, null, { ticker, nowMs, isBacktest, sessionThresholds, store });
             } else {
                 console.log(`[BOOTSTRAP] ⏭️ Se generó OTE para ${ticker} pero se omite ejecución (fase de construcción de estado)`);
             }
@@ -2282,7 +2288,8 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
     // 🔧 FIX: safeSet debe estar en el scope de dispatchOteSignal (no hereda el de processTradingAlert)
     const safeSet = (data: any, options?: any) => {
         if (isBacktest) return Promise.resolve();
-        return docRef.set(data, options);
+        if (docRef) return docRef.set(data, options);
+        return Promise.resolve(); // sin Firestore, sin problema
     };
 
     // =========================================================================
