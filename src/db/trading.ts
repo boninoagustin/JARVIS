@@ -368,7 +368,7 @@ if (db) {
 
 
 const DEDUP_WINDOW_MS = 60000;
-const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 120000, '60': 300000, '240': 600000, 'D': 900000 };
+const SYNC_THROTTLE_MS: Record<string, number> = { '5': 0, '15': 90000, '60': 240000, '240': 480000, 'D': 720000 };
 // 🆕 FIX P0-4: subido de 10 a 20 min. Con el heartbeat del indicador ahora por tiempo,
 // el feed más frecuente (PING/HEARTBEAT de 15m) llega cada ~15 min por cierre de vela;
 // 10 min marcaba el ticker como inactivo entre vela y vela.
