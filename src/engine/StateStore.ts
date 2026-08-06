@@ -41,7 +41,7 @@ export class StateStore {
         fixedRR: 2.0,
         oteEntryPercent: 50,
         entryTrigger: 'OTE' as EntryTrigger,
-        autoTrading: false,
+        autoTrading: true,
         maxSmartRiskPercent: 0.15
     };
     
