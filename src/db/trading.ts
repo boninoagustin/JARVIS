@@ -50,7 +50,7 @@ function scheduleStateSave(ticker: string, state: RadarState) {
                     fs.writeFileSync(`radar_states_${t}.json`, JSON.stringify(s), 'utf8');
                 }
                 // Broadcast via WebSocket (ya existe en puerto 8081)
-                import('../../services/ws_server.js').then(({ broadcastRadarState }) => {
+                import('../services/ws_server.js').then(({ broadcastRadarState }) => {
                     for (const [t, s] of toSave.entries()) {
                         broadcastRadarState(t, s);
                     }
