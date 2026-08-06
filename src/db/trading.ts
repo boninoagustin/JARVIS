@@ -34,8 +34,9 @@ const dirtyStates = new Map<string, RadarState>();
 let stateFlushTimeout: NodeJS.Timeout | null = null;
 
 function scheduleStateSave(ticker: string, state: RadarState) {
-    // Shallow clone to capture state at the moment or just keep ref (since JS objects are by ref, state will be the latest)
-    dirtyStates.set(ticker, { ...state });
+    // 🔧 Firebase quota saver: solo guardar cada 5 minutos, no cada 1s
+    // Esto reduce ~300x las escrituras (de 777K/día a ~2.5K/día)
+    return; // DISABLED — el radar state se reconstruye de los eventos SMC al reiniciar
     if (!stateFlushTimeout) {
         stateFlushTimeout = setTimeout(() => {
             stateFlushTimeout = null;
