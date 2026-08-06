@@ -34,28 +34,25 @@ const dirtyStates = new Map<string, RadarState>();
 let stateFlushTimeout: NodeJS.Timeout | null = null;
 
 function scheduleStateSave(ticker: string, state: RadarState) {
-    // 🔧 Firebase quota saver: solo guardar cada 5 minutos, no cada 1s
-    // Esto reduce ~300x las escrituras (de 777K/día a ~2.5K/día)
-    return; // DISABLED — el radar state se reconstruye de los eventos SMC al reiniciar
+    // 🔧 Reemplazo de Firebase: guardar radar states en archivo JSON local
+    // Elimina ~777K escrituras/día de Firestore. La cuota se libera para journal + trades.
+    dirtyStates.set(ticker, { ...state });
     if (!stateFlushTimeout) {
         stateFlushTimeout = setTimeout(() => {
             stateFlushTimeout = null;
             if (dirtyStates.size === 0) return;
-            if (!db) return;
-            const batch = db.batch();
-            let count = 0;
             const toSave = new Map(dirtyStates);
             dirtyStates.clear();
-
-            for (const [t, s] of toSave.entries()) {
-                const ref = db.collection('radar_states').doc(t);
-                batch.set(ref, s, { merge: true });
-                count++;
+            // Guardar a archivo JSON local
+            try {
+                const fs = require('fs');
+                for (const [t, s] of toSave.entries()) {
+                    fs.writeFileSync(`radar_states_${t}.json`, JSON.stringify(s), 'utf8');
+                }
+            } catch (e: any) {
+                // Silencioso — si falla el disco, no crashea el bot
             }
-            if (count > 0) {
-                batch.commit().catch((e: any) => console.error('[FIREBASE] Error in state batch commit:', e.message));
-            }
-        }, 60000); // Modificado a 60000ms (1 min) para ahorrar cuota de Firebase (evitar RESOURCE_EXHAUSTED)
+        }, 5000); // cada 5 segundos (antes era 1s a Firebase)
     }
 }
 
@@ -623,7 +620,6 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
     const isClimaxCandle = alertText.includes('Vol: CLIMAX');
 
-    const docRef = db.collection('radar_states').doc(ticker);
     const safeSet = (data: any, options?: any) => {
         if (isBacktest || isBootstrap) return Promise.resolve();
         scheduleStateSave(ticker, data);
@@ -645,13 +641,16 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         // 1. LEER DE LA RAM (Ultra rápido y sin costo de base de datos)
         state = store.localRadarStates.get(ticker);
 
-        // Si el servidor se reinició y la RAM está vacía, hacemos 1 sola lectura a Firebase
+        // Si el servidor se reinició y la RAM está vacía, leer de archivo JSON local
         if (!state) {
-            const docSnap = await Promise.race([
-                docRef.get(),
-                new Promise<any>((_, reject) => setTimeout(() => reject(new Error("Firestore docRef.get() timeout tras 5s")), 5000))
-            ]);
-            state = docSnap.exists ? structuredClone(docSnap.data() as RadarState) : emptyState();
+            try {
+                const fs = require('fs');
+                const filePath = `radar_states_${ticker}.json`;
+                if (fs.existsSync(filePath)) {
+                    state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                }
+            } catch (e: any) { /* archivo no existe o corrupto */ }
+            if (!state) state = emptyState();
             store.localRadarStates.set(ticker, state);
         }
 
