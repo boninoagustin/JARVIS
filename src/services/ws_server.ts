@@ -18,6 +18,10 @@ let heartbeatInterval: NodeJS.Timeout | null = null;
 // si dos clientes piden el mismo ticker:period, o si el mismo cliente re-suscribe)
 const liveSubscriptions = new Set<string>();
 
+// 🔧 Cache de últimos radar states por ticker. Cuando un cliente nuevo se conecta,
+// recibe todos los estados acumulados instantáneamente (sin esperar el próximo flush).
+const lastRadarStates = new Map<string, any>();
+
 // Cliente lento: si acumula más de este buffer, se dropea el mensaje
 // (los estados son reemplazables — el próximo tick trae el estado completo)
 const MAX_BUFFERED_BYTES = 5 * 1024 * 1024;
@@ -75,6 +79,13 @@ export function initWebSocketServer(port: number = 8080) {
         subscriptions.set(ws, new Set());
         (ws as any).isAlive = true;
         ws.on('pong', () => { (ws as any).isAlive = true; });
+
+        // 🔧 Enviar todos los radar states acumulados al instante
+        if (lastRadarStates.size > 0) {
+            lastRadarStates.forEach((state, ticker) => {
+                safeSend(ws, JSON.stringify({ type: 'RADAR_STATE', ticker, state }));
+            });
+        }
 
         ws.on('message', async (message: string) => {
             try {
@@ -169,6 +180,7 @@ export function broadcastCandle(ticker: string, candle: any) {
 }
 
 export function broadcastRadarState(ticker: string, state: any) {
+    lastRadarStates.set(ticker, state);
     const payload = JSON.stringify({ type: 'RADAR_STATE', ticker, state });
     // Enviar a TODOS los clientes conectados (el dashboard no se suscribe a tickers específicos)
     clients.forEach(ws => safeSend(ws, payload));

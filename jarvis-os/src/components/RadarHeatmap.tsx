@@ -195,13 +195,13 @@ export default function RadarHeatmap() {
         setError(null);
       });
 
-      // Si después de 5s no llegó ningún RADAR_STATE, mostrar advertencia
+      // Si después de 15s no llegó ningún RADAR_STATE, mostrar advertencia
       setTimeout(() => {
         if (stateMap.size === 0) {
           setLoading(false);
           setError('Esperando datos del backend... ¿JARVIS está corriendo?');
         }
-      }, 5000);
+      }, 15000);
 
       return () => unsub();
     }).catch((err) => {
