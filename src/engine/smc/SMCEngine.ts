@@ -17,6 +17,11 @@ export class SMCEngine {
     private state: SMCState;
     private previousCandle?: OHLCV;
 
+    /** Timestamp de la última vela PROCESADA (no dedupeada). Útil para SMCManager. */
+    public get lastProcessedTs(): number | undefined {
+        return this.previousCandle?.timestamp;
+    }
+
     // Math Modules
     private atr: ATRCalculator;
     private rsi: RSICalculator;
@@ -199,8 +204,12 @@ export class SMCEngine {
         // duplicar pivots/eventos. La actualización visual de la vela viva va por
         // broadcastCandle en SMCManager, no necesita pasar por el motor.
         if (this.previousCandle && candle.timestamp <= this.previousCandle.timestamp) {
+            // 🔍 DIAGNÓSTICO: loguear dedupe con timestamp legible
+            console.log(`[SMC-ENGINE] ⏭️ Dedupe: ${new Date(candle.timestamp).toISOString().substring(11,19)} <= prev ${new Date(this.previousCandle.timestamp).toISOString().substring(11,19)}`);
             return events;
         }
+        // 🔍 DIAGNÓSTICO: loguear vela NUEVA procesada
+        console.log(`[SMC-ENGINE] 🕯️ Nueva vela: ${new Date(candle.timestamp).toISOString().substring(11,19)} → generando events...`);
 
         // 1. Math Update
         const atrVal = this.atr.nextValue(candle, this.previousCandle);
