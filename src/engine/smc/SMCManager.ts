@@ -20,25 +20,18 @@ class SMCManager {
     public getEngine(ticker: string, period: string): SMCEngine {
         const key = `${ticker}:${period}`;
         if (!this.engines.has(key)) {
-            // Asignar el preset correcto según la temporalidad indicada por el usuario
             let basePresetName = 'Forex - 3. Balanceado';
             if (['H1', 'H4', 'D1', 'W1'].includes(period) || ['60', '240', 'D'].includes(period)) {
                 basePresetName = 'Forex - 5. Ultra Agresivo';
             }
-            
-            // Load the preset directly, overriding with optimized json if available
             const preset = loadOptimizedPreset(ticker, period, basePresetName);
-            
             const engine = new SMCEngine(preset, period);
-            
-            // 🆕 Fase 1: Inyectar sesgo HTF inicial si es un marco menor
             if (['M5', 'M15', 'M30', 'H1', 'H4'].includes(period)) {
                 const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
                 const targetHTF = period === 'H1' ? 'D1' : period === 'M15' || period === 'M30' ? 'H4' : 'W1';
                 const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
                 engine.setHTFContext(htfTrend, wBias);
             }
-            
             this.engines.set(key, engine);
         }
         return this.engines.get(key)!;
@@ -52,12 +45,6 @@ class SMCManager {
         return states;
     }
 
-    /**
-     * 🆕 Proyección slim para el scanner WebSocket.
-     * SMCState completo incluye pivotsHigh/pivotsLow (hasta 500 c/u por engine):
-     * serializar eso cada segundo por cliente saturaba el event loop (~MBs/s).
-     * El scanner solo necesita tendencia, contadores y últimos eventos (~300 bytes/key).
-     */
     public getScannerStates(): Record<string, any> {
         const states: Record<string, any> = {};
         for (const [key, engine] of this.engines.entries()) {
@@ -81,51 +68,54 @@ class SMCManager {
         const key = `${ticker}:${period}`;
         const engine = this.getEngine(ticker, period);
 
-        // Process each candle
-        for (const candle of newCandles) {
+        // Sort chronologically (oldest first). cTrader sends newest-first;
+        // processing in that order corrupts `forming` and breaks the loop.
+        const sorted = [...newCandles].sort((a, b) => a.timestamp - b.timestamp);
+        for (const candle of sorted) {
             const prev = this.forming.get(key);
             if (prev && candle.timestamp > prev.timestamp) {
-                const events = engine.nextCandle(prev); // prev ya cerró
-                
-                // 🆕 Fase 1: Notificar a los listeners (SMCBridge → JARVIS)
-                // BOOTSTRAP: siempre notificamos, pasando isHistorical para que
-                // el bridge construya estado sin ejecutar trades ni alertas.
-                if (events.length > 0) {
-                    for (const listener of this.listeners) {
-                        try {
-                            listener(key, prev, events, isHistorical);
-                        } catch (err: any) {
-                            console.error('[SMC-MANAGER] Error en listener:', err.message);
+                // Skip engine call if it already processed this timestamp or newer
+                // (avoids eternal dedupe when historical load leaves previousCandle ahead of forming)
+                const lastTs = engine.lastProcessedTs;
+                const skipEngine = !isHistorical && lastTs !== undefined && prev.timestamp <= lastTs;
+                if (!skipEngine) {
+                    const events = engine.nextCandle(prev);
+                    if (events.length > 0) {
+                        for (const listener of this.listeners) {
+                            try {
+                                listener(key, prev, events, isHistorical);
+                            } catch (err: any) {
+                                console.error('[SMC-MANAGER] Error en listener:', err.message);
+                            }
+                        }
+                    }
+                    if (!isHistorical) {
+                        for (const event of events) {
+                            broadcastEvent(key, event);
                         }
                     }
                 }
-
-                // Si se dispararon eventos, retransmitirlos todos
-                if (!isHistorical) {
-                    for (const event of events) {
-                        broadcastEvent(key, event);
-                    }
-                }
             }
-            this.forming.set(key, candle);
-            
-            // Broadcast live candle (para actualizar el gráfico)
+            // 🔧 Monotonic forming: solo actualizar si la vela es más nueva.
+            // cTrader reenvía el mismo batch → sin esta guarda, forming oscila
+            // hacia atrás en cada batch repetido y los eventos nunca se generan.
+            const curForming = this.forming.get(key);
+            if (!curForming || candle.timestamp > curForming.timestamp) {
+                this.forming.set(key, candle);
+            }
             if (!isHistorical) {
                 broadcastCandle(key, candle);
             }
         }
-        
-        // Retransmitir el estado actualizado si hubo un cierre de vela o un evento importante
+
         const state = engine.getState();
         broadcastState(key, state);
 
-        // 🆕 Fase 1: Propagar el sesgo HTF según el mapeo de temporalidades de Pine
         const htfMap: Record<string, string[]> = {
-            'W1': ['D1', 'H4', 'H1', 'M30', 'M15', 'M5'], // WBias se propaga a todos
-            'D1': ['H1'], // D1 es HTF para H1
-            'H4': ['M30', 'M15'] // H4 es HTF para M15/M30
+            'W1': ['D1', 'H4', 'H1', 'M30', 'M15', 'M5'],
+            'D1': ['H1'],
+            'H4': ['M30', 'M15']
         };
-
         if (htfMap[period]) {
             for (const tf of htfMap[period]) {
                 const targetEngine = this.engines.get(`${ticker}:${tf}`);
@@ -133,7 +123,6 @@ class SMCManager {
                     const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
                     const targetHTF = tf === 'H1' ? 'D1' : tf === 'M15' || tf === 'M30' ? 'H4' : 'W1';
                     const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
-                    
                     targetEngine.setHTFContext(htfTrend, wBias);
                 }
             }

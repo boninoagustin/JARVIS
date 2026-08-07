@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { doc, setDoc, query, collection, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   Terminal, 
@@ -263,14 +263,20 @@ export default function FundamentalTerminal() {
       }
     });
 
-    const unsubRadar = onSnapshot(query(collection(db, 'radar_states')), (radarSnap) => {
-      try {
-        const assets = radarSnap.docs.map(doc => doc.id).filter(id => isNaN(Number(id)));
-        setTradedAssets(assets.sort());
-      } catch(err) {
-        console.error('[FundTerm] Error processing radar states:', err);
-      }
-    });
+    const unsubRadar = (() => {
+      // 🔧 WebSocket en vez de Firestore (cuota agotada)
+      const tickers = new Set<string>();
+      let unsubWs: (() => void) | null = null;
+      import('../services/wsClient').then(({ wsClient }) => {
+        wsClient.connect('ws://localhost:8081');
+        unsubWs = wsClient.subscribe((msg: any) => {
+          if (msg.type !== 'RADAR_STATE') return;
+          tickers.add(msg.ticker);
+          setTradedAssets(Array.from(tickers).sort());
+        });
+      }).catch(() => {});
+      return () => { unsubWs?.(); };
+    })();
 
     fetchMacroData(abortController.signal).catch(err => {
       if (err.name !== 'AbortError') console.error('[FundTerm]', err);

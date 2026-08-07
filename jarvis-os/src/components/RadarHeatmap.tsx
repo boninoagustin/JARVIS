@@ -178,28 +178,37 @@ export default function RadarHeatmap() {
 
   useEffect(() => {
     setLoading(true);
-    const q = query(collection(db, 'radar_states'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      try {
-        const data = snapshot.docs
-          .filter(doc => isNaN(Number(doc.id)))
-          .map(doc => ({ id: doc.id, ...doc.data() } as RadarState));
-        setStates(data);
+
+    // 🔧 WebSocket en vez de Firestore (cuota agotada). El backend emite
+    // { type: 'RADAR_STATE', ticker, state } por cada ticker vía ws://localhost:8081.
+    const stateMap = new Map<string, RadarState>();
+
+    import('../services/wsClient').then(({ wsClient }) => {
+      wsClient.connect('ws://localhost:8081');
+
+      const unsub = wsClient.subscribe((msg: any) => {
+        if (msg.type !== 'RADAR_STATE') return;
+        const { ticker, state } = msg;
+        stateMap.set(ticker, { id: ticker, ...state } as RadarState);
+        setStates(Array.from(stateMap.values()));
         setLoading(false);
         setError(null);
-      } catch (err) {
-        console.error('[Radar] Error processing Firestore data:', err);
-        setError('Error procesando datos en tiempo real.');
-        setLoading(false);
-      }
-    }, (err) => {
-      console.error('[Radar] Error in onSnapshot:', err);
-      setError('Error de conexión con Firebase. Verificá tu conexión.');
+      });
+
+      // Si después de 5s no llegó ningún RADAR_STATE, mostrar advertencia
+      setTimeout(() => {
+        if (stateMap.size === 0) {
+          setLoading(false);
+          setError('Esperando datos del backend... ¿JARVIS está corriendo?');
+        }
+      }, 5000);
+
+      return () => unsub();
+    }).catch((err) => {
+      console.error('[Radar] Error conectando WebSocket:', err);
+      setError('Error conectando al backend (ws://localhost:8081).');
       setLoading(false);
     });
-
-    return () => unsubscribe();
   }, []);
 
   useEffect(() => {

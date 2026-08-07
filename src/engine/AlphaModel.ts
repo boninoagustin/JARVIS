@@ -124,6 +124,17 @@ export function resolveOteGate(isChoch: boolean, isBos: boolean, triggerTf: stri
 
 export const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
 
+/** Distancia mínima en precio absoluto para que cTrader acepte SL/TP. */
+export function getMinPipDistance(ticker: string): number {
+    const t = ticker.toUpperCase();
+    if (t.includes('BTC') || t.includes('ETH')) return 50;         // crypto: $50
+    if (t.includes('XAU') || t.includes('GOLD')) return 1.0;       // gold: $1
+    if (t.includes('US30') || t.includes('NAS') || t.includes('SPX') || t.includes('US500')) return 5; // índices: 5 pts
+    if (t.includes('USOIL') || t.includes('XTI') || t.includes('WTI')) return 0.10; // oil: 10 cents
+    if (t.includes('JPY')) return 0.10;                             // JPY pairs: 10 pips (0.10)
+    return 0.0010;                                                   // forex majors: 10 pips (0.0010)
+}
+
 export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
     const t = ticker.toUpperCase();
     if (t.includes('JPY')) return bufferConfig * 0.1;

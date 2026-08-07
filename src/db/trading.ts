@@ -15,7 +15,7 @@ export const globalState = createStateStore();
 
 
 import {
-    emptyState, normalizeZone, TF_WEIGHT, evaluateImpulseCore, getDecimals, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone,
+    emptyState, normalizeZone, TF_WEIGHT, evaluateImpulseCore, getDecimals, getMinPipDistance, calculateDynamicSlBuffer, evaluateMacroStretching, isInsideMacroOteZone,
     gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
@@ -650,7 +650,6 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         // Si el servidor se reinició y la RAM está vacía, leer de archivo JSON local
         if (!state) {
             try {
-                const fs = require('fs');
                 const filePath = `radar_states_${ticker}.json`;
                 if (fs.existsSync(filePath)) {
                     state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -1949,7 +1948,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const decimals = getDecimals(ticker);
                             const currentSession = getCurrentSession(nowMs);
                             const sessionConfig = config.sessions?.[currentSession];
-                            const slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, 0); // SL Buffer ONLY for OTE
+                            // 🔧 FIX: usar buffer configurado (no 0) + piso mínimo para
+                            // que cTrader acepte el SL/TP (rechaza distancias < ~10 pips forex).
+                            const rawBuffer = sessionConfig?.slBufferPercent ?? config.slBufferPercent;
+                            let slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, rawBuffer);
+                            // Piso absoluto: 10 pips forex (0.0010), 100 puntos índices, 1.0 crypto/commodities
+                            const minPipDist = getMinPipDistance(ticker);
+                            if (slBufferAmt < minPipDist) slBufferAmt = minPipDist;
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
                             const currentPrice = state.lastPrice ?? activeLeg.extreme;
