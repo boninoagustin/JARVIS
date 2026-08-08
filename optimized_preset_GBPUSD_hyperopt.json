@@ -1,0 +1,213 @@
+{
+  "study_name": "jarvis_gbpusd_n200",
+  "ticker": "GBPUSD",
+  "n_trials": 400,
+  "new_trials": 200,
+  "elapsed_seconds": 778.7092564105988,
+  "best_value": 104.410564147191,
+  "best_params": {
+    "pivot_len": 10,
+    "min_sweep_wick_pct": 0.7613168440686662,
+    "div_pivot_len": 6,
+    "z_score_window": 100,
+    "slBufferPercent": 0.2192639461537716,
+    "fixedRR": 2.9539083910900272,
+    "minRR": 1.00105866760844,
+    "oteEntryPercent": 50,
+    "minBuyPoints": 8,
+    "minSellPoints": 7,
+    "partialClosePct": 0.8,
+    "slAfterTp1": "midpoint",
+    "tp15BeEnabled": true,
+    "atrTrailEnabled": true
+  },
+  "best_metrics": {
+    "trade_count": 216,
+    "wins": 194,
+    "losses": 22,
+    "win_rate": 0.8981481481481481,
+    "gross_profit_r": 96.91536093130611,
+    "gross_loss_r": 0.9199126319542702,
+    "net_pnl_r": 95.99544829935184,
+    "profit_factor": 105.35278847668206,
+    "expectancy": 0.4444233717562585,
+    "max_drawdown_r": 0.4733333333333434,
+    "sharpe_simple": 3.4170009516630953,
+    "avg_trade_r": 0.4444233717562585,
+    "max_consec_losses": 2,
+    "max_consec_wins": 28
+  },
+  "best_config": {
+    "ticker": "GBPUSD",
+    "minBuyPoints": 8,
+    "minSellPoints": 7,
+    "minRR": 1.00105866760844,
+    "slBufferPercent": 0.2192639461537716,
+    "fixedRR": 2.9539083910900272,
+    "oteEntryPercent": 50,
+    "entryTrigger": "SMART",
+    "sessions": {
+      "LONDON": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.2192639461537716,
+        "fixedRR": 2.9539083910900272
+      },
+      "NY": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.2192639461537716,
+        "fixedRR": 2.9539083910900272
+      },
+      "ASIA": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.2192639461537716,
+        "fixedRR": 2.9539083910900272
+      },
+      "OFF": {
+        "choch5m": {
+          "enabled": false
+        },
+        "choch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "bos5m": {
+          "enabled": false
+        },
+        "bos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteChoch5m": {
+          "enabled": false
+        },
+        "oteChoch15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "oteBos5m": {
+          "enabled": false
+        },
+        "oteBos15m": {
+          "enabled": true,
+          "minScore": 4,
+          "entryPercent": 50
+        },
+        "slBufferPercent": 0.2192639461537716,
+        "fixedRR": 2.9539083910900272
+      }
+    },
+    "directManagement": {
+      "partialClosePct": 0.8,
+      "slAfterTp1": "midpoint",
+      "tp15BeEnabled": true,
+      "atrTrailEnabled": true
+    },
+    "minimal_roi": {
+      "0": 0.015,
+      "30": 0.005,
+      "60": 0
+    },
+    "smc_overrides": {
+      "pivot_len": 10,
+      "min_sweep_wick_pct": 0.7613168440686662,
+      "div_pivot_len": 6,
+      "z_score_window": 100
+    }
+  }
+}

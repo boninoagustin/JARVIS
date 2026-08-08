@@ -299,6 +299,11 @@ function setupCTraderEvents(client: any) {
                             };
                         });
                         
+                        // 🔍 DIAGNÓSTICO: loguear trendbars recibidos para confirmar que cTrader los envía
+                        const tsFirst = newCandles[0]?.timestamp ? new Date(newCandles[0].timestamp).toISOString() : '???';
+                        const tsLast = newCandles[newCandles.length - 1]?.timestamp ? new Date(newCandles[newCandles.length - 1].timestamp).toISOString() : '???';
+                        console.log(`[CTRADER-TB] 📊 Trendbars recibidos: ${ticker} ×${newCandles.length} (${tsFirst} → ${tsLast})`);
+                        
                         // Agregar o actualizar las velas en el buffer
                         const [baseTicker, period] = ticker.split(':');
                         import('../db/market_data.js').then(({ addCandles }) => {

@@ -1,50 +1,50 @@
 {
     "M15": {
-        "pivot_len": 21,
-        "wick_pct": 0.631349617520836,
+        "pivot_len": 13,
+        "wick_pct": 0.36219153071857957,
         "div_len": 7,
-        "z_window": 50
+        "z_window": 14
     },
     "H1": {
-        "pivot_len": 21,
-        "wick_pct": 0.631349617520836,
+        "pivot_len": 13,
+        "wick_pct": 0.36219153071857957,
         "div_len": 7,
-        "z_window": 50
+        "z_window": 14
     },
     "H4": {
-        "pivot_len": 21,
-        "wick_pct": 0.631349617520836,
+        "pivot_len": 13,
+        "wick_pct": 0.36219153071857957,
         "div_len": 7,
-        "z_window": 50
+        "z_window": 14
     },
     "D1": {
-        "pivot_len": 21,
-        "wick_pct": 0.631349617520836,
+        "pivot_len": 13,
+        "wick_pct": 0.36219153071857957,
         "div_len": 7,
-        "z_window": 50
+        "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 0.0489957156047863,
-        "fixedRR": 1.3718636978600447,
-        "minRR": 1.6506606615265287,
-        "oteEntryPercent": 79,
-        "partialClosePct": 0.8,
+        "slBufferPercent": 0.13071734186848716,
+        "fixedRR": 3.921802884088745,
+        "minRR": 1.5206670723008995,
+        "oteEntryPercent": 50,
+        "partialClosePct": 0.5,
         "slAfterTp1": "midpoint",
         "tp15BeEnabled": true,
         "atrTrailEnabled": true
     },
     "Scoring": {
-        "minBuyPoints": 6,
-        "minSellPoints": 5
+        "minBuyPoints": 7,
+        "minSellPoints": 11
     },
     "Meta": {
-        "objective_value": -11.514323935829358,
-        "trade_count": 121,
-        "profit_factor": 1.6847925611530883,
-        "max_drawdown_r": 6.513420006123404,
-        "win_rate": 0.628099173553719,
-        "n_trials": 5,
-        "study_name": "jarvis_verify_v1",
+        "objective_value": 19.290459978202044,
+        "trade_count": 218,
+        "profit_factor": 21.528734340217778,
+        "max_drawdown_r": 1.1103498217470005,
+        "win_rate": 0.8623853211009175,
+        "n_trials": 400,
+        "study_name": "jarvis_eurusd_n200",
         "source": "hyperopt"
     }
 }

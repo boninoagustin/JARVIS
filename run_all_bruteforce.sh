@@ -1,5 +1,5 @@
 #!/bin/bash
-for asset in audcad eurusd nzdusd usdcad usdjpy xauusd; do
+for asset in AUDCAD EURUSD GBPUSD NZDUSD US500 USDCAD USDJPY USOIL XAUUSD; do
   echo "======================================"
   echo "Optimizing $asset..."
   echo "======================================"
