@@ -877,6 +877,14 @@ export default function BacktestingPanel() {
           tp15BeEnabled: optResult.best.tp15BeEnabled,
           atrTrailEnabled: optResult.best.atrTrailEnabled,
           structuralTrailEnabled: optResult.best.structuralTrailEnabled,
+          entryPercent: optResult.best.entryPercent,
+          minimal_roi: optResult.best.minimal_roi 
+            ? Object.fromEntries(
+                Object.entries(optResult.best.minimal_roi).map(([k, v]) => [
+                  k, (v as number) > 1 ? (v as number) / 100 : v
+                ])
+              )
+            : undefined,
         };
         localStorage.setItem('bt_session_triggers', JSON.stringify(next));
         return next;
@@ -969,6 +977,7 @@ export default function BacktestingPanel() {
                 tp15BeEnabled: optResult.best.tp15BeEnabled,
                 atrTrailEnabled: optResult.best.atrTrailEnabled,
                 structuralTrailEnabled: optResult.best.structuralTrailEnabled,
+                entryPercent: optResult.best.entryPercent,
                 minimal_roi: optResult.best.minimal_roi 
                   ? Object.fromEntries(
                       Object.entries(optResult.best.minimal_roi).map(([k, v]) => [

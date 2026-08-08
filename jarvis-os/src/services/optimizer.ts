@@ -12,6 +12,8 @@ export interface TriggerGenome {
   structuralTrailEnabled: boolean;
   /** 🆕 ROI profiles: null=off, 0=aggro, 1=moderate */
   minimal_roi: Record<string, number> | null;
+  /** 🆕 Nivel de OTE (Fibonacci) opcional (50, 62, 79) */
+  entryPercent?: number;
 }
 
 // --- PRNG reproducible (Mulberry32) ---
@@ -37,6 +39,7 @@ const ROI_PROFILES: (Record<string, number> | null)[] = [
   {"0":0.015,"30":0.005,"60":0},    // agresivo: 1.5%→0.5%→BE
   {"0":0.01,"30":0.003,"60":0},     // moderado: 1.0%→0.3%→BE
 ];
+const ENTRY_PCT_VALS = [50, 62, 79];
 
 export function* gridGenomes(): Generator<TriggerGenome> {
   for (const minScore of MIN_SCORE_VALS) {
@@ -48,7 +51,9 @@ export function* gridGenomes(): Generator<TriggerGenome> {
               for (const atrTrailEnabled of BOOL_VALS) {
                 for (const structuralTrailEnabled of BOOL_VALS) {
                   for (const minimal_roi of ROI_PROFILES) {
-                    yield { minScore, slBuff, tp2, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, minimal_roi };
+                    for (const entryPercent of ENTRY_PCT_VALS) {
+                      yield { minScore, slBuff, tp2, partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled, minimal_roi, entryPercent };
+                    }
                   }
                 }
               }
@@ -63,7 +68,7 @@ export function* gridGenomes(): Generator<TriggerGenome> {
 export function gridCount(): number {
   return MIN_SCORE_VALS.length * SL_BUFF_VALS.length * TP2_VALS.length *
     PARTIAL_CLOSE_PCT_VALS.length * SL_AFTER_TP1_VALS.length *
-    BOOL_VALS.length * BOOL_VALS.length * BOOL_VALS.length * ROI_PROFILES.length;
+    BOOL_VALS.length * BOOL_VALS.length * BOOL_VALS.length * ROI_PROFILES.length * ENTRY_PCT_VALS.length;
 }
 
 // --- Helpers para GA ---
@@ -78,11 +83,12 @@ function randomGenome(rng: () => number): TriggerGenome {
     atrTrailEnabled: rng() > 0.5,
     structuralTrailEnabled: rng() > 0.5,
     minimal_roi: ROI_PROFILES[Math.floor(rng() * ROI_PROFILES.length)],
+    entryPercent: ENTRY_PCT_VALS[Math.floor(rng() * ENTRY_PCT_VALS.length)],
   };
 }
 
 function genomeKey(g: TriggerGenome): string {
-  return `${g.minScore}|${g.slBuff}|${g.tp2}|${g.partialClosePct}|${g.slAfterTp1}|${g.tp15BeEnabled ? 1 : 0}|${g.atrTrailEnabled ? 1 : 0}|${g.structuralTrailEnabled ? 1 : 0}|${g.minimal_roi ? 'roi' : 'none'}`;
+  return `${g.minScore}|${g.slBuff}|${g.tp2}|${g.partialClosePct}|${g.slAfterTp1}|${g.tp15BeEnabled ? 1 : 0}|${g.atrTrailEnabled ? 1 : 0}|${g.structuralTrailEnabled ? 1 : 0}|${g.minimal_roi ? 'roi' : 'none'}|${g.entryPercent ?? 50}`;
 }
 
 function crossoverUniform(a: TriggerGenome, b: TriggerGenome, rng: () => number): TriggerGenome {
@@ -96,6 +102,7 @@ function crossoverUniform(a: TriggerGenome, b: TriggerGenome, rng: () => number)
     atrTrailEnabled: rng() > 0.5 ? a.atrTrailEnabled : b.atrTrailEnabled,
     structuralTrailEnabled: rng() > 0.5 ? a.structuralTrailEnabled : b.structuralTrailEnabled,
     minimal_roi: rng() > 0.5 ? a.minimal_roi : b.minimal_roi,
+    entryPercent: rng() > 0.5 ? a.entryPercent : b.entryPercent,
   };
 }
 
@@ -110,6 +117,7 @@ function mutate(g: TriggerGenome, rng: () => number, rate: number): TriggerGenom
   if (rng() < rate) m.atrTrailEnabled = !m.atrTrailEnabled;
   if (rng() < rate) m.structuralTrailEnabled = !m.structuralTrailEnabled;
   if (rng() < rate) m.minimal_roi = ROI_PROFILES[Math.floor(rng() * ROI_PROFILES.length)];
+  if (rng() < rate) m.entryPercent = ENTRY_PCT_VALS[Math.floor(rng() * ENTRY_PCT_VALS.length)];
   return m;
 }
 

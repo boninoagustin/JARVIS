@@ -79,6 +79,7 @@ self.onmessage = (e: MessageEvent) => {
           atrTrailEnabled: genome.atrTrailEnabled,
           structuralTrailEnabled: genome.structuralTrailEnabled,
           minimal_roi: genome.minimal_roi || undefined,
+          entryPercent: genome.entryPercent,
           enabled: true,
         };
 
