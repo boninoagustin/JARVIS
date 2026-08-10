@@ -863,18 +863,6 @@ export default function BacktestingPanel() {
     if (!baseConfig[sessionKey][triggerKey]) baseConfig[sessionKey][triggerKey] = { enabled: true, minScore: 4 };
     baseConfig[sessionKey][triggerKey].enabled = true;
     
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
-    const logsArray = Array.from(logs.entries());
-
-    try {
-        await runWorkerTask('SET_LOGS', { logsArray });
-    } catch (e) {
-        console.error("Error setting logs in worker", e);
-        setOptimizingTrigger(null);
-        return;
-    }
-
     try {
       const optResult = await runWorkerTask('RUN_OPTIMIZATION', {
         ticker, minBuyPoints, minSellPoints, slBufferPercent, fixedRR, oteEntryPercent,
@@ -943,11 +931,6 @@ export default function BacktestingPanel() {
     
     try {
       toast('🚀 Iniciando Auto-Tune Global... (esto puede tardar unos minutos)', 'info');
-
-      // 1. Send logs to all workers
-      const logCache = new Map<string, string[]>();
-      uploadedFiles.forEach(f => logCache.set(f.tf, f.lines));
-      await runWorkerTask('SET_LOGS', { logsArray: Array.from(logCache.entries()) });
 
       const sessionsToOptimize = ['OFF', 'LONDON', 'NY', 'ASIA'];
       const triggersToOptimize = ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m', 'choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
@@ -1047,16 +1030,6 @@ export default function BacktestingPanel() {
     if (uploadedFiles.length === 0) { toast('Subí al menos 1 log', 'error'); return; }
     
     setOptimizingSessionLosses(sessionKey);
-
-    const logs = new Map<string, string[]>();
-    uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
-    const logsArray = Array.from(logs.entries());
-
-    try {
-        await runWorkerTask('SET_LOGS', { logsArray });
-    } catch (e) {
-        console.error("Error setting logs in worker", e);
-    }
 
     const lossValues = [0, 1, 2, 3, 4];
     const combinations: any[] = [];
