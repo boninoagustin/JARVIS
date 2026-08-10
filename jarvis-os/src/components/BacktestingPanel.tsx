@@ -1659,23 +1659,33 @@ export default function BacktestingPanel() {
   const baseTrades = isGlobal ? trades : trades.filter(t => getSessionForTimestamp(t.timestamp) === sessionFilter);
 
   const tripleFilteredTrades = baseTrades.filter(t => {
-        const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
-        const isBos = t.events?.some(e => e.includes('EVENTO_BOS'));
-        const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
+        let triggerType = (t as any).triggerType as 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null;
+        if (!triggerType) {
+            const hasOte = t.events?.some(e => e.includes('OTE_Retracement'));
+            const isBos = t.events?.some(e => e.includes('EVENTO_BOS'));
+            const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
 
-
-        let tfSuffix = '15m';
-        const tfEvent = t.events?.find(e => e.includes('TF: '));
-        if (tfEvent) {
-           const match = tfEvent.match(/TF:\s*(5|15)/);
-           if (match) tfSuffix = match[1] + 'm';
+            let tfSuffix = '15m';
+            if (t.tf) {
+                let extracted = t.tf.toLowerCase();
+                if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+                tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
+            } else {
+               const tfEvent = t.events?.find(e => e.includes('TF: '));
+               if (tfEvent) {
+                  const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+                  if (match) {
+                      let extracted = match[1].toLowerCase();
+                      if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+                      tfSuffix = extracted + 'm';
+                  }
+               }
+            }
+            if (hasOte && isBos) triggerType = `oteBos${tfSuffix}` as any;
+            else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}` as any;
+            else if (isBos && !hasOte) triggerType = `bos${tfSuffix}` as any;
+            else if (isChoch && !hasOte) triggerType = `choch${tfSuffix}` as any;
         }
-
-        let triggerType: 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null = null;
-        if (hasOte && isBos) triggerType = `oteBos${tfSuffix}` as any;
-        else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}` as any;
-        else if (isBos && !hasOte) triggerType = `bos${tfSuffix}` as any;
-        else if (isChoch && !hasOte) triggerType = `choch${tfSuffix}` as any;
 
         // 1. Local filter by selected tradeFilter in UI (when not in GLOBAL mode)
         if (!isGlobal && tradeFilter !== 'ALL') {
