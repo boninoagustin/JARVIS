@@ -949,8 +949,12 @@ export default function BacktestingPanel() {
       setGlobalAutoTuneProgress({ current: 0, total: tasks.length });
 
       let completed = 0;
-      const promises = tasks.map(async ({ sessionKey, triggerKey }) => {
-        const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
+      const CONCURRENCY = 2; // Safe concurrency limit to prevent PC freeze
+      
+      for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+        const chunk = tasks.slice(i, i + CONCURRENCY);
+        await Promise.all(chunk.map(async ({ sessionKey, triggerKey }) => {
+          const baseConfig = JSON.parse(JSON.stringify(sessionTriggers));
         Object.keys(baseConfig).forEach(sk => {
           Object.keys(baseConfig[sk]).forEach(tk => {
             if (typeof baseConfig[sk][tk] === 'object' && baseConfig[sk][tk] !== null) {
@@ -1008,9 +1012,9 @@ export default function BacktestingPanel() {
           completed++;
           setGlobalAutoTuneProgress(prev => ({ ...prev, current: completed }));
         }
-      });
+        }));
+      }
 
-      await Promise.all(promises);
       toast(`✅ Auto-Tune Global completado (${tasks.length} gatillos)`, 'success');
       
     } catch (err: any) {
