@@ -245,7 +245,6 @@ function calculateAdvancedMetrics(trades: any[], riskUsd: number) {
 
 
 import { useToast } from './Toast';
-import { parseCSV } from '../services/backtestEngine';
 import type { BacktestTrade, BacktestResult } from '../services/backtestEngine';
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -789,8 +788,12 @@ export default function BacktestingPanel() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const content = ev.target?.result as string;
-        const { lines, detectedTF } = parseCSV(content);
-        if (lines.length === 0) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
+        let detectedTF = '3';
+        const tfMatch = content.substring(0, 10000).match(/TF:\s*([a-zA-Z0-9]+)/i);
+        if (tfMatch) detectedTF = tfMatch[1].toUpperCase();
+        
+        const lines = content.split('\n');
+        if (lines.length < 2) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
         
         setUploadedFiles(prev => {
           const filtered = prev.filter(f => f.tf !== detectedTF);

@@ -128,11 +128,34 @@ export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | '
 export async function prepareEntries(logs: Map<string, (string | LogEntry)[]>): Promise<LogEntry[]> {
   const allEntries: LogEntry[] = [];
   let count = 0;
+  const seen = new Set<string>();
+
   for (const [tf, items] of logs.entries()) {
     for (const item of items) {
       if (typeof item === 'string') {
-        const tsMatch = item.match(/TS:\s*(\d+)/i);
-        allEntries.push({ ts: tsMatch ? parseInt(tsMatch[1], 10) : 0, line: item, tf, parsed: preParseAlert(item) });
+        let r = item;
+        if (r.endsWith('\r')) r = r.slice(0, -1);
+        if (r.trim().length === 0 || !r.includes(' | TS: ')) {
+           count++;
+           continue;
+        }
+        
+        const firstComma = r.indexOf(',');
+        const line = firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
+
+        const tsMatch = line.match(/TS:\s*(\d+)/i);
+        const tfMatch = line.match(/TF:\s*([a-zA-Z0-9]+)/i);
+        const ts = tsMatch ? parseInt(tsMatch[1], 10) : 0;
+        const entryTf = tfMatch ? tfMatch[1].toUpperCase() : tf;
+        
+        const dedupKey = `${ts}-${entryTf}-${line.substring(0, 40)}`;
+        if (seen.has(dedupKey)) {
+            count++;
+            continue;
+        }
+        seen.add(dedupKey);
+
+        allEntries.push({ ts, line, tf: entryTf, parsed: preParseAlert(line) });
       } else {
         allEntries.push(item as LogEntry);
       }
