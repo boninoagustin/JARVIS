@@ -7,7 +7,7 @@ export interface BacktestTrade {
   entryPrice: number; tp1Price: number; tp2Price: number; slPrice: number;
   originalSlPrice?: number;
   points: number; events: string[]; grade: string;
-  triggerType?: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m';
+  triggerType?: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | string;
   result?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnl?: number;
   resultTp1?: 'WIN' | 'LOSS' | 'TIMEOUT' | 'REVERSAL'; pnlTp1?: number;
   resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnlTp2?: number;

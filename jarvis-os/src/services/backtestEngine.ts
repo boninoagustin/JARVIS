@@ -1183,7 +1183,13 @@ function processAlert(
 
       if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
-        const tfKey = prefix === 'EVENTO_CHOCH' ? `choch15m` : `bos15m`;
+        let tfSuffix = '15m';
+        if (eventTf === '5') tfSuffix = '5m';
+        else if (eventTf === '15') tfSuffix = '15m';
+        else if (eventTf === '3') tfSuffix = '3m';
+        else tfSuffix = parseTF(eventTf).toLowerCase();
+        
+        const tfKey = prefix === 'EVENTO_CHOCH' ? `choch${tfSuffix}` : `bos${tfSuffix}`;
         const tfConfig = sessionConfig?.[tfKey as keyof typeof sessionConfig] as any;
         const slBuff = tfConfig?.slBuff ?? 0;
         const activeFixedRR = tfConfig?.tp2 ?? 1.5;
@@ -1446,10 +1452,20 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const hasOte = events.some((e: string) => e.includes('OTE_Retracement'));
   const isBos = events.some((e: string) => e.includes('EVENTO_BOS'));
   const isChoch = events.some((e: string) => e.includes('EVENTO_CHOCH'));
-  if (hasOte && isBos) trade.triggerType = 'oteBos15m';
-  else if (hasOte && isChoch) trade.triggerType = 'oteChoch15m';
-  else if (isBos && !hasOte) trade.triggerType = 'bos15m';
-  else if (isChoch && !hasOte) trade.triggerType = 'choch15m';
+  let tfSuffix = '15m';
+  if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
+  else {
+     const tfEvent = events.find((e: string) => e.includes('TF: '));
+     if (tfEvent) {
+         const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+         if (match) tfSuffix = match[1].toLowerCase() + 'm';
+     }
+  }
+
+  if (hasOte && isBos) trade.triggerType = `oteBos${tfSuffix}`;
+  else if (hasOte && isChoch) trade.triggerType = `oteChoch${tfSuffix}`;
+  else if (isBos && !hasOte) trade.triggerType = `bos${tfSuffix}`;
+  else if (isChoch && !hasOte) trade.triggerType = `choch${tfSuffix}`;
 
   // --- FRICTION MODEL INTERCEPTION ---
   const clsFriction = getAssetClass(config.ticker);
