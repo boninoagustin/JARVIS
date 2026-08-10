@@ -466,8 +466,15 @@ function processAlert(
       const isChoch = trade.events?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
       const hasOte = trade.events?.some(e => e.includes('OTE_Retracement'));
       
-      // Siempre usamos 15m
-      const tfSuffix = '15m';
+      // Extraer sufijo TF dinámicamente de eventos
+      let tfSuffix = '15m';
+      const tfEvent = trade.events?.find(e => e.includes('TF: '));
+      if (tfEvent) {
+          const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+          if (match) tfSuffix = match[1].toLowerCase() + 'm';
+      } else if (trade.tf) {
+          tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
+      }
 
       if (hasOte && isBos) finalTriggerType = `oteBos${tfSuffix}`;
       else if (hasOte && isChoch) finalTriggerType = `oteChoch${tfSuffix}`;
@@ -827,7 +834,16 @@ function processAlert(
               const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
               const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
               let ft = '';
-              const tfSuffix = trade.tf === '5' ? '5m' : '15m';
+              let tfSuffix = '15m';
+              if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
+              else {
+                 const tfEvent = trade.events?.find(e => e.includes('TF: '));
+                 if (tfEvent) {
+                     const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+                     if (match) tfSuffix = match[1].toLowerCase() + 'm';
+                 }
+              }
+
               if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
               else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
               else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
@@ -852,7 +868,16 @@ function processAlert(
               const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
               const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
               let ft = '';
-              const tfSuffix = trade.tf === '5' ? '5m' : '15m';
+              let tfSuffix = '15m';
+              if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
+              else {
+                 const tfEvent = trade.events?.find(e => e.includes('TF: '));
+                 if (tfEvent) {
+                     const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+                     if (match) tfSuffix = match[1].toLowerCase() + 'm';
+                 }
+              }
+
               if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
               else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
               else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
@@ -1359,7 +1384,17 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
         const isChoch = existingTradeForTicker.events?.some(e => e.includes('EVENTO_CHOCH'));
         const isBos = existingTradeForTicker.events?.some(e => e.includes('EVENTO_BOS'));
         const hasOte = existingTradeForTicker.events?.some(e => e.includes('OTE_Retracement'));
-        const tfSuffix = existingTradeForTicker.tf === '5' ? '5m' : '15m';
+        
+        let tfSuffix = '15m';
+        if (existingTradeForTicker.tf) tfSuffix = existingTradeForTicker.tf.toLowerCase().endsWith('m') ? existingTradeForTicker.tf.toLowerCase() : existingTradeForTicker.tf.toLowerCase() + 'm';
+        else {
+           const tfEvent = existingTradeForTicker.events?.find(e => e.includes('TF: '));
+           if (tfEvent) {
+               const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+               if (match) tfSuffix = match[1].toLowerCase() + 'm';
+           }
+        }
+        
         let ft = '';
         if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
         else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
