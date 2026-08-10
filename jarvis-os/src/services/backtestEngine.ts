@@ -238,7 +238,14 @@ function preParseAlert(alertText: string): ParsedAlert | undefined {
   const upperText = alertText.toUpperCase();
 
   const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
-  const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
+  let eventTf = tfMatch ? tfMatch[1].toUpperCase() : 'UNKNOWN';
+  if (eventTf === 'M5') eventTf = '5';
+  if (eventTf === 'M15') eventTf = '15';
+  if (eventTf === 'M3') eventTf = '3';
+  if (eventTf === 'H1') eventTf = '60';
+  if (eventTf === 'H4') eventTf = '240';
+  if (eventTf === 'D1') eventTf = 'D';
+  
   const readableTf = parseTF(eventTf);
 
 
@@ -1453,12 +1460,19 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const isBos = events.some((e: string) => e.includes('EVENTO_BOS'));
   const isChoch = events.some((e: string) => e.includes('EVENTO_CHOCH'));
   let tfSuffix = '15m';
-  if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
-  else {
+  if (trade.tf) {
+      let extracted = trade.tf.toLowerCase();
+      if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+      tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
+  } else {
      const tfEvent = events.find((e: string) => e.includes('TF: '));
      if (tfEvent) {
          const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-         if (match) tfSuffix = match[1].toLowerCase() + 'm';
+         if (match) {
+             let extracted = match[1].toLowerCase();
+             if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+             tfSuffix = extracted + 'm';
+         }
      }
   }
 

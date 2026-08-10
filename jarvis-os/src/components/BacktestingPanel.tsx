@@ -1176,7 +1176,11 @@ export default function BacktestingPanel() {
                  const tfEvent = t.events?.find(e => e.includes('TF: '));
                  if (tfEvent) {
                     const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-                    if (match) tfSuffix = match[1].toLowerCase() + 'm';
+                    if (match) {
+                        let extracted = match[1].toLowerCase();
+                        if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+                        tfSuffix = extracted + 'm';
+                    }
                  }
               }
 
