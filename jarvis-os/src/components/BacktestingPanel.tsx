@@ -1089,16 +1089,10 @@ export default function BacktestingPanel() {
         
         for (let j = 0; j < chunkResults.length; j++) {
             const res = chunkResults[j];
-            let pnlR = 0;
-            let wins = 0;
-            let total = 0;
-            res.trades.forEach((t: any) => {
-                if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
-                    pnlR += t.rMultiple;
-                    total++;
-                    if (t.rMultiple > 0) wins++;
-                }
-            });
+            let pnlR = res.pnlR || 0;
+            let wins = res.wins || 0;
+            let total = res.total || 0;
+            
             const wr = total > 0 ? wins / total : 0;
             
             if (pnlR > bestScore || (pnlR === bestScore && wr > bestWinRate)) {

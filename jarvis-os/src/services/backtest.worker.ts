@@ -34,7 +34,20 @@ self.onmessage = (e: MessageEvent) => {
       const prep = logsArray ? prepareEntries(logs) : preparedEntries;
       
       // Reuse prepared entries for all batch items
-      const results = configs.map((config: any) => runBacktest(logs, config, undefined, prep ?? undefined));
+      const results = configs.map((config: any) => {
+          const res = runBacktest(logs, config, undefined, prep ?? undefined);
+          let pnlR = 0;
+          let wins = 0;
+          let total = 0;
+          res.trades.forEach((t: any) => {
+              if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+                  pnlR += t.rMultiple;
+                  total++;
+                  if (t.rMultiple > 0) wins++;
+              }
+          });
+          return { pnlR, wins, total };
+      });
       
       self.postMessage({ type: 'DONE', id, result: results });
     }
