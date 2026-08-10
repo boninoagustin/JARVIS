@@ -107,7 +107,8 @@ async function main() {
         { p: TrendbarPeriod.M15, str: 'M15' },
         { p: TrendbarPeriod.H1, str: 'H1' },
         { p: TrendbarPeriod.H4, str: 'H4' },
-        { p: TrendbarPeriod.D1, str: 'D1' }
+        { p: TrendbarPeriod.D1, str: 'D1' },
+        { p: TrendbarPeriod.M5, str: 'M5' }
     ];
 
     let tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL'];

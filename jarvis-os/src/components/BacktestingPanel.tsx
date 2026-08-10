@@ -294,10 +294,13 @@ interface SessionHistory {
     enabled?: boolean;
     sessions?: Record<string, {
       choch5m: { enabled: boolean; minScore: number };
-    choch15m: { enabled: boolean; minScore: number };
+      choch15m: { enabled: boolean; minScore: number };
       bos5m: { enabled: boolean; minScore: number };
-    bos15m: { enabled: boolean; minScore: number };
-      ote: { enabled: boolean; minScore: number };
+      bos15m: { enabled: boolean; minScore: number };
+      oteChoch5m: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos5m: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteChoch15m: { enabled: boolean; minScore: number; entryPercent?: number };
+      oteBos15m: { enabled: boolean; minScore: number; entryPercent?: number };
     }>;
   };
 }
@@ -305,7 +308,7 @@ interface SessionHistory {
 
 interface TriggerSettingsPanelProps {
   sessionKey: string;
-  triggerKey: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m';
+  triggerKey: 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m';
   title: string;
   config: any;
   updateTrigger: (session: string, triggerType: any, field: string, value: any, autoRun?: boolean) => void;
@@ -493,6 +496,10 @@ export default function BacktestingPanel() {
     return () => unsub();
   }, [ticker]);
   const [sessionTriggers, setSessionTriggers] = useState<Record<string, {
+    choch5m: { enabled: boolean; minScore: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
+    bos5m: { enabled: boolean; minScore: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
+    oteChoch5m: { enabled: boolean; minScore: number; entryPercent?: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
+    oteBos5m: { enabled: boolean; minScore: number; entryPercent?: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
     choch15m: { enabled: boolean; minScore: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
     bos15m: { enabled: boolean; minScore: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
     oteChoch15m: { enabled: boolean; minScore: number; entryPercent?: number; slBuff: number; tp2: number; partialClosePct: number; slAfterTp1: 'midpoint' | 'breakeven' | 'none'; tp15BeEnabled: boolean; atrTrailEnabled: boolean; structuralTrailEnabled: boolean; tp1StructuralMinRR: number };
@@ -503,10 +510,10 @@ export default function BacktestingPanel() {
     const defTrig: any = { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 };
     const defOte: any = { ...defTrig, entryPercent: 62 };
     const fallback = {
-      OFF: { choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
-      LONDON: { choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
-      NY: { choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
-      ASIA: { choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 }
+      OFF: { choch5m: { ...defTrig }, bos5m: { ...defTrig }, oteChoch5m: { ...defOte }, oteBos5m: { ...defOte }, choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
+      LONDON: { choch5m: { ...defTrig }, bos5m: { ...defTrig }, oteChoch5m: { ...defOte }, oteBos5m: { ...defOte }, choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
+      NY: { choch5m: { ...defTrig }, bos5m: { ...defTrig }, oteChoch5m: { ...defOte }, oteBos5m: { ...defOte }, choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
+      ASIA: { choch5m: { ...defTrig }, bos5m: { ...defTrig }, oteChoch5m: { ...defOte }, oteBos5m: { ...defOte }, choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 }
     };
     try {
       const saved = localStorage.getItem('bt_session_triggers');
@@ -529,10 +536,15 @@ export default function BacktestingPanel() {
              const oldOteBos = parsed[s].oteBos15m || {};
              parsed[s].oteBos15m = { ...defOte, ...oldOteBos };
              
-             delete parsed[s].choch5m;
-             delete parsed[s].bos5m;
-             delete parsed[s].oteChoch5m;
-             delete parsed[s].oteBos5m;
+             const oldChoch5m = parsed[s].choch5m || {};
+             parsed[s].choch5m = { ...defTrig, ...oldChoch5m };
+             const oldBos5m = parsed[s].bos5m || {};
+             parsed[s].bos5m = { ...defTrig, ...oldBos5m };
+             const oldOteChoch5m = parsed[s].oteChoch5m || {};
+             parsed[s].oteChoch5m = { ...defOte, ...oldOteChoch5m };
+             const oldOteBos5m = parsed[s].oteBos5m || {};
+             parsed[s].oteBos5m = { ...defOte, ...oldOteBos5m };
+
              delete parsed[s].slBufferPercent;
              delete parsed[s].fixedRR;
           }
@@ -547,21 +559,21 @@ export default function BacktestingPanel() {
 
   const updateSessionTrigger = (
     session: string,
-    triggerType: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | 'maxSellLosses' | 'maxBuyLosses',
+    triggerType: 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | 'maxSellLosses' | 'maxBuyLosses',
     field: string,
     value: any,
     autoRun: boolean = false
   ) => {
     setSessionTriggers(prev => {
       let updatedSession = { ...prev[session] };
-      if (triggerType === 'maxSellLosses' || triggerType === 'maxBuyLosses') {
-        updatedSession[triggerType] = value;
-      } else {
-        const type = triggerType as 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m';
+      if (triggerType !== 'maxSellLosses' && triggerType !== 'maxBuyLosses') {
+        const type = triggerType as 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m';
         updatedSession[type] = {
           ...updatedSession[type],
           [field]: value
         };
+      } else {
+        updatedSession[triggerType] = value;
       }
 
       const next = {
@@ -922,7 +934,7 @@ export default function BacktestingPanel() {
       await runWorkerTask('SET_LOGS', { logsArray: Array.from(logCache.entries()) });
 
       const sessionsToOptimize = ['OFF', 'LONDON', 'NY', 'ASIA'];
-      const triggersToOptimize = ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
+      const triggersToOptimize = ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m', 'choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
       
       const tasks: { sessionKey: string, triggerKey: string }[] = [];
       for (const sessionKey of sessionsToOptimize) {
@@ -1157,14 +1169,24 @@ export default function BacktestingPanel() {
           const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
 
 
-          const tfSuffix = '15m';
-          let triggerType: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null = null;
+          let tfSuffix = '15m';
+          const tfEvent = t.events?.find(e => e.includes('TF: '));
+          if (tfEvent) {
+             const match = tfEvent.match(/TF:\s*(5|15)/);
+             if (match) tfSuffix = match[1] + 'm';
+          }
+
+          let triggerType: 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null = null;
           if (hasOte && isBos) triggerType = `oteBos${tfSuffix}` as any;
           else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}` as any;
           else if (isBos && !hasOte) triggerType = `bos${tfSuffix}` as any;
           else if (isChoch && !hasOte) triggerType = `choch${tfSuffix}` as any;
 
           if (sessionFilter !== 'GLOBAL' && tradeFilter !== 'ALL') {
+            if (tradeFilter === 'CHOCH_5M' && triggerType !== 'choch5m') return false;
+            if (tradeFilter === 'BOS_5M' && triggerType !== 'bos5m') return false;
+            if (tradeFilter === 'OTE_CHOCH_5M' && triggerType !== 'oteChoch5m') return false;
+            if (tradeFilter === 'OTE_BOS_5M' && triggerType !== 'oteBos5m') return false;
             if (tradeFilter === 'CHOCH_15M' && triggerType !== 'choch15m') return false;
             if (tradeFilter === 'BOS_15M' && triggerType !== 'bos15m') return false;
             if (tradeFilter === 'OTE_CHOCH_15M' && triggerType !== 'oteChoch15m') return false;
@@ -1634,8 +1656,14 @@ export default function BacktestingPanel() {
         const isChoch = t.events?.some(e => e.includes('EVENTO_CHOCH'));
 
 
-        const tfSuffix = '15m';
-        let triggerType: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null = null;
+        let tfSuffix = '15m';
+        const tfEvent = t.events?.find(e => e.includes('TF: '));
+        if (tfEvent) {
+           const match = tfEvent.match(/TF:\s*(5|15)/);
+           if (match) tfSuffix = match[1] + 'm';
+        }
+
+        let triggerType: 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | null = null;
         if (hasOte && isBos) triggerType = `oteBos${tfSuffix}` as any;
         else if (hasOte && isChoch) triggerType = `oteChoch${tfSuffix}` as any;
         else if (isBos && !hasOte) triggerType = `bos${tfSuffix}` as any;
@@ -1643,6 +1671,10 @@ export default function BacktestingPanel() {
 
         // 1. Local filter by selected tradeFilter in UI (when not in GLOBAL mode)
         if (!isGlobal && tradeFilter !== 'ALL') {
+          if (tradeFilter === 'CHOCH_5M' && triggerType !== 'choch5m') return false;
+          if (tradeFilter === 'BOS_5M' && triggerType !== 'bos5m') return false;
+          if (tradeFilter === 'OTE_CHOCH_5M' && triggerType !== 'oteChoch5m') return false;
+          if (tradeFilter === 'OTE_BOS_5M' && triggerType !== 'oteBos5m') return false;
           if (tradeFilter === 'CHOCH_15M' && triggerType !== 'choch15m') return false;
           if (tradeFilter === 'BOS_15M' && triggerType !== 'bos15m') return false;
           if (tradeFilter === 'OTE_CHOCH_15M' && triggerType !== 'oteChoch15m') return false;
@@ -2164,6 +2196,30 @@ export default function BacktestingPanel() {
             <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               
+              <TriggerSettingsPanel
+                sessionKey={sessionFilter} triggerKey="choch5m" title="💥 CHOCH (Ruptura) (5m)"
+                config={sessionTriggers[sessionFilter]?.choch5m} updateTrigger={updateSessionTrigger}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="CHOCH_5M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "choch5m")} isOptimizing={optimizingTrigger === `${sessionFilter}-choch5m`} optimizeProgress={optimizeProgress}
+              />
+              <TriggerSettingsPanel
+                sessionKey={sessionFilter} triggerKey="bos5m" title="📈 BOS (5m)"
+                config={sessionTriggers[sessionFilter]?.bos5m} updateTrigger={updateSessionTrigger}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={false}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="BOS_5M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "bos5m")} isOptimizing={optimizingTrigger === `${sessionFilter}-bos5m`} optimizeProgress={optimizeProgress}
+              />
+              <TriggerSettingsPanel
+                sessionKey={sessionFilter} triggerKey="oteChoch5m" title="📉 OTE CHOCH (5m)"
+                config={sessionTriggers[sessionFilter]?.oteChoch5m} updateTrigger={updateSessionTrigger}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_CHOCH_5M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteChoch5m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteChoch5m`} optimizeProgress={optimizeProgress}
+              />
+              <TriggerSettingsPanel
+                sessionKey={sessionFilter} triggerKey="oteBos5m" title="📈 OTE BOS (5m)"
+                config={sessionTriggers[sessionFilter]?.oteBos5m} updateTrigger={updateSessionTrigger}
+                onSimulate={() => handleRun(undefined, undefined, true)} isRunning={isRunning} isOte={true}
+                tradeFilter={tradeFilter} setTradeFilter={setTradeFilter} filterKey="OTE_BOS_5M" onOptimize={() => handleOptimizeTrigger(sessionFilter, "oteBos5m")} isOptimizing={optimizingTrigger === `${sessionFilter}-oteBos5m`} optimizeProgress={optimizeProgress}
+              />
               <TriggerSettingsPanel
                 sessionKey={sessionFilter} triggerKey="choch15m" title="💥 CHOCH (Ruptura) (15m)"
                 config={sessionTriggers[sessionFilter]?.choch15m} updateTrigger={updateSessionTrigger}

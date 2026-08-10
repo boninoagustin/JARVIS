@@ -385,7 +385,7 @@ export async function initializeScanner() {
         }
     }
 
-    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'USOIL'];
+    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'BTCUSD', 'USOIL'];
     const timeframes = [
         { p: TrendbarPeriod.M15, str: 'M15' },
         { p: TrendbarPeriod.H1, str: 'H1' },
