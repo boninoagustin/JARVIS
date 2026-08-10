@@ -1185,9 +1185,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             ? lowPrice <= (trade.slPrice + spreadAdjustment)
                             : highPrice >= (trade.slPrice - spreadAdjustment);
                     } else {
+                        // 🔧 Usar currentPrice (bid) en vez de highPrice/lowPrice (inflados por spread).
+                        // Un spike de ask puede disparar SL falsamente. El precio de ejecución real es el bid.
                         slHit = trade.direction === 'BUY'
-                            ? lowPrice <= trade.slPrice
-                            : highPrice >= trade.slPrice;
+                            ? currentPrice <= trade.slPrice
+                            : currentPrice >= trade.slPrice;
                     }
 
                     if (slHit) {
