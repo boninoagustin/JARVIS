@@ -140,7 +140,7 @@ export interface GeneticResult {
   evaluated: number;
 }
 
-export function geneticSearch(cfg: GeneticConfig): GeneticResult {
+export async function geneticSearch(cfg: GeneticConfig): Promise<GeneticResult> {
   const {
     evaluate, budget,
     seed = 42,
@@ -182,7 +182,11 @@ export function geneticSearch(cfg: GeneticConfig): GeneticResult {
     if (evalCount >= budget) break;
 
     // Evaluate
-    const scored = population.map(g => ({ genome: g, fitness: evalMemo(g) }));
+    const scored: { genome: TriggerGenome; fitness: number }[] = [];
+    for (const g of population) {
+      scored.push({ genome: g, fitness: evalMemo(g) });
+      await new Promise(r => setTimeout(r, 0)); // YIELD FOR GC
+    }
     scored.sort((a, b) => b.fitness - a.fitness);
 
     const currentBest = scored[0];

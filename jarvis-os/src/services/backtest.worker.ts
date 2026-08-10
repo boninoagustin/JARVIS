@@ -7,7 +7,7 @@ let cachedLogs: Map<string, string[]> | null = null;
 let preparedEntries: LogEntry[] | null = null;
 const cancelledIds = new Set<number>();
 
-self.onmessage = (e: MessageEvent) => {
+self.onmessage = async (e: MessageEvent) => {
   const { type, id, payload } = e.data;
 
   try {
@@ -34,8 +34,9 @@ self.onmessage = (e: MessageEvent) => {
       const prep = logsArray ? prepareEntries(logs) : preparedEntries;
       
       // Reuse prepared entries for all batch items
-      const results = configs.map((config: any) => {
-          const res = runBacktest(logs, config, undefined, prep ?? undefined);
+      const results = [];
+      for (let i = 0; i < configs.length; i++) {
+          const res = runBacktest(logs, configs[i], undefined, prep ?? undefined);
           let pnlR = 0;
           let wins = 0;
           let total = 0;
@@ -46,8 +47,9 @@ self.onmessage = (e: MessageEvent) => {
                   if (t.rMultiple > 0) wins++;
               }
           });
-          return { pnlR, wins, total };
-      });
+          results.push({ pnlR, wins, total });
+          await new Promise(r => setTimeout(r, 0)); // YIELD FOR GC
+      }
       
       self.postMessage({ type: 'DONE', id, result: results });
     }
@@ -153,7 +155,7 @@ self.onmessage = (e: MessageEvent) => {
       let result: { best: TriggerGenome; top10: TriggerGenome[]; evaluated: number };
 
       if (strategy === 'ga') {
-        result = geneticSearch({
+        result = await geneticSearch({
           evaluate,
           budget: budget ?? 600,
           seed: seed ?? 42,
@@ -197,6 +199,7 @@ self.onmessage = (e: MessageEvent) => {
               type: 'PROGRESS', id,
               evaluated: evalCount, budget: totalGrid, bestFitness,
             });
+            await new Promise(r => setTimeout(r, 0)); // YIELD FOR GC
           }
         }
 
