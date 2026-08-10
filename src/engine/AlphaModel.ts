@@ -180,7 +180,7 @@ export function evaluateImpulseCore(
     const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
         dbg(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
-        leg.oteScored = true; return { updatedLeg: leg };
+        return { updatedLeg: null };
     }
 
     // 🔧 FIX 2: Opposite pressure — si el score contrario supera 3x y el minScore de sesión, el leg se anula
@@ -194,14 +194,14 @@ export function evaluateImpulseCore(
     
     if (oppositePoints >= dominanceThreshold && (nowMs - oppositeScore.lastUpdate) < 900000) {
         dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositePoints} pts vs propio histórico ${ownStrength} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
-        leg.oteScored = true; return { updatedLeg: leg };
+        return { updatedLeg: null };
     }
 
     // 🔧 FIX 2.5: Invalidación por CHoCH contrario antes de llegar a OTE
     const contraryChochFound = oppositeScore.events?.some(e => e.id.includes('CHOCH') || e.id.includes('CHoCH'));
     if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
-        leg.oteScored = true; return { updatedLeg: leg };
+        return { updatedLeg: null };
     }
 
     // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
@@ -212,7 +212,7 @@ export function evaluateImpulseCore(
         : (currentPrice < leg.extreme - atrEstimate);
     if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
-        leg.oteScored = true; return { updatedLeg: leg };
+        return { updatedLeg: null };
     }
 
     if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
@@ -436,7 +436,8 @@ export function evaluateImpulseCore(
             }
         }
     }
-    if (impulseInvalidated) leg.oteScored = true; return { updatedLeg: leg };
+    if (impulseInvalidated) return { updatedLeg: null }; 
+    return { updatedLeg: leg };
 }
 
 

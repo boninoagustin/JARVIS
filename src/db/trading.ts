@@ -741,6 +741,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             const spreadAnomalous = tickFlow.isSpreadAnomalous(ticker);
             const isKillswitched = spreadAnomalous || nowMs < store.streakKillswitchUntil || nowMs < store.vixKillswitchUntil || !config.sessionEnabled;
 
+            // 🧹 Clear stale lastGatillo (older than 24h) to avoid infinite TTL in the UI
+            if (state.lastGatillo && nowMs - state.lastGatillo.time > 24 * 60 * 60 * 1000) {
+                state.lastGatillo = undefined;
+            }
+
             // ⚙️ Gestión de trades configurada por activo (asset_configs en Firestore).
             // Defaults = comportamiento histórico (parcial 50%, SL al 50% del riesgo, TP1.5 y trail ATR activos).
             const mgmtPartial = Math.min(Math.max(config.partialClosePct ?? 0.5, 0), 1);
