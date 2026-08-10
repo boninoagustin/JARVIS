@@ -603,6 +603,19 @@ export default function BacktestingPanel() {
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const { runWorkerTask } = useBacktestWorker();
+
+  useEffect(() => {
+    if (uploadedFiles.length > 0) {
+      const logs = new Map<string, string[]>();
+      uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
+      const logsArray = Array.from(logs.entries());
+      
+      runWorkerTask('SET_LOGS', { logsArray }).catch(e => {
+        console.error("Error auto-setting logs in worker after upload", e);
+      });
+    }
+  }, [uploadedFiles, runWorkerTask]);
   const [isRunning, setIsRunning] = useState(false);
 
   const [progress, setProgress] = useState(0);
@@ -630,7 +643,7 @@ export default function BacktestingPanel() {
   const { toast } = useToast();
 
   // 🚀 WORKER PARA BACKTESTING (Desbloquea la UI en operaciones pesadas)
-  const { runWorkerTask } = useBacktestWorker();
+
 
   // 🗂️ TABS PRINCIPALES (INDIVIDUAL VS PORTAFOLIO GLOBAL)
   const [activeTab, setActiveTab] = useState<'individual' | 'portfolio'>('individual');
@@ -1145,7 +1158,6 @@ export default function BacktestingPanel() {
 
       try {
         const payload = {
-            logsArray: Array.from(logs.entries()),
             config: { ...baseParams, oteEntryPercent: finalOte, sessions: finalSessions }
         };
         
@@ -1675,7 +1687,7 @@ export default function BacktestingPanel() {
                   if (match) {
                       let extracted = match[1].toLowerCase();
                       if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
-                      tfSuffix = extracted + 'm';
+                      tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
                   }
                }
             }

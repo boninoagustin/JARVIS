@@ -125,8 +125,9 @@ export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | '
 
 
 // --- ENTRY PREPARATION (hoisted from runBacktest for reuse across many configs) ---
-export function prepareEntries(logs: Map<string, (string | LogEntry)[]>): LogEntry[] {
+export async function prepareEntries(logs: Map<string, (string | LogEntry)[]>): Promise<LogEntry[]> {
   const allEntries: LogEntry[] = [];
+  let count = 0;
   for (const [tf, items] of logs.entries()) {
     for (const item of items) {
       if (typeof item === 'string') {
@@ -135,6 +136,10 @@ export function prepareEntries(logs: Map<string, (string | LogEntry)[]>): LogEnt
       } else {
         allEntries.push(item as LogEntry);
       }
+      count++;
+      if (count % 5000 === 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
     }
   }
   return allEntries.filter(e => e.ts > 0).sort((a, b) => a.ts - b.ts);
@@ -142,7 +147,7 @@ export function prepareEntries(logs: Map<string, (string | LogEntry)[]>): LogEnt
 
 // --- MAIN BACKTEST RUNNER ---
 export function runBacktest(
-  logs: Map<string, (string | LogEntry)[]>,
+  _logs: Map<string, (string | LogEntry)[]>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void,
   prepared?: LogEntry[]
@@ -164,9 +169,9 @@ export function runBacktest(
   };
 
   // 1. Parse all entries with timestamps (or use pre-prepared)
-  const validEntries = prepared ?? prepareEntries(logs);
-  
-  if (validEntries.length === 0) {
+  const validEntries = prepared!;
+
+  if (!validEntries || validEntries.length === 0) {
     return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '' };
   }
 
@@ -1471,7 +1476,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
          if (match) {
              let extracted = match[1].toLowerCase();
              if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
-             tfSuffix = extracted + 'm';
+             tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
          }
      }
   }

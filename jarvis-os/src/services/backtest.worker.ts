@@ -15,14 +15,14 @@ self.onmessage = async (e: MessageEvent) => {
       const { logsArray } = payload;
       cachedLogs = new Map<string, string[]>(logsArray);
       // Pre-preparar entradas una sola vez para todas las simulaciones futuras
-      preparedEntries = prepareEntries(cachedLogs);
+      preparedEntries = await prepareEntries(cachedLogs);
       self.postMessage({ type: 'DONE', id, result: { entryCount: preparedEntries.length } });
     }
     else if (type === 'RUN_BACKTEST') {
       const { logsArray, config } = payload;
       const logs = logsArray ? new Map<string, string[]>(logsArray) : cachedLogs;
       if (!logs) throw new Error("No logs available in worker");
-      const prep = logsArray ? prepareEntries(logs) : preparedEntries;
+      const prep = logsArray ? await prepareEntries(logs) : preparedEntries;
       
       const res = runBacktest(logs, config, undefined, prep ?? undefined);
       self.postMessage({ type: 'DONE', id, result: res });
@@ -31,7 +31,7 @@ self.onmessage = async (e: MessageEvent) => {
       const { logsArray, configs } = payload;
       const logs = logsArray ? new Map<string, string[]>(logsArray) : cachedLogs;
       if (!logs) throw new Error("No logs available in worker");
-      const prep = logsArray ? prepareEntries(logs) : preparedEntries;
+      const prep = logsArray ? await prepareEntries(logs) : preparedEntries;
       
       // Reuse prepared entries for all batch items
       const results = [];
