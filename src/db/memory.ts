@@ -5,7 +5,9 @@ import fs from 'fs';
 // Initialize Firebase Admin
 try {
     let serviceAccount;
-    const credPath = config.GOOGLE_APPLICATION_CREDENTIALS;
+    let credPath: string | undefined = config.GOOGLE_APPLICATION_CREDENTIALS;
+    // dotenv puede agregar comillas al valor del .env
+    if (credPath) credPath = credPath.replace(/^["']|["']$/g, '');
 
     if (credPath && credPath.startsWith('{')) {
         // Assume raw JSON string
