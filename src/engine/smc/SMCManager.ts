@@ -80,6 +80,11 @@ class SMCManager {
                 const skipEngine = !isHistorical && lastTs !== undefined && prev.timestamp <= lastTs;
                 if (!skipEngine) {
                     const events = engine.nextCandle(prev);
+                    // 🔍 DIAGNÓSTICO: loguear eventos generados por el engine
+                    if (!isHistorical && events.length > 0) {
+                        const types = [...new Set(events.map((e: any) => e.type))];
+                        console.log(`[SMC-MANAGER] 📤 ${key}: ${events.length} eventos (${types.join(',')})`);
+                    }
                     if (events.length > 0) {
                         for (const listener of this.listeners) {
                             try {

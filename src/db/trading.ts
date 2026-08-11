@@ -1376,6 +1376,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             let addedEventId: string | null = null;
 
             if (prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') {
+                // 🔍 DIAGNÓSTICO
+                console.log(`[RADAR] 📡 ${prefix} ${currentDirection} ${ticker} TF=${eventTf} price=${state.lastPrice}`);
                 state.marketBias[eventTf] = currentDirection;
 
                 // 💥 Invalidación estructural acotada: el CHoCH/BOS borra del score CONTRARIO
