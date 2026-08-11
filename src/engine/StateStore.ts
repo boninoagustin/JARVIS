@@ -40,7 +40,7 @@ export class StateStore {
         slBufferPercent: 0.1,
         fixedRR: 2.0,
         oteEntryPercent: 50,
-        entryTrigger: 'OTE' as EntryTrigger,
+        entryTrigger: 'SMART' as EntryTrigger,
         autoTrading: true,
         maxSmartRiskPercent: 0.15
     };
