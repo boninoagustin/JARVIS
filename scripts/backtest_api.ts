@@ -351,6 +351,7 @@ async function main() {
             metrics: computeMetrics(trades),
             trades: trades.slice(-100).map(t => ({
                 id: `bt_${t.entryTs}`, ticker, direction: t.direction,
+                timestamp: new Date(t.entryTs).toISOString(),
                 entryTs: new Date(t.entryTs).toISOString(), exitTs: new Date(t.exitTs).toISOString(),
                 entryPrice: t.entryPrice, exitPrice: t.exitPrice,
                 result: t.rMultiple > 0 ? 'WIN' : 'LOSS', rMultiple: t.rMultiple, bars: t.bars, setup: t.setup
