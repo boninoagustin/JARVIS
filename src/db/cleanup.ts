@@ -30,7 +30,7 @@ async function cleanupOldData() {
         for (const doc of requestsSnap.docs) {
             if (batchCount >= MAX_BATCH_SIZE) break;
             const data = doc.data();
-            if (data.status === 'sent' || data.status === 'failed' || data.status === 'telegram_error' || data.status === 'vercel_error') {
+            if (data.status === 'sent' || data.status === 'failed' || data.status === 'telegram_error') {
                 batch.delete(doc.ref);
                 deletedRequests++;
                 batchCount++;
