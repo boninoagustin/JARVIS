@@ -482,6 +482,7 @@ export default function BacktestingPanel() {
   // 🔄 Cargar gestión de trades actual desde Firestore (asset_configs/{ticker})
   // para que el panel refleje la config que el bot live tiene en producción.
   useEffect(() => {
+    if (!ticker || ticker.length < 2) return;
     const unsub = onSnapshot(doc(db, 'asset_configs', ticker), (snap) => {
       if (!snap.exists()) return;
       const d = snap.data() as any;
