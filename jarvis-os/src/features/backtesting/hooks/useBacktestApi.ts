@@ -21,23 +21,8 @@ export function useBacktestApi() {
                 const { config } = payload;
                 const ticker = config.ticker || payload.ticker || '';
                 const tfs = (config.tfs || []).join(',');
-                const cfgStr = encodeURIComponent(JSON.stringify({
-                    minBuyPoints: config.minBuyPoints || 5,
-                    minSellPoints: config.minSellPoints || 5,
-                    slBuffer: config.slBufferPercent || 0.0015,
-                    fixedRR: config.fixedRR || 1.5,
-                    entryTrigger: config.entryTrigger || 'SMART',
-                    partialClosePct: config.partialClosePct || 0.5,
-                    slAfterTp1: config.slAfterTp1 || 'midpoint',
-                    tp15BeEnabled: config.tp15BeEnabled ?? true,
-                    atrTrailEnabled: config.atrTrailEnabled ?? true,
-                    structuralTrailEnabled: config.structuralTrailEnabled ?? false,
-                    spreadPips: config.spreadPips || 1.5,
-                    minRR: config.minRR || 0.75,
-                    requireZoneConfluence: config.requireZoneConfluence ?? false,
-                    sessionMinBuy: config.sessionMinBuy || {},
-                    sessionMinSell: config.sessionMinSell || {},
-                }));
+                // Pasar el config COMPLETO (incluye sessions, sessionFilter, etc.)
+                const cfgStr = encodeURIComponent(JSON.stringify(config));
 
                 const res = await fetch(
                     `${KRONOS_URL}/api/backtest/run?ticker=${encodeURIComponent(ticker)}&tfs=${encodeURIComponent(tfs)}&config_json=${cfgStr}`,

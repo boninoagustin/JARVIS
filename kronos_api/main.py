@@ -201,7 +201,7 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
     ticker: 'BTCUSD', tfs: 'M5,M15,H1,H4,D1'
     config_json: JSON con parámetros (opcional)
     """
-    script = os.path.join(JARVIS_DIR, "scripts", "backtest_api.ts")
+    script = os.path.join(JARVIS_DIR, "jarvis-os", "scripts", "backtest_server.ts")
     if not os.path.exists(script):
         raise HTTPException(status_code=500, detail="Script de backtesting no encontrado en el VPS")
     
@@ -219,7 +219,7 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
         shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300,
-            cwd=JARVIS_DIR, env=env
+            cwd=os.path.join(JARVIS_DIR, "jarvis-os"), env=env
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"Backtest error: {result.stderr[:500]}")
