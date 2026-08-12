@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { useBacktestWorker } from '../features/backtesting/hooks/useBacktestWorker';
+import { useBacktestApi } from '../features/backtesting/hooks/useBacktestApi';
 import { ShieldAlert, BarChart2, Zap, TrendingUp, BookOpen, Wand2, Upload, Briefcase, Play, Trash2, FileText, Download, RotateCcw, Loader2 } from 'lucide-react';
 
 function AdvancedDashboardMetrics({ metrics }: { metrics: any }) {
@@ -602,7 +602,7 @@ export default function BacktestingPanel() {
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const { runWorkerTask } = useBacktestWorker();
+  const { runWorkerTask } = useBacktestApi();
 
   useEffect(() => {
     if (uploadedFiles.length > 0) {
@@ -610,7 +610,7 @@ export default function BacktestingPanel() {
       uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
       const logsArray = Array.from(logs.entries());
       
-      runWorkerTask('SET_LOGS', { logsArray }).catch(e => {
+      runWorkerTask('SET_LOGS', { logsArray, ticker }).catch(e => {
         console.error("Error auto-setting logs in worker after upload", e);
       });
     }
