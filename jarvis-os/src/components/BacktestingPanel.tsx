@@ -602,6 +602,29 @@ export default function BacktestingPanel() {
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [exportingCsv, setExportingCsv] = useState(false);
+
+  const handleExportCsv = async () => {
+    if (!ticker || exportingCsv) return;
+    setExportingCsv(true);
+    try {
+      const res = await fetch(`http://169.58.163.132:8000/api/backtest/export-csv?ticker=${ticker}`);
+      const data = await res.json();
+      toast(`✅ CSV generados para ${ticker}: ${Object.values(data.results).filter((r:any) => r.ok).length}/${Object.keys(data.results).length} TFs`, 'success');
+      // Refrescar lista
+      const filesRes = await fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`);
+      const filesData = await filesRes.json();
+      const files = (filesData.files || []).map((f: any) => {
+        const tfMatch = f.match(/Master_([^.]+)/);
+        const tf = tfMatch ? tfMatch[1] : f;
+        return { name: f, tf, lines: [], lineCount: 0 };
+      });
+      setUploadedFiles(files.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
+    } catch (err: any) {
+      toast(`⚠️ Error generando CSV: ${err.message}`, 'error');
+    }
+    setExportingCsv(false);
+  };
   // Auto-detectar archivos disponibles en el VPS al cambiar de ticker
   useEffect(() => {
     if (!ticker) return;
@@ -1983,8 +2006,18 @@ export default function BacktestingPanel() {
             </div>
 
             {uploadedFiles.length === 0 && ticker && (
-              <div style={{ padding: '10px', backgroundColor: 'rgba(255,193,7,0.05)', borderRadius: '4px', border: '1px solid rgba(255,193,7,0.15)', marginBottom: '12px' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>⚠️ No hay logs SMC para {ticker}. El bot debe generar el CSV primero.</span>
+              <div style={{ padding: '12px', backgroundColor: 'rgba(255,193,7,0.05)', borderRadius: '4px', border: '1px solid rgba(255,193,7,0.15)', marginBottom: '12px' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  ⚠️ No hay logs SMC para {ticker}
+                </div>
+                <button type="button" onClick={handleExportCsv} disabled={exportingCsv}
+                  style={{ width: '100%', padding: '8px', backgroundColor: exportingCsv ? 'var(--bg-secondary)' : 'var(--accent-gold)', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: exportingCsv ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.75rem' }}>
+                  {exportingCsv ? <Loader2 size={14} className="spin" /> : <Zap size={14} />}
+                  {exportingCsv ? 'Generando CSVs...' : 'Generar CSV desde SMCEngine'}
+                </button>
+                <div style={{ fontSize: '0.55rem', color: 'var(--text-tertiary)', marginTop: '6px' }}>
+                  Corre export_smc_csv.ts en el VPS (~2-5 min)
+                </div>
               </div>
             )}
 

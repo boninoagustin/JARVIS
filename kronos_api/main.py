@@ -230,6 +230,42 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
         raise HTTPException(status_code=500, detail=f"Respuesta inválida del backtest: {result.stdout[:300]}")
 
 
+@app.post("/api/backtest/export-csv")
+async def backtest_export_csv(ticker: str, tfs: str = "M5,M15,H1,H4,D1"):
+    """
+    Genera los CSVs de logs SMC para un ticker usando el SMCEngine.
+    """
+    script = os.path.join(JARVIS_DIR, "scripts", "export_smc_csv.ts")
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="Script export_smc_csv.ts no encontrado")
+    
+    env = os.environ.copy()
+    env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+    
+    # Limpiar caché
+    import glob
+    for d in glob.glob("/tmp/tsx-*") + glob.glob("/tmp/esbuild-*"):
+        shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
+    
+    results = {}
+    for tf in tfs.split(","):
+        tf = tf.strip()
+        try:
+            result = subprocess.run(
+                ["npx", "tsx", script, ticker, tf],
+                capture_output=True, text=True, timeout=300,
+                cwd=JARVIS_DIR, env=env
+            )
+            results[tf] = {"ok": result.returncode == 0, "output": result.stdout[-200:] if result.stdout else ""}
+        except subprocess.TimeoutExpired:
+            results[tf] = {"ok": False, "error": "timeout"}
+        except Exception as e:
+            results[tf] = {"ok": False, "error": str(e)}
+    
+    return {"status": "ok", "ticker": ticker, "results": results}
+
+
 @app.post("/api/backtest/upload")
 async def backtest_upload(
     ticker: str,
