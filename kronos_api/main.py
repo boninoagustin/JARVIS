@@ -6,6 +6,7 @@ import tempfile
 import shutil
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -21,6 +22,15 @@ except ImportError as e:
     MODEL_AVAILABLE = False
 
 app = FastAPI(title="Kronos Prediction API")
+
+# CORS — permitir requests desde el dashboard (Vite :5173)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://169.58.163.132:5173", "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global variables for caching model
 tokenizer = None
