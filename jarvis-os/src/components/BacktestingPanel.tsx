@@ -781,45 +781,39 @@ export default function BacktestingPanel() {
     }
   };
 
-  const handleFilesUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFilesUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    Array.from(files).forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const content = ev.target?.result as string;
-        let detectedTF = '3';
-        const tfMatch = content.substring(0, 10000).match(/TF:\s*([a-zA-Z0-9]+)/i);
-        if (tfMatch) detectedTF = tfMatch[1].toUpperCase();
-        
-        const lines = content.split('\n');
-        if (lines.length < 2) { toast(`❌ ${file.name}: sin datos válidos`, 'error'); return; }
-        
-        setUploadedFiles(prev => {
-          const filtered = prev.filter(f => f.tf !== detectedTF);
-          const newFiles = [...filtered, { name: file.name, tf: detectedTF, lines, lineCount: lines.length }]
-            .sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
-            
-
-          
-          setSessionTriggers(prevSessions => {
-            const updated = { ...prevSessions };
-            Object.keys(updated).forEach(sessionKey => {
-              if (updated[sessionKey]) {
-              }
-            });
-            localStorage.setItem('bt_session_triggers', JSON.stringify(updated));
-            return updated;
-          });
-          
-          return newFiles;
-        });
-        toast(`✅ ${TF_LABEL[detectedTF] || detectedTF}: ${lines.length} eventos cargados`, 'success');
-      };
-      reader.readAsText(file);
+    const formData = new FormData();
+    formData.append('ticker', ticker);
+    const newFiles: UploadedFile[] = [];
+    for (const file of Array.from(files)) {
+      const chunk = await file.slice(0, 12000).text();
+      let tf = '3';
+      const m = chunk.match(/TF:\s*([a-zA-Z0-9]+)/i);
+      if (m) tf = m[1].toUpperCase();
+      let lineCount = 0, offset = 0;
+      while (offset < file.size) {
+        const s = await file.slice(offset, offset + 65536).text();
+        lineCount += s.split('\n').length - 1;
+        offset += 65536;
+      }
+      lineCount++;
+      formData.append('files', file, `pine-logs-SMC Master_${tf}.csv`);
+      newFiles.push({ name: file.name, tf, lines: [], lineCount });
+    }
+    try {
+      await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
+      toast(`✅ ${newFiles.length} archivos subidos al VPS`, 'success');
+    } catch (err: any) {
+      toast(`⚠️ Upload al VPS falló: ${err.message}`, 'warning');
+    }
+    setUploadedFiles(prev => {
+      const filtered = prev.filter(f => !newFiles.some(n => n.tf === f.tf));
+      return [...filtered, ...newFiles].sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
     });
     e.target.value = '';
-  }, [toast]);
+  }, [toast, ticker]);
 
   const handleResetConfig = useCallback(() => {
     setMinBuyPoints(4);
