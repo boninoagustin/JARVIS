@@ -347,7 +347,7 @@ async function main() {
         result = {
             ticker, timeframes: tfs, mode: 'simulate',
             timings: { loadMs, simulateMs: simMs, totalMs: loadMs + simMs },
-            candles: candles.length, events: events.length, zones: zones.size, config,
+            candles: candles.length, processedEvents: events.length, events: events.length, zones: zones.size, config,
             metrics: computeMetrics(trades),
             trades: trades.slice(-100).map(t => ({
                 id: `bt_${t.entryTs}`, ticker, direction: t.direction,
