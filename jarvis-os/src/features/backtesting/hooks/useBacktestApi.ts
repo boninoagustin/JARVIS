@@ -35,27 +35,16 @@ export function useBacktestApi() {
             case 'RUN_OPTIMIZATION': {
                 const { ticker, ...rest } = payload;
                 const tfs = (rest.tfs || []).join(',');
-                const cfgStr = encodeURIComponent(JSON.stringify({
-                    minBuyPoints: rest.minBuyPoints || 5,
-                    minSellPoints: rest.minSellPoints || 5,
-                    slBuffer: rest.slBufferPercent || 0.0015,
-                    fixedRR: rest.fixedRR || 1.5,
-                    partialClosePct: rest.partialClosePct || 0.5,
-                    slAfterTp1: rest.slAfterTp1 || 'midpoint',
-                    tp15BeEnabled: rest.tp15BeEnabled ?? true,
-                    atrTrailEnabled: rest.atrTrailEnabled ?? true,
-                    structuralTrailEnabled: rest.structuralTrailEnabled ?? false,
-                    spreadPips: rest.spreadPips || 1.5,
-                }));
+                // Pasar el payload COMPLETO (baseConfig, sessionKey, triggerKey, etc.)
+                const cfgStr = encodeURIComponent(JSON.stringify(payload));
 
                 const res = await fetch(
                     `${KRONOS_URL}/api/backtest/optimize?ticker=${encodeURIComponent(ticker || '')}&tfs=${encodeURIComponent(tfs)}&config_json=${cfgStr}`,
                     { method: 'POST' }
                 );
                 if (!res.ok) throw new Error(`Optimize failed: ${res.status}`);
-                const data = await res.json();
-                onProgress?.(50, 50, 0);
-                return { optimized: data.optimized, metrics: data.metrics, trades: data.trades };
+                // El VPS devuelve { best, top10, evaluated, trainPnlR, ... } — pasarlo directo
+                return await res.json();
             }
 
             case 'RUN_BATCH': {
@@ -64,9 +53,18 @@ export function useBacktestApi() {
                 for (const cfg of configs) {
                     try {
                         const res = await runWorkerTask('RUN_BACKTEST', { config: cfg });
-                        results.push(res);
+                        // Computar pnlR/wins/total igual que el viejo worker
+                        let pnlR = 0, wins = 0, total = 0;
+                        (res.trades || []).forEach((t: any) => {
+                            if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
+                                pnlR += t.rMultiple;
+                                total++;
+                                if (t.rMultiple > 0) wins++;
+                            }
+                        });
+                        results.push({ pnlR, wins, total });
                     } catch (e) {
-                        results.push({ error: String(e) });
+                        results.push({ pnlR: 0, wins: 0, total: 0, error: String(e) });
                     }
                 }
                 return results;

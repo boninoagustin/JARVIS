@@ -880,6 +880,7 @@ export default function BacktestingPanel() {
         baseConfig: { sessions: baseConfig },
         sessionKey, triggerKey,
         strategy: 'grid', budget: 0, seed: Date.now() % 100000,
+        tfs: uploadedFiles.map(f => f.tf),
         trainFraction: 1.0, minTrades: 5,
       }, (evaluated: number, budget: number) => {
         setOptimizeProgress(budget > 0 ? evaluated / budget : 0);
@@ -982,6 +983,7 @@ export default function BacktestingPanel() {
             baseConfig: { sessions: baseConfig },
             sessionKey, triggerKey,
             strategy: 'ga', budget: 600, seed: Date.now() % 100000,
+            tfs: uploadedFiles.map(f => f.tf),
             trainFraction: 1.0, minTrades: 5,
           });
 
@@ -1076,7 +1078,8 @@ export default function BacktestingPanel() {
           sessionFilter: [sessionKey],
           enabled: true,
           spreadPips,
-          commissionPerLot
+          commissionPerLot,
+          tfs: uploadedFiles.map(f => f.tf),
         };
         chunkConfigs.push(configToRun);
     }

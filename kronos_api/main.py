@@ -294,13 +294,13 @@ async def backtest_upload(
 @app.post("/api/backtest/optimize")
 async def backtest_optimize(ticker: str, tfs: str, config_json: str = ""):
     """
-    Auto-Tune Global: GA para encontrar la mejor configuración.
+    Auto-Tune Global: GA con el motor real.
     """
-    script = os.path.join(JARVIS_DIR, "scripts", "backtest_api.ts")
+    script = os.path.join(JARVIS_DIR, "jarvis-os", "scripts", "backtest_optimize_server.ts")
     if not os.path.exists(script):
-        raise HTTPException(status_code=500, detail="Script no encontrado")
+        raise HTTPException(status_code=500, detail="Script de optimización no encontrado")
     
-    cmd = [TSX_BIN, "tsx", script, ticker, tfs, "--optimize"]
+    cmd = [TSX_BIN, "tsx", script, ticker, tfs]
     if config_json:
         cmd.append(config_json)
     
@@ -314,7 +314,7 @@ async def backtest_optimize(ticker: str, tfs: str, config_json: str = ""):
         shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600,
-            cwd=JARVIS_DIR, env=env
+            cwd=os.path.join(JARVIS_DIR, "jarvis-os"), env=env
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"Optimize error: {result.stderr[:500]}")
