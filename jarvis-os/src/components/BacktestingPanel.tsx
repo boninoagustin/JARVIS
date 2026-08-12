@@ -614,9 +614,11 @@ export default function BacktestingPanel() {
       // Refrescar lista
       const filesRes = await fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`);
       const filesData = await filesRes.json();
+      const TF_MAP2: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};
       const files = (filesData.files || []).map((f: any) => {
-        const tfMatch = f.match(/Master_([^.]+)/);
-        const tf = tfMatch ? tfMatch[1] : f;
+        const m = f.match(/Master_([^.]+)/);
+        const raw = m ? m[1] : '';
+        const tf = TF_MAP2[raw] || raw;
         return { name: f, tf, lines: [], lineCount: 0 };
       });
       setUploadedFiles(files.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
@@ -632,12 +634,21 @@ export default function BacktestingPanel() {
     fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`)
       .then(r => r.json())
       .then(data => {
+        const TF_MAP: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};
         const files = (data.files || []).map((f: any) => {
-          const tfMatch = f.match(/Master_([^.]+)/);
-          const tf = tfMatch ? tfMatch[1] : f;
+          const m = f.match(/Master_([^.]+)/);
+          const raw = m ? m[1] : '';
+          const tf = TF_MAP[raw] || raw;
           return { name: f, tf, lines: [], lineCount: 0 };
         });
-        setUploadedFiles(files.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
+        // Deducplicar: solo un archivo por TF (prefiere el que tenga mejor nombre)
+        const seen = new Set<string>();
+        const deduped = files.filter((f: any) => {
+          if (seen.has(f.tf)) return false;
+          seen.add(f.tf);
+          return true;
+        });
+        setUploadedFiles(deduped.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
       })
       .catch(() => setUploadedFiles([]));
   }, [ticker]);
@@ -2004,6 +2015,36 @@ export default function BacktestingPanel() {
               <input type="text" value={ticker} onChange={handleTickerChange} className="mono" placeholder="BTCUSD"
                 style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
             </div>
+<div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
+              <input type="number" min="1" step="1" value={riskUsd} onChange={e => setRiskUsd(parseFloat(e.target.value) || 0)}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>SPREAD PIPS</label>
+                <input type="number" min="0" step="0.1" value={spreadPips} onChange={e => setSpreadPips(parseFloat(e.target.value) || 0)}
+                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+              </div>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>COMISIÓN/LOTE</label>
+                <input type="number" min="0" step="1" value={commissionPerLot} onChange={e => setCommissionPerLot(parseFloat(e.target.value) || 0)}
+                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(124,77,255,0.05)', borderRadius: '4px', border: '1px solid rgba(124,77,255,0.15)' }}>
+              <label style={{ fontSize: '0.6rem', color: '#7c4dff', whiteSpace: 'nowrap', fontWeight: 600 }}>⚙️ GATILLO GLOBAL</label>
+              <select value={entryTrigger} onChange={e => setEntryTrigger(e.target.value as any)}
+                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
+                <option value="SMART">SMART (Filtro R:R)</option>
+                <option value="BOTH">BOTH (Choch + Ote)</option>
+                <option value="CHOCH">CHOCH (Ruptura)</option>
+                <option value="OTE">OTE (Pullback)</option>
+              </select>
+            </div>
+
 
             {uploadedFiles.length === 0 && ticker && (
               <div style={{ padding: '12px', backgroundColor: 'rgba(255,193,7,0.05)', borderRadius: '4px', border: '1px solid rgba(255,193,7,0.15)', marginBottom: '12px' }}>
