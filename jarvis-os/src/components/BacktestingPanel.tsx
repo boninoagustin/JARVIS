@@ -776,7 +776,6 @@ export default function BacktestingPanel() {
     if (!files) return;
     console.log('[UPLOAD] Iniciando subida de', files.length, 'archivos. ticker:', ticker);
     const formData = new FormData();
-    formData.append('ticker', ticker);
     const newFiles: UploadedFile[] = [];
     for (const file of Array.from(files)) {
       console.log('[UPLOAD] Procesando:', file.name, file.size, 'bytes');
@@ -797,7 +796,7 @@ export default function BacktestingPanel() {
       const progressTimer = setInterval(() => {
         setUploadProgress(prev => prev ? { pct: Math.min(prev.pct + 3, 90), label: prev.label } : null);
       }, 500);
-      const res = await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
+      const res = await fetch(`http://169.58.163.132:8000/api/backtest/upload?ticker=${ticker}`, { method: 'POST', body: formData });
       clearInterval(progressTimer);
       console.log('[UPLOAD] Kronos responde:', res.status);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
