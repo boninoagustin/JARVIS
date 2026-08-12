@@ -792,13 +792,10 @@ export default function BacktestingPanel() {
       let tf = '3';
       const m = chunk.match(/TF:\s*([a-zA-Z0-9]+)/i);
       if (m) tf = m[1].toUpperCase();
-      let lineCount = 0, offset = 0;
-      while (offset < file.size) {
-        const s = await file.slice(offset, offset + 65536).text();
-        lineCount += s.split('\n').length - 1;
-        offset += 65536;
-      }
-      lineCount++;
+      // Estimar lineCount del sample (instantáneo, sin leer todo el archivo)
+      const sampleLines = chunk.split('\n').length;
+      const lineCount = Math.round((file.size / 12000) * sampleLines);
+      // Subir directo sin pasar por RAM
       formData.append('files', file, `pine-logs-SMC Master_${tf}.csv`);
       newFiles.push({ name: file.name, tf, lines: [], lineCount });
     }
