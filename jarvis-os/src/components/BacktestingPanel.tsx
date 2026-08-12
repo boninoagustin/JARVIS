@@ -602,7 +602,23 @@ export default function BacktestingPanel() {
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<{ pct: number; label: string } | null>(null);
+  // Auto-detectar archivos disponibles en el VPS al cambiar de ticker
+  useEffect(() => {
+    if (!ticker) return;
+    setUploadedFiles([]);
+    fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`)
+      .then(r => r.json())
+      .then(data => {
+        const files = (data.files || []).map((f: any) => {
+          const tfMatch = f.match(/Master_([^.]+)/);
+          const tf = tfMatch ? tfMatch[1] : f;
+          return { name: f, tf, lines: [], lineCount: 0 };
+        });
+        setUploadedFiles(files.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
+      })
+      .catch(() => setUploadedFiles([]));
+  }, [ticker]);
+
   const { runWorkerTask } = useBacktestApi();
 
   const [isRunning, setIsRunning] = useState(false);
@@ -627,7 +643,6 @@ export default function BacktestingPanel() {
 
   const [optimizedSessionResults, setOptimizedSessionResults] = useState<Record<string, { config: any, result: BacktestResult }>>({});
   const [enabled, setEnabled] = useState(true);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const handleRunRef = useRef<any>(null);
   const { toast } = useToast();
 
@@ -771,51 +786,6 @@ export default function BacktestingPanel() {
     }
   };
 
-  const handleFilesUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    console.log('[UPLOAD] Iniciando subida de', files.length, 'archivos. ticker:', ticker);
-    const formData = new FormData();
-    const newFiles: UploadedFile[] = [];
-    for (const file of Array.from(files)) {
-      console.log('[UPLOAD] Procesando:', file.name, file.size, 'bytes');
-      const chunk = await file.slice(0, 12000).text();
-      let tf = '3';
-      const m = chunk.match(/TF:\s*([a-zA-Z0-9]+)/i);
-      if (m) tf = m[1].toUpperCase();
-      const sampleLines = chunk.split('\n').length;
-      const lineCount = Math.round((file.size / 12000) * sampleLines);
-      formData.append('files', file, `pine-logs-SMC Master_${tf}.csv`);
-      newFiles.push({ name: file.name, tf, lines: [], lineCount });
-      console.log('[UPLOAD] Detectado TF:', tf, 'lineCount~:', lineCount);
-    }
-    try {
-      console.log('[UPLOAD] Enviando a Kronos...');
-      setUploadProgress({ pct: 0, label: 'Subiendo al VPS...' });
-      // Simular progreso (fetch no soporta onprogress nativo)
-      const progressTimer = setInterval(() => {
-        setUploadProgress(prev => prev ? { pct: Math.min(prev.pct + 3, 90), label: prev.label } : null);
-      }, 500);
-      const res = await fetch(`http://169.58.163.132:8000/api/backtest/upload?ticker=${ticker}`, { method: 'POST', body: formData });
-      clearInterval(progressTimer);
-      console.log('[UPLOAD] Kronos responde:', res.status);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      console.log('[UPLOAD] Respuesta:', data);
-      setUploadProgress({ pct: 100, label: '¡Completado!' });
-      setTimeout(() => setUploadProgress(null), 1500);
-      toast(`✅ ${newFiles.length} archivos subidos al VPS`, 'success');
-    } catch (err: any) {
-      setUploadProgress(null);
-      console.error('[UPLOAD] Falló:', err);
-      toast(`⚠️ Upload al VPS falló: ${err.message}`, 'warning');
-    }
-    setUploadedFiles(prev => {
-      const filtered = prev.filter(f => !newFiles.some(n => n.tf === f.tf));
-      return [...filtered, ...newFiles].sort((a, b) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99));
-    });
-    e.target.value = '';
-  }, [toast, ticker]);
 
   const handleResetConfig = useCallback(() => {
     setMinBuyPoints(4);
@@ -2003,7 +1973,7 @@ export default function BacktestingPanel() {
           {/* UPLOAD */}
           <div className="panel">
             <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Upload size={18} color="var(--accent-gold)" /> SUBIR LOGS CSV
+              <FileText size={18} color="var(--accent-gold)" /> LOGS SMC EN VPS
             </h3>
 
             <div style={{ marginBottom: '12px' }}>
@@ -2012,70 +1982,13 @@ export default function BacktestingPanel() {
                 style={{ width: '100%', padding: '8px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
             </div>
 
-
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', padding: '8px 10px', backgroundColor: 'rgba(32,191,107,0.05)', borderRadius: '4px', border: '1px solid rgba(32,191,107,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: 'var(--accent-green)', whiteSpace: 'nowrap', fontWeight: 600 }}>💵 RIESGO (USD)</label>
-              <input type="number" min="1" step="1" value={riskUsd} onChange={e => setRiskUsd(parseFloat(e.target.value) || 0)}
-                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>SPREAD PIPS</label>
-                <input type="number" min="0" step="0.1" value={spreadPips} onChange={e => setSpreadPips(parseFloat(e.target.value) || 0)}
-                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
-              </div>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                <label style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 600 }}>COMISIÓN/LOTE</label>
-                <input type="number" min="0" step="1" value={commissionPerLot} onChange={e => setCommissionPerLot(parseFloat(e.target.value) || 0)}
-                  style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right' }} />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 10px', backgroundColor: 'rgba(124,77,255,0.05)', borderRadius: '4px', border: '1px solid rgba(124,77,255,0.15)' }}>
-              <label style={{ fontSize: '0.6rem', color: '#7c4dff', whiteSpace: 'nowrap', fontWeight: 600 }}>⚙️ GATILLO GLOBAL</label>
-              <select value={entryTrigger} onChange={e => setEntryTrigger(e.target.value as any)}
-                style={{ flex: 1, padding: '4px', backgroundColor: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', textAlign: 'right', outline: 'none', cursor: 'pointer' }}>
-                <option value="SMART">SMART (Filtro R:R)</option>
-                <option value="BOTH">BOTH (Choch + Ote)</option>
-                <option value="CHOCH">CHOCH (Ruptura)</option>
-                <option value="OTE">OTE (Pullback)</option>
-              </select>
-            </div>
-
-
-
-
-
-            <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', marginBottom: '12px', transition: 'border-color 0.2s' }}
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--accent-gold)'; }}
-              onDragLeave={e => { e.currentTarget.style.borderColor = 'var(--border-color)'; }}
-              onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--border-color)'; if (e.dataTransfer.files.length) { const dt = new DataTransfer(); Array.from(e.dataTransfer.files).forEach(f => dt.items.add(f)); const input = fileInputRef.current; if (input) { input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); } } }}>
-              <FileText size={24} color="var(--text-tertiary)" style={{ marginBottom: '8px' }} />
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                Click o arrastrá los 4 CSV del Pine Editor
-              </div>
-              <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                Auto-detecta TF por contenido (5M, 15M, 1H, 4H)
-              </div>
-            </div>
-            <input ref={fileInputRef} type="file" accept=".csv,.txt,.log" multiple onChange={handleFilesUpload} style={{ display: 'none' }} />
-
-            {uploadProgress && (
-              <div style={{ marginBottom: '12px', padding: '10px 14px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{uploadProgress.label}</span>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{uploadProgress.pct}%</span>
-                </div>
-                <div style={{ width: '100%', height: '4px', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ width: `${uploadProgress.pct}%`, height: '100%', backgroundColor: 'var(--accent-gold)', borderRadius: '2px', transition: 'width 0.3s ease' }} />
-                </div>
+            {uploadedFiles.length === 0 && ticker && (
+              <div style={{ padding: '10px', backgroundColor: 'rgba(255,193,7,0.05)', borderRadius: '4px', border: '1px solid rgba(255,193,7,0.15)', marginBottom: '12px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>⚠️ No hay logs SMC para {ticker}. El bot debe generar el CSV primero.</span>
               </div>
             )}
 
-            {uploadedFiles.length > 0 && (
+{uploadedFiles.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
                 {uploadedFiles.map(f => (
                   <div key={f.tf} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
