@@ -202,6 +202,11 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
     try:
         env = os.environ.copy()
         env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+        # Limpiar caché de tsx/esbuild para evitar versiones stale
+        import glob
+        for d in glob.glob("/tmp/tsx-*") + glob.glob("/tmp/esbuild-*"):
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300,
             cwd=JARVIS_DIR, env=env
@@ -256,6 +261,11 @@ async def backtest_optimize(ticker: str, tfs: str, config_json: str = ""):
     try:
         env = os.environ.copy()
         env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+        # Limpiar caché de tsx/esbuild para evitar versiones stale
+        import glob
+        for d in glob.glob("/tmp/tsx-*") + glob.glob("/tmp/esbuild-*"):
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600,
             cwd=JARVIS_DIR, env=env
