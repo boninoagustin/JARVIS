@@ -605,17 +605,6 @@ export default function BacktestingPanel() {
   const [uploadProgress, setUploadProgress] = useState<{ pct: number; label: string } | null>(null);
   const { runWorkerTask } = useBacktestApi();
 
-  useEffect(() => {
-    if (uploadedFiles.length > 0) {
-      const logs = new Map<string, string[]>();
-      uploadedFiles.forEach(f => logs.set(f.tf, f.lines));
-      const logsArray = Array.from(logs.entries());
-      
-      runWorkerTask('SET_LOGS', { logsArray, ticker }).catch(e => {
-        console.error("Error auto-setting logs in worker after upload", e);
-      });
-    }
-  }, [uploadedFiles, runWorkerTask]);
   const [isRunning, setIsRunning] = useState(false);
 
   const [progress, setProgress] = useState(0);
@@ -803,25 +792,16 @@ export default function BacktestingPanel() {
     }
     try {
       console.log('[UPLOAD] Enviando a Kronos...');
-      setUploadProgress({ pct: 0, label: 'Subiendo...' });
-      const data = await new Promise<any>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', 'http://169.58.163.132:8000/api/backtest/upload');
-        xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            const pct = Math.round((ev.loaded / ev.total) * 100);
-            const mb = Math.round(ev.loaded / 1048576);
-            const totalMb = Math.round(ev.total / 1048576);
-            setUploadProgress({ pct, label: `Subiendo ${mb}/${totalMb} MB` });
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-          else reject(new Error(`HTTP ${xhr.status}`));
-        };
-        xhr.onerror = () => reject(new Error('Error de red'));
-        xhr.send(formData);
-      });
+      setUploadProgress({ pct: 0, label: 'Subiendo al VPS...' });
+      // Simular progreso (fetch no soporta onprogress nativo)
+      const progressTimer = setInterval(() => {
+        setUploadProgress(prev => prev ? { pct: Math.min(prev.pct + 3, 90), label: prev.label } : null);
+      }, 500);
+      const res = await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
+      clearInterval(progressTimer);
+      console.log('[UPLOAD] Kronos responde:', res.status);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
       console.log('[UPLOAD] Respuesta:', data);
       setUploadProgress({ pct: 100, label: '¡Completado!' });
       setTimeout(() => setUploadProgress(null), 1500);
