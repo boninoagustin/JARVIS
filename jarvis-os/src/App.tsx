@@ -71,7 +71,7 @@ function Header({ time }: { time: Date }) {
       console.error('[Header] Error listening to global settings:', err);
     });
     
-    const unsubBot = onSnapshot(doc(db, 'app_settings', 'bot_config'), (botSnap) => {
+    const unsubBot = onSnapshot(doc(db, 'firebase_config', 'dynamic'), (botSnap) => {
       if (botSnap.exists()) {
         setAutoTrading(botSnap.data()?.autoTrading === true);
       }
@@ -137,7 +137,7 @@ function Header({ time }: { time: Date }) {
     try {
       const newValue = !autoTrading;
       setAutoTrading(newValue);
-      await setDoc(doc(db, 'app_settings', 'bot_config'), { autoTrading: newValue }, { merge: true });
+      await setDoc(doc(db, 'firebase_config', 'dynamic'), { autoTrading: newValue }, { merge: true });
       toast(`🤖 Modo Automático ${newValue ? 'ACTIVADO' : 'DESACTIVADO'}`, newValue ? 'success' : 'info');
     } catch (e) {
       console.error(e);
