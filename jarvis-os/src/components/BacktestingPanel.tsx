@@ -1134,7 +1134,7 @@ export default function BacktestingPanel() {
 
       try {
         const payload = {
-            config: { ...baseParams, oteEntryPercent: finalOte, sessions: finalSessions }
+            config: { ...baseParams, oteEntryPercent: finalOte, sessions: finalSessions, tfs: uploadedFiles.map(f => f.tf) }
         };
         
         const res = await runWorkerTask('RUN_BACKTEST', payload);
