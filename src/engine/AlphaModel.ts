@@ -1,4 +1,5 @@
 import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreEvent } from './Types.js';
+import { extractMgmtOverrides } from './Types.js';
 import { predict as mlPredict, isMLActive } from './MLFilter.js';
 
 const DEBUG = false;
@@ -278,12 +279,14 @@ export function evaluateImpulseCore(
 
             let oteEnabled = false;
             let oteMinScore = 8;
+            let oteTriggerCfg: any = null; // 🆕 config del gatillo OTE (genes tuneados)
 
             if (sessionConfig) {
                 if (isChoch) {
                     const tfKey = `oteChoch${triggerTf}` as keyof typeof sessionConfig;
                     const tfConfig = sessionConfig[tfKey] as any;
                     if (tfConfig) {
+                        oteTriggerCfg = tfConfig;
                         oteEnabled = tfConfig.enabled ?? false;
                         oteMinScore = leg.dir === 'BUY' 
                             ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
@@ -296,6 +299,7 @@ export function evaluateImpulseCore(
                     const tfKey = `oteBos${triggerTf}` as keyof typeof sessionConfig;
                     const tfConfig = sessionConfig[tfKey] as any;
                     if (tfConfig) {
+                        oteTriggerCfg = tfConfig;
                         oteEnabled = tfConfig.enabled ?? false;
                         oteMinScore = leg.dir === 'BUY' 
                             ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? 8) 
@@ -354,15 +358,17 @@ export function evaluateImpulseCore(
 
             const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
             const decimals = getDecimals(ticker);
-            const fixedBuffer = calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent);
+            // 🆕 slBuff tuneado por gatillo (auto-tune) tiene prioridad sobre el de sesión/raíz
+            const fixedBuffer = calculateDynamicSlBuffer(ticker, leg.origin, oteTriggerCfg?.slBuff ?? sessionConfig?.slBufferPercent ?? config.slBufferPercent);
             const slBuffer = Math.max(fixedBuffer, (state.atr14 ?? 0) * 0.5); // piso: 0.5×ATR real
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
-            // TP2 del OTE: respeta config.fixedRR sin truncar a la extensión -0.27 (alineado con la ruta live)
+            // TP2 del OTE: respeta el tp2 tuneado del gatillo (o config.fixedRR como fallback) sin truncar a la extensión -0.27
+            const oteRR = oteTriggerCfg?.tp2 ?? config.fixedRR;
             const fixedTP2 = leg.dir === 'BUY'
-                ? entryFill + (risk * config.fixedRR)
-                : entryFill - (risk * config.fixedRR);
+                ? entryFill + (risk * oteRR)
+                : entryFill - (risk * oteRR);
             const reward = Math.abs(fixedTP2 - entryFill); // Se evalúa el R:R contra el TP2 real de la orden
             const rrRatioOTE = risk > 0 ? reward / risk : 1.0;
 
@@ -416,7 +422,9 @@ export function evaluateImpulseCore(
                     bestZone: leg.bestZone || null,
                     marketBias: { ...state.marketBias },
                     tf: tfFormatted,
-                    isChochEntry: false
+                    isChochEntry: false,
+                    // 🆕 genes de gestión tuneados por el auto-tune para ESTE gatillo OTE
+                    mgmtOverrides: extractMgmtOverrides(oteTriggerCfg)
                 };
 
                 const newTrade: ActiveTrade = {
@@ -430,6 +438,8 @@ export function evaluateImpulseCore(
                     score: oteData.points || 0,
                     timestamp: nowMs
                 };
+                // 🆕 Congelar genes de gestión del gatillo en el trade (solo si existen — Firestore-safe)
+                if (oteData.mgmtOverrides) newTrade.mgmtOverrides = oteData.mgmtOverrides;
 
                 // PURE Alpha Model: Return the decision instead of executing it.
                 return { updatedLeg: leg, triggerOte: true, oteData, newTrade };

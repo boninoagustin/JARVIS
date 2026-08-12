@@ -164,6 +164,108 @@ export async function evaluateGlobalRisk(
     }, { isKilled: true, killReason: 'risk-data-unavailable: límites en fail-closed' });
 }
 
+/** 🆕 Límites de riesgo POR ACTIVO (asset_configs/{ticker}) — espejo de evaluateGlobalRisk filtrado por ticker */
+export interface AssetRiskLimits {
+    maxDailyLossR?: number;
+    dailyProfitTargetR?: number;
+    maxTradesPerDay?: number;
+    maxConsecutiveLosses?: number;
+    trailingDrawdownR?: number;
+}
+
+export async function evaluateAssetRisk(
+    db: firestore.Firestore,
+    ticker: string,
+    nowMs: number,
+    limits: AssetRiskLimits,
+    assumedWinR: number = 1.5,
+    isBacktest: boolean = false,
+    backtestSessionId?: string
+): Promise<KillswitchResult> {
+    const hasAnyLimit = (limits.maxDailyLossR ?? 0) > 0 || (limits.dailyProfitTargetR ?? 0) > 0 ||
+        (limits.maxTradesPerDay ?? 0) > 0 || (limits.maxConsecutiveLosses ?? 0) > 0 || (limits.trailingDrawdownR ?? 0) > 0;
+    if (!hasAnyLimit) return { isKilled: false };
+    if (!db) return { isKilled: false };
+
+    const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
+    return withCache(`asset_${namespace}_${ticker}`, nowMs, async () => {
+        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+
+        const tickerVariants = [ticker];
+        if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
+
+        const snapshot = await db.collection('trade_journal')
+            .where('timestamp', '>=', artMidnightMs - 48 * 60 * 60 * 1000)
+            .get();
+
+        if (snapshot.empty) return { isKilled: false } as KillswitchResult;
+
+        const trades = snapshot.docs
+            .map(d => d.data() as Record<string, any>)
+            .filter(t => {
+                const modeMatch = isBacktest ? t.mode === 'backtesting' : t.mode !== 'backtesting';
+                const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
+                return modeMatch && sessionMatch && t.result && tickerVariants.includes(t.ticker);
+            })
+            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= artMidnightMs)
+            .sort((a, b) => (a.closedAt ?? a.timestamp) - (b.closedAt ?? b.timestamp));
+
+        let totalTrades = trades.length;
+        let dailyPnLR = 0;
+        let peakPnLR = 0;
+        let consecutiveLosses = 0;
+        let maxConsecutiveLosses = 0;
+
+        for (const t of trades) {
+            let rMultiple = Number(t.rMultiple);
+            if (!Number.isFinite(rMultiple) || t.rMultiple == null) {
+                if (t.result === 'WIN') rMultiple = assumedWinR;
+                else if (t.result === 'LOSS') rMultiple = -1.0;
+                else rMultiple = 0;
+            }
+
+            dailyPnLR = Math.round((dailyPnLR + rMultiple) * 1000) / 1000;
+            if (dailyPnLR > peakPnLR) peakPnLR = dailyPnLR;
+
+            if (rMultiple < 0) {
+                consecutiveLosses++;
+                if (consecutiveLosses > maxConsecutiveLosses) maxConsecutiveLosses = consecutiveLosses;
+            } else if (rMultiple > 0) {
+                consecutiveLosses = 0;
+            }
+        }
+
+        const trailingDrawdown = Math.round((peakPnLR - dailyPnLR) * 1000) / 1000;
+        let isKilled = false;
+        let killReason = '';
+
+        if ((limits.maxDailyLossR ?? 0) > 0 && dailyPnLR <= -(limits.maxDailyLossR!)) {
+            isKilled = true;
+            killReason = `[${ticker}] Max Daily Loss superado (-${limits.maxDailyLossR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
+        } else if ((limits.dailyProfitTargetR ?? 0) > 0 && dailyPnLR >= limits.dailyProfitTargetR!) {
+            isKilled = true;
+            killReason = `[${ticker}] Daily Profit Target alcanzado (+${limits.dailyProfitTargetR}R | PnL: ${dailyPnLR.toFixed(2)}R)`;
+        } else if ((limits.maxTradesPerDay ?? 0) > 0 && totalTrades >= limits.maxTradesPerDay!) {
+            isKilled = true;
+            killReason = `[${ticker}] Max Trades per Day superado (${limits.maxTradesPerDay} trades | Realizados: ${totalTrades})`;
+        } else if ((limits.maxConsecutiveLosses ?? 0) > 0 && maxConsecutiveLosses >= limits.maxConsecutiveLosses!) {
+            isKilled = true;
+            killReason = `[${ticker}] Max Consecutive Losses superado (${limits.maxConsecutiveLosses} | Racha: ${maxConsecutiveLosses})`;
+        } else if ((limits.trailingDrawdownR ?? 0) > 0 && trailingDrawdown >= limits.trailingDrawdownR!) {
+            isKilled = true;
+            killReason = `[${ticker}] Trailing Drawdown superado (${limits.trailingDrawdownR}R | Drawdown: ${trailingDrawdown.toFixed(2)}R)`;
+        }
+
+        let result = { isKilled: false } as KillswitchResult;
+        if (isKilled) {
+            const endOfDayMs = getArgentinaMidnightMs(artMidnightMs + 30 * 60 * 60 * 1000) - 1000;
+            result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
+        }
+
+        return result;
+    }, { isKilled: true, killReason: `[${ticker}] asset-risk-data-unavailable: límites en fail-closed` });
+}
+
 export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     if (!db) return 0;
     

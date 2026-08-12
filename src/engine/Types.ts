@@ -114,6 +114,27 @@ export interface RadarState {
     lastModified?: number;
 }
 
+/** 🆕 Overrides de gestión por gatillo (auto-tune): se congelan en el trade al entrar */
+export interface TradeMgmtOverrides {
+    partialClosePct?: number;
+    slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+    tp15BeEnabled?: boolean;
+    atrTrailEnabled?: boolean;
+    structuralTrailEnabled?: boolean;
+    tp1StructuralMinRR?: number;
+    minimal_roi?: Record<string, number>;
+}
+
+/** Extrae los genes de gestión tuneados de un trigger config (sin undefined, Firestore-safe) */
+export function extractMgmtOverrides(tfConfig: any): TradeMgmtOverrides | undefined {
+    if (!tfConfig) return undefined;
+    const o: any = {};
+    for (const k of ['partialClosePct', 'slAfterTp1', 'tp15BeEnabled', 'atrTrailEnabled', 'structuralTrailEnabled', 'tp1StructuralMinRR', 'minimal_roi'] as const) {
+        if (tfConfig[k] !== undefined) o[k] = tfConfig[k];
+    }
+    return Object.keys(o).length > 0 ? o : undefined;
+}
+
 export interface ActiveTrade {
     tradeId: string;
     journalId?: string;       
@@ -140,6 +161,8 @@ export interface ActiveTrade {
     managementMode?: 'SCALP' | 'RIDER';
     /** Temporalidad del Rider (ej 'H1', 'H4') — el motor HTF que decide la salida */
     riderTf?: string;
+    /** 🆕 Genes de gestión tuneados por gatillo (auto-tune), congelados al entrar */
+    mgmtOverrides?: TradeMgmtOverrides;
 }
 
 export interface GlobalPortfolioConfig {

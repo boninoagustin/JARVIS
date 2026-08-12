@@ -5,7 +5,7 @@ import { logTrade, recordResult, sendDailyReview } from '../services/journal.js'
 import * as fs from 'fs';
 
 import { z } from 'zod';
-import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema } from '../engine/Types.js';
+import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema, extractMgmtOverrides } from '../engine/Types.js';
 
 type SessionConfig = z.infer<typeof SessionSchema>;
 import { StateStore, createStateStore } from '../engine/StateStore.js';
@@ -24,7 +24,7 @@ import { evaluateNetTrade } from '../engine/FrictionModel.js';
 import { tickFlow } from '../engine/TickFlow.js';
 
 import {
-    evaluateGlobalRisk, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
+    evaluateGlobalRisk, evaluateAssetRisk, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
 } from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
@@ -197,6 +197,12 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     tp1StructuralMinRR?: number;
     /** 🆕 ROI time-decay: {"0":0.015,"30":0.005,"60":0} */
     minimal_roi?: Record<string, number>;
+    /** 🆕 Límites de riesgo por activo (asset_configs/{ticker}) */
+    maxDailyLossR?: number;
+    dailyProfitTargetR?: number;
+    maxConsecutiveLosses?: number;
+    maxTradesPerDay?: number;
+    trailingDrawdownR?: number;
     /** 🏇 RIDER mode config */
     riderEnabled?: boolean;
     riderTf?: string;
@@ -230,7 +236,8 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
 
     if (config) {
         console.log(`[CONFIG] 📋 Usando config de: ${ticker}`);
-        const sessionConfig = config.sessions ? config.sessions[session] : undefined;
+        // 🆕 FIX: el panel exporta la sesión OFF como 'ALL' — fallback para horas fuera de sesión
+        const sessionConfig = config.sessions ? ((config.sessions as any)[session] ?? (config.sessions as any)['ALL']) : undefined;
         return {
             ...globalState.dynamicBotConfig,
             minPointsForBuy: config.minPointsForBuy ?? globalState.dynamicBotConfig.minPointsForBuy,
@@ -251,6 +258,11 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             structuralTrailEnabled: config.structuralTrailEnabled,
             tp1StructuralMinRR: config.tp1StructuralMinRR,
             minimal_roi: config.minimal_roi as Record<string, number> | undefined,
+            maxDailyLossR: (config as any).maxDailyLossR,
+            dailyProfitTargetR: (config as any).dailyProfitTargetR,
+            maxConsecutiveLosses: (config as any).maxConsecutiveLosses,
+            maxTradesPerDay: (config as any).maxTradesPerDay,
+            trailingDrawdownR: (config as any).trailingDrawdownR,
             riderEnabled: config.riderEnabled as boolean | undefined,
             riderTf: config.riderTf as string | undefined,
             sessions: config.sessions as any
@@ -347,6 +359,13 @@ if (db) {
                     atrTrailEnabled: data.atrTrailEnabled,
                     structuralTrailEnabled: data.structuralTrailEnabled,
                     tp1StructuralMinRR: data.tp1StructuralMinRR,
+                    // 🆕 FIX: campos que el panel exporta pero el listener descartaba
+                    minimal_roi: data.minimal_roi,
+                    maxDailyLossR: data.maxDailyLossR ?? 0,
+                    dailyProfitTargetR: data.dailyProfitTargetR ?? 0,
+                    maxConsecutiveLosses: data.maxConsecutiveLosses ?? 0,
+                    maxTradesPerDay: data.maxTradesPerDay ?? 0,
+                    trailingDrawdownR: data.trailingDrawdownR ?? 0,
                     sessions: data.sessions as any
                 });
             });
@@ -493,9 +512,39 @@ async function evaluateGlobalKillswitch(nowMs: number, store: any, isBacktest: b
     return false;
 }
 
+// 🆕 Throttle de notificaciones de killswitch por activo (1 aviso/hora por ticker)
+const assetKillNotified = new Map<string, number>();
+
 /**
- * 🆕 v7.1: Cuenta los trades SELL ejecutados hoy para un ticker específico.
+ * 🆕 Killswitch POR ACTIVO: enforce de maxDailyLossR / dailyProfitTargetR / maxTradesPerDay /
+ * maxConsecutiveLosses / trailingDrawdownR configurados en asset_configs/{ticker}.
  */
+async function evaluateAssetKillswitch(ticker: string, nowMs: number, store: any, isBacktest: boolean = false): Promise<boolean> {
+    if (isBacktest) return false;
+    const cfg = getConfigForTicker(ticker, nowMs);
+    const limits = {
+        maxDailyLossR: cfg.maxDailyLossR,
+        dailyProfitTargetR: cfg.dailyProfitTargetR,
+        maxTradesPerDay: cfg.maxTradesPerDay,
+        maxConsecutiveLosses: cfg.maxConsecutiveLosses,
+        trailingDrawdownR: cfg.trailingDrawdownR,
+    };
+    const res = await evaluateAssetRisk(db, ticker, nowMs, limits, store.globalPortfolioConfig?.assumedWinR ?? 1.5);
+    if (res.isKilled) {
+        const lastNotif = assetKillNotified.get(ticker) ?? 0;
+        if (nowMs - lastNotif > 60 * 60 * 1000) {
+            assetKillNotified.set(ticker, nowMs);
+            const msg = `🚨 <b>[KILLSWITCH ACTIVO: ${ticker}]</b> 🚨\n\n` +
+                `⚠️ <b>Activo bloqueado hasta el fin del día (reseteo medianoche ART)</b>\n` +
+                `📋 <b>Causa:</b> ${res.killReason}\n\n` +
+                `💡 <i>Límite configurado en asset_configs/${ticker}. Las señales de este activo se ignorarán hoy.</i>`;
+            sendTelegramAlert(msg).catch(() => { });
+        }
+        console.log(`[KILLSWITCH ${ticker}] ⛔ Activo bloqueado. Causa: ${res.killReason}`);
+        return true;
+    }
+    return false;
+}
 async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
     return await pmCountDailySells(db, ticker, nowMs, isBacktest, backtestSessionId);
 }
@@ -748,10 +797,6 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
             // ⚙️ Gestión de trades configurada por activo (asset_configs en Firestore).
             // Defaults = comportamiento histórico (parcial 50%, SL al 50% del riesgo, TP1.5 y trail ATR activos).
-            const mgmtPartial = Math.min(Math.max(config.partialClosePct ?? 0.5, 0), 1);
-            const mgmtSlMode: 'midpoint' | 'breakeven' | 'none' = config.slAfterTp1 ?? 'midpoint';
-            const mgmtTp15 = config.tp15BeEnabled ?? true;
-            const mgmtAtrTrail = config.atrTrailEnabled ?? true;
 
             if (!isKillswitched) {
                 // 🗺️ Estirar patas Macro si están activas
@@ -788,9 +833,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         continue;
                     }
 
+                    // 🆕 Overrides por gatillo (auto-tune): congelados en el trade al entrar; fallback a config raíz
+                    const mgmtPartialT = Math.min(Math.max(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? 0.5, 0), 1);
+                    const mgmtSlModeT: 'midpoint' | 'breakeven' | 'none' = trade.mgmtOverrides?.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint';
+                    const mgmtTp15T = trade.mgmtOverrides?.tp15BeEnabled ?? config.tp15BeEnabled ?? true;
+                    const mgmtAtrTrailT = trade.mgmtOverrides?.atrTrailEnabled ?? config.atrTrailEnabled ?? true;
+
                     // 🆕 ROI TIME-DECAY: si el trade pierde momentum, bajar expectativa de ganancia
                     // según la tabla minimal_roi del activo/sesión. Inspirado en Freqtrade.
-                    const roiTable = config.minimal_roi;
+                    const roiTable = trade.mgmtOverrides?.minimal_roi ?? config.minimal_roi;
                     if (roiTable && Object.keys(roiTable).length > 0 && !trade.tp1Hit) {
                         const tradeAgeMin = tradeAgeMs / 60000;
                         const [effectiveROI, roiLabel] = getEffectiveROI(tradeAgeMin, roiTable);
@@ -883,12 +934,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             trade.tp1Hit = true;
                             trade.originalSlPrice = trade.slPrice;
 
-                            // 🆕 RISK REDUCTION post-TP1: SL según mgmtSlMode ('midpoint' | 'breakeven' | 'none')
+                            // 🆕 RISK REDUCTION post-TP1: SL según mgmtSlModeT ('midpoint' | 'breakeven' | 'none')
                             const distanceToEntry = trade.entryPrice - trade.originalSlPrice;
                             let targetSl: number | null = null;
-                            if (mgmtSlMode === 'midpoint') {
+                            if (mgmtSlModeT === 'midpoint') {
                                 targetSl = parseFloat((trade.originalSlPrice + (distanceToEntry * 0.5)).toFixed(5));
-                            } else if (mgmtSlMode === 'breakeven') {
+                            } else if (mgmtSlModeT === 'breakeven') {
                                 targetSl = parseFloat(trade.entryPrice.toFixed(5));
                             }
 
@@ -904,10 +955,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             // 🏇 RIDER TRANSITION (EA31337): si la sesión tiene riderEnabled y SL→breakeven,
                             // transferir gestión del trade a la temporalidad superior para salida estructural.
-                            const sessionCfg = config.sessions?.[getCurrentSession(nowTrade)] as any;
+                            const sessionCfg = (config.sessions?.[getCurrentSession(nowTrade)] ?? (config.sessions as any)?.['ALL']) as any;
                             const riderEnabled = sessionCfg?.riderEnabled ?? config.riderEnabled ?? false;
                             const riderTf = sessionCfg?.riderTf ?? config.riderTf ?? 'H1';
-                            if (riderEnabled && mgmtSlMode === 'breakeven' && !trade.managementMode) {
+                            if (riderEnabled && mgmtSlModeT === 'breakeven' && !trade.managementMode) {
                                 trade.managementMode = 'RIDER';
                                 trade.riderTf = riderTf;
                                 trade.tp2Price = 0; // deshabilitar TP2 fijo — la salida es estructural
@@ -939,7 +990,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                             }
 
-                            const slModeText = mgmtSlMode === 'breakeven' ? 'Breakeven' : mgmtSlMode === 'none' ? 'Sin cambios' : 'Reducido 50%';
+                            const slModeText = mgmtSlModeT === 'breakeven' ? 'Breakeven' : mgmtSlModeT === 'none' ? 'Sin cambios' : 'Reducido 50%';
                             const tp1Msg = `🟡 <b>TP1 ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
                                 `🕒 Apertura: ${openTimeStr}\n` +
                                 `📥 Entrada: ${trade.entryPrice}\n` +
@@ -947,17 +998,17 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
                                 `🛑 SL (${slModeText}): ${trade.slPrice}\n` +
                                 `⏱️ Duración: ${durationStr}\n\n` +
-                                (mgmtPartial > 0
-                                    ? `💡 Toma parcial ejecutada (${Math.round(mgmtPartial * 100)}%). Stop Loss: ${slModeText}.`
+                                (mgmtPartialT > 0
+                                    ? `💡 Toma parcial ejecutada (${Math.round(mgmtPartialT * 100)}%). Stop Loss: ${slModeText}.`
                                     : `💡 Sin toma parcial (0%). La posición completa sigue abierta hacia TP2.`);
                             if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => { });
-                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Parcial ${Math.round(mgmtPartial * 100)}%, SL: ${slModeText}`);
+                            console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Parcial ${Math.round(mgmtPartialT * 100)}%, SL: ${slModeText}`);
 
                             // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
-                                    if (mgmtPartial > 0) await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartial * 100));
+                                    if (mgmtPartialT > 0) await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartialT * 100));
                                     if (targetSl === null) return; // slAfterTp1 'none': no tocar el SL
                                     const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, targetSl);
                                     if (success) {
@@ -1021,7 +1072,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
-                    if (trade.tp1Hit && !trade.slHalfwayHit && mgmtTp15) {
+                    if (trade.tp1Hit && !trade.slHalfwayHit && mgmtTp15T) {
                         const riskDist = Math.abs(trade.tp1Price - trade.entryPrice);
                         const tp1_5Price = trade.direction === 'BUY' ? trade.tp1Price + (riskDist * 0.5) : trade.tp1Price - (riskDist * 0.5);
 
@@ -1086,7 +1137,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // Complemento PING: trailing continuo post-TP1 por distancia
-                    if (trade.tp1Hit && mgmtAtrTrail) {
+                    if (trade.tp1Hit && mgmtAtrTrailT) {
                         const atrThreshold = (state.atr14 ?? 0) * 1.5;
                         const ratchetStep = (state.atr14 ?? 0) * 0.25;
                         if (trade.direction === 'BUY') {
@@ -1133,7 +1184,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             trade.tp2Hit = true;
                             const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
                             const pnlTp2Pct = Math.abs(trade.tp2Price - trade.entryPrice) / trade.entryPrice * 100;
-                            const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * mgmtPartial + pnlTp2Pct * (1 - mgmtPartial)) : pnlTp2Pct;
+                            const finalPnlPct = trade.tp1Hit ? (pnlTp1Pct * mgmtPartialT + pnlTp2Pct * (1 - mgmtPartialT)) : pnlTp2Pct;
 
                             const originalSl = trade.originalSlPrice ?? trade.slPrice;
                             const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
@@ -1210,7 +1261,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
                         const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
                         const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * mgmtPartial - currentSlLossPct * (1 - mgmtPartial)) : -currentSlLossPct;
+                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * mgmtPartialT - currentSlLossPct * (1 - mgmtPartialT)) : -currentSlLossPct;
                         const rMultiple = initialSlLossPct > 0 ? parseFloat((finalPnlPct / initialSlLossPct).toFixed(4)) : 0;
                         const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BREAKEVEN' : 'LOSS') : 'LOSS';
                         const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
@@ -1868,9 +1919,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 }
 
                 const currentSession = getCurrentSession(nowMs);
-                const sessionConfig = config.sessions?.[currentSession];
+                // 🆕 FIX: fallback a 'ALL' (el panel exporta la sesión OFF como ALL)
+                const sessionConfig = config.sessions?.[currentSession] ?? (config.sessions as any)?.['ALL'];
 
                 let triggerEnabled = false;
+                let liveTriggerCfg: any = null; // 🆕 config del gatillo que dispara (genes tuneados)
                 let minPtsRequired = currentDirection === 'BUY'
                     ? (sessionThresholds?.buy || config.minPointsForBuy)
                     : (sessionThresholds?.sell || config.minPointsForSell);
@@ -1885,6 +1938,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     if (triggerType === 'CHoCH🚀') {
                         const tfConfig = sessionConfig[tfKeyChoch] as any;
                         if (tfConfig) {
+                            liveTriggerCfg = tfConfig;
                             triggerEnabled = tfConfig.enabled ?? false;
                             minPtsRequired = currentDirection === 'BUY'
                                 ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
@@ -1896,6 +1950,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     } else if (triggerType === 'BOS🔨') {
                         const tfConfig = sessionConfig[tfKeyBos] as any;
                         if (tfConfig) {
+                            liveTriggerCfg = tfConfig;
                             triggerEnabled = tfConfig.enabled ?? false;
                             minPtsRequired = currentDirection === 'BUY'
                                 ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
@@ -1956,10 +2011,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
                             const decimals = getDecimals(ticker);
                             const currentSession = getCurrentSession(nowMs);
-                            const sessionConfig = config.sessions?.[currentSession];
+                            const sessionConfig = config.sessions?.[currentSession] ?? (config.sessions as any)?.['ALL'];
                             // 🔧 FIX: usar buffer configurado (no 0) + piso mínimo para
                             // que cTrader acepte el SL/TP (rechaza distancias < ~10 pips forex).
-                            const rawBuffer = sessionConfig?.slBufferPercent ?? config.slBufferPercent;
+                            const rawBuffer = liveTriggerCfg?.slBuff ?? sessionConfig?.slBufferPercent ?? config.slBufferPercent;
                             let slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, rawBuffer);
                             // Piso absoluto: 10 pips forex (0.0010), 100 puntos índices, 1.0 crypto/commodities
                             const minPipDist = getMinPipDistance(ticker);
@@ -1973,8 +2028,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 : currentPrice - riskDist;
                             const tp1 = fixedTP1.toFixed(decimals);
                             const fixedTP2 = currentDirection === 'BUY'
-                                ? currentPrice + (riskDist * config.fixedRR)
-                                : currentPrice - (riskDist * config.fixedRR);
+                                ? currentPrice + (riskDist * (liveTriggerCfg?.tp2 ?? config.fixedRR))
+                                : currentPrice - (riskDist * (liveTriggerCfg?.tp2 ?? config.fixedRR));
                             const tp2 = fixedTP2.toFixed(decimals);
                             const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -1986,7 +2041,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true,
-                                tf: readableTf
+                                tf: readableTf,
+                                // 🆕 genes de gestión tuneados por el auto-tune para ESTE gatillo
+                                mgmtOverrides: extractMgmtOverrides(liveTriggerCfg)
                             };
                             let takeChoch = false;
                             let disableOte = false;
@@ -2358,6 +2415,16 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             return;
         }
 
+        // 🆕 Killswitch POR ACTIVO (límites de asset_configs/{ticker})
+        if (await evaluateAssetKillswitch(ticker, nowMs, store, isBacktest)) {
+            console.log(`[ASSET KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por límite de riesgo del activo.`);
+            state.lastGatillo.status = 'BLOCKED_ASSET';
+            safeSet(state).catch(() => { });
+            store.activeTrades.delete(oteData.tradeId);
+            if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+            return;
+        }
+
         if (nowMs < store.streakKillswitchUntil) {
             const remainingMin = Math.round((store.streakKillswitchUntil - nowMs) / 60000);
             console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${store.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
@@ -2718,6 +2785,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     score: oteData.points || 0,
                     timestamp: nowMs, isBacktest: isBacktest
                 };
+                // 🆕 Congelar genes de gestión del gatillo en el trade (Firestore-safe: solo si existen)
+                const oteMgmt = (oteData as any).mgmtOverrides;
+                if (oteMgmt) activeTrade.mgmtOverrides = oteMgmt;
                 store.activeTrades.set(oteData.tradeId, activeTrade);
                 if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => { });
                 console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
@@ -2743,6 +2813,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             if (!cfg.sessionEnabled) return 'BLOCKED_SESSION';
                             if (store.globalKillswitches['GLOBAL_SYSTEM'] || store.globalKillswitches[ticker]) return 'BLOCKED_KILLSWITCH';
                             if (await evaluateGlobalKillswitch(nowLive, store, isBacktest)) return 'BLOCKED_GLOBAL';
+                            if (await evaluateAssetKillswitch(ticker, nowLive, store, isBacktest)) return 'BLOCKED_ASSET';
                             if (nowLive < store.streakKillswitchUntil) return 'BLOCKED_RACHA';
                             if (nowLive < store.vixKillswitchUntil) return 'BLOCKED_VIX';
                             // 🌊 TickFlow: spread anómalo = probable noticia/iliquidez → no ejecutar
