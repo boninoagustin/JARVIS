@@ -784,25 +784,32 @@ export default function BacktestingPanel() {
   const handleFilesUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
+    console.log('[UPLOAD] Iniciando subida de', files.length, 'archivos. ticker:', ticker);
     const formData = new FormData();
     formData.append('ticker', ticker);
     const newFiles: UploadedFile[] = [];
     for (const file of Array.from(files)) {
+      console.log('[UPLOAD] Procesando:', file.name, file.size, 'bytes');
       const chunk = await file.slice(0, 12000).text();
       let tf = '3';
       const m = chunk.match(/TF:\s*([a-zA-Z0-9]+)/i);
       if (m) tf = m[1].toUpperCase();
-      // Estimar lineCount del sample (instantáneo, sin leer todo el archivo)
       const sampleLines = chunk.split('\n').length;
       const lineCount = Math.round((file.size / 12000) * sampleLines);
-      // Subir directo sin pasar por RAM
       formData.append('files', file, `pine-logs-SMC Master_${tf}.csv`);
       newFiles.push({ name: file.name, tf, lines: [], lineCount });
+      console.log('[UPLOAD] Detectado TF:', tf, 'lineCount~:', lineCount);
     }
     try {
-      await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
+      console.log('[UPLOAD] Enviando a Kronos...');
+      const res = await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
+      console.log('[UPLOAD] Kronos responde:', res.status);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      console.log('[UPLOAD] Respuesta:', data);
       toast(`✅ ${newFiles.length} archivos subidos al VPS`, 'success');
     } catch (err: any) {
+      console.error('[UPLOAD] Falló:', err);
       toast(`⚠️ Upload al VPS falló: ${err.message}`, 'warning');
     }
     setUploadedFiles(prev => {
