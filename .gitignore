@@ -16,3 +16,4 @@ __pycache__
 kronos_api/model/
 scratch/
 logs/
+firebase-key.json

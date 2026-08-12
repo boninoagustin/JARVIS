@@ -1,32 +1,22 @@
 import admin from 'firebase-admin';
-import { config } from '../config.js';
-import fs from 'fs';
+import fs from 'node:fs';
 
-// Initialize Firebase Admin
 try {
     let serviceAccount;
-    let credPath: string | undefined = config.GOOGLE_APPLICATION_CREDENTIALS;
-    // dotenv puede agregar comillas al valor del .env
-    if (credPath) credPath = credPath.replace(/^["']|["']$/g, '');
+    const credPath = '/opt/JARVIS/service-account.json';
 
-    if (credPath && credPath.startsWith('{')) {
-        // Assume raw JSON string
-        serviceAccount = JSON.parse(credPath);
-    } else if (fs.existsSync(credPath)) {
-        // Assume file path
+    if (fs.existsSync(credPath)) {
         serviceAccount = JSON.parse(fs.readFileSync(credPath, 'utf8'));
     }
 
     if (serviceAccount) {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
+        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
         console.log('[DATABASE] Firebase Cloud Memory initialized.');
     } else {
-        console.warn('[DATABASE] No valid Firebase credentials found via GOOGLE_APPLICATION_CREDENTIALS.');
+        console.warn('[DATABASE] No valid Firebase credentials found.');
     }
 } catch (err: any) {
-    console.error('[DATABASE] Error initializing Firebase:', err.message);
+    console.error('[DATABASE] Error:', err.message);
 }
 
 let firestoreInstance: any = null;

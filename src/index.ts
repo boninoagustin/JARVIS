@@ -38,7 +38,7 @@ async function main() {
 
     if (!db) {
         console.error('[FATAL] Firebase is disabled or missing credentials. Hybrid Cloud Mode needs Firebase to receive messages.');
-        process.exit(1);
+        console.warn('[WARN] Sin Firebase. Operando con defaults.');
     }
 
     try {
@@ -59,6 +59,11 @@ async function main() {
         
         // Emular start()
         console.log('[SYSTEM] --- QUEUE LISTENER ESTABLISHED. Ready for messages ---');
+
+        // Long polling directo a Telegram (sin webhook ni proxy Vercel)
+        bot.start({
+            onStart: () => console.log('[TELEGRAM] Long polling activo (directo a api.telegram.org)'),
+        }).catch((err: any) => console.error('[TELEGRAM] Long polling error:', err.message));
 
         unsubscribers.push(db.collection('telegram_incoming')
             .where('status', '==', 'pending')

@@ -180,11 +180,11 @@ export default function RadarHeatmap() {
     setLoading(true);
 
     // 🔧 WebSocket en vez de Firestore (cuota agotada). El backend emite
-    // { type: 'RADAR_STATE', ticker, state } por cada ticker vía ws://localhost:8081.
+    // { type: 'RADAR_STATE', ticker, state } por cada ticker vía ws://169.58.163.132:8081.
     const stateMap = new Map<string, RadarState>();
 
     import('../services/wsClient').then(({ wsClient }) => {
-      wsClient.connect('ws://localhost:8081');
+      wsClient.connect('ws://169.58.163.132:8081');
 
       const unsub = wsClient.subscribe((msg: any) => {
         if (msg.type !== 'RADAR_STATE') return;
@@ -206,7 +206,7 @@ export default function RadarHeatmap() {
       return () => unsub();
     }).catch((err) => {
       console.error('[Radar] Error conectando WebSocket:', err);
-      setError('Error conectando al backend (ws://localhost:8081).');
+      setError('Error conectando al backend (ws://169.58.163.132:8081).');
       setLoading(false);
     });
   }, []);

@@ -15,15 +15,9 @@ const ipv4Agent = new https.Agent({
  * Exported for modular use in both local index.ts (Long Polling)
  * and Vercel serverless functions (Webhooks).
  */
-export const bot = new Bot(config.TELEGRAM_BOT_TOKEN, {
-    client: {
-        buildUrl: (root, token, method) => {
-            // Local PC: override to proxy via Vercel
-            const proxyUrl = 'https://jarvis-seven-kappa.vercel.app/api/proxy';
-            return `${proxyUrl}?method=${method}`;
-        }
-    }
-});
+// VPS: conexion directa a api.telegram.org (el ISP local bloqueaba Telegram,
+// por eso existia el proxy Vercel. En el VPS no hace falta).
+export const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 
 // Whitelist Security
 const whitelistMiddleware = async (ctx: Context, next: NextFunction) => {
