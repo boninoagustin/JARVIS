@@ -12,11 +12,8 @@ const ipv4Agent = new https.Agent({
 
 /**
  * JARVIS TELEGRAM CLIENT
- * Exported for modular use in both local index.ts (Long Polling)
- * and Vercel serverless functions (Webhooks).
+ * Conexión directa a api.telegram.org vía long polling (sin proxy ni webhooks).
  */
-// VPS: conexion directa a api.telegram.org (el ISP local bloqueaba Telegram,
-// por eso existia el proxy Vercel. En el VPS no hace falta).
 export const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 
 // Whitelist Security

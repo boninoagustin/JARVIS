@@ -42,7 +42,7 @@ async function main() {
     }
 
     try {
-        console.log('[TELEGRAM] Fetching bot info via Vercel proxy...');
+        console.log('[TELEGRAM] Fetching bot info...');
         await bot.init();
         console.log(`[SYSTEM] JARVIS is online as @${bot.botInfo.username}`);
 

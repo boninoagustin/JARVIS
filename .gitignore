@@ -17,3 +17,4 @@ kronos_api/model/
 scratch/
 logs/
 firebase-key.json
+firebase_init.cjs

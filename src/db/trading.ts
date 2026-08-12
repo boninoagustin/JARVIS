@@ -928,7 +928,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             : lowPrice <= trade.tp1Price;
 
                         if (tp1Hit) {
-                            // 🛡️ FILTRO ANTI-DUPLICADOS (Vercel Race Condition)
+                            // 🛡️ FILTRO ANTI-DUPLICADOS
                             if (isDuplicate(`TP1_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             trade.tp1Hit = true;
