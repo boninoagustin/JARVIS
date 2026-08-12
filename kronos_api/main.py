@@ -1,7 +1,11 @@
 import os
 import io
+import json
+import subprocess
+import tempfile
+import shutil
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -43,24 +47,8 @@ class PredictRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    global tokenizer, kronos_model, predictor
-    if not MODEL_AVAILABLE:
-        print("Model imports failed. API will run but /predict will return 503.")
-        return
-        
-    print("Loading Kronos models from HuggingFace Hub... This might take a while on first run.")
-    try:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {device}")
-        
-        # Load small model for less RAM usage by default
-        tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
-        kronos_model = Kronos.from_pretrained("NeoQuasar/Kronos-small").to(device)
-        
-        predictor = KronosPredictor(kronos_model, tokenizer, max_context=512)
-        print("Models loaded successfully!")
-    except Exception as e:
-        print(f"Error loading models on startup: {e}")
+    """Modelo ML se carga lazy en /predict. Server arranca inmediato para backtesting."""
+    print("Kronos API ready. Modelo ML se cargará en el primer /predict.")
 
 @app.get("/health")
 async def health():
@@ -72,8 +60,22 @@ async def health():
 
 @app.post("/predict")
 async def predict(req: PredictRequest):
+    global tokenizer, kronos_model, predictor
+    if not MODEL_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Kronos model is not available (missing dependencies).")
+    
+    # Lazy load on first predict call
     if predictor is None:
-        raise HTTPException(status_code=503, detail="Kronos model is not loaded or not available.")
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"[Kronos] Loading models on first /predict call (device: {device})...")
+            tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
+            kronos_model = Kronos.from_pretrained("NeoQuasar/Kronos-small").to(device)
+            predictor = KronosPredictor(kronos_model, tokenizer, max_context=512)
+            print("[Kronos] Models loaded successfully!")
+        except Exception as e:
+            print(f"[Kronos] Error loading models: {e}")
+            raise HTTPException(status_code=503, detail=f"Failed to load model: {e}")
         
     if len(req.klines) == 0:
         raise HTTPException(status_code=400, detail="Empty klines array provided.")
@@ -159,3 +161,119 @@ async def predict(req: PredictRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── BACKTEST ENDPOINTS ────────────────────────────────────────────────────────
+
+class BacktestConfig(BaseModel):
+    minBuyPoints: float = 5
+    minSellPoints: float = 5
+    slBuffer: float = 0.0015
+    fixedRR: float = 1.5
+    entryTrigger: str = "SMART"
+    partialClosePct: float = 0.5
+    slAfterTp1: str = "midpoint"
+    tp15BeEnabled: bool = True
+    atrTrailEnabled: bool = True
+    structuralTrailEnabled: bool = False
+    spreadPips: float = 1.5
+    minRR: float = 0.75
+
+JARVIS_DIR = "/opt/JARVIS"
+NODE_BIN = "/root/.nvm/versions/node/v24.19.0/bin/node"
+TSX_BIN = "/root/.nvm/versions/node/v24.19.0/bin/npx"
+
+
+@app.post("/api/backtest/run")
+async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
+    """
+    Ejecuta backtesting contra archivos CSV existentes en el VPS.
+    ticker: 'BTCUSD', tfs: 'M5,M15,H1,H4,D1'
+    config_json: JSON con parámetros (opcional)
+    """
+    script = os.path.join(JARVIS_DIR, "scripts", "backtest_api.ts")
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="Script de backtesting no encontrado en el VPS")
+    
+    cmd = [TSX_BIN, "tsx", script, ticker, tfs]
+    if config_json:
+        cmd.append(config_json)
+    
+    try:
+        env = os.environ.copy()
+        env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+            cwd=JARVIS_DIR, env=env
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Backtest error: {result.stderr[:500]}")
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Backtest excedió el tiempo límite (5 min)")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=f"Respuesta inválida del backtest: {result.stdout[:300]}")
+
+
+@app.post("/api/backtest/upload")
+async def backtest_upload(
+    ticker: str,
+    files: list[UploadFile] = File(...)
+):
+    """
+    Sube archivos CSV de logs SMC al VPS para backtesting.
+    Los archivos se guardan en /opt/JARVIS/logs/{ticker}/history_exported/
+    """
+    dest_dir = os.path.join(JARVIS_DIR, "logs", ticker.lower(), "history_exported")
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    saved = []
+    for f in files:
+        # Solo aceptar CSVs de logs SMC
+        if not f.filename or not f.filename.startswith("pine-logs-SMC"):
+            continue
+        dest = os.path.join(dest_dir, f.filename)
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(f.file, out)
+        saved.append(f.filename)
+    
+    return {"status": "ok", "ticker": ticker, "saved": saved, "dir": dest_dir}
+
+
+@app.post("/api/backtest/optimize")
+async def backtest_optimize(ticker: str, tfs: str, config_json: str = ""):
+    """
+    Auto-Tune Global: GA para encontrar la mejor configuración.
+    """
+    script = os.path.join(JARVIS_DIR, "scripts", "backtest_api.ts")
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="Script no encontrado")
+    
+    cmd = [TSX_BIN, "tsx", script, ticker, tfs, "--optimize"]
+    if config_json:
+        cmd.append(config_json)
+    
+    try:
+        env = os.environ.copy()
+        env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
+            cwd=JARVIS_DIR, env=env
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Optimize error: {result.stderr[:500]}")
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Optimización excedió el tiempo límite (10 min)")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=f"Respuesta inválida: {result.stdout[:300]}")
+
+
+@app.get("/api/backtest/files")
+async def backtest_files(ticker: str):
+    """Lista los archivos CSV disponibles para un ticker."""
+    ticker_dir = os.path.join(JARVIS_DIR, "logs", ticker.lower(), "history_exported")
+    if not os.path.exists(ticker_dir):
+        return {"ticker": ticker, "files": []}
+    files = [f for f in os.listdir(ticker_dir) if f.startswith("pine-logs-SMC")]
+    return {"ticker": ticker, "files": sorted(files), "dir": ticker_dir}
