@@ -617,10 +617,12 @@ export default function BacktestingPanel() {
       const filesData = await filesRes.json();
       const TF_MAP2: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};
       const files = (filesData.files || []).map((f: any) => {
-        const m = f.match(/Master_([^.]+)/);
+        const name = typeof f === 'string' ? f : f.name;
+        const m = name.match(/Master_([^.]+)/);
         const raw = m ? m[1] : '';
         const tf = TF_MAP2[raw] || raw;
-        return { name: f, tf, lines: [], lineCount: 0 };
+        const lineCount = typeof f === 'string' ? 0 : (f.lines || 0);
+        return { name, tf, lines: [], lineCount };
       });
       setUploadedFiles(files.sort((a: any, b: any) => (TF_ORDER[a.tf] ?? 99) - (TF_ORDER[b.tf] ?? 99)));
     } catch (err: any) {
@@ -637,12 +639,13 @@ export default function BacktestingPanel() {
       .then(data => {
         const TF_MAP: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};
         const files = (data.files || []).map((f: any) => {
-          const m = f.match(/Master_([^.]+)/);
+          const name = typeof f === 'string' ? f : f.name;
+          const m = name.match(/Master_([^.]+)/);
           const raw = m ? m[1] : '';
           const tf = TF_MAP[raw] || raw;
-          return { name: f, tf, lines: [], lineCount: 0 };
+          const lineCount = typeof f === 'string' ? 0 : (f.lines || 0);
+          return { name, tf, lines: [], lineCount };
         });
-        // Deducplicar: solo un archivo por TF (prefiere el que tenga mejor nombre)
         const seen = new Set<string>();
         const deduped = files.filter((f: any) => {
           if (seen.has(f.tf)) return false;

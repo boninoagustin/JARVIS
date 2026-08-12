@@ -332,4 +332,13 @@ async def backtest_files(ticker: str):
     if not os.path.exists(ticker_dir):
         return {"ticker": ticker, "files": []}
     files = [f for f in os.listdir(ticker_dir) if f.startswith("pine-logs-SMC")]
-    return {"ticker": ticker, "files": sorted(files), "dir": ticker_dir}
+    # Incluir conteo de líneas para mostrar en el panel
+    file_info = []
+    for f in sorted(files):
+        try:
+            with open(os.path.join(ticker_dir, f), "rb") as fh:
+                lines = sum(1 for _ in fh)
+        except Exception:
+            lines = 0
+        file_info.append({"name": f, "lines": lines})
+    return {"ticker": ticker, "files": file_info, "dir": ticker_dir}
