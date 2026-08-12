@@ -602,6 +602,7 @@ export default function BacktestingPanel() {
 
 
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<{ pct: number; label: string } | null>(null);
   const { runWorkerTask } = useBacktestApi();
 
   useEffect(() => {
@@ -802,13 +803,31 @@ export default function BacktestingPanel() {
     }
     try {
       console.log('[UPLOAD] Enviando a Kronos...');
-      const res = await fetch('http://169.58.163.132:8000/api/backtest/upload', { method: 'POST', body: formData });
-      console.log('[UPLOAD] Kronos responde:', res.status);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      setUploadProgress({ pct: 0, label: 'Subiendo...' });
+      const data = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', 'http://169.58.163.132:8000/api/backtest/upload');
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const pct = Math.round((ev.loaded / ev.total) * 100);
+            const mb = Math.round(ev.loaded / 1048576);
+            const totalMb = Math.round(ev.total / 1048576);
+            setUploadProgress({ pct, label: `Subiendo ${mb}/${totalMb} MB` });
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else reject(new Error(`HTTP ${xhr.status}`));
+        };
+        xhr.onerror = () => reject(new Error('Error de red'));
+        xhr.send(formData);
+      });
       console.log('[UPLOAD] Respuesta:', data);
+      setUploadProgress({ pct: 100, label: '¡Completado!' });
+      setTimeout(() => setUploadProgress(null), 1500);
       toast(`✅ ${newFiles.length} archivos subidos al VPS`, 'success');
     } catch (err: any) {
+      setUploadProgress(null);
       console.error('[UPLOAD] Falló:', err);
       toast(`⚠️ Upload al VPS falló: ${err.message}`, 'warning');
     }
@@ -2064,6 +2083,18 @@ export default function BacktestingPanel() {
               </div>
             </div>
             <input ref={fileInputRef} type="file" accept=".csv,.txt,.log" multiple onChange={handleFilesUpload} style={{ display: 'none' }} />
+
+            {uploadProgress && (
+              <div style={{ marginBottom: '12px', padding: '10px 14px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{uploadProgress.label}</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)' }}>{uploadProgress.pct}%</span>
+                </div>
+                <div style={{ width: '100%', height: '4px', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ width: `${uploadProgress.pct}%`, height: '100%', backgroundColor: 'var(--accent-gold)', borderRadius: '2px', transition: 'width 0.3s ease' }} />
+                </div>
+              </div>
+            )}
 
             {uploadedFiles.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
