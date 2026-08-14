@@ -18,3 +18,5 @@ scratch/
 logs/
 firebase-key.json
 firebase_init.cjs
+radar_states_*.json
+venv/
