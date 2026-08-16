@@ -39,6 +39,7 @@ interface PendingConfirmation {
     journalId?: string;      // Journal entry ID
     isChochEntry?: boolean;
     sarPendingClose?: any;   // To close old trade ONLY after user approves new SAR trade
+    riskMult?: number;       // 🆕 TimesFM F1: multiplicador de riesgo (default 1)
 }
 
 // Map: tradeId → pending confirmation data
@@ -72,6 +73,7 @@ export async function sendTradeConfirmation(data: {
     journalId?: string;
     isChochEntry?: boolean;
     sarPendingClose?: any;
+    riskMult?: number;       // 🆕 TimesFM F1
 }): Promise<void> {
     // Check if cTrader is configured (if not, skip confirmation flow)
     if (!config.CTRADER_CLIENT_ID || !config.CTRADER_ACCESS_TOKEN) {
@@ -98,13 +100,16 @@ export async function sendTradeConfirmation(data: {
         journalId: data.journalId,
         isChochEntry: data.isChochEntry,
         sarPendingClose: data.sarPendingClose,
+        riskMult: data.riskMult ?? 1,
     };
 
     pendingConfirmations.set(data.tradeId, pending);
 
     // Build confirmation message with execution details
-    const riskPercent = config.CTRADER_RISK_PERCENT;
+    const riskMult = data.riskMult ?? 1;
+    const riskPercent = config.CTRADER_RISK_PERCENT * riskMult;
     const slDistPercent = (Math.abs(data.entryPrice - data.slPrice) / data.entryPrice * 100).toFixed(3);
+    const timesfmNote = riskMult < 1 ? ` (×${riskMult} TimesFM)` : '';
     
     const confirmMsg = `\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -233,6 +238,7 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
         tp1Price: pending.tp1Price,
         tp2Price: pending.tp2Price,
         tradeId: pending.tradeId,
+        riskPercent: config.CTRADER_RISK_PERCENT * (pending.riskMult ?? 1), // 🆕 TimesFM F1
     };
 
     const result: CTraderOrderResult = await executeMarketOrder(orderParams);

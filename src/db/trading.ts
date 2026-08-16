@@ -20,11 +20,12 @@ import {
 } from '../engine/AlphaModel.js';
 
 import { evaluateNetTrade } from '../engine/FrictionModel.js';
+import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
 
 import { tickFlow } from '../engine/TickFlow.js';
 
 import {
-    evaluateGlobalRisk, evaluateAssetRisk, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
+    evaluateGlobalRisk, evaluateAssetRisk, getFxDayStartMs, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
 } from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
@@ -110,7 +111,7 @@ export const getLastPingTime = () => globalState.lastPingTime;
  * 🆕 ROI Time-Decay: devuelve el profit mínimo requerido (%) según la antigüedad del trade.
  * 
  * @param tradeAgeMinutes minutos desde apertura
- * @param roiTable ej: {"0": 1.5, "30": 0.5, "60": 0}
+ * @param roiTable ej: {"0": 0.015, "30": 0.005, "60": 0}  // decimal: 0.015 = 1.5%
  * @returns [roiPercent, label] — si tradeAge ≥ threshold, devuelve el ROI correspondiente.
  *          Si no hay tabla o está vacía, devuelve [0, null] (sin efecto).
  */
@@ -206,6 +207,8 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     /** 🏇 RIDER mode config */
     riderEnabled?: boolean;
     riderTf?: string;
+    /** 🆕 TimesFM F1/F2: bloque de config del filtro (asset_configs/{ticker}.timesfm) */
+    timesfm?: any;
     sessions?: Record<string, {
         choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
         choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -265,6 +268,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             trailingDrawdownR: (config as any).trailingDrawdownR,
             riderEnabled: config.riderEnabled as boolean | undefined,
             riderTf: config.riderTf as string | undefined,
+            timesfm: (config as any).timesfm, // 🆕 F1/F2: filtro direccional TimesFM (asset_configs/{ticker}.timesfm)
             sessions: config.sessions as any
         };
     }
@@ -304,10 +308,10 @@ if (db) {
             if (snap.exists) {
                 const data = snap.data() || {};
                 globalState.dynamicBotConfig = {
-                    sniperCooldownMs: Number(data.sniperCooldownMs) || globalState.dynamicBotConfig.sniperCooldownMs,
-                    minPointsForBuy: Number(data.minPointsForBuy) || globalState.dynamicBotConfig.minPointsForBuy,
-                    minPointsForSell: Number(data.minPointsForSell) || globalState.dynamicBotConfig.minPointsForSell,
-                    baseRiskPercentage: Number(data.baseRiskPercentage) || globalState.dynamicBotConfig.baseRiskPercentage,
+                    sniperCooldownMs: Number.isFinite(Number(data.sniperCooldownMs)) ? Number(data.sniperCooldownMs) : globalState.dynamicBotConfig.sniperCooldownMs,
+                    minPointsForBuy: Number.isFinite(Number(data.minPointsForBuy)) ? Number(data.minPointsForBuy) : globalState.dynamicBotConfig.minPointsForBuy,
+                    minPointsForSell: Number.isFinite(Number(data.minPointsForSell)) ? Number(data.minPointsForSell) : globalState.dynamicBotConfig.minPointsForSell,
+                    baseRiskPercentage: Number.isFinite(Number(data.baseRiskPercentage)) ? Number(data.baseRiskPercentage) : globalState.dynamicBotConfig.baseRiskPercentage,
                     slBufferPercent: data.slBufferPercent !== undefined ? Number(data.slBufferPercent) : globalState.dynamicBotConfig.slBufferPercent,
                     fixedRR: data.fixedRR !== undefined ? Number(data.fixedRR) : globalState.dynamicBotConfig.fixedRR,
                     oteEntryPercent: data.oteEntryPercent !== undefined ? Number(data.oteEntryPercent) : globalState.dynamicBotConfig.oteEntryPercent,
@@ -324,11 +328,11 @@ if (db) {
                 if (doc.id === 'GLOBAL') {
                     const data = doc.data() || {};
                     globalState.globalPortfolioConfig = {
-                        maxDailyLossR: Number(data.maxDailyLossR) || 0,
-                        dailyProfitTargetR: Number(data.dailyProfitTargetR) || 0,
-                        maxTradesPerDay: Number(data.maxTradesPerDay) || 0,
-                        maxConsecutiveLosses: Number(data.maxConsecutiveLosses) || 0,
-                        trailingDrawdownR: Number(data.trailingDrawdownR) || 0,
+                        maxDailyLossR: Number.isFinite(Number(data.maxDailyLossR)) ? Number(data.maxDailyLossR) : 0,
+                        dailyProfitTargetR: Number.isFinite(Number(data.dailyProfitTargetR)) ? Number(data.dailyProfitTargetR) : 0,
+                        maxTradesPerDay: Number.isFinite(Number(data.maxTradesPerDay)) ? Number(data.maxTradesPerDay) : 0,
+                        maxConsecutiveLosses: Number.isFinite(Number(data.maxConsecutiveLosses)) ? Number(data.maxConsecutiveLosses) : 0,
+                        trailingDrawdownR: Number.isFinite(Number(data.trailingDrawdownR)) ? Number(data.trailingDrawdownR) : 0,
                         enabled: data.enabled === true,
                         disabledSessions: Array.isArray(data.disabledSessions) ? data.disabledSessions : []
                     };
@@ -366,7 +370,11 @@ if (db) {
                     maxConsecutiveLosses: data.maxConsecutiveLosses ?? 0,
                     maxTradesPerDay: data.maxTradesPerDay ?? 0,
                     trailingDrawdownR: data.trailingDrawdownR ?? 0,
-                    sessions: data.sessions as any
+                    sessions: data.sessions as any,
+                    riderEnabled: data.riderEnabled,
+                    riderTf: data.riderTf,
+                    autoTrading: data.autoTrading,
+                    maxSmartRiskPercent: data.maxSmartRiskPercent
                 });
             });
             const actualAssets = [...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
@@ -680,8 +688,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
         scheduleStateSave(ticker, data);
         return Promise.resolve();
     };
-    // Para ASIA: anclar el día de trading a las 17:00 ART (convención FX: el día cambia al cierre de NY):
-    const todayStr = new Date(nowMs - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
+    // Anclar el día de trading al cierre de NY (17:00 New York, convención FX/prop-firm), DST-aware:
+    const todayStr = new Date(getFxDayStartMs(nowMs)).toISOString().split('T')[0];
 
     let triggerOte = false;
     let oteData: any = null;
@@ -850,7 +858,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const currentPnlPct = trade.direction === 'BUY'
                                 ? (currentPrice - trade.entryPrice) / trade.entryPrice * 100
                                 : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
-                            if (currentPnlPct >= effectiveROI) {
+                            if (currentPnlPct >= effectiveROI * 100) {
                                 if (isDuplicate(`ROI_${trade.tradeId}_${ticker}`, nowTrade)) continue;
                                 store.activeTrades.delete(tradeId);
                                 if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
@@ -1988,7 +1996,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         // ⚡ HIGH_SCORE_BYPASS: si acumuló ≥12 pts por eventos puros (CHoCH + Sweeps + DIV),
                         // se valida aunque no haya zonas en memoria. Caso típico: reversión contra tendencia
                         // donde 4H/1H son SELL pero 3M hace CHoCH BUY con múltiples confluencias.
-                        const HIGH_SCORE_BYPASS = minPtsRequired; // Use the configured minimum score instead of hardcoded 12
+                        const HIGH_SCORE_BYPASS = Math.min(minPtsRequired, 8); // Bypass "puntaje alto sin zonas" desacoplado del umbral de entrada
                         const efectiveValidation = hasZoneConfluence || hasSpatialBacking || (totalPoints >= HIGH_SCORE_BYPASS);
 
                         if (efectiveValidation) {
@@ -2446,6 +2454,57 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             return;
         }
 
+        // ═══ TIMESFM FILTER (F1) — post-killswitches, pre-ejecución ═══
+        // Espejo del gate en backtestEngine.ts createTrade. Regla de oro: si el puente
+        // falla / forecast viejo / timeout → se loguea DEGRADADO y el trade SIGUE (nunca frenar).
+        const tfmCfg = resolveTimesfmConfig((config as any).timesfm);
+        if (tfmCfg.enabled && !isBacktest) {
+            const atrNow = state.atr14 ?? 0;
+            const tfmDecision: TimesfmDecision = atrNow > 0
+                ? await fetchLiveTimesfmDecision({
+                    ticker,
+                    tfMinutes: parseInt(String(oteData.tf || '15').replace(/\D/g, '')) || 15,
+                    signalDir: oteData.direction as 'BUY' | 'SELL',
+                    currentPrice: oteData.entryPrice,
+                    atr14: atrNow,
+                    smcPoints: oteData.points,
+                    cfg: tfmCfg,
+                })
+                : { action: 'APPROVE', riskMult: 1.0, forecastDir: 'FLAT', highConviction: false, spreadAtr: 0, forecastMedian: 0, reason: 'DEGRADADO: ATR no inicializado', degraded: true };
+            const tfmAudit: Record<string, unknown> = {
+                ts: nowMs, ticker, direction: oteData.direction, points: oteData.points,
+                action: tfmDecision.action, riskMult: tfmDecision.riskMult,
+                forecastDir: tfmDecision.forecastDir, spreadAtr: +tfmDecision.spreadAtr.toFixed(4),
+                reason: tfmDecision.reason, degraded: tfmDecision.degraded, dryRun: tfmCfg.dryRun === true,
+                tp2Dynamic: false,
+            };
+            console.log(`[TIMESFM${tfmCfg.dryRun ? ' DRY' : ''}] ${ticker} ${oteData.direction} → ${tfmDecision.action} (mult=${tfmDecision.riskMult}) — ${tfmDecision.reason}`);
+            if (tfmCfg.dryRun) {
+                // F2 shadow: auditar sin aplicar — el trade sigue con riskMult intacto
+            } else if (tfmDecision.action === 'REJECT') {
+                appendTimesfmAudit(tfmCfg.auditPath ?? 'logs/timesfm_audit.jsonl', tfmAudit);
+                state.lastGatillo.status = 'BLOCKED_TIMESFM';
+                safeSet(state).catch(() => { });
+                store.activeTrades.delete(oteData.tradeId);
+                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                return;
+            } else {
+                oteData.timesfmAction = tfmDecision.action;
+                oteData.riskMult = tfmDecision.riskMult;
+                // Fase C: TP2 dinámico por q90 (SL sigue estructural/slBuff por diseño).
+                if (tfmCfg.tp2Dynamic === 'q90' && tfmDecision.forecast && !tfmDecision.degraded) {
+                    const dyn = resolveTp2FromForecast(tfmDecision.forecast, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, tfmCfg.tp2Q90Step ?? 2);
+                    if (dyn !== null) {
+                        oteData.tp2 = String(dyn);
+                        oteData.tp2DynamicSource = 'q90';
+                        tfmAudit.tp2Dynamic = true;
+                        tfmAudit.tp2Price = dyn;
+                    }
+                }
+            }
+            appendTimesfmAudit(tfmCfg.auditPath ?? 'logs/timesfm_audit.jsonl', tfmAudit);
+        }
+
         let activeSessionId: string | undefined;
         if (isBacktest) {
             const { getCurrentSessionId } = await import('../services/backtesting.js');
@@ -2628,7 +2687,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         if (!isDuplicate(fingerprint, nowMs)) {
 
             state.lastGatillo.status = 'PROCESANDO...';
-            safeSet(state).catch(() => { });
+            safeSet(state).catch((err: any) => console.error('[SNIPER] ❌ Fallo guardando estado (safeSet):', err?.message ?? err));
 
             let kronosAnnotation = '';
             let kronosVerdict: string = 'SKIP';
@@ -2834,6 +2893,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         if (store.dynamicBotConfig.autoTrading) {
                             // 🚀 MODO AUTOMÁTICO: Ejecutar directamente
                             const { executeMarketOrder } = await import('../services/ctrader.js');
+                            const { config: envConfig } = await import('../config.js');
                             console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
 
                             const result = await executeMarketOrder({
@@ -2844,6 +2904,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 tp1Price: parseFloat(oteData.tp1),
                                 tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
                                 tradeId: oteData.tradeId,
+                                riskPercent: envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1), // 🆕 TimesFM F1: riesgo modulado
                             });
 
                             if (result.success && result.positionId) {
@@ -2898,6 +2959,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 journalId: typeof journalId === 'string' ? journalId : undefined,
                                 isChochEntry: oteData.isChochEntry,
                                 sarPendingClose,
+                                riskMult: oteData.riskMult ?? 1, // 🆕 TimesFM F1
                             });
                             console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR + botones cTrader enviada para ${ticker}`);
                         }

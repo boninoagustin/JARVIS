@@ -1,0 +1,17 @@
+torch==2.9.1+cpu
+timesfm==2.0.2
+numpy==2.5.2
+huggingface_hub==1.27.0
+safetensors==0.8.0
+
+# NOTA DE INSTALACIÓN (obligatoria para reproducir):
+# torch debe instalarse desde el índice CPU (wheel ~194MB, sin deps nvidia):
+#   pip install torch==2.9.1+cpu --index-url https://download.pytorch.org/whl/cpu
+#   pip install timesfm==2.0.2
+# (timesfm arrastra numpy/huggingface_hub/safetensors en las versiones pineadas arriba)
+#
+# Medido en VPS (4 cores, 7.8GB RAM) — ver smoke_result.json:
+#   - RSS pico con modelo cargado: 2029 MB
+#   - Carga fría (con descarga): 44.8s | compile: ~0s
+#   - Inferencia single-call (ctx=512, H=24): P50 1289ms / P95 1735ms
+#   - Determinismo bitwise verificado (mismo input → mismo output)

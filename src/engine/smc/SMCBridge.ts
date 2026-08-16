@@ -60,10 +60,27 @@ function dispatch(processAlert: AlertFn, alertText: string) {
 
 // ─── Traducción de eventos por vela ─────────────────────────────────────────
 
+// 🆕 TimesFM F1: alimentar el bridge residente con cada vela cerrada (fire-and-forget).
+// Si el bridge está caído la degradación es silenciosa: NUNCA frena el trading.
+const TIMESFM_BRIDGE_URL = process.env.TIMESFM_BRIDGE_URL || 'http://127.0.0.1:8788';
+function ingestTimesfmCandle(ticker: string, period: string, candle: OHLCV) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    fetch(`${TIMESFM_BRIDGE_URL}/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, tf: period, ts: candle.timestamp, close: candle.close }),
+        signal: controller.signal,
+    }).catch(() => { /* bridge caído → skip silencioso */ })
+      .finally(() => clearTimeout(timer));
+}
+
 function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, events: any[], isHistorical: boolean = false) {
     const [ticker, period] = key.split(':');
     const tf = TF_MAP[period] ?? period;
     const ts = isHistorical ? candle.timestamp : Date.now();
+
+    if (!isHistorical) ingestTimesfmCandle(ticker, period, candle);
 
     const state = smcManager.getEngine(ticker, period).getState();
     const vwapTag = state.vwapStatus ? ` | VWAP: ${state.vwapStatus}` : '';

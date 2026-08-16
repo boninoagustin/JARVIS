@@ -13,6 +13,8 @@ export interface BacktestTrade {
   resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnlTp2?: number;
   tp1Hit?: boolean; tp1_5Hit?: boolean; slHalfwayHit?: boolean; closeTimestamp?: number; durationMin?: number;
   rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number; riskMult?: number;
+  /** 🆕 TimesFM F1: acción del filtro al crear el trade ('APPROVE'|'REDUCE'), dirección del forecast y spread/ATR */
+  timesfmAction?: string; timesfmDir?: string; timesfmSpreadAtr?: number;
   oteEntryUsed?: number;
   tf?: string;
   marketBias?: Record<string, string>;
@@ -69,6 +71,7 @@ export interface BacktestConfig {
   
   // Realism (Spread & Commissions)
   spreadPips?: number;
+  slBufferPercent?: number;
   commissionPerLot?: number;
   maxHoldMin?: number;
   latencyMs?: number;
@@ -76,6 +79,9 @@ export interface BacktestConfig {
   /** 🆕 ROI time-decay table: {"0":0.015,"30":0.005,"60":0}
    *  "0"=1.5% initial target, after 30m→0.5%, after 60m→breakeven */
   minimal_roi?: Record<string, number>;
+
+  /** 🆕 TimesFM F1: config del filtro (ver src/engine/TimesfmFilter.ts). Ausente = filtro off. */
+  timesfm?: Partial<import('../../../src/engine/TimesfmFilter').TimesfmFilterConfig>;
 }
 
 export interface BacktestResult {

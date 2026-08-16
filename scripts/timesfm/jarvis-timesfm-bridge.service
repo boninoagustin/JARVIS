@@ -1,0 +1,21 @@
+[Unit]
+Description=JARVIS TimesFM Bridge (F1) — forecast residente para filtro direccional
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/JARVIS
+ExecStart=/opt/JARVIS/scripts/timesfm/.venv/bin/python /opt/JARVIS/scripts/timesfm/timesfm_bridge.py
+Restart=always
+RestartSec=10
+# Recursos: el modelo usa ~1.2GB RSS; limitar para no asfixiar al bot
+MemoryMax=2G
+Nice=10
+CPUQuota=280%
+Environment=TIMESFM_BRIDGE_PORT=8788
+Environment=TIMESFM_TFS=15,5
+Environment=TIMESFM_CONTEXT=512
+Environment=TIMESFM_HORIZON=24
+
+[Install]
+WantedBy=multi-user.target

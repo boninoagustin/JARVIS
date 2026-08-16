@@ -2,12 +2,19 @@ import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
-import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK } from '../engine/AlphaModel';
+import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, calculateDynamicSlBuffer, getMinPipDistance } from '../engine/AlphaModel';
 import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
 } from './backtestTypes';
+import {
+  evaluateTimesfmFilter, resolveTimesfmConfig, loadTimesfmCache, timesfmCandleKey,
+  appendTimesfmAudit, resolveTp2FromForecast, type TimesfmForecast, type TimesfmDecision
+} from '../engine/TimesfmFilter';
+
+// 🆕 TimesFM F1: cache de forecasts precomputados, cargado una vez por corrida en runBacktest
+let timesfmForecastCache: Map<number, TimesfmForecast> | undefined;
 
 export type { BacktestTrade, BacktestResult, BacktestConfig } from './backtestTypes';
 
@@ -17,6 +24,7 @@ export interface DailyStats {
   pnlR: number;
   peakPnlR: number;
   consecutiveLosses: number;
+  streakKillswitchUntil: number;
   tradeCount: number;
   isKilled: boolean;
   sellLossCount: number;
@@ -36,6 +44,9 @@ function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats,
   const NET_BE_EPS = 0.05;
   if (trade.rMultiple < -NET_BE_EPS) {
     dailyStats.consecutiveLosses++;
+    if (dailyStats.consecutiveLosses >= 5) {
+      dailyStats.streakKillswitchUntil = (trade.closeTimestamp ?? trade.timestamp ?? 0) + 30 * 60 * 1000;
+    }
     if (trade.direction === 'SELL') dailyStats.sellLossCount++;
     if (trade.direction === 'BUY') dailyStats.buyLossCount++;
   } else if (trade.rMultiple >= 0.8) {
@@ -175,8 +186,19 @@ export function runBacktest(
   onProgress?: (pct: number, trades: BacktestTrade[]) => void,
   prepared?: LogEntry[]
 ): BacktestResult {
+  // 🔧 FIX: fricción 0 = "auto" → undefined para caer en defaultFrictionConfig por activo.
+  // El panel manda 0 por defecto y pisaba los defaults reales (FOREX: spread 0.1 + $3/lote).
+  if ((config as any).spreadPips === 0) (config as any).spreadPips = undefined;
+  if ((config as any).commissionPerLot === 0) (config as any).commissionPerLot = undefined;
+
   const state = emptyState();
   const trades: BacktestTrade[] = [];
+
+  // 🆕 TimesFM F1: cargar cache de forecasts precomputados (una sola vez por corrida)
+  const tfmInit = (config as any).timesfm;
+  timesfmForecastCache = (tfmInit?.enabled && tfmInit?.cachePath && !tfmInit?.collectOnly)
+    ? loadTimesfmCache(tfmInit.cachePath)
+    : undefined;
   const activeTrades = new Map<string, BacktestTrade>();
   const dailyStats: DailyStats = {
     currentDayStr: '',
@@ -184,6 +206,7 @@ export function runBacktest(
     pnlR: 0,
     peakPnlR: 0,
     consecutiveLosses: 0,
+    streakKillswitchUntil: 0,
     tradeCount: 0,
     isKilled: false,
     sellLossCount: 0,
@@ -367,6 +390,7 @@ function processAlert(
     dailyStats.pnlR = 0;
     dailyStats.peakPnlR = 0;
     dailyStats.consecutiveLosses = 0;
+    dailyStats.streakKillswitchUntil = 0;
     dailyStats.tradeCount = 0;
     dailyStats.isKilled = false;
   }
@@ -475,14 +499,19 @@ function processAlert(
           const pnlPct = trade.direction === 'BUY'
             ? (currentPrice - trade.entryPrice) / trade.entryPrice * 100
             : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
-          if (pnlPct >= effectiveROI) {
+          if (pnlPct >= effectiveROI * 100) {
             (trade as any).roiDecayApplied = roiLabel;
             const originalSl = trade.originalSlPrice ?? trade.slPrice;
             const slDistPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-            const rMultiple = slDistPct > 0 ? parseFloat((pnlPct / slDistPct).toFixed(4)) : 0;
+            const grossR = slDistPct > 0 ? parseFloat((pnlPct / slDistPct).toFixed(4)) : 0;
+            // 🔧 FIX: cobrar comisión round-turn (consistente con el resto de exits)
+            const riskPips = Math.abs(trade.entryPrice - originalSl) / pipSize;
+            const cls = getAssetClass(config.ticker);
+            const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+            const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
             trade.result = 'WIN';
             trade.pnl = pnlPct;
-            trade.rMultiple = rMultiple;
+            trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
             trade.closeTimestamp = nowMs;
             trade.durationMin = Math.round(tradeAge / 60000);
             activeTrades.delete(tradeId);
@@ -647,6 +676,8 @@ function processAlert(
         }
       }
 
+      // 🔧 FIX conservador: guardar SL antes del trail para detectar si la vela ambigua violó el SL VIEJO (High/Low mismo tick optimista)
+      const slBeforeTrail = trade.slPrice;
       // Complemento PING: trailing continuo post-TP1 por distancia
       if (trade.tp1Hit && atrTrailEnabled) {
         const atrThreshold = (state.atr14 ?? 0) * 1.5;
@@ -667,12 +698,14 @@ function processAlert(
       // Chequeo de vela ambigua: si en la misma vela se alcanzó TP1 o TP1.5 (modificando el SL) y también se violó el nuevo SL
       if (trade.tp1Hit) {
         const slViolated = trade.direction === 'BUY' ? lowPrice <= trade.slPrice : highPrice >= trade.slPrice;
-        if (slViolated) {
-          trade.result = 'WIN'; 
+        // 🔧 FIX conservador: si la vela violó el SL VIEJO (pre-trail), el trade se detiene en ese SL, no en el trail
+        const slViolatedOld = trade.direction === 'BUY' ? lowPrice <= slBeforeTrail : highPrice >= slBeforeTrail;
+        const effectiveSl = (slViolatedOld && trade.slPrice !== slBeforeTrail) ? slBeforeTrail : trade.slPrice;
+        if (slViolated || (slViolatedOld && trade.slPrice !== slBeforeTrail)) {
           trade.resultTp2 = 'LOSS';
           const slPnlPct = trade.direction === 'BUY' 
-            ? (trade.slPrice - trade.entryPrice) / trade.entryPrice * 100 
-            : (trade.entryPrice - trade.slPrice) / trade.entryPrice * 100;
+            ? (effectiveSl - trade.entryPrice) / trade.entryPrice * 100 
+            : (trade.entryPrice - effectiveSl) / trade.entryPrice * 100;
           trade.pnl = trade.pnlTp1! * partialPct + slPnlPct * remainderPct;
           trade.pnlTp2 = trade.pnl;
           
@@ -686,6 +719,7 @@ function processAlert(
           
           const grossR = initialSlLossPct > 0 ? trade.pnl / initialSlLossPct : 0;
           trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+          trade.result = trade.rMultiple > 0 ? 'WIN' : trade.rMultiple === 0 ? 'BE' : 'LOSS'; // 🔧 FIX: result derivado del R real (antes hardcodeado 'WIN')
           
           trade.closeTimestamp = nowMs;
           trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
@@ -1199,7 +1233,7 @@ function processAlert(
     if (isCryptoTicker) minPtsRequired = Math.max(minPtsRequired - 1, 3);
 
     // Escalado de umbral removido: la calidad de la señal debe ser constante.
-    // Usaremos riskMult (Anti-martingala inversa) en su lugar.
+    // Riesgo fijo (anti-martingale eliminado para representatividad vs vivo).
 
     // Validate leg
     
@@ -1229,13 +1263,14 @@ function processAlert(
         const slBuff = tfConfig?.slBuff ?? 0;
         const activeFixedRR = tfConfig?.tp2 ?? 1.5;
 
-        const structuralBuffer = Math.max(
-          (slBuff > 0 ? slBuff : 2 * (config.spreadPips ?? 0.1)) * pipSize,
-          (state.atr14 ?? 0) * 0.5
-        );
+        // 🔧 FIX: misma fórmula de SL que el vivo (calculateDynamicSlBuffer + piso getMinPipDistance)
+        const rawBuffer = slBuff > 0 ? slBuff : (config.slBufferPercent ?? 0.1);
+        let slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, rawBuffer);
+        const minPipDist = getMinPipDistance(ticker);
+        if (slBufferAmt < minPipDist) slBufferAmt = minPipDist;
         const adjustedSL = currentDirection === 'BUY'
-          ? activeLeg.origin - structuralBuffer
-          : activeLeg.origin + structuralBuffer;
+          ? activeLeg.origin - slBufferAmt
+          : activeLeg.origin + slBufferAmt;
         
         const stopLoss = adjustedSL.toFixed(decimals);
         const currentPrice = state.lastPrice ?? activeLeg.extreme;
@@ -1371,10 +1406,62 @@ function minutesSinceSessionOpen(ts: number): number {
 }
 
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
-  if (dailyStats.isKilled) return;
+  // ═══ TIMESFM FILTER (F1) — espejo del gate en dispatchOteSignal (src/db/trading.ts) ═══
+  // Ubicado al inicio para que el modo collect registre TODOS los candles con trigger.
+  const tfmRaw = (config as any).timesfm;
+  if (tfmRaw && (tfmRaw.enabled || tfmRaw.collectOnly)) {
+    const tfmCfg = resolveTimesfmConfig(tfmRaw);
+    const tfMin = parseInt(String(oteData.tf || '15').replace(/\D/g, '')) || 15;
+    const candleKey = timesfmCandleKey(nowMs, tfMin);
+    if (tfmCfg.collectOnly) {
+      appendTimesfmAudit(tfmCfg.collectPath, { ts: candleKey, ticker: config.ticker });
+    } else {
+      const fc = timesfmForecastCache?.get(candleKey);
+      const atr = state.atr14 ?? 0;
+      let decision: TimesfmDecision;
+      if (!fc) {
+        decision = { action: 'APPROVE', riskMult: 1.0, forecastDir: 'FLAT', highConviction: false, spreadAtr: 0, forecastMedian: 0, reason: 'DEGRADADO: sin forecast cacheado para esta vela', degraded: true };
+      } else if (atr <= 0) {
+        decision = { action: 'APPROVE', riskMult: 1.0, forecastDir: 'FLAT', highConviction: false, spreadAtr: 0, forecastMedian: 0, reason: 'DEGRADADO: ATR aún no inicializado', degraded: true };
+      } else {
+        decision = evaluateTimesfmFilter(fc, oteData.direction, oteData.entryPrice, atr, oteData.points, tfmCfg);
+      }
+      const auditRec: Record<string, unknown> = {
+        ts: candleKey, nowMs, ticker: config.ticker, direction: oteData.direction,
+        points: oteData.points, action: decision.action, riskMult: decision.riskMult,
+        forecastDir: decision.forecastDir, spreadAtr: +decision.spreadAtr.toFixed(4),
+        reason: decision.reason, degraded: decision.degraded, dryRun: tfmCfg.dryRun === true,
+        tp2Dynamic: false,
+      };
+      if (tfmCfg.dryRun) {
+        // F2 shadow: auditar sin aplicar — no bloquear ni tocar riskMult
+      } else if (decision.action === 'REJECT') {
+        appendTimesfmAudit(tfmCfg.auditPath, auditRec);
+        return; // trade bloqueado por TimesFM
+      } else {
+        oteData.riskMult = decision.riskMult;
+        oteData.timesfmAction = decision.action;
+        oteData.timesfmDir = decision.forecastDir;
+        oteData.timesfmSpreadAtr = +decision.spreadAtr.toFixed(4);
+        // Fase C: TP2 dinámico por q90 (SL sigue estructural/slBuff por diseño).
+        if (tfmCfg.tp2Dynamic === 'q90' && fc && !decision.degraded) {
+          const dyn = resolveTp2FromForecast(fc, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, tfmCfg.tp2Q90Step ?? 2);
+          if (dyn !== null) {
+            oteData.tp2 = String(dyn);
+            oteData.tp2DynamicSource = 'q90';
+            auditRec.tp2Dynamic = true;
+            auditRec.tp2Price = dyn;
+          }
+        }
+      }
+      appendTimesfmAudit(tfmCfg.auditPath, auditRec);
+    }
+  }
 
-  const riskMult = dailyStats.consecutiveLosses >= 3 ? 0.25 :
-                   dailyStats.consecutiveLosses >= 2 ? 0.5 : 1.0;
+  if (dailyStats.isKilled) return;
+  if (nowMs < dailyStats.streakKillswitchUntil) return;
+
+  const riskMult = oteData.riskMult ?? 1.0; // TimesFM F1 pudo haberlo ajustado arriba; default 1.0 (anti-martingale eliminado)
   oteData.riskMult = riskMult;
 
   const currentSession = getSessionForTimestamp(nowMs);
@@ -1480,6 +1567,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     oteEntryUsed: oteData.oteEntryUsed,
     tf: oteData.tf,
     riskMult: oteData.riskMult,
+    timesfmAction: oteData.timesfmAction,
+    timesfmDir: oteData.timesfmDir,
+    timesfmSpreadAtr: oteData.timesfmSpreadAtr,
   };
 
   // Clasificar triggerType al crear el trade (único punto de verdad)

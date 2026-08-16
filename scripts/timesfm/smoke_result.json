@@ -1,0 +1,16 @@
+{
+  "torch": "2.9.1+cpu",
+  "timesfm": "2.0.2",
+  "numpy": "2.5.2",
+  "huggingface_hub": "1.27.0",
+  "safetensors": "0.8.0",
+  "load_s": 44.77,
+  "compile_s": 0.0,
+  "rss_peak_mb": 2029.0,
+  "latency_ms": {
+    "p50": 1288.598656654358,
+    "p95": 1735.0950837135313,
+    "p99": 1838.5618329048157
+  },
+  "deterministic": true
+}
