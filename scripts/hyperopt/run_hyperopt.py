@@ -71,7 +71,9 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
-    study_name = args.study_name or f"jarvis_{args.ticker.lower()}_n{args.n_trials}"
+    # 🔧 FIX: nombre versionado por motor — evita mezclar trials de motores distintos.
+    # Bump eng2 → eng3 ante cualquier cambio en backtestEngine/hyperopt que invalide resultados previos.
+    study_name = args.study_name or f"jarvis_{args.ticker.lower()}_eng2"
     storage = args.storage or str(REPO_ROOT / "scripts" / "hyperopt" / "jarvis_hyperopt_study.db")
     output = args.output or f"optimized_preset_{args.ticker}_hyperopt.json"
 

@@ -12,6 +12,7 @@ export const defaultFrictionConfig: Record<string, FrictionConfig> = {
     'CRYPTO': { commissionPerLot: 0.0, baseSpreadPips: 2.0, latencyMs: 50 },
     'INDICES': { commissionPerLot: 0.0, baseSpreadPips: 1.0, latencyMs: 50 },
     'METALS': { commissionPerLot: 3.0, baseSpreadPips: 1.0, latencyMs: 50 },
+    'ENERGY': { commissionPerLot: 0.0, baseSpreadPips: 3.0, latencyMs: 50 }, // 🔧 USOIL: spread real ~$0.02-0.03 (antes caía a FOREX con spread ~0)
 };
 
 export function getAssetClass(ticker: string): string {
@@ -19,6 +20,7 @@ export function getAssetClass(ticker: string): string {
     if (t.includes('BTC') || t.includes('ETH')) return 'CRYPTO';
     if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'].some(i => t.includes(i))) return 'INDICES';
     if (t.includes('XAU') || t.includes('GOLD')) return 'METALS';
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 'ENERGY'; // 🔧 USOIL ya no cae a FOREX
     return 'FOREX';
 }
 
@@ -37,6 +39,7 @@ export function getPipValue(ticker: string, currentPrice: number): number {
     }
     if (assetClass === 'INDICES') return 1.0;
     if (assetClass === 'METALS') return 0.1;
+    if (assetClass === 'ENERGY') return 0.01; // 🔧 USOIL: 1 cent por pip (antes 0.0001 → fricción ≈ 0)
     if (assetClass === 'CRYPTO') return currentPrice * 0.0001; // Proxy dinámico
     return 0.0001;
 }

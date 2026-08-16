@@ -1,50 +1,62 @@
 {
-  "study_name": "jarvis_usdjpy_n200",
+  "study_name": "jarvis_USDJPY_eng2",
   "ticker": "USDJPY",
-  "n_trials": 400,
+  "n_trials": 200,
   "new_trials": 200,
-  "elapsed_seconds": 743.2131478786469,
-  "best_value": 51.204478291595194,
+  "elapsed_seconds": 489.61213755607605,
+  "best_value": 0.7807537373940925,
   "best_params": {
-    "pivot_len": 17,
-    "min_sweep_wick_pct": 0.2156401324204842,
-    "div_pivot_len": 5,
-    "z_score_window": 14,
-    "slBufferPercent": 0.1700288411441882,
-    "fixedRR": 4.514250966813429,
-    "minRR": 1.6840434957204025,
-    "oteEntryPercent": 50,
+    "slBufferPercent": 0.00036739574587458385,
+    "fixedRR": 1.4026624035157342,
+    "minRR": 1.0115185911286904,
+    "oteEntryPercent": 79,
     "minBuyPoints": 5,
     "minSellPoints": 11,
-    "partialClosePct": 0.5,
-    "slAfterTp1": "midpoint",
+    "partialClosePct": 0.8,
+    "slAfterTp1": "none",
     "tp15BeEnabled": true,
-    "atrTrailEnabled": true
+    "atrTrailEnabled": false
   },
   "best_metrics": {
-    "trade_count": 216,
-    "wins": 185,
-    "losses": 31,
-    "win_rate": 0.8564814814814815,
-    "gross_profit_r": 159.49653748525682,
-    "gross_loss_r": 2.9610797969880087,
-    "net_pnl_r": 156.53545768826882,
-    "profit_factor": 53.864315864603064,
-    "expectancy": 0.7247011930012446,
-    "max_drawdown_r": 1.346153846153996,
-    "sharpe_simple": 2.3984448432932135,
-    "avg_trade_r": 0.7247011930012446,
-    "max_consec_losses": 2,
-    "max_consec_wins": 33
+    "trade_count": 149,
+    "wins": 85,
+    "losses": 64,
+    "win_rate": 0.5704697986577181,
+    "gross_profit_r": 108.17112832443345,
+    "gross_loss_r": 28.09833887509868,
+    "net_pnl_r": 80.07278944933478,
+    "profit_factor": 3.8497339221820304,
+    "expectancy": 0.5374012714720455,
+    "max_drawdown_r": 3.2355289903379365,
+    "sharpe_simple": 7.082341068571463,
+    "avg_trade_r": 0.5374012714720455,
+    "max_consec_losses": 7,
+    "max_consec_wins": 7
+  },
+  "best_metrics_oos": {
+    "trade_count": 52,
+    "wins": 24,
+    "losses": 28,
+    "win_rate": 0.46153846153846156,
+    "gross_profit_r": 28.78519828415126,
+    "gross_loss_r": 11.01582235668555,
+    "net_pnl_r": 17.76937592746571,
+    "profit_factor": 2.6130775671669575,
+    "expectancy": 0.341718767835879,
+    "max_drawdown_r": 2.4580062873951753,
+    "sharpe_simple": 2.7587251470064653,
+    "avg_trade_r": 0.341718767835879,
+    "max_consec_losses": 5,
+    "max_consec_wins": 4
   },
   "best_config": {
     "ticker": "USDJPY",
     "minBuyPoints": 5,
     "minSellPoints": 11,
-    "minRR": 1.6840434957204025,
-    "slBufferPercent": 0.1700288411441882,
-    "fixedRR": 4.514250966813429,
-    "oteEntryPercent": 50,
+    "minRR": 1.0115185911286904,
+    "slBufferPercent": 0.00036739574587458385,
+    "fixedRR": 1.4026624035157342,
+    "oteEntryPercent": 79,
     "entryTrigger": "SMART",
     "sessions": {
       "LONDON": {
@@ -53,35 +65,61 @@
         },
         "choch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "bos5m": {
           "enabled": false
         },
         "bos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteChoch5m": {
           "enabled": false
         },
         "oteChoch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteBos5m": {
           "enabled": false
         },
         "oteBos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
-        },
-        "slBufferPercent": 0.1700288411441882,
-        "fixedRR": 4.514250966813429
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
+        }
       },
       "NY": {
         "choch5m": {
@@ -89,35 +127,61 @@
         },
         "choch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "bos5m": {
           "enabled": false
         },
         "bos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteChoch5m": {
           "enabled": false
         },
         "oteChoch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteBos5m": {
           "enabled": false
         },
         "oteBos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
-        },
-        "slBufferPercent": 0.1700288411441882,
-        "fixedRR": 4.514250966813429
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
+        }
       },
       "ASIA": {
         "choch5m": {
@@ -125,35 +189,61 @@
         },
         "choch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "bos5m": {
           "enabled": false
         },
         "bos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteChoch5m": {
           "enabled": false
         },
         "oteChoch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteBos5m": {
           "enabled": false
         },
         "oteBos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
-        },
-        "slBufferPercent": 0.1700288411441882,
-        "fixedRR": 4.514250966813429
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
+        }
       },
       "OFF": {
         "choch5m": {
@@ -161,53 +251,67 @@
         },
         "choch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "bos5m": {
           "enabled": false
         },
         "bos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 50,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteChoch5m": {
           "enabled": false
         },
         "oteChoch15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
         },
         "oteBos5m": {
           "enabled": false
         },
         "oteBos15m": {
           "enabled": true,
-          "minScore": 4,
-          "entryPercent": 50
-        },
-        "slBufferPercent": 0.1700288411441882,
-        "fixedRR": 4.514250966813429
+          "tp2": 1.4026624035157342,
+          "slBuff": 0.00036739574587458385,
+          "entryPercent": 79,
+          "partialClosePct": 0.8,
+          "slAfterTp1": "none",
+          "tp15BeEnabled": true,
+          "atrTrailEnabled": false,
+          "structuralTrailEnabled": true,
+          "tp1StructuralMinRR": 1.2
+        }
       }
-    },
-    "directManagement": {
-      "partialClosePct": 0.5,
-      "slAfterTp1": "midpoint",
-      "tp15BeEnabled": true,
-      "atrTrailEnabled": true
     },
     "minimal_roi": {
       "0": 0.015,
       "30": 0.005,
       "60": 0
-    },
-    "smc_overrides": {
-      "pivot_len": 17,
-      "min_sweep_wick_pct": 0.2156401324204842,
-      "div_pivot_len": 5,
-      "z_score_window": 14
     }
   }
 }

@@ -1,50 +1,36 @@
 {
     "M15": {
-        "pivot_len": 14,
-        "wick_pct": 0.2346400131284179,
-        "div_len": 7,
+        "pivot_len": 5,
+        "wick_pct": 0.1,
+        "div_len": 5,
         "z_window": 14
     },
     "H1": {
-        "pivot_len": 14,
-        "wick_pct": 0.2346400131284179,
-        "div_len": 7,
+        "pivot_len": 13,
+        "wick_pct": 0.5,
+        "div_len": 3,
         "z_window": 14
     },
     "H4": {
-        "pivot_len": 14,
-        "wick_pct": 0.2346400131284179,
-        "div_len": 7,
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 3,
         "z_window": 14
     },
     "D1": {
-        "pivot_len": 14,
-        "wick_pct": 0.2346400131284179,
-        "div_len": 7,
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
         "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 0.03431585051551237,
-        "fixedRR": 4.708542486601238,
-        "minRR": 1.0632987175100534,
-        "oteEntryPercent": 50,
-        "partialClosePct": 0.5,
-        "slAfterTp1": "midpoint",
-        "tp15BeEnabled": true,
-        "atrTrailEnabled": true
+        "slBufferPercent": 0,
+        "fixedRR": 1.5,
+        "minRR": 3
     },
-    "Scoring": {
-        "minBuyPoints": 3,
-        "minSellPoints": 10
-    },
-    "Meta": {
-        "objective_value": 137.97590177181291,
-        "trade_count": 194,
-        "profit_factor": 139.920491123629,
-        "max_drawdown_r": 1.003277827691818,
-        "win_rate": 0.8505154639175257,
-        "n_trials": 400,
-        "study_name": "jarvis_us500_n200",
-        "source": "hyperopt"
+    "Metrics": {
+        "PnL_R": "17.86",
+        "Trades": 187,
+        "WinRate": "69.52%"
     }
 }

@@ -197,12 +197,16 @@ async function main() {
             })
         );
 
+        let heartbeatFailCount = 0;
         setInterval(() => {
             if (db) {
                 db.collection('app_settings').doc('heartbeat').set({
                     lastPing: Date.now(),
                     status: 'online'
-                }).catch(() => {});
+                }).catch((err: any) => {
+                    heartbeatFailCount++;
+                    console.error(`[HEARTBEAT] ❌ Fallo al escribir heartbeat (x${heartbeatFailCount}):`, err?.message ?? err);
+                });
             }
             
             // Watchdog: si no recibimos el snapshot del heartbeat en 5 minutos, la conexión gRPC es un zombie.

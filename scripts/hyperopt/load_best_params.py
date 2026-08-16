@@ -7,6 +7,11 @@ leer (loadOptimizedPreset en src/engine/smc/smc_config.ts:50).
 Uso:
     python scripts/hyperopt/load_best_params.py optimized_preset_eurusd_hyperopt.json
     python scripts/hyperopt/load_best_params.py optimized_preset_eurusd_hyperopt.json --ticker EURUSD
+
+🔧 IMPORTANTE (ago-2026): los parámetros SMC (pivot_len/wick_pct/div_len/z_window)
+NO son optimizados por el backtest (el motor consume eventos pre-horneados). Los
+bloques TF del preset los define el BRUTEFORCER. Este script preserva los bloques
+M15/H1/H4/D1 existentes y solo actualiza Risk/Scoring/Meta.
 """
 
 from __future__ import annotations
@@ -38,22 +43,21 @@ def main() -> int:
     ticker = (args.ticker or data["ticker"]).upper()
     params = data["best_params"]
 
-    # Formato compatible con smc_config.ts:loadOptimizedPreset
-    # Cada TF tiene sus propios SMC params; acá los escribimos iguales en los 4.
-    # En el futuro, el hyperopt podría discriminarlos por timeframe.
-    def tf_block(tf_key: str) -> dict:
-        return {
-            "pivot_len": params["pivot_len"],
-            "wick_pct": params["min_sweep_wick_pct"],
-            "div_len": params["div_pivot_len"],
-            "z_window": params["z_score_window"],
-        }
+    out_path = Path(args.out) if args.out else REPO_ROOT / f"optimized_preset_{ticker}.json"
+
+    # 🔧 FIX: preservar los bloques TF existentes (bruteforcer), no pisarlos con params SMC
+    existing_tf: dict = {}
+    if out_path.exists():
+        try:
+            existing = json.loads(out_path.read_text())
+            for k in ("M15", "H1", "H4", "D1"):
+                if k in existing:
+                    existing_tf[k] = existing[k]
+        except Exception:
+            pass
 
     preset = {
-        "M15": tf_block("M15"),
-        "H1": tf_block("H1"),
-        "H4": tf_block("H4"),
-        "D1": tf_block("D1"),
+        **existing_tf,
         "Risk": {
             "slBufferPercent": params["slBufferPercent"],
             "fixedRR": params["fixedRR"],
@@ -74,13 +78,13 @@ def main() -> int:
             "profit_factor": data["best_metrics"]["profit_factor"] if data.get("best_metrics") else None,
             "max_drawdown_r": data["best_metrics"]["max_drawdown_r"] if data.get("best_metrics") else None,
             "win_rate": data["best_metrics"]["win_rate"] if data.get("best_metrics") else None,
+            "oos_profit_factor": data["best_metrics_oos"]["profit_factor"] if data.get("best_metrics_oos") else None,
             "n_trials": data.get("n_trials"),
             "study_name": data.get("study_name"),
             "source": "hyperopt",
         },
     }
 
-    out_path = Path(args.out) if args.out else REPO_ROOT / f"optimized_preset_{ticker}.json"
     out_path.write_text(json.dumps(preset, indent=4))
     print(f"✅ {ticker}: preset → {out_path}", file=sys.stderr)
     print(f"   objetivo={data['best_value']:+.4f} | trades={preset['Meta']['trade_count']} | "

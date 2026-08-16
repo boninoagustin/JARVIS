@@ -45,15 +45,24 @@ function loadLogs(ticker: string, tfs: string[]): Map<string, string[]> {
     return logs;
 }
 
+async function readStdin(): Promise<string> {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    for await (const chunk of process.stdin) data += chunk;
+    return data;
+}
+
 async function main() {
     const args = process.argv.slice(2);
-    if (args.length < 3) {
-        console.log(JSON.stringify({ error: 'Uso: backtest_server.ts <ticker> <tfs> <config_json>' }));
-        process.exit(0);
+    if (args.length < 2) {
+        console.log(JSON.stringify({ error: 'Uso: backtest_server.ts <ticker> <tfs> [config_json|stdin]' }));
+        process.exit(1); // 🔧 FIX: exit(1) para que Kronos no devuelva 200 con error de uso
     }
     const ticker = args[0].toUpperCase();
     const tfs = args[1].split(',').map(t => t.trim()).filter(Boolean);
-    const config = JSON.parse(args[2]);
+    // 🔧 FIX: aceptar config por argv (compat) o por stdin (evita límite E2BIG con configs grandes)
+    const configRaw = args[2] ?? (await readStdin());
+    const config = JSON.parse(configRaw);
 
     // config.tfs es un array en el payload del panel; usarlo si existe
     const tfsFinal = (config.tfs && Array.isArray(config.tfs) && config.tfs.length > 0)

@@ -492,6 +492,17 @@ export default function BacktestingPanel() {
       if (d.atrTrailEnabled !== undefined) setAtrTrailEnabled(d.atrTrailEnabled);
       if (d.structuralTrailEnabled !== undefined) setStructuralTrailEnabled(d.structuralTrailEnabled);
       if (d.tp1StructuralMinRR !== undefined) setTp1StructuralMinRR(d.tp1StructuralMinRR);
+      // 🔧 FIX: cargar también killswitches + scores + RR + enabled vivos, para que
+      // "Exportar a JARVIS" NO los pise con defaults (0/5/2.0/true) al hacer merge.
+      if (d.maxDailyLossR !== undefined) setMaxDailyLossR(d.maxDailyLossR);
+      if (d.dailyProfitTargetR !== undefined) setDailyProfitTargetR(d.dailyProfitTargetR);
+      if (d.maxConsecutiveLosses !== undefined) setMaxConsecutiveLosses(d.maxConsecutiveLosses);
+      if (d.maxTradesPerDay !== undefined) setMaxTradesPerDay(d.maxTradesPerDay);
+      if (d.trailingDrawdownR !== undefined) setTrailingDrawdownR(d.trailingDrawdownR);
+      if (d.minPointsForBuy !== undefined) setMinBuyPoints(d.minPointsForBuy);
+      if (d.minPointsForSell !== undefined) setMinSellPoints(d.minSellPoints);
+      if (d.fixedRR !== undefined) setFixedRR(d.fixedRR);
+      if (d.enabled !== undefined) setEnabled(d.enabled);
     });
     return () => unsub();
   }, [ticker]);
@@ -507,7 +518,7 @@ export default function BacktestingPanel() {
     maxSellLosses?: number;
     maxBuyLosses?: number;
   }>>(() => {
-    const defTrig: any = { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 };
+    const defTrig: any = { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 };
     const defOte: any = { ...defTrig, entryPercent: 62 };
     const fallback = {
       OFF: { choch5m: { ...defTrig }, bos5m: { ...defTrig }, oteChoch5m: { ...defOte }, oteBos5m: { ...defOte }, choch15m: { ...defTrig }, bos15m: { ...defTrig }, oteChoch15m: { ...defOte }, oteBos15m: { ...defOte }, maxSellLosses: 0, maxBuyLosses: 0 },
@@ -596,8 +607,8 @@ export default function BacktestingPanel() {
   const [maxTradesPerDay, setMaxTradesPerDay] = useState(0);
   const [trailingDrawdownR, setTrailingDrawdownR] = useState(0);
   const [minRR] = useState(2.0);
-  const [spreadPips, setSpreadPips] = useState(0.0);
-  const [commissionPerLot, setCommissionPerLot] = useState(0.0);
+  const [spreadPips, setSpreadPips] = useState(0.1); // 🔧 default = fricción real forex (antes 0.0 → backtest sin costos)
+  const [commissionPerLot, setCommissionPerLot] = useState(3.0); // 🔧 default = comisión real cTrader forex
   const [activeSessions] = useState<string[]>(['LONDON', 'NY', 'ASIA', 'OFF']);
   const [maxTradesPerSession] = useState(0);
 
@@ -826,22 +837,23 @@ export default function BacktestingPanel() {
 
 
   const handleResetConfig = useCallback(() => {
-    setMinBuyPoints(4);
-    setMinSellPoints(4);
+    // 🔧 FIX: reset alineado con los defaults iniciales del panel (defTrig: midpoint/trails ON)
+    setMinBuyPoints(5);
+    setMinSellPoints(5);
     
     setSessionTriggers(prev => {
       const next = { ...prev };
       for (const s of Object.keys(next)) {
         next[s] = {
           ...next[s],
-          choch5m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          bos5m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          oteChoch5m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch5m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          oteBos5m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos5m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          choch15m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          bos15m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          oteChoch15m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch15m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
-          oteBos15m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos15m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'none', tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, tp1StructuralMinRR: 1.2 },
+          choch5m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          bos5m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          oteChoch5m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch5m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          oteBos5m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos5m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          choch15m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          bos15m: { enabled: true, minScore: 4, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          oteChoch15m: { enabled: true, minScore: 4, entryPercent: next[s].oteChoch15m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
+          oteBos15m: { enabled: true, minScore: 4, entryPercent: next[s].oteBos15m?.entryPercent ?? 62, slBuff: 0.1, tp2: 1.5, partialClosePct: 0.5, slAfterTp1: 'midpoint', tp15BeEnabled: true, atrTrailEnabled: true, structuralTrailEnabled: true, tp1StructuralMinRR: 1.2 },
         };
       }
       localStorage.setItem('bt_session_triggers', JSON.stringify(next));
@@ -1751,7 +1763,7 @@ export default function BacktestingPanel() {
     const pnlTotalRGlobal = closedGlobal.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
     const wrGlobal = closedGlobal.length > 0 ? ((winsGlobal / closedGlobal.length) * 100).toFixed(1) : '—';
     
-    let maxDDGlobal = 0, peakGlobal = 0;
+    let maxDDGlobal = 0, peakGlobal = 0, cumGlobal = 0;
     let grossProfitUsdGlobal = 0, grossLossUsdGlobal = 0;
     let maxConsLossesGlobal = 0, currentLossStreakGlobal = 0;
     let totalDurationGlobal = 0, tradesWithDurationGlobal = 0;
@@ -1761,8 +1773,11 @@ export default function BacktestingPanel() {
       const r = t.rMultiple || 0;
       const profitUsd = r * riskUsd;
       
-      peakGlobal += profitUsd;
-      if (peakGlobal < maxDDGlobal) maxDDGlobal = peakGlobal;
+      // 🔧 FIX: drawdown real (peak − cum), no el mínimo del PnL acumulado
+      cumGlobal += profitUsd;
+      if (cumGlobal > peakGlobal) peakGlobal = cumGlobal;
+      const ddGlobal = peakGlobal - cumGlobal;
+      if (ddGlobal > maxDDGlobal) maxDDGlobal = ddGlobal;
 
       if (profitUsd > 0) grossProfitUsdGlobal += profitUsd;
       else grossLossUsdGlobal += Math.abs(profitUsd);

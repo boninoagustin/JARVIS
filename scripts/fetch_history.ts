@@ -111,7 +111,7 @@ async function main() {
         { p: TrendbarPeriod.M5, str: 'M5' }
     ];
 
-    let tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL'];
+    let tickers = ['EURUSD', 'GBPUSD', 'US500', 'XAUUSD', 'USDCAD', 'USDJPY', 'AUDCAD', 'NZDUSD', 'USOIL', 'BTCUSD'];
     if (process.argv.length > 2) {
         tickers = [process.argv[2]];
     }

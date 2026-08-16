@@ -1,50 +1,7 @@
 {
-    "M15": {
-        "pivot_len": 4,
-        "wick_pct": 0.7931826544620068,
-        "div_len": 6,
-        "z_window": 20
-    },
-    "H1": {
-        "pivot_len": 4,
-        "wick_pct": 0.7931826544620068,
-        "div_len": 6,
-        "z_window": 20
-    },
-    "H4": {
-        "pivot_len": 4,
-        "wick_pct": 0.7931826544620068,
-        "div_len": 6,
-        "z_window": 20
-    },
-    "D1": {
-        "pivot_len": 4,
-        "wick_pct": 0.7931826544620068,
-        "div_len": 6,
-        "z_window": 20
-    },
-    "Risk": {
-        "slBufferPercent": 0.10989780293688965,
-        "fixedRR": 4.456547841776085,
-        "minRR": 1.0645777269903227,
-        "oteEntryPercent": 79,
-        "partialClosePct": 0.8,
-        "slAfterTp1": "breakeven",
-        "tp15BeEnabled": true,
-        "atrTrailEnabled": false
-    },
-    "Scoring": {
-        "minBuyPoints": 7,
-        "minSellPoints": 7
-    },
-    "Meta": {
-        "objective_value": 23.02295913383066,
-        "trade_count": 564,
-        "profit_factor": 26.672644908793455,
-        "max_drawdown_r": 1.388606864062794,
-        "win_rate": 0.9060283687943262,
-        "n_trials": 200,
-        "study_name": "jarvis_btcusd_n200",
-        "source": "hyperopt"
-    }
+    "M15": {},
+    "H1": {},
+    "H4": {},
+    "D1": {},
+    "Note": "Sin override SMC: BTCUSD usa defaults del SMCEngine (pivot/wick/div/z por TF). El hyperopt no validaba estos parámetros (smc_overrides muerto en backtest)."
 }

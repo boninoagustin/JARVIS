@@ -163,6 +163,7 @@ async function main() {
         partialClosePct: result.best.partialClosePct, slAfterTp1: result.best.slAfterTp1,
         tp15BeEnabled: result.best.tp15BeEnabled, atrTrailEnabled: result.best.atrTrailEnabled,
         structuralTrailEnabled: result.best.structuralTrailEnabled, enabled: true,
+        minimal_roi: result.best.minimal_roi, // 🔧 FIX: propagar ROI al train re-eval (antes el reporte no correspondía al fitness)
     };
     const trainConfig: any = {
         ticker, entryTrigger: 'SMART', sessions: trainSessions, sessionFilter: [sessionKey],

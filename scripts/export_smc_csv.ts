@@ -13,6 +13,16 @@ const fmt = fmtPrice;
 
 const dirToBot = (d: string) => (d === 'Bullish' ? 'BUY' : 'SELL');
 
+// 🔧 FIX look-ahead: duración de cada TF en ms. Los eventos de una vela solo se
+// conocen al CIERRE, así que se estampan con timestamp = apertura + duración.
+const TF_CLOSE_MS: Record<string, number> = {
+    'M5': 5 * 60 * 1000,
+    'M15': 15 * 60 * 1000,
+    'H1': 60 * 60 * 1000,
+    'H4': 4 * 60 * 60 * 1000,
+    'D1': 24 * 60 * 60 * 1000,
+};
+
 // Pine usaba medallas cortas: PLAT, ORO, PLATA, BRONCE, CHoCH, GOD
 // Pero el category del motor viene como "Platino", "Oro", etc.  con posible sufijo " | Legacy+SWP"
 // El SMCBridge del bot real usa estos mismos mapeos (ver SMCBridge.ts L38-40)
@@ -265,7 +275,7 @@ async function loadHTFContext(inputDir: string, period: string, ticker: string =
             wBias = candle.close > mid ? 'Bullish' : candle.close < mid ? 'Bearish' : 'Neutral';
         }
         
-        manager.addData(timestamp, state.simpleTrend ?? 'Neutral', wBias);
+        manager.addData(timestamp + (TF_CLOSE_MS[htfPeriod] ?? 0), state.simpleTrend ?? 'Neutral', wBias);
     }
     
     manager.sort();
@@ -305,8 +315,10 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
 
     for (let i = 0; i < records.length; i++) {
         const candle = records[i];
+        // 🔧 FIX look-ahead: estampar con tiempo de CIERRE (el evento solo se conoce al cierre de la vela)
+        const closeTs = candle.timestamp + (TF_CLOSE_MS[period] ?? 0);
         
-        const { htfTrend, wBias } = htfManager.getContext(candle.timestamp);
+        const { htfTrend, wBias } = htfManager.getContext(closeTs);
         engine.setHTFContext(htfTrend, wBias);
         
         const events = engine.nextCandle(candle);
@@ -345,15 +357,15 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                     const prefix = ev.type === 'EVENT_CHOCH' ? 'EVENTO_CHOCH' : 'EVENTO_BOS';
                     const dir = dirToBot(ev.direction);
                     const origin = (ev as any).origin !== undefined ? ` | ORIGIN: ${fmt((ev as any).origin)}` : '';
-                    alertMsg = `${prefix} | TF: ${tf} | Dir: ${dir} | Precio: ${fmt(candle.close)}${vwapTag}${origin} | CONFIRMED | TS: ${candle.timestamp}`;
+                    alertMsg = `${prefix} | TF: ${tf} | Dir: ${dir} | Precio: ${fmt(candle.close)}${vwapTag}${origin} | CONFIRMED | TS: ${closeTs}`;
                     break;
                 }
                 case 'EVENT_SWEEP': {
                     const dir = dirToBot(ev.direction);
                     if (ev.sweepType === 'LIQ_GRAB') {
-                        alertMsg = `LIQ_GRAB | TF: ${tf} | Dir: ${dir} | Nivel: ${fmt(ev.price)} | TS: ${candle.timestamp}`;
+                        alertMsg = `LIQ_GRAB | TF: ${tf} | Dir: ${dir} | Nivel: ${fmt(ev.price)} | TS: ${closeTs}`;
                     } else {
-                        alertMsg = `EVENTO_SWEEP | TF: ${tf} | Dir: ${dir} | Nivel Reclamado | TS: ${candle.timestamp}`;
+                        alertMsg = `EVENTO_SWEEP | TF: ${tf} | Dir: ${dir} | Nivel Reclamado | TS: ${closeTs}`;
                     }
                     break;
                 }
@@ -361,14 +373,14 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                     const dir = dirToBot(ev.direction);
                     const rsiDiff = ev.divergence?.rsiDiff ? Math.round(ev.divergence.rsiDiff * 10) / 10 : 0;
                     const score = ev.divergence?.score ?? 0;
-                    alertMsg = `EVENTO_SMC_DIV | TF: ${tf} | Dir: ${dir} | Score: ${score} | RSI_Diff: ${rsiDiff} | TS: ${candle.timestamp}`;
+                    alertMsg = `EVENTO_SMC_DIV | TF: ${tf} | Dir: ${dir} | Score: ${score} | RSI_Diff: ${rsiDiff} | TS: ${closeTs}`;
                     break;
                 }
                 case 'ZONE_TOUCHED':
                 case 'ZONE_BROKEN': {
                     const dir = dirToBot(ev.direction);
                     const medal = MEDAL_MAP[ev.category] ?? ev.category;
-                    alertMsg = `${ev.type} | TF: ${tf} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)} | TS: ${candle.timestamp}`;
+                    alertMsg = `${ev.type} | TF: ${tf} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)} | TS: ${closeTs}`;
                     break;
                 }
             }
@@ -378,11 +390,11 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
             }
         }
         
-        const msg = formatSyncZones(period, state, candle.timestamp, divZones);
+        const msg = formatSyncZones(period, state, closeTs, divZones);
         const bias = state.currentTrend === 'Bullish' ? 'BUY' : state.currentTrend === 'Bearish' ? 'SELL' : 'NEUTRAL';
         const zoneCount = (state.activeOBs?.length ?? 0) + divZones.length;
-        const hbMsg = `HEARTBEAT | TF: ${tf} | Bias: ${bias} | Zones: ${zoneCount}${vwapTag} | Z-Up: 0 | Z-Dn: 0 | TS: ${candle.timestamp}`;
-        const pingMsg = `PING_PRICE | TF: ${tf} | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${vwapTag} | Z-Up: 0 | Z-Dn: 0 | TS: ${candle.timestamp}`;
+        const hbMsg = `HEARTBEAT | TF: ${tf} | Bias: ${bias} | Zones: ${zoneCount}${vwapTag} | Z-Up: 0 | Z-Dn: 0 | TS: ${closeTs}`;
+        const pingMsg = `PING_PRICE | TF: ${tf} | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${vwapTag} | Z-Up: 0 | Z-Dn: 0 | TS: ${closeTs}`;
         
         outStream.write(`${isoLocal},${toCSVCell(hbMsg)}\n`);
         outStream.write(`${isoLocal},${toCSVCell(pingMsg)}\n`);

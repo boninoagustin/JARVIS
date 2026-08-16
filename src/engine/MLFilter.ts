@@ -37,9 +37,10 @@ interface MLModelExport {
   xgboost_model: any;
 }
 
-// ── Cache ──
-let _cachedTrees: XGBoostTree[] | null = null;
-let _cachedMeta: MLModelExport['meta'] | null = null;
+// ── Cache (por ticker; '__default__' = modelo genérico) ──
+interface LoadedModel { trees: XGBoostTree[]; meta: MLModelExport['meta']; }
+const _models = new Map<string, LoadedModel>();
+const DEFAULT_KEY = '__default__';
 
 // ── Tree walker ──
 function walkTree(features: number[], tree: XGBoostTree): number {
@@ -68,10 +69,9 @@ function walkTree(features: number[], tree: XGBoostTree): number {
 
 function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
 
-function predictProba(features: number[]): number {
-  if (!_cachedTrees) return 1.0;
+function predictProba(features: number[], trees: XGBoostTree[]): number {
   let raw = 0;
-  for (const t of _cachedTrees) raw += walkTree(features, t);
+  for (const t of trees) raw += walkTree(features, t);
   return sigmoid(raw);
 }
 
@@ -127,31 +127,33 @@ export function extractFeatures(
 
 export function predict(
   state: RadarState, direction: 'BUY' | 'SELL', nowMs: number,
-  chochPoints: number, scorePoints: number, tf: string,
+  chochPoints: number, scorePoints: number, tf: string, ticker?: string,
 ): MLPrediction {
   const f = extractFeatures(state, direction, nowMs, chochPoints, scorePoints, tf);
   const vec = [f.z_score, f.vwap_status, f.atr_value, f.sweep_direction, f.simple_trend,
                f.hour_of_day, f.session, f.day_of_week, f.score_points, f.active_zones,
                f.choch_points, f.bias_aligned];
 
-  if (!_cachedTrees) return { probability: 1.0, approved: true, threshold: 0.65, features: vec };
+  const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+  const model = _models.get(key) ?? _models.get(DEFAULT_KEY);
+  if (!model) return { probability: 1.0, approved: true, threshold: 0.65, features: vec };
 
-  const prob = predictProba(vec);
-  const threshold = _cachedMeta?.threshold ?? 0.65;
+  const prob = predictProba(vec, model.trees);
+  const threshold = model.meta?.threshold ?? 0.65;
   return { probability: prob, approved: prob >= threshold, threshold, features: vec };
 }
 
-export function isMLActive(): boolean { return _cachedTrees !== null; }
+export function isMLActive(): boolean { return _models.size > 0; }
 
 /**
  * Carga un modelo desde un objeto JSON (útil para browser y Node.js).
  * En Node.js se puede usar fs.readFileSync + JSON.parse.
  * En browser se puede usar fetch() + response.json().
  */
-export function loadModelFromJSON(json: string | object): boolean {
+export function loadModelFromJSON(json: string | object, ticker?: string): boolean {
   try {
     const exported: MLModelExport = typeof json === 'string' ? JSON.parse(json) : json;
-    _cachedMeta = exported.meta;
+    const meta = exported.meta;
 
     const booster = exported.xgboost_model?.learner?.gradient_booster?.model;
     const trees: XGBoostTree[] = [];
@@ -169,9 +171,11 @@ export function loadModelFromJSON(json: string | object): boolean {
       for (const val of Object.values(obj)) collect(val);
     };
     collect(booster || exported.xgboost_model);
-    _cachedTrees = trees;
-    console.log(`[MLFilter] ✅ ${trees.length} trees, acc=${_cachedMeta.accuracy.toFixed(3)}, f1=${_cachedMeta.f1.toFixed(3)}`);
-    return trees.length > 0;
+    if (trees.length === 0) return false;
+    const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+    _models.set(key, { trees, meta });
+    console.log(`[MLFilter] ✅ ${ticker ? ticker.toUpperCase() : 'default'}: ${trees.length} trees, acc=${meta.accuracy.toFixed(3)}, f1=${meta.f1.toFixed(3)}`);
+    return true;
   } catch (e: any) {
     console.error(`[MLFilter] ❌ Error: ${e.message}`);
     return false;

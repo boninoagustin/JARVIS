@@ -19,8 +19,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -49,13 +51,9 @@ DEFAULT_STORAGE = REPO_ROOT / "scripts" / "hyperopt" / "jarvis_hyperopt_study.db
 
 def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
     """Define el espacio de búsqueda. Con TPE el sampling es inteligente."""
+    # 🔧 FIX: NO muestrear params SMC (pivot/wick/div/z). El backtest no los evalúa
+    # (el motor consume eventos pre-horneados de los CSVs); los tunnea el bruteforcer.
     return {
-        # SMC — parámetros del motor SMCEngine (4 dimensiones)
-        "pivot_len": trial.suggest_int("pivot_len", 3, 21),
-        "min_sweep_wick_pct": trial.suggest_float("min_sweep_wick_pct", 0.05, 0.8),
-        "div_pivot_len": trial.suggest_int("div_pivot_len", 2, 7),
-        "z_score_window": trial.suggest_categorical("z_score_window", [14, 20, 50, 100]),
-
         # Risk Management — parámetros de la gestión de salida
         "slBufferPercent": trial.suggest_float("slBufferPercent", 0.0, 0.25),
         "fixedRR": trial.suggest_float("fixedRR", 1.2, 5.0),
@@ -93,11 +91,19 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
         for t in active_triggers:
             sess_cfg[t] = {
                 "enabled": True,
-                "minScore": 4,
-                "entryPercent": 50,
+                # 🔧 FIX: NO hardcodear minScore — el engine usa minBuyPoints/minSellPoints (por dirección) como umbral
+                # 🔧 FIX: fixedRR → tp2 (única clave que lee el engine para el TP2)
+                "tp2": params["fixedRR"],
+                "slBuff": params["slBufferPercent"],
+                "entryPercent": params["oteEntryPercent"] if t.startswith("ote") else 50,
+                # 🔧 FIX: gestión de salida dentro de cada trigger (antes iba en directManagement, que el engine ignora)
+                "partialClosePct": params["partialClosePct"],
+                "slAfterTp1": params["slAfterTp1"],
+                "tp15BeEnabled": params["tp15BeEnabled"],
+                "atrTrailEnabled": params["atrTrailEnabled"],
+                "structuralTrailEnabled": True,
+                "tp1StructuralMinRR": 1.2,
             }
-        sess_cfg["slBufferPercent"] = params["slBufferPercent"]
-        sess_cfg["fixedRR"] = params["fixedRR"]
         sessions[sess] = sess_cfg
 
     return {
@@ -110,22 +116,9 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
         "oteEntryPercent": params["oteEntryPercent"],
         "entryTrigger": "SMART",
         "sessions": sessions,
-        "directManagement": {
-            "partialClosePct": params["partialClosePct"],
-            "slAfterTp1": params["slAfterTp1"],
-            "tp15BeEnabled": params["tp15BeEnabled"],
-            "atrTrailEnabled": params["atrTrailEnabled"],
-        },
-        # 🆕 ROI time-decay — si no se especifica en el trial, usar default conservador
+        # 🔧 FIX: directManagement eliminado — la gestión ahora viaja dentro de cada trigger de sesión
+        # 🔧 FIX: smc_overrides eliminado — el backtest no lo leía (params SMC los tunnea el bruteforcer)
         "minimal_roi": params.get("minimal_roi", {"0": 0.015, "30": 0.005, "60": 0}),
-        # SMC engine se aplica indirectamente via el engine al procesar los logs;
-        # el worker también expone pivot/wick/div/z en el payload para usos futuros.
-        "smc_overrides": {
-            "pivot_len": params["pivot_len"],
-            "min_sweep_wick_pct": params["min_sweep_wick_pct"],
-            "div_pivot_len": params["div_pivot_len"],
-            "z_score_window": params["z_score_window"],
-        },
     }
 
 
@@ -148,8 +141,19 @@ class HyperoptWorker:
         )
         self._next_id = 1
         self._ts_errors: list[str] = []
+        # 🔧 FIX: drenar stderr en un hilo para evitar deadlock de pipe (>64KB) y preservar el tail de errores
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
-    def _send(self, method: str, params: Optional[dict] = None) -> dict:
+    def _drain_stderr(self) -> None:
+        if self.proc.stderr is None:
+            return
+        for line in self.proc.stderr:
+            self._ts_errors.append(line.strip())
+            if len(self._ts_errors) > 200:
+                self._ts_errors = self._ts_errors[-200:]
+
+    def _send(self, method: str, params: Optional[dict] = None, timeout: float = 180.0) -> dict:
         if self.proc.stdin is None or self.proc.stdout is None:
             raise RuntimeError("worker stdin/stdout cerrados")
         msg_id = self._next_id
@@ -158,8 +162,15 @@ class HyperoptWorker:
         self.proc.stdin.write(json.dumps(payload) + "\n")
         self.proc.stdin.flush()
 
-        # Leer respuesta (línea por línea hasta matchear id)
+        # Leer respuesta (línea por línea hasta matchear id) con timeout por trial
+        deadline = time.time() + timeout
         while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise RuntimeError(f"timeout esperando respuesta del worker ({timeout}s)")
+            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+            if not ready:
+                continue  # timeout parcial → re-evaluar deadline
             line = self.proc.stdout.readline()
             if not line:
                 # stderr útil para diagnóstico
@@ -170,7 +181,7 @@ class HyperoptWorker:
                 continue
             try:
                 resp = json.loads(line)
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 self._ts_errors.append(line)
                 continue
             if resp.get("id") == msg_id:
@@ -263,14 +274,18 @@ def run_optimization(args: argparse.Namespace) -> int:
         trial.set_user_attr("max_drawdown_r", metrics["max_drawdown_r"])
         trial.set_user_attr("win_rate", metrics["win_rate"])
         trial.set_user_attr("eval_ms", dt_ms)
+        if res.get("metrics_oos"):
+            trial.set_user_attr("metrics_oos", res["metrics_oos"])
 
         # Optuna MAXIMIZA → devolvemos obj tal cual
         # (en Freqtrade loss_objective se MINIMIZA y devuelve el negativo)
+        oos = res.get("metrics_oos")
+        oos_str = f" | OOS_PF={oos['profit_factor']:.2f}" if oos else ""
         print(
             f"[trial {trial.number:>4}] obj={obj:+.4f} | "
             f"PF={metrics['profit_factor']:.2f} | DD={metrics['max_drawdown_r']:.2f}R | "
             f"WR={metrics['win_rate']*100:5.1f}% | n={metrics['trade_count']:>3} | "
-            f"{dt_ms:>6.0f}ms",
+            f"{dt_ms:>6.0f}ms{oos_str}",
             file=sys.stderr,
         )
         return obj
@@ -308,6 +323,7 @@ def run_optimization(args: argparse.Namespace) -> int:
         "best_value": study.best_value,
         "best_params": study.best_params,
         "best_metrics": study.best_trial.user_attrs.get("metrics") if study.best_trial else None,
+        "best_metrics_oos": study.best_trial.user_attrs.get("metrics_oos") if study.best_trial else None,
         "best_config": build_backtest_config(args.ticker, study.best_params) if study.best_trial else None,
     }
     out_path = Path(args.output)

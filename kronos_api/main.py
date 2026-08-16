@@ -206,8 +206,6 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
         raise HTTPException(status_code=500, detail="Script de backtesting no encontrado en el VPS")
     
     cmd = [TSX_BIN, "tsx", script, ticker, tfs]
-    if config_json:
-        cmd.append(config_json)
     
     try:
         env = os.environ.copy()
@@ -219,6 +217,7 @@ async def backtest_run(ticker: str, tfs: str, config_json: str = ""):
         shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300,
+            input=config_json,  # 🔧 FIX: config por stdin (evita límite ARG_MAX con configs grandes)
             cwd=os.path.join(JARVIS_DIR, "jarvis-os"), env=env
         )
         if result.returncode != 0:

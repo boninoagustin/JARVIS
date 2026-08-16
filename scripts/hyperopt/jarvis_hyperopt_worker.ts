@@ -16,7 +16,7 @@
  * genera el campo 'parsed' correctamente (requisito de processAlert).
  */
 
-import { runBacktest } from '../../jarvis-os/src/services/backtestEngine.js';
+import { runBacktest, prepareEntries } from '../../jarvis-os/src/services/backtestEngine.js';
 import type { BacktestConfig, BacktestTrade } from '../../jarvis-os/src/services/backtestTypes.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -41,6 +41,7 @@ function log(msg: string): void {
 function loadLogsFromDir(ticker: string, baseDir: string): Map<string, string[]> {
   const logs = new Map<string, string[]>();
   const tfToFile: Record<string, string[]> = {
+    '5':   ['pine-logs-SMC Master_M5.csv', 'history_M5.csv', 'M5.csv'],
     '15':  ['pine-logs-SMC Master_M15.csv', 'history_M15.csv', 'M15.csv'],
     '60':  ['pine-logs-SMC Master_H1.csv', 'history_H1.csv', 'H1.csv'],
     '240': ['pine-logs-SMC Master_H4.csv', 'history_H4.csv', 'H4.csv'],
@@ -169,19 +170,22 @@ function computeMetrics(trades: BacktestTrade[]): Metrics {
            avg_trade_r: net / n, max_consec_losses: mcLosses, max_consec_wins: mcWins };
 }
 
-function objectiveFunction(m: Metrics, minTrades=30, ddPenalty=2.0, samplePenalty=0.5, targetTrades=200): number {
+function objectiveFunction(m: Metrics, minTrades=30, ddPenalty=0.5, samplePenalty=0.25, targetTrades=200): number {
   if (m.trade_count < minTrades) {
     if (m.trade_count === 0) return -100.0;
     return -10.0 * (1.0 - m.trade_count / minTrades);
   }
+  // 🔧 FIX: cap PF para no premiar configs degeneradas (gross_loss≈0 → PF→∞)
+  const pfCapped = Math.min(m.profit_factor, 5.0);
   const tradeDev = Math.abs(m.trade_count - targetTrades) / targetTrades;
-  return m.profit_factor - ddPenalty * m.max_drawdown_r - samplePenalty * tradeDev + 0.1 * m.expectancy;
+  // 🔧 FIX: pesos rebalanceados — antes -2·DD dominaba y de facto minimizaba drawdown
+  return 0.5 * pfCapped - ddPenalty * m.max_drawdown_r - samplePenalty * tradeDev + 1.0 * m.expectancy;
 }
 
 // -----------------------------------------------------------------------------
 // Handlers
 // -----------------------------------------------------------------------------
-function handleInit(params: any): any {
+async function handleInit(params: any): Promise<any> {
   const ticker = params.ticker as string;
   const logDir = params.log_dir as string;
   log(`init ticker=${ticker} log_dir=${logDir}`);
@@ -189,25 +193,46 @@ function handleInit(params: any): any {
   if (logs.size === 0) {
     throw new Error(`No logs found for ${ticker} in ${logDir}`);
   }
+  const prepared = await prepareEntries(logs);
+  // 🔧 FIX: split temporal 70/30 para validación out-of-sample (prepared viene ordenado por TS)
+  const cutIdx = Math.floor(prepared.length * 0.7);
+  const cutTs = prepared[cutIdx]?.ts ?? 0;
+  const train = prepared.filter(e => e.ts < cutTs);
+  const test = prepared.filter(e => e.ts >= cutTs);
   (global as any).__logs = logs;
+  (global as any).__prepared = prepared;
+  (global as any).__train = train;
+  (global as any).__test = test;
+  log(`split OOS: train=${train.length} test=${test.length} (cutTs=${cutTs})`);
   return {
     ticker,
     logs_loaded: Object.fromEntries([...logs.entries()].map(([k, v]) => [k, v.length])),
-    total_events: [...logs.values()].reduce((acc, arr) => acc + arr.length, 0),
+    total_events: prepared.length,
+    oos_split: { train: train.length, test: test.length },
   };
 }
 
-function handleEvaluate(params: any): any {
+async function handleEvaluate(params: any): Promise<any> {
   const config: BacktestConfig = params.config;
   const logs: Map<string, string[]> = (global as any).__logs;
-  if (!logs) throw new Error('Worker no inicializado. Llamar method=init primero.');
+  const train = (global as any).__train;
+  const test = (global as any).__test;
+  if (!logs || !train) throw new Error('Worker no inicializado. Llamar method=init primero.');
 
   // runBacktest espera Map<string, (string|LogEntry)[]>
   // Pasamos strings crudos → prepareEntries → preParseAlert correcto
-  const result = runBacktest(logs as Map<string, (string|any)[]>, config);
+  const result = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, train);
   const metrics = computeMetrics(result.trades);
   const obj = objectiveFunction(metrics);
-  return { metrics, objective: obj, trade_count: metrics.trade_count,
+
+  // 🔧 FIX: validación out-of-sample sobre el 30% final (solo reportada, no entra en la objetivo)
+  let metricsOos: any = null;
+  if (test && test.length > 0) {
+    const oosResult = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, test);
+    metricsOos = computeMetrics(oosResult.trades);
+  }
+
+  return { metrics, metrics_oos: metricsOos, objective: obj, trade_count: metrics.trade_count,
            start_date: result.startDate, end_date: result.endDate };
 }
 
@@ -217,6 +242,7 @@ function handleEvaluate(params: any): any {
 async function main() {
   log('worker started, waiting for RPC...');
   let buf = '';
+  let queue: Promise<void> = Promise.resolve();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
     buf += chunk;
@@ -225,22 +251,27 @@ async function main() {
       const line = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 1);
       if (!line) continue;
-      let req: RpcRequest;
-      try { req = JSON.parse(line); }
-      catch (e: any) { send({ id: -1, error: `JSON parse: ${e.message}` }); continue; }
-      try {
-        let result: any;
-        switch (req.method) {
-          case 'init':     result = handleInit(req.params || {}); break;
-          case 'evaluate': result = handleEvaluate(req.params || {}); break;
-          case 'ping':     result = { pong: true, ts: Date.now() }; break;
-          case 'shutdown': send({ id: req.id, result: { ok: true } }); log('shutdown'); process.exit(0); return;
-          default: throw new Error(`Unknown method: ${req.method}`);
-        }
-        send({ id: req.id, result });
-      } catch (e: any) { send({ id: req.id, error: e.message || String(e) }); }
+      queue = queue.then(() => handleRpc(line));
     }
   });
-  process.stdin.on('end', () => { log('stdin closed'); process.exit(0); });
+  process.stdin.on('end', () => { queue.finally(() => { log('stdin closed'); process.exit(0); }); });
 }
+
+async function handleRpc(line: string): Promise<void> {
+  let req: RpcRequest;
+  try { req = JSON.parse(line); }
+  catch (e: any) { send({ id: -1, error: `JSON parse: ${e.message}` }); return; }
+  try {
+    let result: any;
+    switch (req.method) {
+      case 'init':     result = await handleInit(req.params || {}); break;
+      case 'evaluate': result = await handleEvaluate(req.params || {}); break;
+      case 'ping':     result = { pong: true, ts: Date.now() }; break;
+      case 'shutdown': send({ id: req.id, result: { ok: true } }); log('shutdown'); process.exit(0); return;
+      default: throw new Error(`Unknown method: ${req.method}`);
+    }
+    send({ id: req.id, result });
+  } catch (e: any) { send({ id: req.id, error: e.message || String(e) }); }
+}
+
 main().catch((e) => { log(`fatal: ${e.message}`); process.exit(1); });

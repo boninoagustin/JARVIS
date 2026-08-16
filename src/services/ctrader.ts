@@ -118,6 +118,8 @@ async function connectWithRetry(): Promise<boolean> {
                 if (s.status === 'disconnected' && ctClient === client) {
                     isConnected = false;
                     ctClient = null;
+                    console.error('[CTRADER] 🚨 Feed perdido. Reiniciando para re-suscripción limpia...');
+                    setTimeout(() => process.exit(1), 2000); // PM2 re-levanta y re-suscribe
                 }
             });
             
@@ -387,6 +389,7 @@ export async function initializeScanner() {
 
     const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'BTCUSD', 'USOIL'];
     const timeframes = [
+        { p: TrendbarPeriod.M5, str: 'M5' },
         { p: TrendbarPeriod.M15, str: 'M15' },
         { p: TrendbarPeriod.H1, str: 'H1' },
         { p: TrendbarPeriod.H4, str: 'H4' },
@@ -757,6 +760,54 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     console.log(`[CTRADER] ✅ Posición ${positionId} cerrada de emergencia exitosamente.`);
                 } catch (closeErr: any) {
                     console.error(`[CTRADER] ❌ FATAL: No se pudo cerrar la posición ${positionId} de emergencia!`, closeErr.message);
+
+                    // 🆕 (a) Persistir ghost_position para reconciliación al arranque
+                    if (db) {
+                        try {
+                            await db.collection('ghost_positions').doc(String(positionId)).set({
+                                positionId: String(positionId),
+                                ticker,
+                                direction,
+                                lots,
+                                reason: `SL/TP no adjuntado y cierre de emergencia falló: ${closeErr.message}`,
+                                status: 'UNPROTECTED',
+                                createdAt: Date.now(),
+                            });
+                        } catch (persistErr: any) {
+                            console.error('[CTRADER] ❌ No se pudo persistir ghost_position:', persistErr.message);
+                        }
+                    }
+
+                    // 🆕 (b) Retry del cierre con backoff
+                    let closed = false;
+                    for (const delayMs of [2000, 5000, 10000]) {
+                        await new Promise(r => setTimeout(r, delayMs));
+                        try {
+                            await ctClient.close(Number(positionId));
+                            closed = true;
+                            console.log(`[CTRADER] ✅ Posición ${positionId} cerrada en reintento (backoff ${delayMs}ms).`);
+                            if (db) db.collection('ghost_positions').doc(String(positionId)).delete().catch(() => {});
+                            break;
+                        } catch (retryErr: any) {
+                            console.error(`[CTRADER] 🔄 Reintento fallido (${delayMs}ms):`, retryErr.message);
+                        }
+                    }
+
+                    // 🆕 (c) Alerta Telegram crítica
+                    try {
+                        const { bot } = await import('../bot/telegram.js');
+                        const statusTxt = closed ? 'CERRADA en reintento' : 'AÚN ABIERTA — CERRAR MANUALMENTE YA';
+                        const msg = `🚨 <b>[GHOST POSITION — RIESGO NO ACOTADO]</b> 🚨\n\n` +
+                            `Posición <b>${positionId}</b> (${ticker} ${direction}, ${lots} lotes) sin SL/TP y con cierre de emergencia fallido.\n` +
+                            `Estado tras reintentos: <b>${statusTxt}</b>\n` +
+                            `Causa: ${closeErr.message}\n\n` +
+                            `💡 Revisar en cTrader y cerrar manualmente si sigue abierta.`;
+                        for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                            await bot.api.sendMessage(userId, msg, { parse_mode: 'HTML' }).catch(() => {});
+                        }
+                    } catch (tgErr: any) {
+                        console.error('[CTRADER] ❌ No se pudo enviar alerta Telegram de ghost position:', tgErr.message);
+                    }
                 }
                 throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
             }
@@ -777,7 +828,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 tradeId: params.tradeId,
                 demo: config.CTRADER_DEMO,
                 timestamp: Date.now(),
-            }).catch(() => {});
+            }).catch((err: any) => console.error('[CTRADER] ❌ Fallo guardando execution_metrics:', err?.message ?? err));
         }
 
         console.log(`[CTRADER] ✅ Orden ejecutada: ${direction} ${ticker} | ${lots} lotes @ ${executedPrice} | posID: ${positionId}`);

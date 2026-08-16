@@ -1,0 +1,13 @@
+import admin from 'firebase-admin';
+import fs from 'node:fs';
+const sa = JSON.parse(fs.readFileSync('/opt/JARVIS/service-account.json', 'utf8'));
+admin.initializeApp({ credential: admin.credential.cert(sa) });
+const db = admin.firestore();
+const out = {};
+const snap = await db.collection('asset_configs').get();
+for (const d of snap.docs) out[d.id] = d.data();
+const path = `/opt/JARVIS/backups/asset_configs_backup_${Date.now()}.json`;
+fs.mkdirSync('/opt/JARVIS/backups', { recursive: true });
+fs.writeFileSync(path, JSON.stringify(out, null, 2));
+console.log('backup OK:', path, '| docs:', Object.keys(out).length);
+process.exit(0);

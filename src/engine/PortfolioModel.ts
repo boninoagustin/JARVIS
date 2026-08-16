@@ -20,14 +20,42 @@ export function invalidateRiskCache(prefix?: string): void {
 }
 
 
-const BA_TZ = 'America/Argentina/Buenos_Aires';
+const NY_TZ = 'America/New_York';
 
-function getArgentinaMidnightMs(nowMs: number): number {
-    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: BA_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-    const [year, month, day] = dayFmt.format(new Date(nowMs)).split('-').map(Number);
-    const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-    const offsetMs = new Date(probe.toLocaleString('en-US', { timeZone: BA_TZ })).getTime() - probe.getTime();
-    return Date.UTC(year, month - 1, day, 0, 0, 0) - offsetMs;
+/**
+ * Offset UTC (ms) de un timezone en un instante dado. Negativo al oeste de Greenwich.
+ * Usa Intl `longOffset` (ej. "GMT-04:00") para NO depender de la zona horaria del server.
+ */
+function getTimezoneOffsetMs(timeZone: string, atMs: number): number {
+    const dtf = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' });
+    const name = dtf.formatToParts(new Date(atMs)).find(p => p.type === 'timeZoneName')?.value ?? 'GMT';
+    const m = name.match(/GMT([+-])(\d{2}):(\d{2})/);
+    if (!m) return 0;
+    const sign = m[1] === '-' ? -1 : 1;
+    return sign * (Number(m[2]) * 60 + Number(m[3])) * 60000;
+}
+
+/**
+ * Inicio del día FX (convención prop-firm / Funding Pips): las 17:00 de Nueva York.
+ * El día de trading rota al cierre de la sesión NY, no a medianoche local. DST-aware.
+ */
+export function getFxDayStartMs(nowMs: number): number {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: NY_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(nowMs));
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+    const year = get('year'), month = get('month'), day = get('day'), hour = get('hour');
+
+    let fxYear = year, fxMonth = month, fxDay = day;
+    if (hour < 17) {
+        const prev = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+        prev.setUTCDate(prev.getUTCDate() - 1);
+        fxYear = prev.getUTCFullYear(); fxMonth = prev.getUTCMonth() + 1; fxDay = prev.getUTCDate();
+    }
+
+    const offsetMs = getTimezoneOffsetMs(NY_TZ, Date.UTC(fxYear, fxMonth - 1, fxDay, 17, 0, 0));
+    return Date.UTC(fxYear, fxMonth - 1, fxDay, 17, 0, 0) - offsetMs;
 }
 
 /**
@@ -54,7 +82,8 @@ async function withCache<T>(key: string, nowMs: number, fetcher: () => Promise<T
     const promise = fetcher().then(result => {
         riskCache.set(key, { at: nowMs, result });
         return result;
-    }).catch(_err => {
+    }).catch(err => {
+        console.error(`[RISK] 🚨 Error leyendo trade_journal (key=${key}) — usando cache/fallback:`, err);
         // En caso de fallo, intentamos devolver el último valor conocido si existe, o el fallback
         const lastKnown = riskCache.get(key);
         const STALE_TOLERANCE = 5 * 60 * 1000;
@@ -88,10 +117,10 @@ export async function evaluateGlobalRisk(
 
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`global_${namespace}`, nowMs, async () => {
-        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+        const fxDayStartMs = getFxDayStartMs(nowMs);
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs - 48 * 60 * 60 * 1000)
+            .where('timestamp', '>=', fxDayStartMs - 48 * 60 * 60 * 1000)
             .get();
 
         if (snapshot.empty) return { isKilled: false } as KillswitchResult;
@@ -104,7 +133,7 @@ export async function evaluateGlobalRisk(
                 const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
                 return modeMatch && sessionMatch && t.result;
             })
-            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= artMidnightMs)
+            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= fxDayStartMs)
             .sort((a, b) => (a.closedAt ?? a.timestamp) - (b.closedAt ?? b.timestamp));
 
         let totalTrades = trades.length;
@@ -121,8 +150,8 @@ export async function evaluateGlobalRisk(
                 else rMultiple = 0;
             }
 
-            // Corrección de punto flotante
-            dailyPnLR = Math.round((dailyPnLR + rMultiple) * 1000) / 1000;
+            // Acumular crudo (redondeo solo al comparar/mostrar, no en cada acumulación)
+            dailyPnLR += rMultiple;
             if (dailyPnLR > peakPnLR) peakPnLR = dailyPnLR;
 
             if (rMultiple < 0) {
@@ -156,12 +185,12 @@ export async function evaluateGlobalRisk(
 
         let result = { isKilled: false } as KillswitchResult;
         if (isKilled) {
-            const endOfDayMs = getArgentinaMidnightMs(artMidnightMs + 30 * 60 * 60 * 1000) - 1000;
+            const endOfDayMs = getFxDayStartMs(fxDayStartMs + 30 * 60 * 60 * 1000) - 1000;
             result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
         }
 
         return result;
-    }, { isKilled: true, killReason: 'risk-data-unavailable: límites en fail-closed' });
+    }, { isKilled: false, killReason: 'risk-data-unavailable (fail-open)' });
 }
 
 /** 🆕 Límites de riesgo POR ACTIVO (asset_configs/{ticker}) — espejo de evaluateGlobalRisk filtrado por ticker */
@@ -189,13 +218,13 @@ export async function evaluateAssetRisk(
 
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`asset_${namespace}_${ticker}`, nowMs, async () => {
-        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+        const fxDayStartMs = getFxDayStartMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs - 48 * 60 * 60 * 1000)
+            .where('timestamp', '>=', fxDayStartMs - 48 * 60 * 60 * 1000)
             .get();
 
         if (snapshot.empty) return { isKilled: false } as KillswitchResult;
@@ -207,7 +236,7 @@ export async function evaluateAssetRisk(
                 const sessionMatch = isBacktest ? (backtestSessionId ? t.sessionId === backtestSessionId : true) : true;
                 return modeMatch && sessionMatch && t.result && tickerVariants.includes(t.ticker);
             })
-            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= artMidnightMs)
+            .filter(t => (typeof t.closedAt === 'number' ? t.closedAt : t.timestamp) >= fxDayStartMs)
             .sort((a, b) => (a.closedAt ?? a.timestamp) - (b.closedAt ?? b.timestamp));
 
         let totalTrades = trades.length;
@@ -224,7 +253,7 @@ export async function evaluateAssetRisk(
                 else rMultiple = 0;
             }
 
-            dailyPnLR = Math.round((dailyPnLR + rMultiple) * 1000) / 1000;
+            dailyPnLR += rMultiple;
             if (dailyPnLR > peakPnLR) peakPnLR = dailyPnLR;
 
             if (rMultiple < 0) {
@@ -258,12 +287,12 @@ export async function evaluateAssetRisk(
 
         let result = { isKilled: false } as KillswitchResult;
         if (isKilled) {
-            const endOfDayMs = getArgentinaMidnightMs(artMidnightMs + 30 * 60 * 60 * 1000) - 1000;
+            const endOfDayMs = getFxDayStartMs(fxDayStartMs + 30 * 60 * 60 * 1000) - 1000;
             result = { isKilled: true, killUntilMs: endOfDayMs, killReason };
         }
 
         return result;
-    }, { isKilled: true, killReason: `[${ticker}] asset-risk-data-unavailable: límites en fail-closed` });
+    }, { isKilled: false, killReason: `[${ticker}] asset-risk-data-unavailable (fail-open)` });
 }
 
 export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
@@ -271,13 +300,13 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`sells_${namespace}_${ticker}`, nowMs, async () => {
-        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+        const fxDayStartMs = getFxDayStartMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
+            .where('timestamp', '>=', fxDayStartMs)
             .where('direction', '==', 'SELL')
             .get();
 
@@ -289,7 +318,7 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
         }).length;
         
         return result;
-    }, 999); // 999 = fail closed
+    }, 0); // 0 = fail open
 }
 
 export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
@@ -297,13 +326,13 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`buys_${namespace}_${ticker}`, nowMs, async () => {
-        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+        const fxDayStartMs = getFxDayStartMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
+            .where('timestamp', '>=', fxDayStartMs)
             .where('direction', '==', 'BUY')
             .get();
 
@@ -315,7 +344,7 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
         }).length;
         
         return result;
-    }, 999);
+    }, 0);
 }
 
 export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, globalPortfolioConfig: GlobalPortfolioConfig, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
@@ -323,13 +352,13 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`streak_${namespace}_${ticker}_${session}_${direction}`, nowMs, async () => {
-        const artMidnightMs = getArgentinaMidnightMs(nowMs);
+        const fxDayStartMs = getFxDayStartMs(nowMs);
 
         const tickerVariants = [ticker];
         if (ticker.includes('NAS') || ticker.includes('US100')) tickerVariants.push('NAS100', 'US100');
 
         const snapshot = await db.collection('trade_journal')
-            .where('timestamp', '>=', artMidnightMs)
+            .where('timestamp', '>=', fxDayStartMs)
             .where('direction', '==', direction)
             .get();
 
@@ -360,5 +389,5 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
         }
         
         return streak;
-    }, 999);
+    }, 0);
 }

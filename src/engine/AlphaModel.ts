@@ -327,14 +327,14 @@ export function evaluateImpulseCore(
             const activeScore = leg.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
             const scorePts = computePoints(activeScore, nowMs);
             const tfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';
-            const mlPred = mlPredict(state, leg.dir, nowMs, leg.chochPoints || 0, scorePts, tfKey);
+            const mlPred = mlPredict(state, leg.dir, nowMs, leg.chochPoints || 0, scorePts, tfKey, ticker);
 
             if (isMLActive() && mlPred) {
                 if (!mlPred.approved) {
-                    dbg(`[ML] 🤖 ${ticker} ${leg.dir}: RECHAZADO por ML (prob=${mlPred.probability.toFixed(3)} < ${mlPred.threshold})`);
+                    console.log(`[ML] ⛔ ${ticker} ${leg.dir}: RECHAZADO por ML (prob=${mlPred.probability.toFixed(3)} < ${mlPred.threshold})`);
                     return { updatedLeg: leg };
                 }
-                dbg(`[ML] 🤖 ${ticker} ${leg.dir}: APROBADO por ML (prob=${mlPred.probability.toFixed(3)} >= ${mlPred.threshold}) [override heurística]`);
+                console.log(`[ML] ✅ ${ticker} ${leg.dir}: APROBADO por ML (prob=${mlPred.probability.toFixed(3)} >= ${mlPred.threshold}) [override heurística]`);
             } else {
                 // Fallback: heurística legacy (solo si ML no está activo)
 
