@@ -1,6 +1,6 @@
 import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
-import { config } from '../config.js';
+import { config, config as envConfig } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
 import * as fs from 'fs';
 
@@ -2699,9 +2699,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             if (isBacktest) {
                 const { getCurrentSessionId } = await import('../services/backtesting.js');
                 sessionId = getCurrentSessionId() || undefined;
-            } else {
+            } else if (envConfig.KRONOS_AI_ENABLED) {
                 let kronosRawDetails = '';
-                // Kronos AI local (LSTM, sin quota externa)
+                // Kronos AI local (LSTM, sin quota externa) — off por default (sin backtest)
                 try {
                     const { evaluateWithKronos } = await import('../services/kronos.js');
                     const kRes = await evaluateWithKronos(

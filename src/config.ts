@@ -28,6 +28,8 @@ export const config = {
   CTRADER_DEMO: (process.env.CTRADER_DEMO || 'true').toLowerCase() === 'true',
   CTRADER_RISK_PERCENT: parseFloat(process.env.CTRADER_RISK_PERCENT || '1'),
   CTRADER_MAX_POSITIONS: parseInt(process.env.CTRADER_MAX_POSITIONS || '3', 10),
+  // Kronos AI + enjambre multi-IA: solo anotación del journal (no gatea). Sin backtest → OFF por defecto.
+  KRONOS_AI_ENABLED: (process.env.KRONOS_AI_ENABLED || 'false') === 'true',
   // 🛡️ Market-Range: orden de mercado con cap de slippage nativo de cTrader.
   // Si falla por rechazo (no por timeout), cae al MARKET clásico.
   CTRADER_MARKET_RANGE: (process.env.CTRADER_MARKET_RANGE || 'true').toLowerCase() === 'true',
