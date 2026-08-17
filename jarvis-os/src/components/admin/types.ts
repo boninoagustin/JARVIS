@@ -74,14 +74,15 @@ export interface BotConfig {
 }
 
 export const TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'USOIL', 'BTCUSD'] as const;
-export const SESSIONS = ['ALL', 'ASIA', 'LONDON', 'NY'] as const;
+export const SESSIONS = ['ALL', 'ASIA', 'LONDON', 'NY', 'OFF'] as const;
 export type SessionKey = typeof SESSIONS[number];
 
 export const SESSION_LABELS: Record<SessionKey, { label: string; emoji: string; color: string }> = {
-  ALL:    { label: 'Global',  emoji: '🌍', color: '#ffaa00' },
+  ALL:    { label: 'Fallback (si falta la sesión)', emoji: '🌍', color: '#ffaa00' },
   ASIA:   { label: 'Asia',    emoji: '🌏', color: '#7c4dff' },
   LONDON: { label: 'London',  emoji: '🇬🇧', color: '#0088ff' },
   NY:     { label: 'New York', emoji: '🇺🇸', color: '#00e676' },
+  OFF:    { label: 'Nocturna (OFF)', emoji: '🌙', color: '#888888' },
 };
 
 export const DEFAULT_ASSET_CONFIG: AssetConfig = {

@@ -36,6 +36,17 @@ export default function AdminPanel() {
               oteBos15m: { enabled: true, minScore: 8 },
             };
           });
+          // 🌙 OFF nace apagada SIEMPRE (por diseño: no se opera fuera de sesión)
+          if (!data.sessions?.OFF) sessions.OFF = {
+            choch5m: { enabled: false, minScore: 12 },
+            choch15m: { enabled: false, minScore: 12 },
+            bos5m: { enabled: false, minScore: 12 },
+            bos15m: { enabled: false, minScore: 12 },
+            oteChoch5m: { enabled: false, minScore: 8 },
+            oteChoch15m: { enabled: false, minScore: 8 },
+            oteBos5m: { enabled: false, minScore: 8 },
+            oteBos15m: { enabled: false, minScore: 8 },
+          };
           setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
           setMinimalRoiText(JSON.stringify(data.minimal_roi ?? {}, null, 1));
           setMinimalRoiError(false);
@@ -55,6 +66,17 @@ export default function AdminPanel() {
               oteBos15m: { enabled: true, minScore: 8 },
             };
           });
+          // 🌙 OFF nace apagada SIEMPRE (por diseño: no se opera fuera de sesión)
+          newConfig.sessions.OFF = {
+            choch5m: { enabled: false, minScore: 12 },
+            choch15m: { enabled: false, minScore: 12 },
+            bos5m: { enabled: false, minScore: 12 },
+            bos15m: { enabled: false, minScore: 12 },
+            oteChoch5m: { enabled: false, minScore: 8 },
+            oteChoch15m: { enabled: false, minScore: 8 },
+            oteBos5m: { enabled: false, minScore: 8 },
+            oteBos15m: { enabled: false, minScore: 8 },
+          };
           setAssetConfig(newConfig);
           setMinimalRoiText('{}');
           setMinimalRoiError(false);
