@@ -8,7 +8,7 @@ import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
 import BacktestingPanel from './components/BacktestingPanel';
-import AutoTunePanel from './components/AutoTunePanel';
+import PeriodicOptPanel from './components/PeriodicOptPanel';
 import SMCChartPanel from './components/SMCChartPanel';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
@@ -41,7 +41,7 @@ function Sidebar() {
           <Settings size={18} /> Panel de Control
         </NavLink>
         <NavLink to="/autotune" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <BrainCircuit size={18} /> Auto-Tune (ML)
+          <BrainCircuit size={18} /> Optimización Periódica
         </NavLink>
       </nav>
       
@@ -246,7 +246,7 @@ function App() {
             <Route path="/journal" element={<AnalyticsJournal />} />
             <Route path="/backtesting" element={<BacktestingPanel />} />
             <Route path="/admin" element={<AdminPanel />} />
-            <Route path="/autotune" element={<AutoTunePanel />} />
+            <Route path="/autotune" element={<PeriodicOptPanel />} />
           </Routes>
         </main>
       </div>
