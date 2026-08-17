@@ -11,6 +11,9 @@ export default function AdminPanel() {
   const [activeTicker, setActiveTicker] = useState<string>(TICKERS[0]);
   const [assetConfig, setAssetConfig] = useState<AssetConfig>(DEFAULT_ASSET_CONFIG);
   const [saving, setSaving] = useState(false);
+  const [editedFields, setEditedFields] = useState<Set<string>>(new Set());
+  const [minimalRoiText, setMinimalRoiText] = useState<string>('{}');
+  const [minimalRoiError, setMinimalRoiError] = useState(false);
 
   // Cargar config del activo seleccionado
   useEffect(() => {
@@ -34,6 +37,9 @@ export default function AdminPanel() {
             };
           });
           setAssetConfig({ ...DEFAULT_ASSET_CONFIG, ...data, sessions });
+          setMinimalRoiText(JSON.stringify(data.minimal_roi ?? {}, null, 1));
+          setMinimalRoiError(false);
+          setEditedFields(new Set());
         } else {
           // Inicializar si no existe
           const newConfig = { ...DEFAULT_ASSET_CONFIG, sessions: {} as Record<string, SessionConfig> };
@@ -50,6 +56,9 @@ export default function AdminPanel() {
             };
           });
           setAssetConfig(newConfig);
+          setMinimalRoiText('{}');
+          setMinimalRoiError(false);
+          setEditedFields(new Set());
         }
       } catch (err) {
         console.error("Error processing config:", err);
@@ -63,6 +72,7 @@ export default function AdminPanel() {
 
   const handleChange = (field: keyof AssetConfig, value: any) => {
     setAssetConfig((prev: AssetConfig) => ({ ...prev, [field]: value }));
+    setEditedFields((prev: Set<string>) => new Set(prev).add(field as string));
   };
 
   const handleSessionChange = (session: SessionKey, config: SessionConfig) => {
@@ -70,16 +80,37 @@ export default function AdminPanel() {
       ...prev,
       sessions: { ...prev.sessions, [session]: config }
     }));
+    setEditedFields((prev: Set<string>) => new Set(prev).add('sessions'));
   };
+
+  // Campos que el panel puede escribir. Guardado por diff: SOLO se persiste lo que
+  // el usuario tocó (evita pisar con defaults campos que el doc no tenía, ej. timesfm).
+  const MANAGED_FIELDS = new Set([
+    'fixedRR', 'slBufferPercent', 'minPointsForBuy', 'minPointsForSell',
+    'maxSellsPerDay', 'sellScorePenalty', 'maxBuysPerDay', 'buyScorePenalty',
+    'maxDailyLossR', 'maxConsecutiveLosses', 'maxTradesPerDay', 'trailingDrawdownR', 'dailyProfitTargetR',
+    'enabled', 'entryTrigger', 'oteEntryPercent', 'autoTrading',
+    'partialClosePct', 'slAfterTp1', 'tp15BeEnabled', 'atrTrailEnabled',
+    'structuralTrailEnabled', 'tp1StructuralMinRR', 'minimal_roi',
+  ]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await setDoc(doc(db, 'asset_configs', activeTicker), {
-        ...assetConfig,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+      const payload: Record<string, any> = {};
+      for (const f of editedFields) {
+        if (MANAGED_FIELDS.has(f)) payload[f] = (assetConfig as any)[f];
+      }
+      if (editedFields.has('sessions')) payload.sessions = assetConfig.sessions;
+      payload.updatedAt = new Date().toISOString();
+      if (Object.keys(payload).length === 1) {
+        toast('Sin cambios que guardar', 'success');
+        setSaving(false);
+        return;
+      }
+      await setDoc(doc(db, 'asset_configs', activeTicker), payload, { merge: true });
       toast(`✅ Configuración de ${activeTicker} guardada`, 'success');
+      setEditedFields(new Set());
     } catch (e) {
       console.error(e);
       toast('❌ Error guardando configuración', 'error');
@@ -220,6 +251,141 @@ export default function AdminPanel() {
                 <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>Resta puntos a setups BUY</div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* 🛡️ KILLSWITCHES Y EJECUCIÓN */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+          <div style={{ ...cardClass, borderColor: '#ffaa0040', backgroundColor: '#ffaa0005' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ffaa00', marginBottom: '16px', fontSize: '0.9rem' }}>
+              🛡️ Killswitches / Límites Diarios
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Max Pérdida Diaria (R)</label>
+                <input type="number" step="0.1" value={assetConfig.maxDailyLossR ?? 0} onChange={e => handleChange('maxDailyLossR', parseFloat(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin límite</div>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Max Pérdidas Consecutivas</label>
+                <input type="number" value={assetConfig.maxConsecutiveLosses ?? 0} onChange={e => handleChange('maxConsecutiveLosses', parseInt(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin límite</div>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Max Trades / Día</label>
+                <input type="number" value={assetConfig.maxTradesPerDay ?? 0} onChange={e => handleChange('maxTradesPerDay', parseInt(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin límite</div>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Trailing Drawdown (R)</label>
+                <input type="number" step="0.1" value={assetConfig.trailingDrawdownR ?? 0} onChange={e => handleChange('trailingDrawdownR', parseFloat(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin límite</div>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Objetivo Diario (R)</label>
+                <input type="number" step="0.1" value={assetConfig.dailyProfitTargetR ?? 0} onChange={e => handleChange('dailyProfitTargetR', parseFloat(e.target.value) || 0)} style={inputClass} />
+                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin objetivo</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={cardClass}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#00e676', marginBottom: '16px', fontSize: '0.9rem' }}>
+              ⚙️ Ejecución
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>Modo de Entrada</label>
+                <select value={assetConfig.entryTrigger} onChange={e => handleChange('entryTrigger', e.target.value)} style={{ ...inputClass, appearance: 'auto' }}>
+                  <option value="SMART">SMART</option>
+                  <option value="OTE">OTE</option>
+                  <option value="CHOCH">CHOCH</option>
+                  <option value="BOTH">BOTH</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#888' }}>OTE Entry %</label>
+                <input type="number" value={assetConfig.oteEntryPercent} onChange={e => handleChange('oteEntryPercent', parseFloat(e.target.value))} style={inputClass} />
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#e6e6e6' }}>
+                <input type="checkbox" checked={assetConfig.enabled} onChange={e => handleChange('enabled', e.target.checked)} style={{ accentColor: '#00e676', width: '16px', height: '16px' }} />
+                Activo operando
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#e6e6e6' }}>
+                <input type="checkbox" checked={assetConfig.autoTrading ?? true} onChange={e => handleChange('autoTrading', e.target.checked)} style={{ accentColor: '#00e676', width: '16px', height: '16px' }} />
+                Auto-trading
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* 🎯 GESTIÓN DE TRADES */}
+        <div style={{ ...cardClass, marginTop: '20px', borderColor: '#0088ff30' }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#0088ff', marginBottom: '16px', fontSize: '0.9rem' }}>
+            🎯 Gestión de Trades (TP1 parcial / SL post-TP1 / trailing)
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: '#888' }}>Cierre Parcial TP1 (%)</label>
+              <input type="number" step="5" min="0" max="100" value={assetConfig.partialClosePct ?? 0} onChange={e => handleChange('partialClosePct', parseFloat(e.target.value) || 0)} style={inputClass} />
+              <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '4px' }}>0 = sin toma parcial</div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: '#888' }}>SL tras TP1</label>
+              <select value={assetConfig.slAfterTp1 ?? 'midpoint'} onChange={e => handleChange('slAfterTp1', e.target.value)} style={{ ...inputClass, appearance: 'auto' }}>
+                <option value="midpoint">Midpoint</option>
+                <option value="breakeven">Breakeven</option>
+                <option value="none">Sin mover</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: '#888' }}>TP1 Min RR (estructural)</label>
+              <input type="number" step="0.1" value={assetConfig.tp1StructuralMinRR ?? 0} onChange={e => handleChange('tp1StructuralMinRR', parseFloat(e.target.value) || 0)} style={inputClass} />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#e6e6e6' }}>
+              <input type="checkbox" checked={assetConfig.tp15BeEnabled ?? false} onChange={e => handleChange('tp15BeEnabled', e.target.checked)} style={{ accentColor: '#0088ff', width: '16px', height: '16px' }} />
+              BE en TP1 (15m)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#e6e6e6' }}>
+              <input type="checkbox" checked={assetConfig.atrTrailEnabled ?? false} onChange={e => handleChange('atrTrailEnabled', e.target.checked)} style={{ accentColor: '#0088ff', width: '16px', height: '16px' }} />
+              Trailing ATR
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#e6e6e6' }}>
+              <input type="checkbox" checked={assetConfig.structuralTrailEnabled ?? false} onChange={e => handleChange('structuralTrailEnabled', e.target.checked)} style={{ accentColor: '#0088ff', width: '16px', height: '16px' }} />
+              Trailing estructural
+            </label>
+          </div>
+          <div style={{ marginTop: '12px' }}>
+            <label style={{ fontSize: '0.75rem', color: '#888' }}>{'ROI time-decay (JSON: {"0": 0.015, "30": 0.005})'}</label>
+            <textarea
+              rows={2}
+              value={minimalRoiText}
+              onChange={e => {
+                const v = e.target.value;
+                setMinimalRoiText(v);
+                try {
+                  handleChange('minimal_roi', JSON.parse(v));
+                  setMinimalRoiError(false);
+                } catch {
+                  setMinimalRoiError(true);
+                }
+              }}
+              style={{ ...inputClass, fontFamily: "'JetBrains Mono', monospace", resize: 'vertical', borderColor: minimalRoiError ? '#ff3333' : '#333' }}
+            />
+            {minimalRoiError && <div style={{ fontSize: '0.65rem', color: '#ff3333', marginTop: '4px' }}>JSON inválido — no se guardará hasta corregirlo</div>}
+          </div>
+        </div>
+
+        {/* 🤖 TIMESFM (solo lectura — se gestiona con el tooling del shadow) */}
+        <div style={{ ...cardClass, marginTop: '20px', borderColor: '#7c4dff30' }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#7c4dff', marginBottom: '8px', fontSize: '0.9rem' }}>
+            🤖 TimesFM (solo lectura)
+          </h3>
+          <pre style={{ fontSize: '0.75rem', color: '#aaa', background: '#000', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: 0 }}>
+            {assetConfig.timesfm ? JSON.stringify(assetConfig.timesfm, null, 2) : '(sin config TimesFM)'}
+          </pre>
+          <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '6px' }}>
+            Este bloque se gestiona desde el tooling del shadow (enable_shadow.js / run_ab.py) — no se edita acá.
           </div>
         </div>
 

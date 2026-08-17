@@ -29,6 +29,7 @@ export interface AssetConfig {
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
   enabled: boolean;
+  autoTrading?: boolean;
   maxSellsPerDay: number;
   sellScorePenalty: number;
   maxBuysPerDay: number;
@@ -38,6 +39,15 @@ export interface AssetConfig {
   maxDailyLossR?: number;
   dailyProfitTargetR?: number;
   trailingDrawdownR?: number;
+  // 🎯 Gestión de trades (TP1 parcial, SL post-TP1, trailing)
+  partialClosePct?: number;
+  slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+  tp15BeEnabled?: boolean;
+  atrTrailEnabled?: boolean;
+  structuralTrailEnabled?: boolean;
+  tp1StructuralMinRR?: number;
+  minimal_roi?: Record<string, number>;
+  timesfm?: any; // 🤖 bloque del filtro TimesFM (lectura en el panel, se gestiona por tooling)
   sessions?: Record<string, SessionConfig>;
   updatedAt?: string;
 }
@@ -80,12 +90,25 @@ export const DEFAULT_ASSET_CONFIG: AssetConfig = {
   slBufferPercent: 0.1,
   fixedRR: 2.0,
   oteEntryPercent: 50,
-  entryTrigger: 'BOTH',
+  entryTrigger: 'SMART', // alineado con el default del bot (StateStore.dynamicBotConfig)
   enabled: true,
+  autoTrading: true,
   maxSellsPerDay: 0,
   sellScorePenalty: 0,
   maxBuysPerDay: 0,
   buyScorePenalty: 0,
+  maxTradesPerDay: 0,
+  maxConsecutiveLosses: 0,
+  maxDailyLossR: 0,
+  dailyProfitTargetR: 0,
+  trailingDrawdownR: 0,
+  partialClosePct: 0,
+  slAfterTp1: 'midpoint',
+  tp15BeEnabled: false,
+  atrTrailEnabled: false,
+  structuralTrailEnabled: false,
+  tp1StructuralMinRR: 0,
+  minimal_roi: {},
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
