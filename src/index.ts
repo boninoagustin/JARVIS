@@ -172,19 +172,26 @@ async function main() {
         setInterval(fetchFundamentals, 900_000);
         console.log(`[FINNHUB] Fundamentals update scheduled every 15 minutes.`);
 
-        // 🧠 Motor Auto-Tune (Fase 2)
-        const runAutoTuneScheduler = async () => {
-            try {
-                const { checkAndRunAutoTune } = await import('./services/autotune.js');
-                await checkAndRunAutoTune();
-            } catch (e: any) {
-                console.error('[AUTO-TUNE] Error scheduling autotune:', e.message);
-            }
-        };
-        // Revisar cada 24 horas (86400000 ms)
-        setInterval(runAutoTuneScheduler, 86_400_000);
-        // También revisar al iniciar
-        setTimeout(runAutoTuneScheduler, 10_000);
+        // 🧠 Motor Auto-Tune (Fase 2) — LEGACY, OFF por defecto (AUTOTUNE_ENABLED=true para revivir).
+        // Solo afinaba umbrales de score sobre trades reales (muestras chicas, sin OOS) →
+        // recomendaciones ruidosas. Reemplazado por el Centro de Optimización Periódica (hyperopt OOS).
+        if (process.env.AUTOTUNE_ENABLED === 'true') {
+            const runAutoTuneScheduler = async () => {
+                try {
+                    const { checkAndRunAutoTune } = await import('./services/autotune.js');
+                    await checkAndRunAutoTune();
+                } catch (e: any) {
+                    console.error('[AUTO-TUNE] Error scheduling autotune:', e.message);
+                }
+            };
+            // Revisar cada 24 horas (86400000 ms)
+            setInterval(runAutoTuneScheduler, 86_400_000);
+            // También revisar al iniciar
+            setTimeout(runAutoTuneScheduler, 10_000);
+            console.log('[AUTO-TUNE] Scheduler legacy ACTIVO (cada 24h, corre cada 15 días).');
+        } else {
+            console.log('[AUTO-TUNE] Scheduler legacy DESACTIVADO — Centro de Optimización Periódica lo reemplaza.');
+        }
 
         // 💓 Heartbeat de Firebase (Evita desconexiones silenciosas de onSnapshot)
         let lastSnapshotReceivedAt = Date.now();
