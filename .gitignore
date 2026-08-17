@@ -20,3 +20,5 @@ firebase-key.json
 firebase_init.cjs
 radar_states_*.json
 venv/
+scripts/periodic_opt/reports/
+scripts/periodic_opt/opt_out/

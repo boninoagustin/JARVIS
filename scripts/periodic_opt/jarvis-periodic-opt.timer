@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer semanal del Centro de Optimización Periódica (domingo 02:00, mercado cerrado)
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

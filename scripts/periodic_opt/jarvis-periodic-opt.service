@@ -1,0 +1,16 @@
+[Unit]
+Description=JARVIS Centro de Optimización Periódica — hyperopt semanal + comparación producción (solo propone, nunca aplica)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JARVIS
+ExecStart=/usr/bin/python3 /opt/JARVIS/scripts/periodic_opt/run_weekly.py
+ExecStartPost=/root/.nvm/versions/node/v24.19.0/bin/npx tsx /opt/JARVIS/scripts/periodic_opt/push_reports.js
+# node/npx en PATH para el worker del hyperopt (venv python lo invoca)
+Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/usr/bin:/bin
+Nice=5
+TimeoutStartSec=8h
+
+[Install]
+WantedBy=multi-user.target
