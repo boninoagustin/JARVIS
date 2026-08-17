@@ -374,7 +374,8 @@ if (db) {
                     riderEnabled: data.riderEnabled,
                     riderTf: data.riderTf,
                     autoTrading: data.autoTrading,
-                    maxSmartRiskPercent: data.maxSmartRiskPercent
+                    maxSmartRiskPercent: data.maxSmartRiskPercent,
+                    timesfm: (data as any).timesfm // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
                 });
             });
             const actualAssets = [...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
