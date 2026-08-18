@@ -1337,7 +1337,33 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             // 🛡️ FILTRO ANTI-DUPLICADOS
                             if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
-                            // 💾 Eliminar de RAM inmediatamente de forma síncrona
+                            // 🔴 LIVE: la VERDAD es cTrader. El feed de TradingView (High/Low de velas)
+                            // puede tocar TP2 con un wick que el bid de cTrader nunca tocó → el TP
+                            // server-side no ejecuta y la posición sigue viva. NO se marca WIN por
+                            // adelantado ni se saca de RAM: se espera el cierre real de cTrader.
+                            if (!isBacktest && trade.ctraderPositionId) {
+                                const { getOpenPositions } = await import('../services/ctrader.js');
+                                const stillOpen = (await getOpenPositions(ticker)).some(
+                                    (p: any) => String(p.positionId) === String(trade.ctraderPositionId)
+                                );
+                                if (stillOpen) {
+                                    if (!(trade as any).tp2ZoneNotified) {
+                                        (trade as any).tp2ZoneNotified = true;
+                                        const zoneMsg = `🎯 <b>ZONA TP2 TOCADA | ${ticker} | ${trade.direction}</b>\n\n` +
+                                            `El feed tocó ${trade.tp2Price} pero la posición sigue <b>ABIERTA</b> en cTrader.\n` +
+                                            `Se espera el cierre real del TP de cTrader (no se marca WIN por adelantado).`;
+                                        sendTelegramAlert(zoneMsg).catch(() => { });
+                                        console.log(`[TP2] ⚠️ ${ticker} #${tradeId}: feed tocó TP2 pero la posición sigue abierta en cTrader — esperando cierre real.`);
+                                    }
+                                    continue;
+                                }
+                                // Posición ya cerrada en cTrader → el ExecutionEvent registró el
+                                // resultado real (y el reconciler limpia cualquier residuo). Nada que hacer aquí.
+                                console.log(`[TP2] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — resultado lo registra el evento real.`);
+                                continue;
+                            }
+
+                            // 💾 Eliminar de RAM inmediatamente de forma síncrona (backtest / sin cTrader)
                             store.activeTrades.delete(tradeId);
                             if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
 
