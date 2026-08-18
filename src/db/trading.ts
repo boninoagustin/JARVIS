@@ -1438,6 +1438,29 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         // 🛡️ FILTRO ANTI-DUPLICADOS
                         if (isDuplicate(`CLOSE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
+                        // 🔴 LIVE: verificar cierre real en cTrader antes de marcar LOSS.
+                        // El SL de un SELL ejecuta con el ASK; el feed del bot es el bid.
+                        // Con spread ancho el bid puede tocar el SL sin que cTrader cierre.
+                        if (!isBacktest && trade.ctraderPositionId) {
+                            const { getOpenPositions } = await import('../services/ctrader.js');
+                            const stillOpen = (await getOpenPositions(ticker)).some(
+                                (p: any) => String(p.positionId) === String(trade.ctraderPositionId)
+                            );
+                            if (stillOpen) {
+                                if (!(trade as any).slZoneNotified) {
+                                    (trade as any).slZoneNotified = true;
+                                    console.log(`[SL] ⚠️ ${ticker} #${tradeId}: feed tocó SL pero la posición sigue abierta en cTrader — esperando cierre real.`);
+                                    const zoneMsg = `🛑 <b>ZONA SL TOCADA | ${ticker} | ${trade.direction}</b>\n\n` +
+                                        `El feed tocó ${trade.slPrice} pero la posición sigue <b>ABIERTA</b> en cTrader.\n` +
+                                        `Se espera el cierre real del SL de cTrader (no se marca LOSS por adelantado).`;
+                                    sendTelegramAlert(zoneMsg).catch(() => { });
+                                }
+                                continue;
+                            }
+                            console.log(`[SL] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — resultado lo registra el evento real.`);
+                            continue;
+                        }
+
                         // 💾 Eliminar de RAM inmediatamente de forma síncrona para evitar race conditions
                         store.activeTrades.delete(tradeId);
                         if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
