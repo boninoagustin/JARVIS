@@ -2,6 +2,7 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
+import { getLastBidAsk } from '../services/ctrader.js';
 import * as fs from 'fs';
 
 import { z } from 'zod';
@@ -64,6 +65,8 @@ function buildBotStatus(ticker: string, s: any): any {
         }
     }
     const tfm = lastTfmByTicker.get(ticker);
+    const ba = getLastBidAsk(ticker);
+    const pipSize = ticker.includes('JPY') ? 0.01 : 0.0001;
     return {
         ks: ks.length ? ks : null,
         session,
@@ -72,6 +75,7 @@ function buildBotStatus(ticker: string, s: any): any {
         enabled: cfg?.enabled !== false,
         position,
         tfm: tfm && now - tfm.ts < 15 * 60 * 1000 ? tfm : null,
+        spreadPips: ba ? +((ba.ask - ba.bid) / pipSize).toFixed(1) : null,
     };
 }
 
@@ -1329,9 +1333,21 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                     // 🚀 EVALUACIÓN DE TP2
                     if (trade.tp2Price > 0) {
-                        const tp2Hit = trade.direction === 'BUY'
-                            ? highPrice >= trade.tp2Price
-                            : lowPrice <= trade.tp2Price;
+                        let tp2Hit: boolean;
+                        if (isBacktest) {
+                            tp2Hit = trade.direction === 'BUY'
+                                ? highPrice >= trade.tp2Price
+                                : lowPrice <= trade.tp2Price;
+                        } else {
+                            // LIVE: lado de ejecución correcto. Un BUY cierra con el BID,
+                            // un SELL cierra con el ASK (comprando). Si no hay ask fresco,
+                            // se cae al high/low del bid como antes.
+                            const ba = getLastBidAsk(ticker);
+                            const askFresh = ba != null && Date.now() - ba.ts < 30_000;
+                            tp2Hit = trade.direction === 'BUY'
+                                ? highPrice >= trade.tp2Price
+                                : (askFresh ? ba!.ask <= trade.tp2Price : lowPrice <= trade.tp2Price);
+                        }
 
                         if (tp2Hit) {
                             // 🛡️ FILTRO ANTI-DUPLICADOS
@@ -1427,11 +1443,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             ? lowPrice <= (trade.slPrice + spreadAdjustment)
                             : highPrice >= (trade.slPrice - spreadAdjustment);
                     } else {
-                        // 🔧 Usar currentPrice (bid) en vez de highPrice/lowPrice (inflados por spread).
-                        // Un spike de ask puede disparar SL falsamente. El precio de ejecución real es el bid.
+                        // 🔧 LIVE: lado de ejecución correcto. BUY cierra con bid, SELL con ask.
+                        const ba = getLastBidAsk(ticker);
+                        const askFresh = ba != null && Date.now() - ba.ts < 30_000;
                         slHit = trade.direction === 'BUY'
                             ? currentPrice <= trade.slPrice
-                            : currentPrice >= trade.slPrice;
+                            : (askFresh ? ba!.ask >= trade.slPrice : currentPrice >= trade.slPrice);
                     }
 
                     if (slHit) {

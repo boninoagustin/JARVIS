@@ -38,6 +38,7 @@ interface RadarState {
     enabled: boolean;
     position: { direction: string; pnlR: number | null; managementMode?: string } | null;
     tfm: { action: string; riskMult: number; degraded: boolean; dryRun: boolean } | null;
+    spreadPips?: number | null;
   };
 }
 
@@ -492,6 +493,13 @@ export default function RadarHeatmap() {
                           <span key="pos" title={`Posición abierta (${bs.position.direction}${bs.position.managementMode ? ' · ' + bs.position.managementMode : ''})`}
                             style={{ ...estadoBadge, background: 'rgba(0,136,255,0.12)', color: pnlColor, borderColor: 'rgba(0,136,255,0.35)' }}>
                             📈 {bs.position.direction === 'BUY' ? 'L' : 'S'} {bs.position.pnlR == null ? '' : (bs.position.pnlR >= 0 ? '+' : '') + bs.position.pnlR + 'R'}
+                          </span>);
+                      }
+                      if (bs.spreadPips != null) {
+                        badges.push(
+                          <span key="spread" title={`Spread actual (ask − bid): ${bs.spreadPips} pips`}
+                            style={{ ...estadoBadge, background: 'rgba(100,200,255,0.08)', color: '#8fd4ff', borderColor: 'rgba(100,200,255,0.3)' }}>
+                            ↔ {bs.spreadPips} pips
                           </span>);
                       }
                       if (bs.tfm) {

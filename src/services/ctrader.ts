@@ -240,6 +240,10 @@ function setupCTraderEvents(client: any) {
                     if (flowTicker) {
                         try { tickFlow.onTick(flowTicker, Date.now(), currentPrice, askPrice); } catch { /* nunca romper el feed */ }
                     }
+                    // 📊 Guardar último bid/ask por ticker (TP/SL del lado correcto + spread en radar)
+                    if (flowTicker && !Number.isNaN(askPrice)) {
+                        lastBidAsk.set(flowTicker, { bid: currentPrice, ask: askPrice, ts: Date.now() });
+                    }
                     
                     // Buscar si tenemos el activo en buffer para actualizar visualmente
                     for (const [key, subSymbolId] of subscribedSymbols.entries()) {
@@ -337,6 +341,13 @@ type SpotTickListener = (baseTicker: string, candle: OHLCV) => void;
 let spotTickListener: SpotTickListener | null = null;
 export function setSpotTickListener(fn: SpotTickListener | null) {
     spotTickListener = fn;
+}
+
+// 📊 Último bid/ask por ticker (el SpotEvent trae ambos; se guardan para
+// detección de TP/SL del lado de ejecución correcto y para el spread en el radar).
+const lastBidAsk = new Map<string, { bid: number; ask: number; ts: number }>();
+export function getLastBidAsk(ticker: string): { bid: number; ask: number; ts: number } | null {
+    return lastBidAsk.get(ticker.toUpperCase()) ?? null;
 }
 
 /**
