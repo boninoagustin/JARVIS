@@ -1018,6 +1018,34 @@ export async function getOpenPositions(ticker?: string): Promise<any[]> {
  * KILLSWITCH: Close all open positions immediately.
  * Used for emergency risk management.
  */
+/**
+ * Deals históricos de una posición (para reconciliar cierres que el stream perdió).
+ */
+export async function getDealsByPosition(positionId: string): Promise<any[]> {
+    if (!isCTraderReady()) return [];
+    try {
+        return await ctClient.getDealsByPosition(Number(positionId));
+    } catch (err: any) {
+        console.error('[CTRADER] ❌ Error obteniendo deals de posición:', err.message);
+        return [];
+    }
+}
+
+/**
+ * Nombre de símbolo desde symbolId (para adopción de huérfanos).
+ */
+export async function getSymbolName(symbolId: number): Promise<string> {
+    if (!isCTraderReady()) return '';
+    try {
+        const symbols: any[] = await ctClient.getSymbols();
+        const s = symbols.find((x: any) => x.symbolId === symbolId);
+        return s?.symbolName || '';
+    } catch (err: any) {
+        console.error('[CTRADER] ❌ Error obteniendo símbolos:', err.message);
+        return '';
+    }
+}
+
 export async function closeAllPositions(): Promise<{ closed: number; failed: number }> {
     if (!isCTraderReady()) {
         const connected = await connectCTrader();

@@ -138,6 +138,115 @@ function scheduleRawSignalSave(data: any) {
 export const getActiveTradeCount = () => globalState.activeTrades.size;
 export const getLastPingTime = () => globalState.lastPingTime;
 
+// 👻 RECONCILIACIÓN cTrader ↔ RAM/Firestore: si el stream de cTrader pierde un evento
+// de cierre (desconexión, token expirado), la posición queda "fantasma" en activeTrades
+// y congela al activo (anti-piramidación + "mantiene operación actual"). Este reconciler
+// compara las posiciones REALMENTE abiertas en cTrader contra activeTrades y finaliza
+// fantasmas consultando el historial real de la posición.
+let lastReconcileTs = 0;
+export async function reconcileCTraderPositions(): Promise<void> {
+    try {
+        if (Date.now() - lastReconcileTs < 5 * 60 * 1000) return; // throttle 5 min
+        lastReconcileTs = Date.now();
+        const { getOpenPositions, getDealsByPosition } = await import('../services/ctrader.js');
+        const open = await getOpenPositions();
+        console.log(`[RECONCILE] run: activeTrades=${globalState.activeTrades.size} | posiciones abiertas en cTrader=${open.length}${open.length ? ' → ' + open.map((p: any) => String(p.positionId)).join(',') : ''}`);
+        if (globalState.activeTrades.size === 0 && open.length === 0) {
+            console.log('[RECONCILE] run: nada que reconciliar (RAM y cTrader vacíos).');
+            return;
+        }
+        const openIds = new Set(open.map((p: any) => String(p.positionId)));
+        const GRACE_MS = 5 * 60 * 1000;
+        for (const trade of [...globalState.activeTrades.values()]) {
+            if (trade.isBacktest || !trade.ctraderPositionId) continue;
+            if (Date.now() - trade.timestamp < GRACE_MS) continue; // recién abierto → gracia
+            if (openIds.has(String(trade.ctraderPositionId))) continue;
+            console.log(`[RECONCILE] 👻 Posición fantasma ${trade.ticker} #${trade.tradeId} (posID ${trade.ctraderPositionId}) — consultando historial real...`);
+            let pnl = 0;
+            let result = 'BREAKEVEN';
+            let slHit = false;
+            try {
+                const deals = await getDealsByPosition(trade.ctraderPositionId!);
+                const closeDeal = deals.find((d: any) => d?.closePositionDetail);
+                if (closeDeal) {
+                    const cp = closeDeal.closePositionDetail;
+                    pnl = Number(cp.grossProfit || 0);
+                    slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
+                    result = pnl > 0.5 ? 'WIN' : pnl < -0.5 ? 'LOSS' : 'BREAKEVEN';
+                } else {
+                    console.warn(`[RECONCILE] ⚠️ Sin deal de cierre en historial para posID ${trade.ctraderPositionId} — se marca BREAKEVEN conservador.`);
+                }
+            } catch (e: any) {
+                console.warn(`[RECONCILE] no se pudo leer historial: ${e.message}`);
+            }
+            const rMultiple = +(pnl / 50).toFixed(2);
+            globalState.activeTrades.delete(trade.tradeId);
+            if (db) {
+                const journalId = trade.journalId || trade.tradeId;
+                db.collection('trade_journal').doc(journalId).set(
+                    { result, rMultiple, ctrader_real_pnl: pnl, slHit, reconciled: true, closedAt: new Date().toISOString() },
+                    { merge: true }
+                ).catch(() => {});
+                db.collection('active_trades').doc(trade.tradeId).delete().catch(() => {});
+            }
+            console.log(`[RECONCILE] ✅ ${trade.ticker} #${trade.tradeId} finalizado como ${result} (pnl=$${pnl.toFixed(2)}, ${rMultiple}R)`);
+        }
+
+        // 🐣 Adopción de HUÉRFANOS: posiciones abiertas en cTrader sin trade en RAM
+        // (ej. el bot perdió el trade en un reinicio, o el cierre no se registró y quedó
+        // una posición viva sin gestión). Se re-adopta con los niveles REALES de cTrader.
+        const knownIds = new Set([...globalState.activeTrades.values()].map(t => t.ctraderPositionId && String(t.ctraderPositionId)).filter(Boolean));
+        for (const p of open) {
+            const pid = String(p.positionId);
+            if (knownIds.has(pid)) continue;
+            console.log(`[RECONCILE] 🐣 Huérfano RAW: ${JSON.stringify(p).slice(0, 600)}`);
+            const td: any = p.tradeData || {};
+            const side = (td.tradeSide ?? td.direction) as any;
+            const dirNum = typeof side === 'number' ? side : String(side || '').toUpperCase();
+            const dir = dirNum === 1 || dirNum === 'BUY' ? 'BUY' : dirNum === 2 || dirNum === 'SELL' ? 'SELL' : null;
+            if (!dir) { console.warn('[RECONCILE] sin dirección clara — no se adopta'); continue; }
+            const entry = Number(p.price ?? td.openPrice ?? 0) || null;
+            const slPrice = Number(p.stopLoss ?? 0) || null;
+            const tpPrice = Number(p.takeProfit ?? 0) || null;
+            const openTs = Number(td.openTimestamp ?? Date.now()) || Date.now();
+            // Resolver símbolo desde symbolId (el payload de posición no trae el nombre)
+            let sym = String(p.symbolName || td.symbolName || p.ticker || '').toUpperCase();
+            if (!sym && td.symbolId != null) {
+                try {
+                    const { getSymbolName } = await import('../services/ctrader.js');
+                    sym = (await getSymbolName(Number(td.symbolId))).toUpperCase();
+                } catch { }
+            }
+            console.log(`[RECONCILE] 🐣 Huérfano: sym='${sym}' ${dir} posID=${pid} entry=${entry} SL=${slPrice} TP=${tpPrice} label=${td.label || ''}`);
+            if (entry == null) { console.warn('[RECONCILE] sin precio de entrada — no se adopta'); continue; }
+            if (!sym) { console.warn('[RECONCILE] sin símbolo — no se adopta'); continue; }
+            // Si la posición tiene label del bot, se adopta con ese id (vincula con el historial)
+            const tradeId = (td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`;
+            const now = Date.now();
+            const trade: any = {
+                tradeId, ticker: sym, direction: dir as 'BUY' | 'SELL',
+                entryPrice: entry, slPrice: slPrice ?? entry, tp1Price: tpPrice ?? entry,
+                tp2Price: tpPrice ?? entry, originalSlPrice: slPrice ?? entry,
+                timestamp: now, score: 0, ctraderPositionId: pid,
+                adopted: true, adoptedFromCTrader: true, openTs,
+            };
+            globalState.activeTrades.set(tradeId, trade);
+            if (db) {
+                db.collection('active_trades').doc(tradeId).set(trade).catch(() => {});
+                db.collection('trade_journal').doc(tradeId).set({
+                    id: tradeId, ticker: sym, direction: dir, grade: 'Reconciliado',
+                    points: 0, timestamp: openTs, entryPrice: entry, slPrice: slPrice ?? entry,
+                    tp1Price: tpPrice ?? entry, tp2Price: tpPrice ?? entry,
+                    ctraderStatus: 'EXECUTED', adopted: true,
+                }).catch(() => {});
+            }
+            console.log(`[RECONCILE] ✅ Adoptada posición ${sym} ${dir} posID=${pid} como #${tradeId} (gestión reanudada)`);
+        }
+    } catch (e: any) {
+        console.warn('[RECONCILE] error:', e.message);
+    }
+}
+
 
 // 🆕 v7.0: Consolidación de Cuenta & Portfolio Global
 

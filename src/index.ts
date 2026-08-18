@@ -193,9 +193,23 @@ async function main() {
             console.log('[AUTO-TUNE] Scheduler legacy DESACTIVADO — Centro de Optimización Periódica lo reemplaza.');
         }
 
+        // 👻 Reconciliación de posiciones fantasma (cTrader ↔ RAM/Firestore):
+        // si el stream de cTrader pierde un evento de cierre, el activo queda congelado.
+        // Cada 10 min se comparan posiciones reales vs activeTrades y se finalizan fantasmas.
+        const runReconcile = async () => {
+            try {
+                const { reconcileCTraderPositions } = await import('./db/trading.js');
+                await reconcileCTraderPositions();
+            } catch (e: any) {
+                console.error('[RECONCILE] Error en scheduler:', e.message);
+            }
+        };
+        setInterval(runReconcile, 10 * 60 * 1000); // cada 10 min
+        setTimeout(runReconcile, 60 * 1000);       // 1 min tras arrancar
+        console.log('[RECONCILE] Scheduler activo: run a los 60s + cada 10 min.');
+
         // 💓 Heartbeat de Firebase (Evita desconexiones silenciosas de onSnapshot)
         let lastSnapshotReceivedAt = Date.now();
-        
         unsubscribers.push(
             db.collection('app_settings').doc('heartbeat').onSnapshot(() => {
                 lastSnapshotReceivedAt = Date.now();
