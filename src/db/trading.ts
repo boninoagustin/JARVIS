@@ -39,6 +39,10 @@ let stateFlushTimeout: NodeJS.Timeout | null = null;
 // 🆕 Radar v2: último veredicto TimesFM por ticker (para el dashboard, sin Firestore)
 const lastTfmByTicker = new Map<string, { action: string; riskMult: number; degraded: boolean; dryRun: boolean; ts: number }>();
 
+// 🛡️ Dedupe de journal: un gatillo puede llegar dos veces en <1s (2 eventos SMC del
+// mismo quiebre) y cada dispatch creaba un doc → trades duplicados en la bitácora.
+const journalDedupe = new Map<string, number>();
+
 /** 🆕 Radar v2: estado operativo del bot por activo (killswitches, sesión, cooldown, posición, TimesFM) */
 function buildBotStatus(ticker: string, s: any): any {
     const now = Date.now();
@@ -3044,29 +3048,40 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
             console.log(`[SNIPER] 📨 Mensaje FRANCOTIRADOR construido para ${ticker} (${msg.length} chars). isBacktest=${isBacktest}`);
 
-            const journalId = await logTrade({
-                ticker, direction: oteData.direction as 'BUY' | 'SELL',
-                grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
-                macroContext: oteData.marketBias,
-                kronosVerdict: isBacktest ? 'SKIP_BT' : kronosVerdict,
-                mixtureConsensus: swarmConsensus,
-                timestamp: nowMs,
-                mode: isBacktest ? 'backtesting' : 'live',
-                sessionId,
-                entryPrice: oteData.entryPrice,
-                tp1Price: parseFloat(oteData.tp1),
-                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
-                slPrice: parseFloat(oteData.stopLoss),
-                isChochEntry: oteData.isChochEntry,
-                // 🧠 MACHINE LEARNING FEATURES (Fase 1)
-                hourOfDay: new Date(nowMs).getHours(),
-                dayOfWeek: new Date(nowMs).getDay(),
-                session: getCurrentSession(nowMs),
-                bias4H: state.marketBias['240'] === oteData.direction ? 'ALIGNED' : state.marketBias['240'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
-                bias1H: state.marketBias['60'] === oteData.direction ? 'ALIGNED' : state.marketBias['60'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
-                vwapDistance: (oteData.events.includes('VWAP_Premium') || oteData.events.includes('VWAP_Discount')) ? 1 : 0,
-                tf: oteData.tf
-            }).catch(() => 'ERR');
+            // 🛡️ Dedupe: el mismo gatillo puede llegar 2 veces en <1s (doble evento SMC)
+            // y cada dispatch creaba un doc → trades duplicados en la bitácora.
+            let journalId: string | undefined;
+            const dedupeKey = `${ticker}:${oteData.direction}`;
+            const lastJournalTs = journalDedupe.get(dedupeKey) || 0;
+            if (!isBacktest && nowMs - lastJournalTs < 30_000) {
+                console.log(`[JOURNAL] ⏭️ Doc duplicado evitado para ${ticker} ${oteData.direction} (segundo dispatch del mismo gatillo en <30s)`);
+                journalId = undefined;
+            } else {
+                journalDedupe.set(dedupeKey, nowMs);
+                journalId = await logTrade({
+                    ticker, direction: oteData.direction as 'BUY' | 'SELL',
+                    grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
+                    macroContext: oteData.marketBias,
+                    kronosVerdict: isBacktest ? 'SKIP_BT' : kronosVerdict,
+                    mixtureConsensus: swarmConsensus,
+                    timestamp: nowMs,
+                    mode: isBacktest ? 'backtesting' : 'live',
+                    sessionId,
+                    entryPrice: oteData.entryPrice,
+                    tp1Price: parseFloat(oteData.tp1),
+                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                    slPrice: parseFloat(oteData.stopLoss),
+                    isChochEntry: oteData.isChochEntry,
+                    // 🧠 MACHINE LEARNING FEATURES (Fase 1)
+                    hourOfDay: new Date(nowMs).getHours(),
+                    dayOfWeek: new Date(nowMs).getDay(),
+                    session: getCurrentSession(nowMs),
+                    bias4H: state.marketBias['240'] === oteData.direction ? 'ALIGNED' : state.marketBias['240'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
+                    bias1H: state.marketBias['60'] === oteData.direction ? 'ALIGNED' : state.marketBias['60'] === 'NEUTRAL' ? 'NEUTRAL' : 'AGAINST',
+                    vwapDistance: (oteData.events.includes('VWAP_Premium') || oteData.events.includes('VWAP_Discount')) ? 1 : 0,
+                    tf: oteData.tf
+                }).catch(() => 'ERR');
+            }
 
             // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)
             let activeTrade = store.activeTrades.get(oteData.tradeId);

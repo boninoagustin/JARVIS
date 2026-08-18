@@ -187,28 +187,34 @@ function setupCTraderEvents(client: any) {
                 dealPnl = rawProfit / Math.pow(10, moneyDigits);
             }
             
-            const positionStatus = event.position.positionStatus; // 3 = CLOSED, 2 = OPEN, 1 = CREATED
-            
+            const positionStatus = event.position.positionStatus; // 1 = OPEN, 2 = CLOSED, 3 = CREATED
+
             // Acumular PnL de deals parciales (no sobreescribir)
             const previousPnl = trade.ctrader_real_pnl || 0;
             const accumulatedPnl = Number((previousPnl + dealPnl).toFixed(2));
-            
-            // Posición cerrada completamente (Hit SL o Hit TP final)
+
+            // 3 = CREATED: evento transitorio de apertura — nada que hacer
             if (positionStatus === 3) {
+                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} creado (evento transitorio) — sin acción.`);
+            }
+            // 2 = CLOSED: la posición cerró del todo (SL, TP2 o manual)
+            else if (positionStatus === 2) {
                 let resultStatus: string;
-                if (accumulatedPnl > 1) resultStatus = 'WIN';
-                else if (accumulatedPnl < -1) resultStatus = 'LOSS';
+                if (accumulatedPnl > 0.5) resultStatus = 'WIN';
+                else if (accumulatedPnl < -0.5) resultStatus = 'LOSS';
                 else resultStatus = 'BREAKEVEN';
-                
+                const trigger = (event.deal?.stopTriggerBase ?? event.deal?.closePositionDetail?.closeTriggerBase ?? '').toString().toUpperCase();
                 await tradeDoc.ref.update({
                     result: resultStatus,
                     ctrader_real_pnl: accumulatedPnl,
-                    status: 'CLOSED'
+                    status: 'CLOSED',
+                    slHit: trigger === 'STOP_LOSS',
+                    tp2Hit: trigger === 'TAKE_PROFIT',
                 });
-                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL Acumulado: $${accumulatedPnl} -> ${resultStatus}`);
-            } 
-            // Posición aún abierta pero hubo un deal (cierre parcial)
-            else if (positionStatus === 2 && event.deal && dealPnl !== 0) {
+                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL Acumulado: $${accumulatedPnl} -> ${resultStatus} (trigger: ${trigger || 'n/d'})`);
+            }
+            // 1 = OPEN + deal con closePositionDetail: cierre parcial (TP1)
+            else if (positionStatus === 1 && event.deal && event.deal.closePositionDetail) {
                 await tradeDoc.ref.update({
                     result: 'PARTIAL_TP1',
                     ctrader_real_pnl: accumulatedPnl,
