@@ -35,6 +35,46 @@ import {
 const dirtyStates = new Map<string, RadarState>();
 let stateFlushTimeout: NodeJS.Timeout | null = null;
 
+// 🆕 Radar v2: último veredicto TimesFM por ticker (para el dashboard, sin Firestore)
+const lastTfmByTicker = new Map<string, { action: string; riskMult: number; degraded: boolean; dryRun: boolean; ts: number }>();
+
+/** 🆕 Radar v2: estado operativo del bot por activo (killswitches, sesión, cooldown, posición, TimesFM) */
+function buildBotStatus(ticker: string, s: any): any {
+    const now = Date.now();
+    const cfg: any = globalState.assetSessionConfigs.get(ticker);
+    const ks: string[] = [];
+    if (now < globalState.streakKillswitchUntil) ks.push('racha');
+    if (now < globalState.vixKillswitchUntil) ks.push('VIX');
+    if (now < globalState.globalPortfolioKillswitchUntil) ks.push('portfolio');
+    const session = getCurrentSession(now);
+    const sessionTriggers: any = (cfg?.sessions as any)?.[session] ?? (cfg?.sessions as any)?.['ALL'];
+    const anyTriggerOn = Object.values(sessionTriggers ?? {}).some((t: any) => t?.enabled !== false);
+    const sessionOff = session === 'OFF' || (sessionTriggers !== undefined && !anyTriggerOn);
+    const sniperMs = (cfg as any)?.sniperCooldownMs ?? (globalState.dynamicBotConfig as any)?.sniperCooldownMs ?? 180000;
+    const cooldown = now - (s.lastSniperAlert ?? 0) < sniperMs;
+    let position: any = null;
+    for (const t of globalState.activeTrades.values()) {
+        if (t.ticker === ticker && !t.isBacktest) {
+            const risk = Math.abs(t.entryPrice - t.slPrice) || 1;
+            const pnlR = s.lastPrice != null
+                ? (t.direction === 'BUY' ? (s.lastPrice - t.entryPrice) / risk : (t.entryPrice - s.lastPrice) / risk)
+                : null;
+            position = { direction: t.direction, pnlR: pnlR == null ? null : +pnlR.toFixed(2), managementMode: t.managementMode };
+            break;
+        }
+    }
+    const tfm = lastTfmByTicker.get(ticker);
+    return {
+        ks: ks.length ? ks : null,
+        session,
+        sessionOff,
+        cooldown,
+        enabled: cfg?.enabled !== false,
+        position,
+        tfm: tfm && now - tfm.ts < 15 * 60 * 1000 ? tfm : null,
+    };
+}
+
 function scheduleStateSave(ticker: string, state: RadarState) {
     // 🔧 Reemplazo de Firebase: guardar radar states en archivo JSON local
     // Elimina ~777K escrituras/día de Firestore. La cuota se libera para journal + trades.
@@ -48,12 +88,14 @@ function scheduleStateSave(ticker: string, state: RadarState) {
             // Guardar a archivo JSON local + broadcast WebSocket al dashboard
             try {
                 for (const [t, s] of toSave.entries()) {
-                    fs.writeFileSync(`radar_states_${t}.json`, JSON.stringify(s), 'utf8');
+                    // 🆕 Radar v2: adjuntar estado operativo del bot (killswitches, sesión, cooldown, posición, TimesFM)
+                    const enriched = { ...s, botStatus: buildBotStatus(t, s) };
+                    fs.writeFileSync(`radar_states_${t}.json`, JSON.stringify(enriched), 'utf8');
                 }
                 // Broadcast via WebSocket (ya existe en puerto 8081)
                 import('../services/ws_server.js').then(({ broadcastRadarState }) => {
                     for (const [t, s] of toSave.entries()) {
-                        broadcastRadarState(t, s);
+                        broadcastRadarState(t, { ...s, botStatus: buildBotStatus(t, s) });
                     }
                 }).catch(() => {});
             } catch (e: any) {
@@ -2480,6 +2522,15 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 tp2Dynamic: false,
             };
             console.log(`[TIMESFM${tfmCfg.dryRun ? ' DRY' : ''}] ${ticker} ${oteData.direction} → ${tfmDecision.action} (mult=${tfmDecision.riskMult}) — ${tfmDecision.reason}`);
+            // 🆕 Radar v2: registrar veredicto para el dashboard (mapa en memoria + gatillo actual)
+            lastTfmByTicker.set(ticker, {
+                action: tfmDecision.action, riskMult: tfmDecision.riskMult,
+                degraded: tfmDecision.degraded, dryRun: tfmCfg.dryRun === true, ts: nowMs,
+            });
+            (state.lastGatillo as any).tfm = {
+                action: tfmDecision.action, riskMult: tfmDecision.riskMult,
+                degraded: tfmDecision.degraded, dryRun: tfmCfg.dryRun === true,
+            };
             if (tfmCfg.dryRun) {
                 // F2 shadow: auditar sin aplicar — el trade sigue con riskMult intacto
             } else if (tfmDecision.action === 'REJECT') {

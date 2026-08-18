@@ -4,6 +4,12 @@ import { db } from '../firebase';
 import { Activity, Zap, Crosshair, AlertTriangle, Sparkles, TrendingUp, TrendingDown, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
 import { useToast } from './Toast';
 
+// 🆕 Radar v2: estilo base de los badges de estado operativo
+const estadoBadge: React.CSSProperties = {
+  fontSize: '0.65rem', fontWeight: 700, padding: '2px 7px', borderRadius: '3px',
+  border: '1px solid', whiteSpace: 'nowrap',
+};
+
 interface ImpulseLeg {
   dir: 'BUY' | 'SELL';
   origin: number;
@@ -22,7 +28,17 @@ interface RadarState {
   lastPrice?: number;
   activeImpulseBuy?: ImpulseLeg | null;
   activeImpulseSell?: ImpulseLeg | null;
-  lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; tf?: string; };
+  lastGatillo?: { dir: 'BUY' | 'SELL'; price: number; time: number; type: string; status: string; tf?: string; tfm?: { action: string; riskMult: number; degraded: boolean; dryRun: boolean } };
+  // 🆕 Radar v2: estado operativo del bot (enriquecido en trading.ts)
+  botStatus?: {
+    ks: string[] | null;
+    session: string;
+    sessionOff: boolean;
+    cooldown: boolean;
+    enabled: boolean;
+    position: { direction: string; pnlR: number | null; managementMode?: string } | null;
+    tfm: { action: string; riskMult: number; degraded: boolean; dryRun: boolean } | null;
+  };
 }
 
 /** Calcula el precio del 50% OTE (Fibonacci) del impulse leg */
@@ -168,6 +184,9 @@ export default function RadarHeatmap() {
   const [states, setStates] = useState<RadarState[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 🆕 Radar v2: orden por calor + ocultar apagados
+  const [sortByHeat, setSortByHeat] = useState(false);
+  const [hideIdle, setHideIdle] = useState(false);
 
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
@@ -329,7 +348,26 @@ export default function RadarHeatmap() {
 
       <div className="panel-header">
         <span><Activity size={14} style={{ marginRight: 8 }} /> MATRIZ DE ALINEACIÓN CUANTITATIVA (VIVO)</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* 🆕 Radar v2: orden/filtro */}
+          <button
+            onClick={() => setSortByHeat(v => !v)}
+            title="Ordenar por calor (termómetro, de mayor a menor puntos)"
+            style={{ padding: '4px 10px', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px', cursor: 'pointer',
+              backgroundColor: sortByHeat ? 'rgba(255,170,0,0.2)' : 'transparent', color: sortByHeat ? 'var(--accent-gold)' : 'var(--text-secondary)',
+              border: `1px solid ${sortByHeat ? 'var(--accent-gold)' : 'var(--border-color)'}` }}
+          >
+            🔥 Caliente primero
+          </button>
+          <button
+            onClick={() => setHideIdle(v => !v)}
+            title="Ocultar activos apagados / sin actividad"
+            style={{ padding: '4px 10px', fontSize: '0.7rem', fontWeight: 700, borderRadius: '4px', cursor: 'pointer',
+              backgroundColor: hideIdle ? 'rgba(0,136,255,0.2)' : 'transparent', color: hideIdle ? '#0088ff' : 'var(--text-secondary)',
+              border: `1px solid ${hideIdle ? '#0088ff' : 'var(--border-color)'}` }}
+          >
+            👁️ Solo activos operando
+          </button>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Filtro de Confluencia Inteligente</span>
           <span className="live-dot"></span>
         </div>
@@ -345,7 +383,8 @@ export default function RadarHeatmap() {
         <table className="data-table" style={{ margin: 0 }}>
           <thead>
             <tr>
-              <th style={{ paddingLeft: '16px' }}>ACTIVO</th>
+              <th style={{ paddingLeft: '16px' }}>ESTADO</th>
+              <th>ACTIVO</th>
               <th>PRECIO</th>
               <th>D</th>
               <th>4H</th>
@@ -362,7 +401,18 @@ export default function RadarHeatmap() {
           <tbody>
             {loading && states.length === 0 ? (
               <><SkeletonRow /><SkeletonRow /><SkeletonRow /><SkeletonRow /></>
-            ) : states.map(asset => {
+            ) : (() => {
+              // 🆕 Radar v2: orden por calor + ocultar apagados
+              const rows = [...states];
+              if (sortByHeat) {
+                rows.sort((a, b) =>
+                  Math.max(b.scoreSell?.points || 0, b.scoreBuy?.points || 0) -
+                  Math.max(a.scoreSell?.points || 0, a.scoreBuy?.points || 0));
+              }
+              const visible = hideIdle
+                ? rows.filter(a => a.botStatus?.enabled && !a.botStatus?.sessionOff)
+                : rows;
+              return visible.map(asset => {
               const buyPoints = asset.scoreBuy?.points || 0;
               const sellPoints = asset.scoreSell?.points || 0;
               const maxPoints = Math.max(buyPoints, sellPoints);
@@ -402,7 +452,61 @@ export default function RadarHeatmap() {
               
               return (
                 <tr key={asset.id} className={rowClass} style={{ transition: 'all 0.3s ease' }}>
-                  <td style={{ paddingLeft: '16px', fontWeight: 700 }}>
+                  {/* 🆕 Radar v2: ESTADO OPERATIVO DEL BOT */}
+                  <td style={{ paddingLeft: '16px', minWidth: '130px' }}>
+                    {(() => {
+                      const bs = asset.botStatus;
+                      if (!bs) return <span style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem' }}>—</span>;
+                      const badges: React.ReactNode[] = [];
+                      if (bs.ks && bs.ks.length > 0) {
+                        badges.push(
+                          <span key="ks" title={`Killswitch activo: ${bs.ks.join(', ')}`}
+                            style={{ ...estadoBadge, background: 'rgba(255,51,51,0.15)', color: '#ff6b6b', borderColor: 'rgba(255,51,51,0.4)' }}>
+                            🛡️ KS
+                          </span>);
+                      }
+                      if (!bs.enabled) {
+                        badges.push(
+                          <span key="off" title="Activo desactivado en asset_configs" style={{ ...estadoBadge, background: 'rgba(255,51,51,0.2)', color: '#ff3333', borderColor: 'rgba(255,51,51,0.5)' }}>
+                            ⛔ APAGADO
+                          </span>);
+                      } else if (bs.sessionOff) {
+                        badges.push(
+                          <span key="sess" title={`Sesión ${bs.session}: gatillos apagados`} style={{ ...estadoBadge, background: 'rgba(120,120,120,0.15)', color: '#999', borderColor: 'rgba(120,120,120,0.35)' }}>
+                            🚫 {bs.session === 'OFF' ? 'Nocturna' : bs.session}
+                          </span>);
+                      } else if (bs.cooldown) {
+                        badges.push(
+                          <span key="cd" title="Cooldown del sniper activo" style={{ ...estadoBadge, background: 'rgba(255,170,0,0.15)', color: '#ffaa00', borderColor: 'rgba(255,170,0,0.4)' }}>
+                            💤 Cooldown
+                          </span>);
+                      } else {
+                        badges.push(
+                          <span key="ok" title="Operando normal" style={{ ...estadoBadge, background: 'rgba(0,230,118,0.1)', color: '#00e676', borderColor: 'rgba(0,230,118,0.35)' }}>
+                            ✅
+                          </span>);
+                      }
+                      if (bs.position) {
+                        const pnlColor = bs.position.pnlR == null ? '#aaa' : bs.position.pnlR >= 0 ? '#00e676' : '#ff3333';
+                        badges.push(
+                          <span key="pos" title={`Posición abierta (${bs.position.direction}${bs.position.managementMode ? ' · ' + bs.position.managementMode : ''})`}
+                            style={{ ...estadoBadge, background: 'rgba(0,136,255,0.12)', color: pnlColor, borderColor: 'rgba(0,136,255,0.35)' }}>
+                            📈 {bs.position.direction === 'BUY' ? 'L' : 'S'} {bs.position.pnlR == null ? '' : (bs.position.pnlR >= 0 ? '+' : '') + bs.position.pnlR + 'R'}
+                          </span>);
+                      }
+                      if (bs.tfm) {
+                        const tfm = bs.tfm;
+                        const icon = tfm.degraded ? '⚠️' : tfm.action === 'REJECT' ? '✗' : tfm.action === 'APPROVE' ? '✓' : '↓';
+                        badges.push(
+                          <span key="tfm" title={`TimesFM ${tfm.dryRun ? '(shadow) ' : ''}${tfm.action} · riesgo ×${tfm.riskMult}${tfm.degraded ? ' · degradado' : ''}`}
+                            style={{ ...estadoBadge, background: 'rgba(124,77,255,0.12)', color: '#b39dff', borderColor: 'rgba(124,77,255,0.35)' }}>
+                            🧊 {icon}
+                          </span>);
+                      }
+                      return <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>{badges}</div>;
+                    })()}
+                  </td>
+                  <td style={{ fontWeight: 700 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', height: '100%' }}>
                       <span style={{ color: isPerfectlyAligned ? 'var(--accent-gold)' : 'var(--text-primary)' }}>
                         {asset.id}
@@ -551,10 +655,10 @@ export default function RadarHeatmap() {
                   </td>
                 </tr>
               );
-            })}
+            })})()}
             {!loading && states.length === 0 && (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-tertiary)' }}>
+                <td colSpan={13} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-tertiary)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                     <Activity size={24} opacity={0.3} />
                     <span style={{ fontWeight: 600 }}>Esperando datos del Radar Cuantitativo...</span>
