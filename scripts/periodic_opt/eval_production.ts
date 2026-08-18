@@ -76,9 +76,9 @@ async function main() {
 
     const w = new RpcWorker();
     try {
-        await w.call('init', { ticker: ticker.toLowerCase(), log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
+        const initRes: any = await w.call('init', { ticker: ticker.toLowerCase(), log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
         const result: any = await w.call('evaluate', { config });
-        console.log(JSON.stringify({ ticker, config, metrics: result.metrics, metrics_oos: result.metrics_oos }));
+        console.log(JSON.stringify({ ticker, config, metrics: result.metrics, metrics_oos: result.metrics_oos, oos_split: initRes?.oos_split }));
     } finally {
         w.close();
         process.exit(0);

@@ -10,10 +10,15 @@ interface OosMetrics {
     max_drawdown_r?: number; win_rate?: number; trade_count?: number;
 }
 interface OptReport {
-    ticker: string; timestamp: number; status: 'RECOMMEND' | 'HOLD' | 'ERROR';
+    ticker: string; timestamp: number; status: 'RECOMMEND' | 'HOLD' | 'ERROR' | 'REFRESH_ERROR';
     reason?: string; delta?: { d_exp_oos: number; dd_improve_ratio: number; pnl_drop_ratio: number };
     proposal_oos?: OosMetrics; production_oos?: OosMetrics;
     best_config?: Record<string, any>;
+    session_apply?: Record<string, Record<string, { enabled?: boolean; entryPercent?: number }>>;
+    ks_proposal?: { maxDailyLossR: number; maxConsecutiveLosses: number; score: number };
+    shadow_week?: { n: number; approve: number; downgrade: number; reject: number; note?: string };
+    oos_split?: { train: number; test: number };
+    data_refreshed_at?: number;
     appliedAt?: number; new_trades?: number;
 }
 
@@ -36,7 +41,11 @@ export default function PeriodicOptPanel() {
     const { toast } = useToast();
     const [reports, setReports] = useState<OptReport[]>([]);
     const [loading, setLoading] = useState(true);
-    const [confirming, setConfirming] = useState<{ ticker: string; diff: { label: string; old: string; new: string }[] } | null>(null);
+    const [confirming, setConfirming] = useState<{
+        ticker: string;
+        diff: { label: string; old: string; new: string }[];
+        mergedSessions: Record<string, Record<string, any>> | null;
+    } | null>(null);
     const [applying, setApplying] = useState<string | null>(null);
 
     const fetchReports = async () => {
@@ -68,11 +77,31 @@ export default function PeriodicOptPanel() {
             const oldStr = cur === undefined || cur === null ? '(sin configurar)' : f.fmt(cur);
             if (oldStr !== newStr) diff.push({ label: f.label, old: oldStr, new: newStr });
         }
+        // Sesiones: SOLO enabled/entryPercent por gatillo (lo que el motor live lee).
+        // Merge profundo: Firestore merge es shallow — si no fusionamos acá, se pisa toda la sesión.
+        let mergedSessions: Record<string, Record<string, any>> | null = null;
+        const sessionDiff: { label: string; old: string; new: string }[] = [];
+        if (report.session_apply && Object.keys(report.session_apply).length > 0) {
+            const currentSessions = (current.sessions || {}) as Record<string, Record<string, any>>;
+            mergedSessions = JSON.parse(JSON.stringify(currentSessions));
+            for (const [session, triggers] of Object.entries(report.session_apply)) {
+                mergedSessions[session] = mergedSessions[session] || {};
+                for (const [trig, changes] of Object.entries(triggers)) {
+                    mergedSessions[session][trig] = { ...(mergedSessions[session][trig] || {}), ...changes };
+                    const curT = currentSessions[session]?.[trig] || {};
+                    for (const [k, v] of Object.entries(changes)) {
+                        const oldV = curT[k] === undefined ? '(sin configurar)' : String(curT[k]);
+                        if (String(v) !== String(curT[k])) sessionDiff.push({ label: `${session}/${trig} · ${k}`, old: oldV, new: String(v) });
+                    }
+                }
+            }
+        }
+        diff.push(...sessionDiff);
         if (diff.length === 0) {
             toast(`La propuesta de ${ticker} ya está aplicada — no hay cambios`, 'success');
             return;
         }
-        setConfirming({ ticker, diff });
+        setConfirming({ ticker, diff, mergedSessions });
     };
 
     const confirmApply = async () => {
@@ -86,6 +115,7 @@ export default function PeriodicOptPanel() {
                 const proposed = report.best_config?.[f.src];
                 if (proposed !== undefined && proposed !== null) payload[f.dst] = proposed;
             }
+            if (confirming.mergedSessions) payload.sessions = confirming.mergedSessions;
             await setDoc(doc(db, 'asset_configs', ticker), payload, { merge: true });
             await setDoc(doc(db, 'opt_reports', ticker), { appliedAt: Date.now(), appliedBy: 'operador' }, { merge: true });
             toast(`✅ Optimización aplicada para ${ticker}`, 'success');
@@ -202,6 +232,35 @@ export default function PeriodicOptPanel() {
                                 </div>
                             )}
                         </>
+                    )}
+
+                    {/* 🛡️ KS propuesta + 🌙 shadow + 📊 ventana OOS (fuera del condicional: visible aunque no haya propuesta) */}
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '14px', flexWrap: 'wrap', fontSize: '0.78rem', color: '#aaa' }}>
+                        {r.ks_proposal && (
+                            <span title="Propuesta del killswitch sweep (NO se aplica acá — editalo en Panel de Control)">
+                                🛡️ <b>KS propuesta:</b> maxDLR {r.ks_proposal.maxDailyLossR}R · maxCL {r.ks_proposal.maxConsecutiveLosses}
+                            </span>
+                        )}
+                        {r.shadow_week && (
+                            <span title="Shadow TimesFM — decisiones de los últimos 7 días">
+                                🌙 <b>Shadow 7d:</b> {r.shadow_week.n} decisiones ({r.shadow_week.approve}✓/{r.shadow_week.downgrade}↓/{r.shadow_week.reject}✗)
+                            </span>
+                        )}
+                        {r.oos_split && (
+                            <span title="Ventana de validación out-of-sample del backtest">
+                                📊 <b>OOS:</b> {r.oos_split.train} train / {r.oos_split.test} test
+                            </span>
+                        )}
+                        {r.data_refreshed_at && (
+                            <span title="Última regeneración de los CSVs SMC (walk-forward)">
+                                🗓️ <b>Datos:</b> {new Date(r.data_refreshed_at).toLocaleDateString('es-AR')}
+                            </span>
+                        )}
+                    </div>
+                    {r.session_apply && Object.keys(r.session_apply).length > 0 && (
+                        <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '8px', marginBottom: 0 }}>
+                            ⚙️ La propuesta incluye ajustes por gatillo (enabled/entryPercent) — se muestran en el modal de confirmación.
+                        </p>
                     )}
 
                     {r.status === 'RECOMMEND' && !r.appliedAt && (
