@@ -1010,10 +1010,15 @@ export async function getOpenPositions(ticker?: string): Promise<any[]> {
         const state = await ctClient.getState();
         let positions = state?.positions || [];
         if (ticker) {
-            const mappedTicker = mapToCTraderSymbol(ticker).toUpperCase();
+            const want = ticker.toUpperCase();
+            // El payload de Position NO trae symbolName — se resuelve con el mapa
+            // local symbolToTicker (symbolId → ticker de las suscripciones del bot).
+            // Antes el filtro comparaba contra campos inexistentes → devolvía todo.
             positions = positions.filter((p: any) => {
-                const sym = (p.symbolName || p.tradeData?.symbolName || '').toUpperCase();
-                return sym === mappedTicker || sym.includes(mappedTicker) || mappedTicker.includes(sym);
+                const symId = p?.tradeData?.symbolId ?? p?.symbolId;
+                if (symId == null) return false;
+                const tk = symbolToTicker.get(Number(symId));
+                return tk != null && tk.toUpperCase() === want;
             });
         }
         return positions;

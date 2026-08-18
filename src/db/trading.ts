@@ -2863,12 +2863,17 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     const openPositions = await ctrader.getOpenPositions(ticker);
                     if (openPositions && openPositions.length > 0) {
                         cTraderPos = openPositions[0];
-                        const cTraderDir = (cTraderPos.tradeData?.tradeSide || cTraderPos.tradeSide || '').toString().toUpperCase();
+                        // tradeSide es un ENUM numérico de cTrader: 1 = BUY, 2 = SELL.
+                        // Antes se leía como string ('1') y toda posición quedaba como SELL.
+                        const sideRaw: any = cTraderPos.tradeData?.tradeSide ?? cTraderPos.tradeSide;
+                        let cTraderDir = '';
+                        if (sideRaw === 1 || String(sideRaw).toUpperCase() === 'BUY') cTraderDir = 'BUY';
+                        else if (sideRaw === 2 || String(sideRaw).toUpperCase() === 'SELL') cTraderDir = 'SELL';
                         // Crear un mock de ActiveTrade para aplicar la misma lógica
                         existingTradeForTicker = {
                             tradeId: String(cTraderPos.positionId || cTraderPos.id || 'CTRADER_MOCK'),
                             ticker: ticker,
-                            direction: cTraderDir.includes('BUY') ? 'BUY' : 'SELL',
+                            direction: (cTraderDir || 'SELL') as 'BUY' | 'SELL',
                             entryPrice: cTraderPos.entryPrice || cTraderPos.price || 0,
                             tp1Price: 0, tp2Price: 0, slPrice: 0,
                             tp1Hit: false, tp2Hit: false,
