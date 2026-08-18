@@ -39,6 +39,7 @@ interface RadarState {
     position: { direction: string; pnlR: number | null; managementMode?: string } | null;
     tfm: { action: string; riskMult: number; degraded: boolean; dryRun: boolean } | null;
     spreadPips?: number | null;
+    spreadUnit?: string;
   };
 }
 
@@ -497,9 +498,9 @@ export default function RadarHeatmap() {
                       }
                       if (bs.spreadPips != null) {
                         badges.push(
-                          <span key="spread" title={`Spread actual (ask − bid): ${bs.spreadPips} pips`}
+                          <span key="spread" title={`Spread actual (ask − bid)`}
                             style={{ ...estadoBadge, background: 'rgba(100,200,255,0.08)', color: '#8fd4ff', borderColor: 'rgba(100,200,255,0.3)' }}>
-                            ↔ {bs.spreadPips} pips
+                            ↔ {bs.spreadPips} {bs.spreadUnit || 'pips'}
                           </span>);
                       }
                       if (bs.tfm) {

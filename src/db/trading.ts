@@ -66,7 +66,15 @@ function buildBotStatus(ticker: string, s: any): any {
     }
     const tfm = lastTfmByTicker.get(ticker);
     const ba = getLastBidAsk(ticker);
-    const pipSize = ticker.includes('JPY') ? 0.01 : 0.0001;
+    // Unidad de spread por tipo de activo (1 pip forex = 0.0001, JPY = 0.01,
+    // oro/petróleo en centavos, índices en puntos, crypto en USD).
+    const tu = ticker.toUpperCase();
+    let unitSize = 0.0001; let unitLabel = 'pips';
+    if (tu.includes('JPY')) { unitSize = 0.01; unitLabel = 'pips'; }
+    else if (tu.includes('XAU') || tu.includes('XAG')) { unitSize = 0.01; unitLabel = 'cents'; }
+    else if (tu === 'US500' || tu.includes('NAS') || tu.includes('US30') || tu.includes('SPX')) { unitSize = 1; unitLabel = 'pts'; }
+    else if (tu.includes('USOIL') || tu.includes('WTI') || tu.includes('OIL')) { unitSize = 0.01; unitLabel = 'cents'; }
+    else if (tu.includes('BTC') || tu.includes('ETH')) { unitSize = 1; unitLabel = 'USD'; }
     return {
         ks: ks.length ? ks : null,
         session,
@@ -75,7 +83,8 @@ function buildBotStatus(ticker: string, s: any): any {
         enabled: cfg?.enabled !== false,
         position,
         tfm: tfm && now - tfm.ts < 15 * 60 * 1000 ? tfm : null,
-        spreadPips: ba ? +((ba.ask - ba.bid) / pipSize).toFixed(1) : null,
+        spreadPips: ba ? +((ba.ask - ba.bid) / unitSize).toFixed(1) : null,
+        spreadUnit: unitLabel,
     };
 }
 
