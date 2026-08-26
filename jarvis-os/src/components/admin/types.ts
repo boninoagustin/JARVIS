@@ -73,7 +73,7 @@ export interface BotConfig {
   autoTrading: boolean; // 🆕 Modo Automático (bypass Telegram)
 }
 
-export const TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'USOIL', 'BTCUSD'] as const;
+export const TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'] as const;
 export const SESSIONS = ['ALL', 'ASIA', 'LONDON', 'NY', 'OFF'] as const;
 export type SessionKey = typeof SESSIONS[number];
 

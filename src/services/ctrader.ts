@@ -498,7 +498,7 @@ export async function initializeScanner() {
         }
     }
 
-    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'BTCUSD', 'USOIL'];
+    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
     const timeframes = [
         { p: TrendbarPeriod.M5, str: 'M5' },
         { p: TrendbarPeriod.M15, str: 'M15' },
@@ -654,7 +654,7 @@ export function calculateLotSize(
         const costPerUnit = 1; // $1 per unit per 1 lot (varies by broker)
         const lotSize = riskAmount / (slDistance * costPerUnit);
         return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
-    } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX')) {
+    } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX') || t.includes('GER') || t.includes('DE40') || t.includes('DAX')) {
         // Indices: 1 pip = 1 point
         const costPerPoint = 1; // $1 per point per 1 lot (varies)
         const lotSize = riskAmount / (slDistance * costPerPoint);
@@ -1082,7 +1082,7 @@ async function getSymbolDigits(symbolId?: number, fallbackName?: string): Promis
         if (n.includes('JPY') || n.includes('BTC') || n.includes('ETH')) digits = 3;
         else if (n.includes('XAU') || n.includes('XAG') || n.includes('XTI') || n.includes('OIL')
             || n.includes('500') || n.includes('TECH') || n.includes('SPX') || n.includes('NAS')
-            || n.includes(' 30') || n.includes('US30')) digits = 2;
+            || n.includes(' 30') || n.includes('US30') || n.includes('GER') || n.includes('DAX') || n.includes('DE40')) digits = 2;
         else digits = 5; // forex
     }
     if (symbolId) digitsCache.set(symbolId, digits);
@@ -1522,6 +1522,9 @@ function mapToCTraderSymbol(ticker: string): string {
         'XAUUSD': 'XAUUSD',
         'USOIL': 'XTIUSD',
         'BTCUSD': 'BTCUSD',
+        'AUDJPY': 'AUDJPY',
+        'GER40': 'GERMANY 40',
+        'DE40': 'GERMANY 40',
         'US100': 'US TECH 100',   // Usuario reporta que su broker lo llama 'US TECH 100'
         'NAS100': 'US TECH 100',
         'US30': 'US 30',          // Mapeo corregido a 'US 30'

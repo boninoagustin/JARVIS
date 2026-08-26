@@ -20,7 +20,7 @@ import fs from 'fs';
 import { smcManager } from '../engine/smc/SMCManager.js';
 import { getCandles } from '../db/market_data.js';
 
-export const CORR_TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'USDCAD', 'NZDUSD', 'BTCUSD', 'USOIL', 'XTIUSD'];
+export const CORR_TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
 
 export interface CorrelationFilterConfig {
     enabled: boolean;    // false = filtro apagado por completo (sin auditar)
