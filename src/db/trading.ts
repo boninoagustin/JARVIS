@@ -200,7 +200,15 @@ export async function reconcileCTraderPositions(): Promise<void> {
     try {
         if (Date.now() - lastReconcileTs < 5 * 60 * 1000) return; // throttle 5 min
         lastReconcileTs = Date.now();
-        const { getOpenPositions, getDealsByPosition } = await import('../services/ctrader.js');
+        const { getOpenPositions, getDealsByPosition, isCTraderReady } = await import('../services/ctrader.js');
+        // 🆕 FIX (ago-2026): si cTrader NO está conectado, getOpenPositions() devuelve [] en silencio
+        // y la pasada de fantasmas marcaba como CERRADAS posiciones que siguen VIVAS
+        // (falsos BREAKEVEN + borrado de active_trades en cada arranque).
+        if (!isCTraderReady()) {
+            lastReconcileTs = 0; // permitir reintento inmediato al conectarse (hook en connectCTrader)
+            console.log('[RECONCILE] ⏸️ cTrader no conectado — se omite esta pasada (evita falsos fantasmas).');
+            return;
+        }
         const open = await getOpenPositions();
         console.log(`[RECONCILE] run: activeTrades=${globalState.activeTrades.size} | posiciones abiertas en cTrader=${open.length}${open.length ? ' → ' + open.map((p: any) => String(p.positionId)).join(',') : ''}`);
         if (globalState.activeTrades.size === 0 && open.length === 0) {
@@ -361,6 +369,22 @@ export async function reconcileCTraderPositions(): Promise<void> {
             }
             if (existingJournalId) {
                 console.log(`[RECONCILE] ♻️ Posición ${sym} ${dir} posID=${pid} ya tiene journal abierto #${existingJournalId} — re-enlazando en vez de duplicar.`);
+            }
+            // 🆕 FIX (ago-2026): eliminar gemelos zombie antes de adoptar. Tras un reinicio,
+            // un trade rehidratado sin ctraderPositionId sigue en RAM y manda notificaciones
+            // fantasma mientras no puede tocar cTrader. Si la posición que vamos a adoptar
+            // ya tiene un gemelo así (mismo journal o label), se lo saca de RAM y Firestore
+            // para que la posición se gestione UNA sola vez, con niveles reales del broker.
+            const twinLabel = String(td.label || '').toUpperCase();
+            for (const [ramId, ramTrade] of [...globalState.activeTrades.entries()]) {
+                if (ramTrade.ctraderPositionId) continue;
+                const isTwin = (existingJournalId && (ramTrade.journalId === existingJournalId || ramId === existingJournalId))
+                    || (twinLabel && ramId === twinLabel);
+                if (isTwin) {
+                    globalState.activeTrades.delete(ramId);
+                    if (db) db.collection('active_trades').doc(ramId).delete().catch(() => { });
+                    console.log(`[RECONCILE] 🧟 Eliminado gemelo zombie #${ramId} de la posición ${pid} (se gestiona con niveles reales).`);
+                }
             }
             // Si la posición tiene label del bot, se adopta con ese id (vincula con el historial)
             const tradeId = existingJournalId ?? ((td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`);
@@ -1343,37 +1367,60 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             }
 
                             const slModeText = mgmtSlModeT === 'breakeven' ? 'Breakeven' : mgmtSlModeT === 'none' ? 'Sin cambios' : 'Reducido 50%';
-                            const tp1Msg = `🟡 <b>TP1 ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n` +
-                                `🕒 Apertura: ${openTimeStr}\n` +
-                                `📥 Entrada: ${trade.entryPrice}\n` +
-                                `🎯 TP1: ${trade.tp1Price} ✅\n` +
-                                `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n` +
-                                `🛑 SL (${slModeText}): ${trade.slPrice}\n` +
-                                `⏱️ Duración: ${durationStr}\n\n` +
-                                (mgmtPartialT > 0
-                                    ? `💡 Toma parcial ejecutada (${Math.round(mgmtPartialT * 100)}%). Stop Loss: ${slModeText}.`
-                                    : `💡 Sin toma parcial (0%). La posición completa sigue abierta hacia TP2.`);
-                            if (!isBacktest) sendTelegramAlert(tp1Msg).catch(() => { });
                             console.log(`[JOURNAL] 🟡 TP1 alcanzado: ${ticker} ${trade.direction} #${tradeId} — Parcial ${Math.round(mgmtPartialT * 100)}%, SL: ${slModeText}`);
+
+                            // 🆕 FIX (ago-2026): el mensaje de Telegram refleja el resultado REAL de cTrader.
+                            // Antes se anunciaba "Toma parcial ejecutada" ANTES de intentar nada —
+                            // si faltaba el enlace de posición (reinicio), el mensaje mentía.
+                            const buildTp1Msg = (summary: string) => `🟡 <b>TP1 ALCANZADO | ${ticker} | ${trade.direction}</b>\n\n`
+                                + `🕒 Apertura: ${openTimeStr}\n`
+                                + `📥 Entrada: ${trade.entryPrice}\n`
+                                + `🎯 TP1: ${trade.tp1Price} ✅\n`
+                                + `🚀 TP2: ${trade.tp2Price > 0 ? trade.tp2Price : '—'}\n`
+                                + `🛑 SL (${slModeText}): ${trade.slPrice}\n`
+                                + `⏱️ Duración: ${durationStr}\n\n`
+                                + summary;
 
                             // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
-                                    if (mgmtPartialT > 0) await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartialT * 100));
-                                    if (targetSl === null) return; // slAfterTp1 'none': no tocar el SL
-                                    const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, targetSl);
-                                    if (success) {
-                                        console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
-                                        trade.slPrice = trade.targetSlPrice!;
-                                        trade.targetSlPending = false;
-                                        if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => { });
-                                    } else {
-                                        console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
+                                    let partialOk = true;
+                                    if (mgmtPartialT > 0) {
+                                        partialOk = await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartialT * 100));
                                     }
+                                    let slDone: boolean | null = null;
+                                    if (targetSl !== null) {
+                                        slDone = await ctrader.modifyStopLoss(trade.ctraderPositionId!, targetSl);
+                                        if (slDone) {
+                                            console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice}.`);
+                                            trade.slPrice = trade.targetSlPrice!;
+                                            trade.targetSlPending = false;
+                                            if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => { });
+                                        } else {
+                                            console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
+                                        }
+                                    }
+                                    const parts: string[] = [];
+                                    if (mgmtPartialT > 0) {
+                                        parts.push(partialOk
+                                            ? `✅ Toma parcial ejecutada (${Math.round(mgmtPartialT * 100)}%).`
+                                            : `⚠️ NO se pudo ejecutar la toma parcial (${Math.round(mgmtPartialT * 100)}%) en cTrader.`);
+                                    } else {
+                                        parts.push(`💡 Sin toma parcial (0%). La posición completa sigue abierta hacia TP2.`);
+                                    }
+                                    if (slDone === true) parts.push(`✅ SL ajustado (${slModeText}).`);
+                                    else if (slDone === false) parts.push(`⚠️ SL NO se pudo ajustar (${slModeText}) — se reintentará.`);
+                                    else if (targetSl === null) parts.push(`SL: ${slModeText}.`);
+                                    if (partialOk === false || slDone === false) parts.push(`⚠️ Verificar la posición en cTrader.`);
+                                    sendTelegramAlert(buildTp1Msg(parts.join(' '))).catch(() => { });
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
+                                    sendTelegramAlert(buildTp1Msg(`⚠️ Error interno al ejecutar en cTrader — verificar la posición manualmente.`)).catch(() => { });
                                 });
+                            } else if (!isBacktest) {
+                                // Sin "gancho" de posición (reinicio previo al fix de persistencia): avisar la verdad.
+                                sendTelegramAlert(buildTp1Msg(`⚠️ TP1 detectado pero NO se pudo ejecutar en cTrader (sin enlace de posición). El reconciler adoptará la posición con niveles reales.`)).catch(() => { });
                             }
                         }
                     }
@@ -1465,13 +1512,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                             }
 
-                            const beMsg = `🛡️ <b>BREAKEVEN ACTIVADO | ${ticker} | ${trade.direction}</b>\n\n` +
-                                `📈 El precio avanzó un 50% extra después del TP1.\n` +
-                                `🛑 SL Ajustado a Precio de Entrada: ${trade.entryPrice}\n\n` +
-                                `💡 Operación 100% libre de riesgo.`;
-
-                            if (!isBacktest) sendTelegramAlert(beMsg).catch(() => { });
                             console.log(`[JOURNAL] 🛡️ Breakeven diferido activado: ${ticker} ${trade.direction} #${tradeId}`);
+
+                            // 🆕 FIX (ago-2026): anunciar el breakeven SOLO cuando cTrader confirme el cambio.
+                            // Antes el mensaje salía primero y el intento de mover el SL después —
+                            // si faltaba el enlace de posición, llegaba un "100% libre de riesgo" falso.
+                            const buildBeMsg = (summary: string) => `🛡️ <b>BREAKEVEN ACTIVADO | ${ticker} | ${trade.direction}</b>\n\n`
+                                + `📈 El precio avanzó un 50% extra después del TP1.\n`
+                                + `🛑 SL objetivo (entrada): ${trade.entryPrice}\n\n`
+                                + summary;
 
                             if (!isBacktest && trade.ctraderPositionId) {
                                 import('../services/ctrader.js').then(async (ctrader) => {
@@ -1482,10 +1531,18 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         trade.slPrice = trade.targetSlPrice!;
                                         trade.targetSlPending = false;
                                         if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => { });
+                                        sendTelegramAlert(buildBeMsg(`✅ SL ajustado a precio de entrada: ${trade.entryPrice}\n💡 Operación 100% libre de riesgo.`)).catch(() => { });
                                     } else {
                                         console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
+                                        sendTelegramAlert(buildBeMsg(`⚠️ El SL NO se pudo mover en cTrader — se reintentará automáticamente.`)).catch(() => { });
                                     }
-                                }).catch(() => { });
+                                }).catch(err => {
+                                    console.error(`[CTRADER] ❌ Error en Breakeven Definitivo: ${err.message}`);
+                                    sendTelegramAlert(buildBeMsg(`⚠️ Error interno al mover el SL — se reintentará automáticamente.`)).catch(() => { });
+                                });
+                            } else if (!isBacktest) {
+                                // Sin "gancho" de posición: avisar la verdad, no mentir.
+                                sendTelegramAlert(buildBeMsg(`⚠️ NO se pudo mover el SL en cTrader (sin enlace de posición). El reconciler adoptará la posición con niveles reales.`)).catch(() => { });
                             }
                         }
                     }
@@ -2855,6 +2912,13 @@ export function updateTradePositionId(tradeId: string, positionId: string) {
     if (trade) {
         trade.ctraderPositionId = positionId;
         console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
+        // 🆕 FIX (ago-2026): persistir el posID a Firestore además de RAM.
+        // Antes solo se guardaba en RAM: tras un reinicio (pm2 max_memory_restart),
+        // el trade rehidratado quedaba SIN "gancho" → no podía mover SL ni cerrar
+        // parciales, pero seguía mandando notificaciones falsas (ej. BREAKEVEN).
+        import('./memory.js').then(({ db }) => {
+            if (db) db.collection('active_trades').doc(tradeId).update({ ctraderPositionId: positionId }).catch(() => { });
+        }).catch(() => { });
     }
 }
 

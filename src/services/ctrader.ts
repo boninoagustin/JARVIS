@@ -112,6 +112,11 @@ async function connectWithRetry(): Promise<boolean> {
             console.log('[CTRADER] ✅ Conectado exitosamente a cTrader.');
             
             setupCTraderEvents(client);
+
+            // 🆕 FIX (ago-2026): al (re)conectarse, disparar la reconciliación en caliente para
+            // re-adoptar posiciones abiertas sin esperar el ciclo de 10 min. El reconciler tiene
+            // throttle de 5 min, así que no spamea. Import dinámico para evitar ciclos.
+            import('../db/trading.js').then(m => m.reconcileCTraderPositions()).catch(() => { });
             
             // 🛡️ FIX B: ante desconexión, reintentar en el MISMO proceso (no matar todo con exit(1)).
             // El SDK reporta 'disconnected' en caídas transitorias del feed; antes esto forzaba
