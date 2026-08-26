@@ -40,6 +40,11 @@ interface TradeLog {
   tp1Timestamp?: number;
   tp2Timestamp?: number;
   slTimestamp?: number;
+  // 🆕 toma parcial de TP1 (ago-2026): datos reales del deal de cierre parcial
+  tp1PartialPct?: number;
+  tp1PartialPrice?: number;
+  tp1PartialPnlUsd?: number;
+  tp1PartialAt?: number;
   events?: string[];
   isChochEntry?: boolean;
   rMultiple?: number;
@@ -891,6 +896,7 @@ export default function AnalyticsJournal() {
                   <th style={{ padding: '6px 8px' }}>GATILLO</th>
                   <th style={{ padding: '6px 8px' }}>PTS</th>
                   <th style={{ padding: '6px 8px' }}>R</th>
+                  <th style={{ padding: '6px 8px' }}>PARCIAL</th>
                   <th style={{ padding: '6px 8px' }}>RESULTADO</th>
                   <th style={{ padding: '6px 8px' }}></th>
                 </tr>
@@ -906,8 +912,13 @@ export default function AnalyticsJournal() {
                       <td style={{ padding: '7px 8px', color: '#aaa' }}>{classifyTrigger(t)}</td>
                       <td style={{ padding: '7px 8px', color: '#aaa', fontFamily: 'monospace' }}>{t.points ?? '—'}</td>
                       <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: rr >= 0 ? '#00e676' : '#ff3333' }}>{rr >= 0 ? '+' : ''}{rr.toFixed(2)}</td>
+                      <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontSize: '0.78rem', color: '#ffaa00' }}>
+                        {t.tp1Hit
+                          ? `${Math.round((t.tp1PartialPct ?? 0.8) * 100)}%${t.tp1PartialPrice != null ? ` @ ${t.tp1PartialPrice}` : ''}${t.tp1PartialPnlUsd != null ? ` (+${t.tp1PartialPnlUsd.toFixed(2)})` : ''}`
+                          : '—'}
+                      </td>
                       <td style={{ padding: '7px 8px', fontWeight: 700, color: t.result === 'WIN' ? '#00e676' : t.result === 'LOSS' ? '#ff3333' : '#ffaa00' }}>
-                        {t.result === 'WIN' ? '✓ WIN' : t.result === 'LOSS' ? '✗ LOSS' : t.result || '—'}
+                        {t.result === 'WIN' ? '✓ WIN' : t.result === 'LOSS' ? '✗ LOSS' : t.result === 'BREAKEVEN' ? 'BE ➖' : t.result || (t.tp1Hit ? '🏳️ PARCIAL (abierto)' : 'EN CURSO')}
                       </td>
                       <td style={{ padding: '2px 4px' }}>
                         <button

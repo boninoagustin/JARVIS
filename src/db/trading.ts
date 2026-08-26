@@ -1388,6 +1388,27 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     let partialOk = true;
                                     if (mgmtPartialT > 0) {
                                         partialOk = await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartialT * 100));
+                                        if (partialOk) {
+                                            // 🆕 (ago-2026) Persistir los datos REALES del parcial (precio ejecutado + PnL)
+                                            // para que el Diario Analítico muestre la toma parcial, no solo "abierto".
+                                            try {
+                                                const pdeal = await ctrader.getLastCloseDealForPosition(trade.ctraderPositionId!);
+                                                if (pdeal) {
+                                                    const partialFields: any = {
+                                                        tp1PartialAt: Date.now(),
+                                                        tp1PartialPct: mgmtPartialT,
+                                                        tp1PartialPrice: pdeal.executionPrice,
+                                                        tp1PartialPnlUsd: pdeal.grossProfit,
+                                                    };
+                                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update(partialFields).catch(() => { });
+                                                    if (trade.journalId) {
+                                                        const { db: fireDb } = await import('./memory.js');
+                                                        if (fireDb && !trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update(partialFields).catch(() => { });
+                                                    }
+                                                    console.log(`[JOURNAL] 🟡 TP1 parcial registrado: ${ticker} #${tradeId} ${Math.round(mgmtPartialT * 100)}% @ ${pdeal.executionPrice} (PnL ${pdeal.grossProfit.toFixed(2)})`);
+                                                }
+                                            } catch { /* telemetría: nunca bloquear la gestión */ }
+                                        }
                                     }
                                     let slDone: boolean | null = null;
                                     if (targetSl !== null) {

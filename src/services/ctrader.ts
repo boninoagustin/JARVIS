@@ -1343,6 +1343,30 @@ export async function closePartial(positionId: string, percentToClose: number = 
 // ─── Account Info ───
 
 /**
+ * 🆕 (ago-2026) Lee el último deal de cierre (parcial o total) de una posición:
+ * precio ejecutado + PnL bruto en moneda de la cuenta (grossProfit / 10^moneyDigits).
+ * Devuelve null si no hay deal de cierre. Lo usa el TP1-parcial para persistir
+ * los datos del parcial en el journal (Diario Analítico).
+ */
+export async function getLastCloseDealForPosition(positionId: string): Promise<{ executionPrice: number; grossProfit: number } | null> {
+    if (!isCTraderReady()) return null;
+    try {
+        const deals = await ctClient.getDealsByPosition(Number(positionId), Date.now() - 864e5, Date.now());
+        const closeDeal = [...deals].reverse().find((d: any) => d?.closePositionDetail);
+        if (!closeDeal) return null;
+        const cp: any = closeDeal.closePositionDetail || {};
+        const moneyDigits = Number((closeDeal as any).moneyDigits ?? cp.moneyDigits ?? 2);
+        return {
+            executionPrice: Number(closeDeal.executionPrice),
+            grossProfit: Number(cp.grossProfit || 0) / Math.pow(10, moneyDigits),
+        };
+    } catch (e: any) {
+        console.warn(`[CTRADER] no se pudo leer el deal de cierre de posID ${positionId}: ${e.message}`);
+        return null;
+    }
+}
+
+/**
  * Get current account balance, equity, and open positions count.
  */
 export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
