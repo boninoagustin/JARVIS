@@ -78,7 +78,7 @@ function buildBotStatus(ticker: string, s: any): any {
     let unitSize = 0.0001; let unitLabel = 'pips';
     if (tu.includes('JPY')) { unitSize = 0.01; unitLabel = 'pips'; }
     else if (tu.includes('XAU') || tu.includes('XAG')) { unitSize = 0.01; unitLabel = 'cents'; }
-    else if (tu === 'US500' || tu.includes('NAS') || tu.includes('US30') || tu.includes('SPX')) { unitSize = 1; unitLabel = 'pts'; }
+    else if (tu === 'US500' || tu.includes('NAS') || tu.includes('US30') || tu.includes('SPX') || tu.includes('GER') || tu.includes('DE40') || tu.includes('DAX')) { unitSize = 1; unitLabel = 'pts'; }
     else if (tu.includes('USOIL') || tu.includes('WTI') || tu.includes('OIL')) { unitSize = 0.01; unitLabel = 'cents'; }
     else if (tu.includes('BTC') || tu.includes('ETH')) { unitSize = 1; unitLabel = 'USD'; }
     return {
@@ -1717,7 +1717,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         // Castigo de realidad: añadir spread simulado en el backtest
                         let spreadAdjustment = 0;
                         const upperTicker = ticker.toUpperCase();
-                        if (upperTicker.includes('NAS100') || upperTicker.includes('TECH 100')) spreadAdjustment = 0.5; // 0.5 puntos
+                        if (upperTicker.includes('NAS100') || upperTicker.includes('TECH 100') || upperTicker.includes('GER') || upperTicker.includes('DE40') || upperTicker.includes('DAX')) spreadAdjustment = 0.5; // 0.5 puntos (índices)
                         else if (upperTicker.includes('JPY')) spreadAdjustment = 0.005; // 0.5 pips
                         else if (upperTicker.includes('XAU')) spreadAdjustment = 0.1; // 10 centavos
                         else spreadAdjustment = 0.00005; // 0.5 pips standard para forex (EURUSD, GBPUSD)

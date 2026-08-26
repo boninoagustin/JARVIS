@@ -18,7 +18,7 @@ export const defaultFrictionConfig: Record<string, FrictionConfig> = {
 export function getAssetClass(ticker: string): string {
     const t = ticker.toUpperCase();
     if (t.includes('BTC') || t.includes('ETH')) return 'CRYPTO';
-    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'].some(i => t.includes(i))) return 'INDICES';
+    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return 'INDICES';
     if (t.includes('XAU') || t.includes('GOLD')) return 'METALS';
     if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 'ENERGY'; // 🔧 USOIL ya no cae a FOREX
     return 'FOREX';
