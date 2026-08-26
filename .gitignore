@@ -18,6 +18,10 @@ scratch/
 logs/
 firebase-key.json
 firebase_init.cjs
+# Backup/DR: el .db del hyperopt es un artefacto regenerable y pesa 49MB
+scripts/hyperopt/*.db
+# Snapshots de Firestore: los datos viven en Google Cloud; no van al repo
+backups/
 radar_states_*.json
 venv/
 scripts/periodic_opt/reports/
