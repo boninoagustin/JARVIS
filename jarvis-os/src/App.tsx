@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Terminal, PieChart, Settings, Play, BrainCircuit, TrendingUp } from 'lucide-react';
+import { Activity, Terminal, PieChart, Settings, Play, BrainCircuit } from 'lucide-react';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
@@ -9,7 +9,6 @@ import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
 import BacktestingPanel from './components/BacktestingPanel';
 import PeriodicOptPanel from './components/PeriodicOptPanel';
-import SMCChartPanel from './components/SMCChartPanel';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
@@ -24,9 +23,6 @@ function Sidebar() {
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
         <NavLink to="/radar" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Activity size={18} /> Radar Cuantitativo
-        </NavLink>
-        <NavLink to="/smc" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <TrendingUp size={18} /> SMC Live Chart
         </NavLink>
         <NavLink to="/terminal" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Terminal size={18} /> Terminal Fundamental
@@ -241,7 +237,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/radar" replace />} />
             <Route path="/radar" element={<RadarHeatmap />} />
-            <Route path="/smc" element={<SMCChartPanel />} />
             <Route path="/terminal" element={<FundamentalTerminal />} />
             <Route path="/journal" element={<AnalyticsJournal />} />
             <Route path="/backtesting" element={<BacktestingPanel />} />
