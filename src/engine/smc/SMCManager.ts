@@ -85,13 +85,17 @@ class SMCManager {
                         const types = [...new Set(events.map((e: any) => e.type))];
                         console.log(`[SMC-MANAGER] 📤 ${key}: ${events.length} eventos (${types.join(',')})`);
                     }
-                    if (events.length > 0) {
-                        for (const listener of this.listeners) {
-                            try {
-                                listener(key, prev, events, isHistorical);
-                            } catch (err: any) {
-                                console.error('[SMC-MANAGER] Error en listener:', err.message);
-                            }
+                    // 🔧 FIX (19-ago): llamar a los listeners SIEMPRE (no solo con eventos).
+                    // El listener de SMCBridge ingesta la vela cerrada al bridge TimesFM
+                    // ANTES de iterar eventos; si solo se llama con eventos, las velas
+                    // "silenciosas" (sin CHoCH/BOS/zona) no llegan al bridge y el forecast
+                    // envejece → el filtro degrada por stale. Con events=[] no se
+                    // despacha ninguna alerta, así que el cambio es seguro.
+                    for (const listener of this.listeners) {
+                        try {
+                            listener(key, prev, events, isHistorical);
+                        } catch (err: any) {
+                            console.error('[SMC-MANAGER] Error en listener:', err.message);
                         }
                     }
                     if (!isHistorical) {

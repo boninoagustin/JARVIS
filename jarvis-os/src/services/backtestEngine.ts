@@ -12,6 +12,7 @@ import {
   evaluateTimesfmFilter, resolveTimesfmConfig, loadTimesfmCache, timesfmCandleKey,
   appendTimesfmAudit, resolveTp2FromForecast, type TimesfmForecast, type TimesfmDecision
 } from '../engine/TimesfmFilter';
+import { extractFeatures } from '../../../src/engine/MLFilter';
 
 // 🆕 TimesFM F1: cache de forecasts precomputados, cargado una vez por corrida en runBacktest
 let timesfmForecastCache: Map<number, TimesfmForecast> | undefined;
@@ -1571,6 +1572,32 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     timesfmDir: oteData.timesfmDir,
     timesfmSpreadAtr: oteData.timesfmSpreadAtr,
   };
+
+  // 🛡️ ML F2: congelar las 12 features REALES del estado al momento de la entrada.
+  // Usa exactamente extractFeatures de MLFilter.ts (la misma que evalúa el runtime),
+  // para que train_ml_model.py entrene con features idénticas a las de producción
+  // (reemplaza el POC anterior que generaba features sintéticas con random()).
+  try {
+    // Mapear el tf legible del trade ("5M","15M","1H","4H","D") a la clave que espera
+    // extractFeatures/MLFilter ('5','15','60','240','240'). Los gatillos reales son 5m/15m.
+    const tfReadable = (trade.tf || '15M').toUpperCase();
+    let tfKey = '15';
+    if (tfReadable === 'D') tfKey = '240';
+    else if (tfReadable === '4H') tfKey = '240';
+    else if (tfReadable === '1H') tfKey = '60';
+    else tfKey = tfReadable.replace(/[^0-9]/g, '') || '15';
+    const scoreKey = trade.direction === 'BUY' ? state.scoreBuy : state.scoreSell;
+    const scorePts = scoreKey ? computePoints(scoreKey, nowMs) : 0;
+    trade.mlFeatures = extractFeatures(
+      state as any, trade.direction, nowMs,
+      trade.points,      // chochPoints
+      scorePts,          // scorePoints
+      tfKey,             // tf
+    ) as any;
+  } catch (e: any) {
+    // No dejar que la captura de features rompa el backtest.
+    console.warn(`[ML] ⚠️ No se pudieron congelar features del trade ${trade.id}: ${e.message}`);
+  }
 
   // Clasificar triggerType al crear el trade (único punto de verdad)
   const events = trade.events;

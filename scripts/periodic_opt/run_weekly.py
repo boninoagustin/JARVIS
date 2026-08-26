@@ -111,11 +111,17 @@ def load_last_report(ticker: str) -> dict:
 def run_hyperopt(ticker: str) -> dict:
     out = OPT_OUT_DIR / f"{ticker}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    # F3-etapa2: weekly3 (espacio por sesión, 28 dims) + 400 trials + timeout 75 min
+    # (medido ~3.2s/trial × 400 ≈ 21 min por activo; 75 min da margen para tickers lentos)
+    # n-startup 50: con 28 dims hacen falta más trials aleatorios iniciales para que TPE
+    # construya un modelo decente (20 era para el espacio de 10-13 params).
     cmd = [str(VENV_PY), str(HYPEROPT), ticker,
-           "--study-name", f"jarvis_{ticker}_weekly",
+           "--study-name", f"jarvis_{ticker}_weekly3",
+           "--n-trials", "400",
+           "--n-startup", "50",
            "--output", str(out)]
     t0 = time.time()
-    r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=45 * 60)
+    r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=75 * 60)
     if r.returncode != 0:
         raise RuntimeError(f"hyperopt exit {r.returncode}: {(r.stderr or r.stdout)[-400:]}")
     data = json.loads(out.read_text())
@@ -172,7 +178,9 @@ def shadow_week(ticker: str) -> dict:
             if now - int(e.get("ts") or 0) > WEEK_MS:
                 continue
             agg["n"] += 1
-            decision = str(e.get("decision") or "").upper()
+            # 🔧 FIX: el audit escribe `action` (APPROVE/REDUCE/REJECT), no `decision`.
+            # Antes esto leía un campo inexistente → TODO caía en "downgrade".
+            decision = str(e.get("action") or e.get("decision") or "").upper()
             if decision in ("APPROVE", "APROBAR", "HOLD", "MANTENER"):
                 agg["approve"] += 1
             elif decision in ("REJECT", "RECHAZAR"):
@@ -204,9 +212,12 @@ def compare(prop_oos: dict, prod_oos: dict) -> dict:
 
 
 def sessions_apply_map(best_config: dict) -> dict:
-    """Del best_config.sessions (esquema backtest) → lo ÚNICO que el motor LIVE lee por gatillo:
-    enabled + entryPercent (resolveOteGate/AlphaModel). El resto (tp2/slBuff/partialClosePct
-    por gatillo) NO tiene equivalente live → queda fuera hasta el proyecto de paridad engine."""
+    """Del best_config.sessions (esquema backtest) → lo que el motor LIVE lee por gatillo.
+    F3-etapa3: además de enabled/entryPercent, ahora también la gestión de salida
+    (partialClosePct, slAfterTp1, tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled)
+    que el vivo congela en trade.mgmtOverrides al entrar. tp1StructuralMinRR viaja por
+    trigger para el AlphaModel (fallback a nivel activo)."""
+    MGMT_KEYS = ["partialClosePct", "slAfterTp1", "tp15BeEnabled", "atrTrailEnabled", "structuralTrailEnabled", "tp1StructuralMinRR"]
     out: dict = {}
     for session, triggers in (best_config.get("sessions") or {}).items():
         s_out: dict = {}
@@ -217,6 +228,9 @@ def sessions_apply_map(best_config: dict) -> dict:
                     t_out["enabled"] = bool(cfg["enabled"])
                 if "entryPercent" in cfg:
                     t_out["entryPercent"] = float(cfg["entryPercent"])
+                for k in MGMT_KEYS:
+                    if k in cfg:
+                        t_out[k] = cfg[k]
             if t_out:
                 s_out[trig] = t_out
         if s_out:
@@ -306,6 +320,21 @@ def main() -> int:
 
         (REPORTS_DIR / f"{ticker}.json").write_text(json.dumps(report, indent=2, default=str))
         summary.append(f"{ticker}: {report['status']}")
+
+    # 5. Paridad VIVO vs BACKTEST (telemetría de gatillos, Plan B ago-2026)
+    # Compara lo que pasó en vivo (trigger_telemetry) con lo que el optimizador espera.
+    try:
+        pr = subprocess.run(
+            ["npx", "tsx", str(REPO / "scripts" / "trigger_parity_report.ts"), "--days=7"],
+            cwd=str(REPO), capture_output=True, text=True, timeout=10 * 60,
+        )
+        parity_out = (pr.stdout or "") + (pr.stderr or "")
+        print("    Parity vivo-vs-backtest:")
+        print("\n".join(f"      {ln}" for ln in parity_out.splitlines()[-25:]), flush=True)
+        if pr.returncode != 0:
+            print(f"    ⚠ Parity report exit={pr.returncode}", flush=True)
+    except Exception as e:
+        print(f"    ⚠ Parity report falló: {e}", flush=True)
 
     print("════ RESUMEN ════")
     print("\n".join(summary))

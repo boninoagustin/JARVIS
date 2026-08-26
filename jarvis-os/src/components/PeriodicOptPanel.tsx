@@ -14,7 +14,9 @@ interface OptReport {
     reason?: string; delta?: { d_exp_oos: number; dd_improve_ratio: number; pnl_drop_ratio: number };
     proposal_oos?: OosMetrics; production_oos?: OosMetrics;
     best_config?: Record<string, any>;
-    session_apply?: Record<string, Record<string, { enabled?: boolean; entryPercent?: number }>>;
+    // F3-etapa3: ahora incluye gestión de salida por gatillo (partialClosePct, slAfterTp1,
+    // tp15BeEnabled, atrTrailEnabled, structuralTrailEnabled) además de enabled/entryPercent.
+    session_apply?: Record<string, Record<string, Record<string, any>>>;
     ks_proposal?: { maxDailyLossR: number; maxConsecutiveLosses: number; score: number };
     shadow_week?: { n: number; approve: number; downgrade: number; reject: number; note?: string };
     oos_split?: { train: number; test: number };
@@ -32,6 +34,8 @@ const APPLY_FIELDS: { src: string; dst: string; label: string; fmt: (v: any) => 
     { src: 'slBufferPercent', dst: 'slBufferPercent', label: 'SL Buffer %', fmt: v => Number(v).toFixed(3) },
     { src: 'oteEntryPercent', dst: 'oteEntryPercent', label: 'OTE Entry %', fmt: v => String(Math.round(v)) },
     { src: 'minimal_roi', dst: 'minimal_roi', label: 'ROI time-decay', fmt: v => JSON.stringify(v) },
+    // F3-etapa3: TP1 estructural a nivel activo (fallback cuando el gatillo no lo tiene)
+    { src: 'tp1StructuralMinRR', dst: 'tp1StructuralMinRR', label: 'TP1 min RR estructural', fmt: v => Number(v).toFixed(2) },
 ];
 
 const fmtR = (v?: number) => (v === undefined || v === null ? '—' : Number(v).toFixed(2));
@@ -278,11 +282,12 @@ export default function PeriodicOptPanel() {
             {/* Modal de confirmación con diff */}
             {confirming && (
                 <div className="modal-overlay" onClick={() => setConfirming(null)}>
-                    <div className="modal-content-premium" onClick={e => e.stopPropagation()} style={{ borderColor: 'var(--border-color)', maxWidth: '460px' }}>
-                        <div className="modal-header-premium" style={{ justifyContent: 'space-between', width: '100%' }}>
+                    <div className="modal-content-premium" onClick={e => e.stopPropagation()} style={{ borderColor: 'var(--border-color)', maxWidth: '460px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div className="modal-header-premium" style={{ justifyContent: 'space-between', width: '100%', flexShrink: 0 }}>
                             <span style={{ color: 'var(--accent-gold)' }}>🚀</span>
                             <h3 style={{ margin: 0 }}>APLICAR OPTIMIZACIÓN — {confirming.ticker}</h3>
                         </div>
+                        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, paddingRight: '4px' }}>
                         <p style={{ fontSize: '0.8rem', color: '#888' }}>Cambios que se van a escribir en asset_configs:</p>
                         <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
                             <tbody>
@@ -299,7 +304,8 @@ export default function PeriodicOptPanel() {
                         <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '8px' }}>
                             <ShieldCheck size={12} style={{ verticalAlign: '-2px' }} /> Se escribe SOLO lo listado (merge). Sesiones/gatillos no se tocan. El bot toma la config nueva al instante (listener Firestore).
                         </p>
-                        <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexShrink: 0 }}>
                             <button onClick={() => setConfirming(null)} style={{ flex: 1, padding: '10px', background: '#111', color: '#e6e6e6', border: '1px solid #333', borderRadius: '4px', cursor: 'pointer' }}>Cancelar</button>
                             <button onClick={confirmApply} disabled={applying === confirming.ticker} style={{ flex: 1, padding: '10px', background: '#00e676', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: applying === confirming.ticker ? 'wait' : 'pointer' }}>
                                 {applying === confirming.ticker ? 'APLICANDO...' : 'CONFIRMAR'}

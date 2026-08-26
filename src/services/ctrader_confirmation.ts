@@ -323,8 +323,17 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
             db.collection('trade_journal').doc(pending.journalId).update({
                 ctraderStatus: 'EXECUTION_FAILED',
                 ctraderError: result.error,
+                // 🛡️ FIX: marcar SKIP para que no se contabilice como LOSS en el diario/killswitch.
+                result: 'SKIP',
+                skipReason: `Ejecución fallida en cTrader: ${result.error}`,
             }).catch(() => {});
         }
+
+        // 🛡️ FIX: limpiar el trade de active_trades (RAM + Firestore) para que el gestor
+        // no lo marque LOSS por un trade que nunca se abrió en cTrader.
+        const { globalState } = await import('../db/trading.js');
+        globalState.activeTrades.delete(tradeId);
+        if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 
         console.error(`[CTRADER_CONFIRM] ❌ Error ejecutando trade: ${result.error}`);
     }

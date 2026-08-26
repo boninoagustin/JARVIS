@@ -44,6 +44,36 @@ export function getPipValue(ticker: string, currentPrice: number): number {
     return 0.0001;
 }
 
+/**
+ * 🛡️ FIX C: rMultiple real = PnL en USD / riesgo en USD del trade.
+ * riesgo USD = distancia entry→SL (en pips) × valor por pip × lotes.
+ * Reemplaza el $50 fijo hardcodeado (falso para lotes de 23-31 en cuenta ~$4.6k).
+ */
+export function computeRMultipleFromPnlUsd(
+    ticker: string,
+    entry: number,
+    sl: number,
+    lots: number,
+    pnlUsd: number
+): number {
+    const t = (ticker || '').toUpperCase();
+    const e = Number(entry);
+    const s = Number(sl);
+    const l = Number(lots);
+    if (!t || !Number.isFinite(e) || !Number.isFinite(s) || e === s || l <= 0) {
+        return pnlUsd > 0.5 ? 1.5 : pnlUsd < -0.5 ? -1 : 0;
+    }
+    const pipSize = getPipValue(t, e);
+    const pipValuePerLot = pipValuePerLotUsd(t, e);
+    const riskDistancePips = Math.abs(e - s) / pipSize;
+    const riskUsd = riskDistancePips * pipValuePerLot * l;
+    if (!Number.isFinite(riskUsd) || riskUsd <= 0) {
+        return pnlUsd > 0.5 ? 1.5 : pnlUsd < -0.5 ? -1 : 0;
+    }
+    const r = pnlUsd / riskUsd;
+    return Number.isFinite(r) ? Math.round(r * 100) / 100 : 0;
+}
+
 export function evaluateNetTrade(
     trade: ActiveTrade, 
     nowMs: number, 

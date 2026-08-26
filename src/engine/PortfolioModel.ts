@@ -97,6 +97,28 @@ async function withCache<T>(key: string, nowMs: number, fetcher: () => Promise<T
     return promise;
 }
 
+/**
+ * 🛡️ Sanitiza un rMultiple antes de sumarlo al PnL diario.
+ * - BREAKEVEN nunca puede valer |r| > 0.5 (un breakeven real es ~0R): si viene corrupto, se fuerza 0.
+ * - rMultiple absurdo (|r| > 10, típico de SL mal calculado) → fallback por result.
+ * - No numérico / null → fallback por result.
+ */
+export function sanitizeRMultiple(rawR: unknown, result: string | undefined, assumedWinR: number): number {
+    let rMultiple = Number(rawR);
+    if (!Number.isFinite(rMultiple) || rawR == null) {
+        if (result === 'WIN') rMultiple = assumedWinR;
+        else if (result === 'LOSS') rMultiple = -1.0;
+        else rMultiple = 0;
+    } else if (result === 'BREAKEVEN' && (rMultiple < -0.5 || rMultiple > 0.5)) {
+        rMultiple = 0;
+    } else if (Math.abs(rMultiple) > 10) {
+        if (result === 'WIN') rMultiple = assumedWinR;
+        else if (result === 'LOSS') rMultiple = -1.0;
+        else rMultiple = 0;
+    }
+    return rMultiple;
+}
+
 export async function evaluateGlobalRisk(
     nowMs: number,
     globalPortfolioConfig: GlobalPortfolioConfig,
@@ -143,12 +165,7 @@ export async function evaluateGlobalRisk(
         let maxConsecutiveLosses = 0;
 
         for (const t of trades) {
-            let rMultiple = Number(t.rMultiple);
-            if (!Number.isFinite(rMultiple) || t.rMultiple == null) {
-                if (t.result === 'WIN') rMultiple = globalPortfolioConfig.assumedWinR ?? 1.5;
-                else if (t.result === 'LOSS') rMultiple = -1.0;
-                else rMultiple = 0;
-            }
+            let rMultiple = sanitizeRMultiple(t.rMultiple, t.result, globalPortfolioConfig.assumedWinR ?? 1.5);
 
             // Acumular crudo (redondeo solo al comparar/mostrar, no en cada acumulación)
             dailyPnLR += rMultiple;
@@ -246,12 +263,7 @@ export async function evaluateAssetRisk(
         let maxConsecutiveLosses = 0;
 
         for (const t of trades) {
-            let rMultiple = Number(t.rMultiple);
-            if (!Number.isFinite(rMultiple) || t.rMultiple == null) {
-                if (t.result === 'WIN') rMultiple = assumedWinR;
-                else if (t.result === 'LOSS') rMultiple = -1.0;
-                else rMultiple = 0;
-            }
+            let rMultiple = sanitizeRMultiple(t.rMultiple, t.result, assumedWinR);
 
             dailyPnLR += rMultiple;
             if (dailyPnLR > peakPnLR) peakPnLR = dailyPnLR;

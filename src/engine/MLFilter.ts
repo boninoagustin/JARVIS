@@ -128,7 +128,13 @@ export function extractFeatures(
 export function predict(
   state: RadarState, direction: 'BUY' | 'SELL', nowMs: number,
   chochPoints: number, scorePoints: number, tf: string, ticker?: string,
-): MLPrediction {
+): MLPrediction | null {
+  // 🛡️ FIX: tickers excluidos (ej. USOIL con modelo ~azar) no pasan por el filtro ML.
+  // Devolvemos null para que AlphaModel caiga al fallback heurístico legacy (reglas de puntaje).
+  if (ticker && ML_EXCLUDED_TICKERS.has(ticker.toUpperCase())) {
+    return null;
+  }
+
   const f = extractFeatures(state, direction, nowMs, chochPoints, scorePoints, tf);
   const vec = [f.z_score, f.vwap_status, f.atr_value, f.sweep_direction, f.simple_trend,
                f.hour_of_day, f.session, f.day_of_week, f.score_points, f.active_zones,
@@ -144,6 +150,12 @@ export function predict(
 }
 
 export function isMLActive(): boolean { return _models.size > 0; }
+
+// 🛡️ FIX: activos cuyo modelo ML no aporta señal (accuracy ≈ azar ~0.50) se excluyen del filtro.
+// El modelo USOIL tiene acc=0.536 → rechaza TODO con prob≈0.500 < 0.65, matando todas las
+// señales del radar (el activo "nunca gatilla" a pesar de tener muchos puntos). Excluirlo hace
+// que USOIL caiga al fallback heurístico (reglas normales de puntaje) en AlphaModel.
+const ML_EXCLUDED_TICKERS = new Set(['USOIL']);
 
 /**
  * Carga un modelo desde un objeto JSON (útil para browser y Node.js).

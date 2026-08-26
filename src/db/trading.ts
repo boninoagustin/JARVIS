@@ -20,10 +20,12 @@ import {
     gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
-import { evaluateNetTrade } from '../engine/FrictionModel.js';
+import { evaluateNetTrade, getPipValue, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
 import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
+import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit } from '../services/correlation.js';
 
 import { tickFlow } from '../engine/TickFlow.js';
+import { telemetry } from '../services/telemetry.js';
 
 import {
     evaluateGlobalRisk, evaluateAssetRisk, getFxDayStartMs, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
@@ -155,12 +157,45 @@ function scheduleRawSignalSave(data: any) {
 export const getActiveTradeCount = () => globalState.activeTrades.size;
 export const getLastPingTime = () => globalState.lastPingTime;
 
+// 🛡️ FIX C: calcula el rMultiple real = PnL en USD / riesgo en USD del trade.
+// El riesgo real = distancia entry→SL en pips × valor por pip × lotes.
+// Ya no se usa el $50 fijo (que era falso para lotes de 23-31 en cuenta ~$4.6k).
+function computeRMultipleFromRealPnl(trade: any, pnlUsd: number): number {
+    const ticker = (trade.ticker || '').toUpperCase();
+    const entry = Number(trade.entryPrice);
+    const sl = Number(trade.slPrice ?? trade.originalSlPrice);
+    const lots = Number(trade.ctraderLots ?? trade.lots ?? trade.volume ?? 0);
+    return computeRMultipleFromPnlUsd(ticker, entry, sl, lots, pnlUsd);
+}
+
 // 👻 RECONCILIACIÓN cTrader ↔ RAM/Firestore: si el stream de cTrader pierde un evento
 // de cierre (desconexión, token expirado), la posición queda "fantasma" en activeTrades
 // y congela al activo (anti-piramidación + "mantiene operación actual"). Este reconciler
 // compara las posiciones REALMENTE abiertas en cTrader contra activeTrades y finaliza
 // fantasmas consultando el historial real de la posición.
 let lastReconcileTs = 0;
+
+// Resuelve el resultado REAL de una posición cerrada consultando los deals del broker.
+// Devuelve null si no hay deal de cierre (no se fabrica resultado).
+async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number; slHit: boolean } | null> {
+    try {
+        const { getDealsByPosition } = await import('../services/ctrader.js');
+        const deals = await getDealsByPosition(positionId);
+        const closeDeal = deals.find((d: any) => d?.closePositionDetail);
+        if (!closeDeal) return null;
+        const cp = closeDeal.closePositionDetail;
+        const moneyDigits = Number(closeDeal.moneyDigits ?? cp.moneyDigits ?? 2);
+        const rawProfit = Number(cp.grossProfit || 0);
+        const pnl = rawProfit / Math.pow(10, moneyDigits);
+        const slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
+        const result = pnl > 0.5 ? 'WIN' : pnl < -0.5 ? 'LOSS' : 'BREAKEVEN';
+        return { result, pnl, rMultiple: computeRMultipleFromRealPnl(trade, pnl), slHit };
+    } catch (e: any) {
+        console.warn(`[RECONCILE] no se pudo leer historial de posID ${positionId}: ${e.message}`);
+        return null;
+    }
+}
+
 export async function reconcileCTraderPositions(): Promise<void> {
     try {
         if (Date.now() - lastReconcileTs < 5 * 60 * 1000) return; // throttle 5 min
@@ -182,21 +217,14 @@ export async function reconcileCTraderPositions(): Promise<void> {
             let pnl = 0;
             let result = 'BREAKEVEN';
             let slHit = false;
-            try {
-                const deals = await getDealsByPosition(trade.ctraderPositionId!);
-                const closeDeal = deals.find((d: any) => d?.closePositionDetail);
-                if (closeDeal) {
-                    const cp = closeDeal.closePositionDetail;
-                    pnl = Number(cp.grossProfit || 0);
-                    slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
-                    result = pnl > 0.5 ? 'WIN' : pnl < -0.5 ? 'LOSS' : 'BREAKEVEN';
-                } else {
-                    console.warn(`[RECONCILE] ⚠️ Sin deal de cierre en historial para posID ${trade.ctraderPositionId} — se marca BREAKEVEN conservador.`);
-                }
-            } catch (e: any) {
-                console.warn(`[RECONCILE] no se pudo leer historial: ${e.message}`);
+            const resolved = await resolveClosedFromDeals(trade.ctraderPositionId!, trade);
+            if (resolved) {
+                pnl = resolved.pnl; result = resolved.result; slHit = resolved.slHit;
+            } else {
+                console.warn(`[RECONCILE] ⚠️ Sin deal de cierre en historial para posID ${trade.ctraderPositionId} — se marca BREAKEVEN conservador.`);
             }
-            const rMultiple = +(pnl / 50).toFixed(2);
+            // 🛡️ FIX C: rMultiple = PnL real en USD / riesgo real en USD (ya no $50 fijos).
+            const rMultiple = resolved ? resolved.rMultiple : computeRMultipleFromRealPnl(trade, pnl);
             globalState.activeTrades.delete(trade.tradeId);
             if (db) {
                 const journalId = trade.journalId || trade.tradeId;
@@ -205,8 +233,58 @@ export async function reconcileCTraderPositions(): Promise<void> {
                     { merge: true }
                 ).catch(() => {});
                 db.collection('active_trades').doc(trade.tradeId).delete().catch(() => {});
+                // 🆕 Dedupe: otros docs abiertos con el mismo posID son duplicados de este cierre.
+                try {
+                    const dupSnap = await db.collection('trade_journal')
+                        .where('ctraderPositionId', '==', trade.ctraderPositionId)
+                        .limit(10).get();
+                    for (const d of dupSnap.docs) {
+                        if (d.id === journalId) continue;
+                        const x = d.data();
+                        if (!x.result && x.mode !== 'backtesting') {
+                            await d.ref.update({ duplicateOf: journalId });
+                            console.log(`[RECONCILE] 🧹 Duplicado abierto #${d.id} marcado duplicateOf #${journalId} (posID ${trade.ctraderPositionId}).`);
+                        }
+                    }
+                } catch (e: any) {
+                    console.warn(`[RECONCILE] ⚠️ dedupe falló para posID ${trade.ctraderPositionId}: ${e.message}`);
+                }
             }
             console.log(`[RECONCILE] ✅ ${trade.ticker} #${trade.tradeId} finalizado como ${result} (pnl=$${pnl.toFixed(2)}, ${rMultiple}R)`);
+        }
+
+        // 🆕 Reapertura general: docs del journal con result cuya posición SIGUE viva en cTrader.
+        // (Cubre también trades gestionados en RAM, no solo adoptados — ej. SKAAQ2 cerrado en
+        // journal por error de stream pero abierto en el broker.)
+        if (db) {
+            try {
+                for (const pid of openIds) {
+                    const jSnap = await db.collection('trade_journal')
+                        .where('ctraderPositionId', '==', pid)
+                        .limit(10).get();
+                    for (const d of jSnap.docs) {
+                        const x = d.data();
+                        if (x.result && !x.reopened) {
+                            await d.ref.update({ result: null, closedAt: null, rMultiple: null, slHit: null, reopened: true, reopenedAt: Date.now() });
+                            console.log(`[RECONCILE] 🔓 Journal #${d.id} (posID ${pid}) reabierto: posición viva en el broker.`);
+                        }
+                    }
+                }
+                // 🆕 docs viejos sin ctraderPositionId: reabrir por id del trade en RAM
+                for (const t of [...globalState.activeTrades.values()]) {
+                    if (!t.ctraderPositionId || !openIds.has(String(t.ctraderPositionId))) continue;
+                    const jid = t.journalId || t.tradeId;
+                    if (!jid) continue;
+                    const dSnap = await db.collection('trade_journal').doc(jid).get();
+                    const x = dSnap.data();
+                    if (x && x.result && !x.reopened) {
+                        await dSnap.ref.update({ result: null, closedAt: null, rMultiple: null, slHit: null, reopened: true, reopenedAt: Date.now() });
+                        console.log(`[RECONCILE] 🔓 Journal #${jid} reabierto (trade en RAM con posición viva, doc sin posID).`);
+                    }
+                }
+            } catch (e: any) {
+                console.warn('[RECONCILE] error en reapertura general:', e.message);
+            }
         }
 
         // 🐣 Adopción de HUÉRFANOS: posiciones abiertas en cTrader sin trade en RAM
@@ -237,8 +315,55 @@ export async function reconcileCTraderPositions(): Promise<void> {
             console.log(`[RECONCILE] 🐣 Huérfano: sym='${sym}' ${dir} posID=${pid} entry=${entry} SL=${slPrice} TP=${tpPrice} label=${td.label || ''}`);
             if (entry == null) { console.warn('[RECONCILE] sin precio de entrada — no se adopta'); continue; }
             if (!sym) { console.warn('[RECONCILE] sin símbolo — no se adopta'); continue; }
+
+            // 🛡️ FIX C v3: antes de adoptar, reconciliar el journal para esta posición:
+            // 1) docs con result pero posición VIVA en el broker → resultado inválido → REABRIR.
+            // 2) varios docs abiertos con el mismo posID → mergear (queda uno).
+            let existingJournalId: string | null = null;
+            if (db) {
+                try {
+                    const dupSnap = await db.collection('trade_journal')
+                        .where('ctraderPositionId', '==', pid)
+                        .limit(10).get();
+                    const openDocs: any[] = [];
+                    for (const d of dupSnap.docs) {
+                        const x = d.data();
+                        if (x.result && !x.reopened) {
+                            // journal dice cerrado pero el broker tiene la posición viva → reabrir
+                            await d.ref.update({
+                                result: null, closedAt: null, rMultiple: null, slHit: null,
+                                reopened: true, reopenedAt: Date.now(),
+                            });
+                            console.log(`[RECONCILE] 🔓 Journal #${d.id} (posID ${pid}) reabierto: la posición SIGUE viva en el broker.`);
+                            openDocs.push({ id: d.id, x });
+                            existingJournalId = existingJournalId ?? d.id;
+                        } else if (!x.result && x.mode !== 'backtesting') {
+                            openDocs.push({ id: d.id, x });
+                        }
+                    }
+                    // si hay más de un doc abierto para el mismo posID → mergear
+                    if (openDocs.length > 1) {
+                        const labelMatch = openDocs.find(o => td.label && String(td.label).toUpperCase() === String(o.id).toUpperCase());
+                        const keeper = labelMatch ?? openDocs.sort((a, b) => Number(a.x.timestamp ?? 0) - Number(b.x.timestamp ?? 0))[0];
+                        existingJournalId = keeper.id;
+                        for (const o of openDocs) {
+                            if (o.id !== keeper.id) {
+                                await db.collection('trade_journal').doc(o.id).update({ duplicateOf: keeper.id }).catch(() => {});
+                                console.log(`[RECONCILE] 🧹 Duplicado abierto #${o.id} mergeado a #${keeper.id} (posID ${pid}).`);
+                            }
+                        }
+                    } else if (openDocs.length === 1) {
+                        existingJournalId = openDocs[0].id;
+                    }
+                } catch (e: any) {
+                    console.warn(`[RECONCILE] ⚠️ no se pudo chequear duplicado de journal: ${e.message}`);
+                }
+            }
+            if (existingJournalId) {
+                console.log(`[RECONCILE] ♻️ Posición ${sym} ${dir} posID=${pid} ya tiene journal abierto #${existingJournalId} — re-enlazando en vez de duplicar.`);
+            }
             // Si la posición tiene label del bot, se adopta con ese id (vincula con el historial)
-            const tradeId = (td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`;
+            const tradeId = existingJournalId ?? ((td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`);
             const now = Date.now();
             const trade: any = {
                 tradeId, ticker: sym, direction: dir as 'BUY' | 'SELL',
@@ -255,9 +380,42 @@ export async function reconcileCTraderPositions(): Promise<void> {
                     points: 0, timestamp: openTs, entryPrice: entry, slPrice: slPrice ?? entry,
                     tp1Price: tpPrice ?? entry, tp2Price: tpPrice ?? entry,
                     ctraderStatus: 'EXECUTED', adopted: true,
+                    ctraderPositionId: pid,
                 }).catch(() => {});
             }
             console.log(`[RECONCILE] ✅ Adoptada posición ${sym} ${dir} posID=${pid} como #${tradeId} (gestión reanudada)`);
+        }
+
+        // 🆕 Journal abiertos huérfanos: docs sin result cuya posición ya NO está en cTrader
+        // ni en RAM (ej. reinicio perdió el trade). Se resuelven con los deals reales del broker.
+        if (db) {
+            try {
+                const openJournals = await db.collection('trade_journal')
+                    .where('result', '==', null)
+                    .limit(100).get();
+                for (const docSnap of openJournals.docs) {
+                    const x = docSnap.data();
+                    const pid = x.ctraderPositionId ? String(x.ctraderPositionId) : '';
+                    if (!pid) continue;
+                    if (openIds.has(pid)) continue; // sigue abierta en el broker
+                    const inRam = [...globalState.activeTrades.values()].some(t => t.ctraderPositionId && String(t.ctraderPositionId) === pid);
+                    if (inRam) continue; // la RAM la gestiona
+                    if (Date.now() - Number(x.timestamp ?? 0) < 5 * 60 * 1000) continue; // gracia
+                    const resolved = await resolveClosedFromDeals(pid, x);
+                    if (!resolved) continue; // sin deal de cierre → dejar abierto, no fabricar
+                    await docSnap.ref.set({
+                        result: resolved.result,
+                        rMultiple: resolved.rMultiple,
+                        ctrader_real_pnl: resolved.pnl,
+                        slHit: resolved.slHit,
+                        reconciled: true,
+                        closedAt: new Date().toISOString(),
+                    }, { merge: true });
+                    console.log(`[RECONCILE] 📖 Journal abierto #${docSnap.id} (posID ${pid}) resuelto con deals: ${resolved.result} (${resolved.rMultiple}R)`);
+                }
+            } catch (e: any) {
+                console.warn('[RECONCILE] error escaneando journals abiertos:', e.message);
+            }
         }
     } catch (e: any) {
         console.warn('[RECONCILE] error:', e.message);
@@ -377,6 +535,8 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     riderTf?: string;
     /** 🆕 TimesFM F1/F2: bloque de config del filtro (asset_configs/{ticker}.timesfm) */
     timesfm?: any;
+    /** 🧲 Filtro de correlación cross-asset EWMA (asset_configs/{ticker}.correlationFilter) */
+    correlationFilter?: any;
     sessions?: Record<string, {
         choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
         choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -437,6 +597,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             riderEnabled: config.riderEnabled as boolean | undefined,
             riderTf: config.riderTf as string | undefined,
             timesfm: (config as any).timesfm, // 🆕 F1/F2: filtro direccional TimesFM (asset_configs/{ticker}.timesfm)
+            correlationFilter: (config as any).correlationFilter, // 🧲 filtro de correlación cross-asset
             sessions: config.sessions as any
         };
     }
@@ -1100,9 +1261,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                     // 🎯 EVALUACIÓN DE TP1
                     if (!trade.tp1Hit) {
-                        const tp1Hit = trade.direction === 'BUY'
+                        // 🆕 ago-2026: guardia de precio del BROKER contra falsos positivos del feed.
+                        // El feed de TV puede marcar wicks que el broker nunca imprimió (caso real:
+                        // USDJPY SELL creyó ver TP1 26 pips abajo y ejecutó el parcial a mercado
+                        // EN CONTRA → -1.84 EUR). Si el bid/ask real está fresco (<30s), el TP1
+                        // solo se da cuando el BROKER confirma el nivel. Sin datos frescos → feed.
+                        const ba = getLastBidAsk(ticker);
+                        const baFresh = ba != null && Date.now() - ba.ts < 30_000;
+                        const feedTp1Hit = trade.direction === 'BUY'
                             ? highPrice >= trade.tp1Price
                             : lowPrice <= trade.tp1Price;
+                        const brokerTp1Hit = baFresh
+                            ? (trade.direction === 'BUY' ? ba!.bid >= trade.tp1Price : ba!.ask <= trade.tp1Price)
+                            : null;
+                        if (feedTp1Hit && brokerTp1Hit === false) {
+                            console.log(`[TRADE] ⚠️ TP1 falso positivo en ${ticker} (feed lo marca, broker NO: ${trade.direction === 'BUY' ? `bid=${ba!.bid}` : `ask=${ba!.ask}`} vs TP1 ${trade.tp1Price}) — parcial NO ejecutado.`);
+                        }
+                        const tp1Hit = brokerTp1Hit !== null ? brokerTp1Hit : feedTp1Hit;
 
                         if (tp1Hit) {
                             // 🛡️ FILTRO ANTI-DUPLICADOS
@@ -1253,9 +1428,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         const riskDist = Math.abs(trade.tp1Price - trade.entryPrice);
                         const tp1_5Price = trade.direction === 'BUY' ? trade.tp1Price + (riskDist * 0.5) : trade.tp1Price - (riskDist * 0.5);
 
+                        const baBe = getLastBidAsk(ticker);
+                        const baBeFresh = baBe != null && Date.now() - baBe.ts < 30_000;
                         const beHit = trade.direction === 'BUY'
-                            ? highPrice >= tp1_5Price
-                            : lowPrice <= tp1_5Price;
+                            ? (baBeFresh ? baBe!.bid >= tp1_5Price : highPrice >= tp1_5Price)
+                            : (baBeFresh ? baBe!.ask <= tp1_5Price : lowPrice <= tp1_5Price);
 
                         if (beHit) {
                             if (isDuplicate(`BE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
@@ -1317,8 +1494,17 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     if (trade.tp1Hit && mgmtAtrTrailT) {
                         const atrThreshold = (state.atr14 ?? 0) * 1.5;
                         const ratchetStep = (state.atr14 ?? 0) * 0.25;
+                        // 🛡️ FIX D: el trailing nunca debe cruzar el SL al lado equivocado del entry.
+                        // Cota = entry (breakeven). Así el rMultiple del SL-hit no puede dispararse
+                        // con un SL en territorio de ganancia tratado como pérdida.
                         if (trade.direction === 'BUY') {
-                            const atrTrailSL = highPrice - atrThreshold;
+                            // BUY: SL siempre por DEBAJO del entry (breakeven = entry)
+                            // 🆕 Ronda 2: ratchet contra el BID del broker (wick falso del feed ya no sube el SL)
+                            const baTrail = getLastBidAsk(ticker);
+                            const baTrailFresh = baTrail != null && Date.now() - baTrail.ts < 30_000;
+                            const refHigh = baTrailFresh ? baTrail!.bid : highPrice;
+                            let atrTrailSL = refHigh - atrThreshold;
+                            if (atrTrailSL > trade.entryPrice) atrTrailSL = trade.entryPrice;
                             if (atrTrailSL > trade.slPrice + ratchetStep) {
                                 if (isBacktest) {
                                     trade.slPrice = atrTrailSL;
@@ -1330,7 +1516,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                             }
                         } else {
-                            const atrTrailSL = lowPrice + atrThreshold;
+                            // SELL: SL siempre por ENCIMA del entry (breakeven = entry)
+                            // 🆕 Ronda 2: ratchet contra el ASK del broker
+                            const baTrail = getLastBidAsk(ticker);
+                            const baTrailFresh = baTrail != null && Date.now() - baTrail.ts < 30_000;
+                            const refLow = baTrailFresh ? baTrail!.ask : lowPrice;
+                            let atrTrailSL = refLow + atrThreshold;
+                            if (atrTrailSL < trade.entryPrice) atrTrailSL = trade.entryPrice;
                             if (atrTrailSL < trade.slPrice - ratchetStep) {
                                 if (isBacktest) {
                                     trade.slPrice = atrTrailSL;
@@ -1353,13 +1545,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 : lowPrice <= trade.tp2Price;
                         } else {
                             // LIVE: lado de ejecución correcto. Un BUY cierra con el BID,
-                            // un SELL cierra con el ASK (comprando). Si no hay ask fresco,
-                            // se cae al high/low del bid como antes.
+                            // un SELL cierra con el ASK (comprando). Si no hay bid/ask fresco,
+                            // se cae al high/low del feed como antes.
                             const ba = getLastBidAsk(ticker);
-                            const askFresh = ba != null && Date.now() - ba.ts < 30_000;
+                            const baFresh = ba != null && Date.now() - ba.ts < 30_000;
                             tp2Hit = trade.direction === 'BUY'
-                                ? highPrice >= trade.tp2Price
-                                : (askFresh ? ba!.ask <= trade.tp2Price : lowPrice <= trade.tp2Price);
+                                ? (baFresh ? ba!.bid >= trade.tp2Price : highPrice >= trade.tp2Price)
+                                : (baFresh ? ba!.ask <= trade.tp2Price : lowPrice <= trade.tp2Price);
                         }
 
                         if (tp2Hit) {
@@ -1458,10 +1650,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     } else {
                         // 🔧 LIVE: lado de ejecución correcto. BUY cierra con bid, SELL con ask.
                         const ba = getLastBidAsk(ticker);
-                        const askFresh = ba != null && Date.now() - ba.ts < 30_000;
+                        const baFresh = ba != null && Date.now() - ba.ts < 30_000;
                         slHit = trade.direction === 'BUY'
-                            ? currentPrice <= trade.slPrice
-                            : (askFresh ? ba!.ask >= trade.slPrice : currentPrice >= trade.slPrice);
+                            ? (baFresh ? ba!.bid <= trade.slPrice : currentPrice <= trade.slPrice)
+                            : (baFresh ? ba!.ask >= trade.slPrice : currentPrice >= trade.slPrice);
                     }
 
                     if (slHit) {
@@ -1740,6 +1932,44 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             if (isBuy) state.activeImpulseBuy = newLeg;
                             else state.activeImpulseSell = newLeg;
+
+                            // 🆕 F3-etapa3: TRAILING STOP ESTRUCTURAL POST-TP1 (espejo de backtestEngine.ts:921-960)
+                            // Se ejecuta al crearse un impulso NUEVO: si hay un trade abierto post-TP1 del
+                            // mismo ticker/dirección con structuralTrailEnabled (congelado por gatillo en
+                            // mgmtOverrides al entrar, fallback config del activo), arrastra el SL al nuevo
+                            // origin con buffer máx(2×spread, 0.5×ATR). Ratchet: solo mejora ≥ 0.25×ATR.
+                            if (!isBootstrap) {
+                                const stCfg = getConfigForTicker(ticker, nowMs);
+                                const stPip = getPipValue(ticker, actualPrice);
+                                for (const [, tTrade] of store.activeTrades) {
+                                    if (tTrade.ticker !== ticker) continue;
+                                    if (!!(tTrade as any).isBacktest !== isBacktest) continue;
+                                    if (tTrade.direction !== currentDirection) continue;
+                                    if (!tTrade.tp1Hit) continue;
+                                    const stEnabled = tTrade.mgmtOverrides?.structuralTrailEnabled
+                                        ?? (stCfg as any).structuralTrailEnabled ?? false;
+                                    if (!stEnabled) continue;
+                                    const stAtrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
+                                    const stBuffer = Math.max(2 * ((stCfg as any).spreadPips ?? 0.1) * stPip, stAtrTrail);
+                                    const trailedSL = currentDirection === 'BUY' ? newOrigin - stBuffer : newOrigin + stBuffer;
+                                    const improved = currentDirection === 'BUY'
+                                        ? trailedSL > tTrade.slPrice + stAtrTrail * 0.5
+                                        : trailedSL < tTrade.slPrice - stAtrTrail * 0.5;
+                                    if (!improved) continue;
+                                    if (isBacktest) {
+                                        tTrade.slPrice = trailedSL;
+                                    } else {
+                                        tTrade.targetSlPrice = parseFloat(trailedSL.toFixed(getDecimals(ticker)));
+                                        tTrade.targetSlPending = true;
+                                        tTrade.targetSlRetries = 0;
+                                        if (db && !tTrade.isBacktest) db.collection('active_trades').doc(tTrade.tradeId).update({
+                                            targetSlPrice: tTrade.targetSlPrice,
+                                            targetSlPending: true
+                                        }).catch(() => { });
+                                        console.log(`[STRAIL] 🧲 ${ticker} ${tTrade.direction} #${tTrade.tradeId}: SL estructural → ${tTrade.targetSlPrice} (origin ${newOrigin}, buffer ${stBuffer.toFixed(5)})`);
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if (eventTf === '15' || eventTf === '60' || eventTf === '240' || eventTf === 'D') {
@@ -1938,7 +2168,32 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const lateTotalPts = pendingLeg.chochPoints!;
                             const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= lateConfig.sniperCooldownMs;
 
-                            if (canFireChoch && lateConfig.sessionEnabled && cooldownOk && lateTotalPts >= lateMinPts) {
+                            // 🛡️ FIX ago-2026 (gatillos 15m/OTE sin entradas): este path NO respetaba la
+                            // config por gatillo (enabled/minScore) y los eventos 5m copaban las entradas
+                            // en sesiones donde están deshabilitados, consumiendo el cooldown antes del 15m.
+                            // Ahora se consulta el gatillo real de la TF del leg (igual que la Capa 4).
+                            const lateLegEvs = pendingLeg.chochEvents || [];
+                            const lateEntryEv = lateLegEvs.find((e: string) => e.includes('🚀') || e.includes('🔨'));
+                            const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(CHoCH|BOS)_/.test(e));
+                            const lateLegFam = lateStructEv?.includes('BOS') ? 'BOS' : 'CHoCH';
+                            const lateLegTf = (lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/)?.[1] ?? '5m').toLowerCase();
+                            const lateSessionKey = getCurrentSession(nowMs);
+                            const lateSessionCfg = (lateConfig.sessions as any)?.[lateSessionKey] ?? (lateConfig.sessions as any)?.['ALL'];
+                            const lateTriggerKey = `${lateLegFam === 'BOS' ? 'bos' : 'choch'}${lateLegTf}`;
+                            const lateTriggerCfg = (lateSessionCfg as any)?.[lateTriggerKey];
+                            let lateTriggerEnabled = true;
+                            let lateMinPtsG = lateMinPts;
+                            if (lateTriggerCfg) {
+                                lateTriggerEnabled = lateTriggerCfg.enabled ?? true;
+                                lateMinPtsG = currentDirection === 'BUY'
+                                    ? (lateTriggerCfg.minScoreBuy ?? lateTriggerCfg.minScore ?? lateMinPts)
+                                    : (lateTriggerCfg.minScoreSell ?? lateTriggerCfg.minScore ?? lateMinPts);
+                            }
+                            if (!lateTriggerEnabled) {
+                                console.log(`[RADAR] 🚫 Re-val tardía ${ticker}: gatillo ${lateTriggerKey} deshabilitado en ${lateSessionKey} (config por gatillo).`);
+                            }
+
+                            if (canFireChoch && lateConfig.sessionEnabled && lateTriggerEnabled && cooldownOk && lateTotalPts >= lateMinPtsG) {
                                 const dec = getDecimals(ticker);
                                 const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
                                 const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
@@ -1954,11 +2209,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     for (let i = state.zones.length - 1; i >= 0; i--) { if (state.zones[i].atr) { atr = state.zones[i].atr!; break; } }
                                     if (rDist > (atr > 0 ? atr * 1.5 : pctLimit)) {
                                         fireNow = false;
+                                        telemetry.oteWait(ticker, lateSessionKey, `ote${lateLegFam === 'BOS' ? 'Bos' : 'Choch'}${lateLegTf}`);
                                         console.log(`[RADAR] 🧠 Re-val tardía ${ticker}: distancia excesiva, esperando OTE.`);
                                     }
                                 }
 
                                 if (fireNow) {
+                                    telemetry.directEntry(ticker, lateSessionKey, lateTriggerKey);
                                     const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
                                     const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * lateConfig.fixedRR) : curPrice - (rDist * lateConfig.fixedRR);
                                     const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -2232,6 +2489,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                         if (efectiveValidation) {
                             activeLeg.isValidated = true;
+                            // 🆕 Plan B ago-2026: señal validada (telemetría de gatillos)
+                            telemetry.signal(ticker, currentSession, `${triggerType === 'CHoCH🚀' ? 'choch' : 'bos'}${eventTf}m`);
                             if (!hasZoneConfluence && !hasSpatialBacking && totalPoints >= HIGH_SCORE_BYPASS) {
                                 console.log(`[RADAR] ⚡ Leg ${currentDirection} en ${ticker} VALIDADO por PUNTAJE ALTO (${totalPoints} pts ≥ ${HIGH_SCORE_BYPASS}) sin zonas en memoria.`);
                             } else if (hasSpatialBacking && !hasZoneConfluence) {
@@ -2260,7 +2519,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (slBufferAmt < minPipDist) slBufferAmt = minPipDist;
                             const adjustedSL = currentDirection === 'BUY' ? activeLeg.origin - slBufferAmt : activeLeg.origin + slBufferAmt;
                             const stopLoss = adjustedSL.toFixed(decimals);
-                            const currentPrice = state.lastPrice ?? activeLeg.extreme;
+                            // 🆕 ago-2026 Ronda 2: SL/TP y riesgo 1% se calculan contra el precio del
+                            // BROKER (bid/ask vivo <30s, lado correcto) — no contra state.lastPrice
+                            // del radar, que puede divergir pips del fill real (caso USOIL: 9 pips).
+                            const baEntry = getLastBidAsk(ticker);
+                            const currentPrice = (baEntry && Date.now() - baEntry.ts < 30_000)
+                                ? (currentDirection === 'BUY' ? baEntry.ask : baEntry.bid)
+                                : (state.lastPrice ?? activeLeg.extreme);
                             const riskDist = Math.abs(currentPrice - adjustedSL);
                             const fixedTP1 = currentDirection === 'BUY'
                                 ? currentPrice + riskDist
@@ -2397,8 +2662,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             if (!takeChoch) {
                                 triggerOte = false; // Bloqueamos la ejecución inmediata de este trade
+                                // 🆕 Plan B ago-2026: SMART difiere al OTE (telemetría)
+                                telemetry.oteWait(ticker, currentSession, `ote${triggerType === 'CHoCH🚀' ? 'Choch' : 'Bos'}${eventTf}m`);
                                 console.log(`[RADAR] 🧠 Modo SMART/OTE: Gatillo inicial omitido para ${ticker}. Esperando retroceso OTE.`);
                             } else {
+                                // 🆕 Plan B ago-2026: entrada directa (telemetría)
+                                telemetry.directEntry(ticker, currentSession, `${triggerType === 'CHoCH🚀' ? 'choch' : 'bos'}${eventTf}m`);
                                 if (smartReport) oteData.confluenceReport += smartReport;
                                 triggerOte = true;
                                 // ✅ Cooldown y reset SOLO cuando el trade realmente se dispara
@@ -2927,6 +3196,46 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             }
         }
 
+        // 🧲 FILTRO DE CORRELACIÓN CROSS-ASSET (EWMA M15) — ago-2026
+        // Shadow por defecto: audita sin bloquear (paridad exacta de trading).
+        // Para activar el bloqueo real: asset_configs/{ticker}.correlationFilter = {shadow:false}.
+        if (!isBacktest) {
+            const corrCfgObj = getConfigForTicker(ticker, nowMs);
+            const corrCfg = resolveCorrelationConfig((corrCfgObj as any).correlationFilter);
+            const corrOpenTrades = [...store.activeTrades.values()]
+                .filter(t => t.ticker.toUpperCase() !== ticker.toUpperCase() && !(t as any).isBacktest)
+                .map(t => ({ ticker: t.ticker, direction: t.direction }));
+            const corrVerdict = evaluateCorrelationGate(ticker, oteData.direction as 'BUY' | 'SELL', corrOpenTrades, corrCfg);
+            if (corrVerdict.applied) {
+                appendCorrelationAudit(corrCfg.auditPath, {
+                    ts: nowMs, ticker, direction: oteData.direction, points: oteData.points,
+                    wouldBlock: corrVerdict.wouldBlock, blockedBy: corrVerdict.blockedBy,
+                    riskMult: corrVerdict.riskMult, shadow: corrCfg.shadow, degraded: corrVerdict.degraded,
+                });
+                if (corrVerdict.wouldBlock) {
+                    const detail = corrVerdict.blockedBy.map(b => `${b.otherTicker}(${b.otherDir}) ρ=${b.rho.toFixed(2)} [${b.rule}]`).join('; ');
+                    if (corrCfg.shadow) {
+                        console.log(`[CORRELATION SHADOW] ${ticker} ${oteData.direction} habría sido BLOQUEADO por: ${detail}`);
+                    } else {
+                        console.log(`[CORRELATION] ⛔ ${ticker} ${oteData.direction} BLOQUEADO por correlación: ${detail}`);
+                        state.lastGatillo.status = 'BLOCKED_CORRELATION';
+                        safeSet(state).catch(() => { });
+                        store.activeTrades.delete(oteData.tradeId);
+                        if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                        return;
+                    }
+                } else if (corrVerdict.riskMult < 1) {
+                    if (corrCfg.shadow) {
+                        console.log(`[CORRELATION SHADOW] ${ticker} ${oteData.direction} riskMult habría sido ×${corrVerdict.riskMult.toFixed(2)} (clúster positivo misma dirección)`);
+                    } else {
+                        oteData.riskMult = (oteData.riskMult ?? 1) * corrVerdict.riskMult;
+                        console.log(`[CORRELATION] ${ticker} ${oteData.direction} riskMult ×${corrVerdict.riskMult.toFixed(2)} (clúster positivo misma dirección)`);
+                    }
+                }
+                if (corrVerdict.degraded) console.log(`[CORRELATION] ⚠️ ${ticker}: algún par sin correlación calculada (fail-open).`);
+            }
+        }
+
         const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
         console.log(`[SNIPER] 🔍 Verificando duplicado: ${fingerprint}`);
         if (!isDuplicate(fingerprint, nowMs)) {
@@ -3184,6 +3493,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                         ctraderPositionId: result.positionId,
                                         ctraderLots: result.lots,
                                         ctraderExecutedPrice: result.executedPrice,
+                                        // 🆕 ago-2026: entryPrice = precio REAL del deal (corregido por
+                                        // confirmOrderFilled) → R del Diario exacto.
+                                        entryPrice: result.executedPrice,
                                         ctraderStatus: 'EXECUTED',
                                         ctraderDemo: globalConfig.CTRADER_DEMO,
                                     }).catch(() => { });
@@ -3193,6 +3505,24 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             } else {
                                 const errorMsg = `❌ <b>ERROR AUTO-EJECUCIÓN</b>\n\n${msg}\n\n⚠️ Error: ${result.error}`;
                                 await sendTelegramAlert(errorMsg);
+                                // 🛡️ FIX: la orden NO se ejecutó en cTrader (abortada por guardrail de volumen,
+                                // rechazo, etc). El trade ya quedó registrado en active_trades + journal ANTES
+                                // de intentar la ejecución. Hay que LIMPIARLO para que no quede como posición
+                                // "viva" que luego el gestor marca LOSS (y dispara el killswitch) por un
+                                // trade que nunca existió en cTrader.
+                                store.activeTrades.delete(oteData.tradeId);
+                                if (db && !isBacktest) {
+                                    db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                                    if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
+                                        db.collection('trade_journal').doc(journalId).update({
+                                            result: 'SKIP',
+                                            ctraderStatus: 'ABORTED',
+                                            skipReason: `Ejecución abortada en cTrader: ${result.error}`,
+                                            ctraderError: result.error ?? null,
+                                        }).catch(() => { });
+                                    }
+                                }
+                                console.log(`[SNIPER] 🧹 Trade ${oteData.tradeId} abortado limpiado de active_trades y marcado SKIP en journal.`);
                             }
                         } else {
                             // ⏸️ MODO SEMI-AUTOMÁTICO: Enviar alerta WITH cTrader execution buttons

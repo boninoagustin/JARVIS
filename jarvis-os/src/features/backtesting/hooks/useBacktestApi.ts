@@ -4,7 +4,7 @@
  */
 import { useCallback } from 'react';
 
-const KRONOS_URL = 'http://169.58.163.132:8000';
+const KRONOS_URL = `http://${typeof window !== 'undefined' ? window.location.hostname : '169.58.163.132'}:8000`;
 
 export function useBacktestApi() {
     const runWorkerTask = useCallback(async (

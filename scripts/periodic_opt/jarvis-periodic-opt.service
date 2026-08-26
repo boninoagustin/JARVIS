@@ -14,7 +14,9 @@ Nice=5
 # no a la máquina (el bot sigue vivo). 8GB total: el job se limita a 4-5GB.
 MemoryHigh=4G
 MemoryMax=5G
-TimeoutStartSec=8h
+# F3-etapa2: 400 trials × 28 dims por activo ≈ 21 min/activo; 10 activos + refresh + sweeps ≈ 5-6h.
+# Peor caso (algún ticker al timeout de 75 min): 12h cubren.
+TimeoutStartSec=12h
 
 [Install]
 WantedBy=multi-user.target

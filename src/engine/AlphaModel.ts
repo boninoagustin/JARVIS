@@ -1,8 +1,12 @@
 import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreEvent } from './Types.js';
 import { extractMgmtOverrides } from './Types.js';
 import { predict as mlPredict, isMLActive } from './MLFilter.js';
+import { telemetry } from '../services/telemetry.js';
 
-const DEBUG = false;
+// 🆕 Plan B ago-2026: dbg controlado por env para spot-checks sin recompilar.
+// Guard `typeof process` porque este módulo se re-exporta al NAVEGADOR (jarvis-os backtest),
+// donde `process` no existe → crasheaba al importar (pantalla negra).
+const DEBUG = typeof process !== 'undefined' && process?.env?.JARVIS_DEBUG_FIBO === '1';
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
 
 
@@ -177,10 +181,21 @@ export function evaluateImpulseCore(
 
     const { config, sessionConfig } = ctx;
 
+    // 🆕 Plan B ago-2026: familia/tf del leg para la telemetría de gatillos
+    let _legFam = 'Choch'; let _legTf = '5m';
+    for (const e of leg.chochEvents ?? []) {
+        if (e.includes('BOS')) _legFam = 'Bos';
+        if (e.includes('CHOCH') || e.includes('CHoCH')) _legFam = 'Choch';
+        const m = String(e).match(/_(\d+M)$/);
+        if (m && ['3M', '5M', '15M'].includes(m[1])) _legTf = m[1].toLowerCase();
+    }
+    const _oteKey = `ote${_legFam}${_legTf}`;
+
     // 🔧 FIX 1: Stale leg cleaner — legs de más de 8 horas se invalidan automáticamente (Intradia)
     const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
         dbg(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
+        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'otra');
         return { updatedLeg: null };
     }
 
@@ -195,6 +210,7 @@ export function evaluateImpulseCore(
     
     if (oppositePoints >= dominanceThreshold && (nowMs - oppositeScore.lastUpdate) < 900000) {
         dbg(`[FIBO] ⚠️ Leg ${leg.dir} en ${ticker} ANULADO por presión contraria: score opuesto ${oppositePoints} pts vs propio histórico ${ownStrength} pts (hace ${Math.round((nowMs - oppositeScore.lastUpdate) / 60000)}min).`);
+        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'opuesta');
         return { updatedLeg: null };
     }
 
@@ -202,6 +218,7 @@ export function evaluateImpulseCore(
     const contraryChochFound = oppositeScore.events?.some(e => e.id.includes('CHOCH') || e.id.includes('CHoCH'));
     if (contraryChochFound && leg.createdAt && oppositeScore.lastUpdate > leg.createdAt) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} ANULADO: Se detectó un CHoCH contrario posterior a la creación del leg (antes de llegar a OTE).`);
+        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'chochContrario');
         return { updatedLeg: null };
     }
 
@@ -213,6 +230,7 @@ export function evaluateImpulseCore(
         : (currentPrice < leg.extreme - atrEstimate);
     if (priceBeyondExtreme && leg.createdAt && (nowMs - leg.createdAt) > 30 * 60 * 1000) {
         dbg(`[FIBO] 🚫 Leg ${leg.dir} en ${ticker} INALCANZABLE: precio ${currentPrice} ya superó el extreme ${leg.extreme} en más de 1 ATR.`);
+        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'inalcanzable');
         return { updatedLeg: null };
     }
 
@@ -341,16 +359,19 @@ export function evaluateImpulseCore(
             if (sessionConfig && config.entryTrigger !== 'SMART' && config.entryTrigger !== 'BOTH') {
                 if (!oteEnabled || totalPoints < oteMinScore) {
                     dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} para esta sesión`);
+                    telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'minScore');
                     return { updatedLeg: leg };
                 }
             } else {
                 const MIN_OTE_POINTS = oteMinScore;
                 if (!leg.isValidated && (leg.chochPoints || 0) < MIN_OTE_POINTS) {
                     dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: leg no validado y solo ${leg.chochPoints || 0} pts (< ${MIN_OTE_POINTS})`);
+                    telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'minScore');
                     return { updatedLeg: leg };
                 }
                 if (!oteEnabled || totalPoints < oteMinScore) {
                     dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} ignorado: OTE deshabilitado o puntaje ${totalPoints} < requerido ${oteMinScore} de base`);
+                    telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'minScore');
                     return { updatedLeg: leg };
                 }
             }
@@ -375,6 +396,7 @@ export function evaluateImpulseCore(
             if (risk <= 0 || rrRatioOTE < 0.75) {
                 dbg(`[FIBO] ❌ R:R invalid: risk=${risk}, reward=${reward}, ratio=${rrRatioOTE}`);
                 dbg(`[FIBO] ⚠️ OTE ${ticker} ${leg.dir} descartado: R:R teórico ${rrRatioOTE.toFixed(2)} < 0.75 (rango impulso: ${(Math.abs(leg.extreme - leg.origin)).toFixed(4)})`);
+                telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'rr075');
                 return { updatedLeg: leg };
             }
 
@@ -384,13 +406,16 @@ export function evaluateImpulseCore(
             
             if (addScoreEvent(activeScore, { id: eventName, pts: 4, tf: eventTfKey, ts: nowMs })) {
                 leg.oteScored = true;
+                // 🆕 Plan B ago-2026: ejecución OTE registrada en la telemetría
+                telemetry.oteExec(ticker, ctx.currentSession, `ote${isChoch ? 'Choch' : 'Bos'}${triggerTf}`);
                 
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const riskDist = risk;
                 const fixedTP1 = leg.dir === 'BUY' ? entryFill + riskDist : entryFill - riskDist;
                 // TP1 estructural: usar el extremo del impulso si queda a >= tp1StructuralMinRR (default 1.2R);
-                // si está más cerca, fallback al 1:1 fijo del riesgo
-                const structuralMinRR = config.tp1StructuralMinRR ?? 1.2;
+                // si está más cerca, fallback al 1:1 fijo del riesgo.
+                // F3-etapa3: leer por gatillo primero (oteTriggerCfg), fallback a nivel activo.
+                const structuralMinRR = oteTriggerCfg?.tp1StructuralMinRR ?? config.tp1StructuralMinRR ?? 1.2;
                 const structuralDist = Math.abs(leg.extreme - entryFill);
                 const chosenTP1 = structuralDist >= riskDist * structuralMinRR ? leg.extreme : fixedTP1;
                 const tp1 = chosenTP1.toFixed(decimals);

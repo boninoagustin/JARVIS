@@ -70,6 +70,23 @@ export interface PerformanceMetrics {
 
 const JOURNAL_COLLECTION = 'trade_journal';
 
+// 🆕 Deriva el gatillo real de la entrada desde events + isChochEntry.
+// El evento ejecutor lleva emoji (CHoCH🚀_TF / BOS🔨_TF); isChochEntry=false → OTE.
+// Claves alineadas con el backtest: choch5m, choch15m, bos5m, bos15m, oteChoch5m, oteChoch15m, oteBos5m, oteBos15m.
+function deriveTriggerKey(record: any): { triggerKey: string; triggerFam: string; entryType: string } {
+    const ev: string[] = Array.isArray(record.events) ? record.events : [];
+    const entry = ev.find((e: string) => e.includes('🚀') || e.includes('🔨'));
+    const structural = entry ?? [...ev].reverse().find((e: string) => /^(CHoCH|BOS)_/.test(e));
+    const fam = structural?.includes('BOS') ? 'BOS' : structural?.includes('CHoCH') ? 'CHoCH' : null;
+    const tf = (structural?.match(/_(\d+M|1H|4H|D|W)$/)?.[1]?.toLowerCase() ?? '').replace('m', 'm');
+    const isOte = record.isChochEntry === false || ev.some((e: string) => /OTE|Retracement/i.test(e));
+    const famLower = fam ? fam.toLowerCase() : 'unknown';
+    const key = fam
+        ? `${isOte ? 'ote' + (fam === 'BOS' ? 'Bos' : 'Choch') : famLower}${tf}`
+        : (isOte ? 'ote_unknown' : 'unknown');
+    return { triggerKey: key, triggerFam: fam ?? 'Otro', entryType: isOte ? 'OTE' : 'DIRECTO' };
+}
+
 // ─── Trade Logging ───
 
 function generateTradeId(): string {
@@ -96,6 +113,7 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
 
     try {
         // Eliminar propiedades undefined para evitar errores en Firestore
+        const derived = deriveTriggerKey(record);
         const cleanRecord = Object.fromEntries(
             Object.entries({
                 ...record,
@@ -104,6 +122,10 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
                 tp1Hit: record.tp1Hit || false,
                 tp2Hit: record.tp2Hit || false,
                 slHit: record.slHit || false,
+                // 🆕 gatillo real de la entrada (matriz sesión×gatillo del Diario)
+                triggerKey: derived.triggerKey,
+                triggerFam: derived.triggerFam,
+                entryType: derived.entryType,
             }).filter(([_, v]) => v !== undefined)
         );
 

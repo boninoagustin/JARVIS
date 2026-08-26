@@ -89,7 +89,7 @@ export default function SMCChartPanel() {
         let unsubscribe: (() => void) | undefined;
         
         import('../services/wsClient').then(({ wsClient }) => {
-            wsClient.connect('ws://169.58.163.132:8081');
+            wsClient.connect(`ws://${window.location.hostname}:8081`);
             wsClient.send({ type: 'SUBSCRIBE', ticker: `${ticker}:${period}` });
             setIsConnected(true);
 
@@ -243,7 +243,7 @@ export default function SMCChartPanel() {
             
             {/* Embedded Scanner */}
             <div style={{ flexShrink: 0, marginTop: '16px', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
-                <SMCScanner wsUrl="ws://169.58.163.132:8081" activeAsset={ticker} />
+                <SMCScanner wsUrl={`ws://${window.location.hostname}:8081`} activeAsset={ticker} />
             </div>
         </div>
     );

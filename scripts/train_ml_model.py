@@ -174,14 +174,16 @@ def parse_smc_state_from_log_line(line: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def extract_features_from_logs(log_dir: Path) -> List[Dict[str, Any]]:
+def extract_features_from_logs(log_dir: Path, ticker: str = "EURUSD") -> List[Dict[str, Any]]:
     """
-    Genera datos de entrenamiento usando el worker TS de backtest.
-    Corre el backtest con una config base, recolecta features al momento de cada
-    entrada y asigna label=1 (WIN) o 0 (LOSS) según el resultado real del trade.
+    Recolecta trades con features REALES usando el worker TS de backtest.
 
-    Este enfoque es superior al label proxy porque usa resultados reales
-    del motor de backtest (incluyendo TP/SL/ROI time-decay correctos).
+    Flujo: inicia el worker, llama method=collect_trades (que corre runBacktest
+    sobre el split de train 70% y congela las 12 features de MLFilter.extractFeatures
+    en cada trade), y asigna label=1 (WIN) / 0 (LOSS) según el resultado real.
+
+    Este enfoque reemplaza el POC anterior que generaba features SINTÉTICAS con
+    random() — el modelo ahora entrena con los mismos features que evalúa el runtime.
     """
     import subprocess
     import tempfile
@@ -196,7 +198,7 @@ def extract_features_from_logs(log_dir: Path) -> List[Dict[str, Any]]:
 
     # Config de backtest base (misma que usa el hyperopt)
     config = {
-        "ticker": "EURUSD",
+        "ticker": ticker,
         "minBuyPoints": 5, "minSellPoints": 5,
         "minRR": 1.5, "oteEntryPercent": 50, "entryTrigger": "SMART",
         "slBufferPercent": 0, "fixedRR": 2,
@@ -234,63 +236,37 @@ def extract_features_from_logs(log_dir: Path) -> List[Dict[str, Any]]:
 
     next_id = 1
     try:
-        # Init
-        init_res = send("init", {"ticker": "EURUSD", "log_dir": str(log_dir)})
+        # Init (carga logs y hace split temporal 70/30)
+        init_res = send("init", {"ticker": ticker, "log_dir": str(log_dir)})
         total = sum(init_res["logs_loaded"].values())
         print(f"[train_ml] Worker cargó {total} eventos", file=sys.stderr)
 
-        # Evaluate
-        eval_res = send("evaluate", {"config": config})
-        # Nota: el worker actual solo devuelve métricas agregadas, no trades individuales.
-        # Para obtener features por trade, necesitamos extender el worker.
-        # Por ahora, usamos un enfoque simplificado: generamos features sintéticas
-        # basadas en estadísticas del backtest.
-        metrics = eval_res["metrics"]
-        print(f"[train_ml] Backtest: {metrics['trade_count']} trades, "
-              f"WR={metrics['win_rate']*100:.1f}%, PF={metrics['profit_factor']:.2f}", file=sys.stderr)
+        # Collect trades con features reales (NO sintéticas)
+        collect_res = send("collect_trades", {"config": config})
+        raw_trades = collect_res.get("trades", [])
+        print(f"[train_ml] collect_trades devolvió {len(raw_trades)} trades", file=sys.stderr)
 
-        if metrics["trade_count"] == 0:
-            print("[train_ml] Sin trades en el backtest — no se pueden generar features.", file=sys.stderr)
-            send("shutdown", {})
-            proc.wait(timeout=5)
-            return features
+        for t in raw_trades:
+            result = t.get("result")
+            mlf = t.get("mlFeatures")
+            # Solo WIN/LOSS entrenan el clasificador binario (BE/TIMEOUT/REVERSAL se descartan)
+            if result not in ("WIN", "LOSS"):
+                continue
+            if not mlf:
+                continue
+            label = 1 if result == "WIN" else 0
+            entry = dict(mlf)  # copia de las 12 features
+            entry["label"] = label
+            entry["direction"] = t.get("direction", "BUY")
+            entry["ts"] = int(t.get("timestamp") or 0)
+            features.append(entry)
 
-        # Generar features sintéticas para entrenamiento rápido (POC).
-        # En producción, extender el worker para devolver trades con features.
-        import random
-        random.seed(42)
-
-        n_trades = metrics["trade_count"]
-        win_rate = metrics["win_rate"]
-
-        for i in range(min(n_trades, 500)):
-            label = 1 if random.random() < win_rate else 0
-            direction = "BUY" if random.random() < 0.5 else "SELL"
-
-            feature_vec = {
-                "z_score": random.gauss(0, 1.5),
-                "vwap_status": random.choice([0, 1, 2]),
-                "atr_value": abs(random.gauss(0.003, 0.002)),
-                "sweep_direction": random.choice([0, 0, 0, 1, 2]),
-                "simple_trend": random.choice([0, 1, 2]),
-                "hour_of_day": random.randint(0, 23),
-                "session": random.choice([0, 1, 2]),
-                "day_of_week": random.randint(0, 4),
-                "score_points": random.randint(3, 20),
-                "active_zones": random.randint(0, 15),
-                "choch_points": random.randint(0, 12),
-                "bias_aligned": random.choice([0, 1]),
-                "label": label,
-                "direction": direction,
-                "ts": int(time.time() * 1000) - random.randint(0, 86400000),
-            }
-            features.append(feature_vec)
-
-        print(f"[train_ml] {len(features)} features sintéticas generadas "
-              f"(POC — reemplazar con worker extendido en prod)", file=sys.stderr)
-        wins = sum(1 for e in features if e["label"] == 1)
-        print(f"[train_ml] WIN={wins} LOSS={len(features)-wins} (WR={wins/max(1,len(features))*100:.1f}%)",
-              file=sys.stderr)
+        print(f"[train_ml] {len(features)} trades WIN/LOSS con features reales "
+              f"(descartados BE/TIMEOUT/REVERSAL o sin features)", file=sys.stderr)
+        if features:
+            wins = sum(1 for e in features if e["label"] == 1)
+            print(f"[train_ml] WIN={wins} LOSS={len(features)-wins} (WR={wins/max(1,len(features))*100:.1f}%)",
+                  file=sys.stderr)
 
         # Shutdown
         send("shutdown", {})
@@ -437,7 +413,7 @@ def main() -> int:
         print(f"[train_ml] ERROR: {log_dir} no existe", file=sys.stderr)
         return 1
 
-    entries = extract_features_from_logs(log_dir)
+    entries = extract_features_from_logs(log_dir, ticker)
     if len(entries) < 20:
         print(f"[train_ml] ERROR: insuficientes muestras ({len(entries)}). Se necesitan ≥ 20.", file=sys.stderr)
         return 1

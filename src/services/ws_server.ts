@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { SMCState } from '../engine/smc/types.js';
 import { smcManager } from '../engine/smc/SMCManager.js';
+import { getLastBidAsk } from './ctrader.js';
 
 let wss: WebSocketServer | null = null;
 const clients = new Set<WebSocket>();
@@ -180,9 +181,22 @@ export function broadcastCandle(ticker: string, candle: any) {
 }
 
 export function broadcastRadarState(ticker: string, state: any) {
+    // 🆕 ago-2026 Ronda 2 (D): el radar que ve el dashboard muestra el precio del BROKER
+    // (bid vivo <30s), no el de la última alerta de TV — pueden divergir pips (caso USOIL).
+    const live = getLastBidAsk(ticker);
+    if (live && Date.now() - live.ts < 30_000) {
+        try { state.lastPrice = live.bid; } catch { /* estado congelado: ignorar */ }
+    }
     lastRadarStates.set(ticker, state);
     const payload = JSON.stringify({ type: 'RADAR_STATE', ticker, state });
     // Enviar a TODOS los clientes conectados (el dashboard no se suscribe a tickers específicos)
+    clients.forEach(ws => safeSend(ws, payload));
+}
+
+// 🆕 POSICIONES REALES: snapshot global de activeTrades (verificado por RECONCILE contra cTrader).
+// Alimenta la sección "POSICIONES REALES (cTrader)" del radar (reemplaza la bitácora de journal).
+export function broadcastPositions(positions: any[]) {
+    const payload = JSON.stringify({ type: 'POSITIONS', positions });
     clients.forEach(ws => safeSend(ws, payload));
 }
 

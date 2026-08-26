@@ -41,7 +41,10 @@ const finalConfig = {
   maxTradesPerDay: current.maxTradesPerDay || undefined,
   trailingDrawdownR: current.trailingDrawdownR || undefined,
   enabled: current.enabled ?? true,
-  spreadPips: 0.1, commissionPerLot: 3.0, tp1StructuralMinRR: 1.2,
+  spreadPips: 0.1, commissionPerLot: 3.0,
+  // F3-etapa1: reflejar la gestión real de producción (antes hardcodeado en 1.2 y sin ROI)
+  tp1StructuralMinRR: current.tp1StructuralMinRR ?? 1.2,
+  minimal_roi: current.minimal_roi,
 };
 const res = runBacktest(logs, finalConfig, undefined, prepared);
 const ft = res.trades;

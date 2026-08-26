@@ -223,6 +223,13 @@ export async function initSMCBridge() {
     const { processTradingAlert } = await import('../../db/trading.js');
     const { setSpotTickListener } = await import('../../services/ctrader.js');
 
+    // 🧲 Filtro de correlación cross-asset: registrar su listener ANTES del de eventos
+    // para que el bootstrap histórico (getHistoricalCandles → processLiveCandles(true))
+    // siembre el EWMA desde el arranque.
+    import('../../services/correlation.js').then(({ initCorrelationFilter }) => {
+        initCorrelationFilter();
+    }).catch(err => console.error('[SMC-BRIDGE] Error iniciando filtro de correlación:', err.message));
+
     // 1. Eventos del motor (CHoCH/BOS, sweeps, divergencias, zonas)
     smcManager.addListener((key, candle, events, isHistorical) => handleEngineEvents(processTradingAlert, key, candle, events, isHistorical));
 

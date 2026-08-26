@@ -208,6 +208,43 @@ async function main() {
         setTimeout(runReconcile, 60 * 1000);       // 1 min tras arrancar
         console.log('[RECONCILE] Scheduler activo: run a los 60s + cada 10 min.');
 
+        // 🆕 POSICIONES REALES → dashboard (reemplaza la bitácora de journal).
+        // Snapshot de activeTrades (verificado por RECONCILE contra cTrader) cada 5s por WS.
+        const runPositionsBroadcast = async () => {
+            try {
+                const { globalState } = await import('./db/trading.js');
+                const { broadcastPositions } = await import('./services/ws_server.js');
+                const positions = [...globalState.activeTrades.values()]
+                    .filter((t: any) => !t.isBacktest)
+                    .map((t: any) => ({
+                        tradeId: t.tradeId,
+                        ticker: t.ticker,
+                        direction: t.direction,
+                        entryPrice: t.entryPrice,
+                        slPrice: t.slPrice,
+                        originalSlPrice: t.originalSlPrice,
+                        tp1Price: t.tp1Price,
+                        tp2Price: t.tp2Price,
+                        tp1Hit: !!t.tp1Hit,
+                        managementMode: t.managementMode ?? null,
+                        ctraderPositionId: t.ctraderPositionId ?? null,
+                        adopted: !!t.adopted,
+                        openTs: t.openTs ?? t.timestamp,
+                        timestamp: t.timestamp,
+                    }));
+                broadcastPositions(positions);
+            } catch (e: any) {
+                console.error('[POSITIONS] Error en broadcast:', e.message);
+            }
+        };
+        setInterval(runPositionsBroadcast, 5_000);
+        runPositionsBroadcast();
+        console.log('[POSITIONS] Broadcast de posiciones reales ACTIVO (cada 5s).');
+
+        // 🆕 Plan B ago-2026: telemetría de gatillos (embudo vivo → trigger_telemetry)
+        const { scheduleTelemetryFlush } = await import('./services/telemetry.js');
+        scheduleTelemetryFlush();
+
         // 💓 Heartbeat de Firebase (Evita desconexiones silenciosas de onSnapshot)
         let lastSnapshotReceivedAt = Date.now();
         unsubscribers.push(

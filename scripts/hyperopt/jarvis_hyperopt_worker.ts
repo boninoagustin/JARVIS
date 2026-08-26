@@ -212,6 +212,30 @@ async function handleInit(params: any): Promise<any> {
   };
 }
 
+async function handleCollectTrades(params: any): Promise<any> {
+  const config: BacktestConfig = params.config;
+  const logs: Map<string, string[]> = (global as any).__logs;
+  const train = (global as any).__train;
+  if (!logs || !train) throw new Error('Worker no inicializado. Llamar method=init primero.');
+
+  // Correr el backtest sobre el split de train (70%) con la config dada.
+  const result = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, train);
+
+  // Devolver trades con: result (label), mlFeatures (12 dims reales), y mínimos para debug.
+  // Los BE/TIMEOUT/REVERSAL se filtran en el lado Python (solo WIN/LOSS entrenan el clasificador).
+  const trades = (result.trades || []).map(t => ({
+    id: t.id,
+    direction: t.direction,
+    result: t.result ?? null,
+    timestamp: t.timestamp,
+    points: t.points,
+    tf: t.tf,
+    mlFeatures: t.mlFeatures ?? null,
+  }));
+
+  return { trades, trade_count: trades.length, start_date: result.startDate, end_date: result.endDate };
+}
+
 async function handleEvaluate(params: any): Promise<any> {
   const config: BacktestConfig = params.config;
   const logs: Map<string, string[]> = (global as any).__logs;
@@ -266,6 +290,7 @@ async function handleRpc(line: string): Promise<void> {
     switch (req.method) {
       case 'init':     result = await handleInit(req.params || {}); break;
       case 'evaluate': result = await handleEvaluate(req.params || {}); break;
+      case 'collect_trades': result = await handleCollectTrades(req.params || {}); break;
       case 'ping':     result = { pong: true, ts: Date.now() }; break;
       case 'shutdown': send({ id: req.id, result: { ok: true } }); log('shutdown'); process.exit(0); return;
       default: throw new Error(`Unknown method: ${req.method}`);

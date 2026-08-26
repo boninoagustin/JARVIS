@@ -620,11 +620,11 @@ export default function BacktestingPanel() {
     if (!ticker || exportingCsv) return;
     setExportingCsv(true);
     try {
-      const res = await fetch(`http://169.58.163.132:8000/api/backtest/export-csv?ticker=${ticker}`);
+      const res = await fetch(`http://${window.location.hostname}:8000/api/backtest/export-csv?ticker=${ticker}`);
       const data = await res.json();
       toast(`✅ CSV generados para ${ticker}: ${Object.values(data.results).filter((r:any) => r.ok).length}/${Object.keys(data.results).length} TFs`, 'success');
       // Refrescar lista
-      const filesRes = await fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`);
+      const filesRes = await fetch(`http://${window.location.hostname}:8000/api/backtest/files?ticker=${ticker}`);
       const filesData = await filesRes.json();
       const TF_MAP2: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};
       const files = (filesData.files || []).map((f: any) => {
@@ -645,7 +645,7 @@ export default function BacktestingPanel() {
   useEffect(() => {
     if (!ticker) return;
     setUploadedFiles([]);
-    fetch(`http://169.58.163.132:8000/api/backtest/files?ticker=${ticker}`)
+    fetch(`http://${window.location.hostname}:8000/api/backtest/files?ticker=${ticker}`)
       .then(r => r.json())
       .then(data => {
         const TF_MAP: Record<string,string> = {'5':'M5','15':'M15','60':'H1','240':'H4','D1':'D1','D':'D1'};

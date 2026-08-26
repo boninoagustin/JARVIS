@@ -72,8 +72,9 @@ def main() -> int:
         return 1
 
     # 🔧 FIX: nombre versionado por motor — evita mezclar trials de motores distintos.
-    # Bump eng2 → eng3 ante cualquier cambio en backtestEngine/hyperopt que invalide resultados previos.
-    study_name = args.study_name or f"jarvis_{args.ticker.lower()}_eng2"
+    # Bump engN → engN+1 ante cualquier cambio en backtestEngine/hyperopt que invalide resultados previos.
+    # F3-etapa2: eng3→eng4 (espacio por sesión: 28 dims).
+    study_name = args.study_name or f"jarvis_{args.ticker.lower()}_eng4"
     storage = args.storage or str(REPO_ROOT / "scripts" / "hyperopt" / "jarvis_hyperopt_study.db")
     output = args.output or f"optimized_preset_{args.ticker}_hyperopt.json"
 

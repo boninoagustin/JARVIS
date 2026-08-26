@@ -49,12 +49,33 @@ DEFAULT_STORAGE = REPO_ROOT / "scripts" / "hyperopt" / "jarvis_hyperopt_study.db
 #   handleOptimizeTrigger: partialClose=[0,0.5,0.8], slAfterTp1={none,midpoint,breakeven},
 #                        tp15Be={true,false}, atrTrail={true,false}
 
+# F3-etapa1: presets de ROI time-decay que el optimizador puede elegir.
+# "roi_off" = tabla vacía → getEffectiveROI devuelve [0, null] → sin acción ROI.
+ROI_PRESETS: Dict[str, Dict[str, float]] = {
+    "roi_std":       {"0": 0.015, "30": 0.005, "60": 0},
+    "roi_off":       {},
+    "roi_aggressive": {"0": 0.025, "30": 0.008, "60": 0.003},
+    "roi_mild":      {"0": 0.008, "30": 0.003, "60": 0},
+}
+
+# F3-etapa2: sesiones del backtest y parámetros de gestión de salida que se
+# muestrean POR SESIÓN (el backtest los lee por gatillo dentro de config.sessions).
+# El resto queda global por activo (se leen a nivel raíz del config).
+SESSIONS = ["LONDON", "NY", "ASIA", "OFF"]
+SESSION_MGMT_CATEGORICALS: Dict[str, list] = {
+    "partialClosePct":      [0.0, 0.5, 0.8],
+    "slAfterTp1":           ["none", "midpoint", "breakeven"],
+    "tp15BeEnabled":        [True, False],
+    "atrTrailEnabled":      [True, False],
+    "structuralTrailEnabled": [True, False],
+}
+
 def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
     """Define el espacio de búsqueda. Con TPE el sampling es inteligente."""
     # 🔧 FIX: NO muestrear params SMC (pivot/wick/div/z). El backtest no los evalúa
     # (el motor consume eventos pre-horneados de los CSVs); los tunnea el bruteforcer.
-    return {
-        # Risk Management — parámetros de la gestión de salida
+    params: Dict[str, Any] = {
+        # Risk Management — globales por activo
         "slBufferPercent": trial.suggest_float("slBufferPercent", 0.0, 0.25),
         "fixedRR": trial.suggest_float("fixedRR", 1.2, 5.0),
         "minRR": trial.suggest_float("minRR", 1.0, 3.0),
@@ -64,12 +85,22 @@ def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
         "minBuyPoints": trial.suggest_int("minBuyPoints", 3, 12),
         "minSellPoints": trial.suggest_int("minSellPoints", 3, 12),
 
-        # Trade Management — parámetros de jarvis-os/BacktestingPanel
-        "partialClosePct": trial.suggest_categorical("partialClosePct", [0.0, 0.5, 0.8]),
-        "slAfterTp1": trial.suggest_categorical("slAfterTp1", ["none", "midpoint", "breakeven"]),
-        "tp15BeEnabled": trial.suggest_categorical("tp15BeEnabled", [True, False]),
-        "atrTrailEnabled": trial.suggest_categorical("atrTrailEnabled", [True, False]),
+        # F3-etapa1: los 3 que antes estaban fijos
+        # TP1 estructural: el extremo del impulso se usa como TP1 solo si queda
+        # a >= minRR × riesgo; si no, fallback al 1R fijo (AlphaModel.ts:391-394).
+        # Se lee a nivel RAÍZ del config (no por gatillo) → global.
+        "tp1StructuralMinRR": trial.suggest_float("tp1StructuralMinRR", 1.0, 2.0),
+        # ROI time-decay: elegir entre presets (backtestEngine.ts:485 lo lee a nivel config)
+        "minimal_roi": trial.suggest_categorical("minimal_roi", list(ROI_PRESETS.keys())),
     }
+
+    # F3-etapa2: gestión de salida POR SESIÓN (5 params × 4 sesiones = 20 dims).
+    # El backtest los lee por gatillo vía config.sessions[sesión][trigger].
+    for sess in SESSIONS:
+        for name, choices in SESSION_MGMT_CATEGORICALS.items():
+            params[f"{name}_{sess}"] = trial.suggest_categorical(f"{name}_{sess}", choices)
+
+    return params
 
 
 def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,7 +111,7 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
     """
     active_triggers = ["choch15m", "bos15m", "oteChoch15m", "oteBos15m"]
     sessions: Dict[str, Any] = {}
-    for sess in ["LONDON", "NY", "ASIA", "OFF"]:
+    for sess in SESSIONS:
         sess_cfg: Dict[str, Any] = {}
         # desactivar todos los triggers por default
         for t in [
@@ -88,6 +119,8 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
             "oteChoch5m", "oteChoch15m", "oteBos5m", "oteBos15m",
         ]:
             sess_cfg[t] = {"enabled": False}
+        # F3-etapa2: gestión de salida por sesión (sorteada en suggest_params)
+        mgmt = {name: params[f"{name}_{sess}"] for name in SESSION_MGMT_CATEGORICALS}
         for t in active_triggers:
             sess_cfg[t] = {
                 "enabled": True,
@@ -97,12 +130,9 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
                 "slBuff": params["slBufferPercent"],
                 "entryPercent": params["oteEntryPercent"] if t.startswith("ote") else 50,
                 # 🔧 FIX: gestión de salida dentro de cada trigger (antes iba en directManagement, que el engine ignora)
-                "partialClosePct": params["partialClosePct"],
-                "slAfterTp1": params["slAfterTp1"],
-                "tp15BeEnabled": params["tp15BeEnabled"],
-                "atrTrailEnabled": params["atrTrailEnabled"],
-                "structuralTrailEnabled": True,
-                "tp1StructuralMinRR": 1.2,
+                **mgmt,
+                # tp1StructuralMinRR va igual por trigger, pero el engine lo lee a nivel raíz (ver abajo)
+                "tp1StructuralMinRR": params["tp1StructuralMinRR"],
             }
         sessions[sess] = sess_cfg
 
@@ -115,10 +145,15 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
         "fixedRR": params["fixedRR"],
         "oteEntryPercent": params["oteEntryPercent"],
         "entryTrigger": "SMART",
+        # F3-etapa1: tp1StructuralMinRR a nivel raíz — es la clave que lee el AlphaModel
+        # compartido en el path OTE del backtest (AlphaModel.ts:393 `config.tp1StructuralMinRR ?? 1.2`).
+        # Antes no estaba a nivel raíz → el backtest siempre usaba el default 1.2 sin importar el trigger.
+        "tp1StructuralMinRR": params["tp1StructuralMinRR"],
         "sessions": sessions,
         # 🔧 FIX: directManagement eliminado — la gestión ahora viaja dentro de cada trigger de sesión
         # 🔧 FIX: smc_overrides eliminado — el backtest no lo leía (params SMC los tunnea el bruteforcer)
-        "minimal_roi": params.get("minimal_roi", {"0": 0.015, "30": 0.005, "60": 0}),
+        # F3-etapa1: minimal_roi ahora viene del espacio (preset elegido), antes fijo
+        "minimal_roi": ROI_PRESETS[params["minimal_roi"]],
     }
 
 

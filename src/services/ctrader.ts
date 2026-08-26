@@ -13,7 +13,7 @@
  */
 
 import { config } from '../config.js';
-import { TrendbarPeriod } from 'ctrader-ts';
+import { TrendbarPeriod, PayloadType } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
 import { tickFlow } from '../engine/TickFlow.js';
@@ -52,7 +52,7 @@ export let ctClient: any = null;
 let isConnected = false;
 let connectingPromise: Promise<boolean> | null = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
-const CONNECT_TIMEOUT_MS = 20_000;
+const CONNECT_TIMEOUT_MS = 60_000; // 🛡️ 60s: el handshake de cTrader demo a veces tarda >20s
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
     let timer: NodeJS.Timeout;
@@ -113,13 +113,13 @@ async function connectWithRetry(): Promise<boolean> {
             
             setupCTraderEvents(client);
             
-            // Invalidar el flag cuando el SDK reporte desconexión definitiva
+            // 🛡️ FIX B: ante desconexión, reintentar en el MISMO proceso (no matar todo con exit(1)).
+            // El SDK reporta 'disconnected' en caídas transitorias del feed; antes esto forzaba
+            // un reinicio completo de PM2 (932 restarts) y un handshake nuevo que a veces daba timeout.
             client.connection.onEvent('stateChange', (s: any) => {
                 if (s.status === 'disconnected' && ctClient === client) {
-                    isConnected = false;
-                    ctClient = null;
-                    console.error('[CTRADER] 🚨 Feed perdido. Reiniciando para re-suscripción limpia...');
-                    setTimeout(() => process.exit(1), 2000); // PM2 re-levanta y re-suscribe
+                    console.error('[CTRADER] 🚨 Feed perdido. Reintentando reconexión en caliente (sin reiniciar el proceso)...');
+                    handleDisconnectAndReconnect(client);
                 }
             });
             
@@ -142,6 +142,53 @@ async function connectWithRetry(): Promise<boolean> {
     return false;
 }
 
+// 🛡️ FIX B: reconexión en caliente ante caída del feed. Desloguea el cliente viejo,
+// limpia estado de suscripción y reintenta en el MISMO proceso. No usa process.exit(1).
+let reconnectInFlight = false;
+let reconnectConsecutiveFailures = 0;
+
+async function handleDisconnectAndReconnect(oldClient: any): Promise<void> {
+    if (reconnectInFlight) return; // ya hay una reconexión en curso
+    reconnectInFlight = true;
+    try {
+        // 1. Desloguear el cliente caído y limpiar estado
+        try { oldClient?.disconnect?.(); } catch { /* noop */ }
+        if (ctClient === oldClient) { ctClient = null; isConnected = false; }
+        clearSubscriptionState();
+
+        // 2. Backoff exponencial entre intentos de reconexión
+        const baseDelay = Math.min(5000 * (1 + reconnectConsecutiveFailures), 30000);
+        console.log(`[CTRADER] 🔄 Reconexión en caliente en ${baseDelay / 1000}s...`);
+        await new Promise(r => setTimeout(r, baseDelay));
+
+        // 3. Reintentar conectar (connectWithRetry ya trae su propio backoff interno)
+        connectingPromise = null;
+        const ok = await connectCTrader();
+        if (ok) {
+            reconnectConsecutiveFailures = 0;
+            console.log('[CTRADER] ✅ Reconexión exitosa. Re-inicializando escáner SMC...');
+            try { await initializeScanner(); } catch (e: any) { console.warn('[CTRADER] ⚠️ No se pudo re-inicializar el escáner tras reconexión:', e.message); }
+        } else {
+            reconnectConsecutiveFailures++;
+            console.error(`[CTRADER] ❌ Reconexión fallida (${reconnectConsecutiveFailures} fallo(s) consecutivos).`);
+            // Si falla repetidamente, caer a reinicio de PM2 como último recurso
+            if (reconnectConsecutiveFailures >= 5) {
+                console.error('[CTRADER] ⛔ 5 reconexiones fallidas. Cediendo a PM2 (reinicio limpio).');
+                process.exit(1);
+            } else {
+                // reintentar de nuevo en caliente
+                reconnectInFlight = false;
+                handleDisconnectAndReconnect(ctClient).catch(() => {});
+            }
+        }
+    } catch (e: any) {
+        console.error('[CTRADER] ❌ Error en reconexión en caliente:', e.message);
+        reconnectConsecutiveFailures++;
+    } finally {
+        reconnectInFlight = false;
+    }
+}
+
 /**
  * Check if cTrader is connected and ready.
  */
@@ -154,6 +201,14 @@ export function isCTraderReady(): boolean {
 function setupCTraderEvents(client: any) {
     client.onExecution(async (event: any) => {
         try {
+            // 🆕 ago-2026: loguear deals RECHAZADOS para diagnóstico. cTrader acepta la orden,
+            // devuelve positionId y puede rechazar el deal internamente ~400ms después
+            // (filledVolume=0, dealStatus=5 INTERNALLY_REJECTED). Antes estos eventos eran invisibles.
+            const dealStatus = Number(event?.deal?.dealStatus ?? 0);
+            if (dealStatus >= 4) {
+                console.warn(`[CTRADER-EVENT] ⚠️ Deal RECHAZADO (status=${dealStatus}): posId=${event?.position?.positionId ?? event?.order?.positionId ?? '?'} orderId=${event?.deal?.orderId ?? '?'} reasonCode=${event?.deal?.reasonCode ?? '?'} reason=${event?.deal?.reason ?? ''}`);
+                return;
+            }
             if (!event.position || !event.position.positionId) return;
             
             const positionId = event.position.positionId.toString();
@@ -294,38 +349,53 @@ function setupCTraderEvents(client: any) {
 
                 // 2. Process trendbars (closed or periodically updated bars by broker)
                 if (msg.trendbar && msg.trendbar.length > 0) {
-                    const tickerObj = Array.from(subscribedSymbols.entries()).find(([, v]) => v === symbolId);
-                    
-                    if (tickerObj) {
-                        const ticker = tickerObj[0]; // e.g. "EURUSD:M5"
-                        
-                        const newCandles = msg.trendbar.map((tb: any) => {
-                            const lowRaw = tb.low || 0;
-                            return {
-                                timestamp: (tb.utcTimestampInMinutes || 0) * 60000,
-                                open: (lowRaw + (tb.deltaOpen || 0)) / divider,
-                                high: (lowRaw + (tb.deltaHigh || 0)) / divider,
-                                low: lowRaw / divider,
-                                close: (lowRaw + (tb.deltaClose || 0)) / divider,
-                                volume: tb.volume || 0
-                            };
-                        });
-                        
-                        // 🔍 DIAGNÓSTICO: loguear trendbars recibidos para confirmar que cTrader los envía
-                        const tsFirst = newCandles[0]?.timestamp ? new Date(newCandles[0].timestamp).toISOString() : '???';
-                        const tsLast = newCandles[newCandles.length - 1]?.timestamp ? new Date(newCandles[newCandles.length - 1].timestamp).toISOString() : '???';
-                        console.log(`[CTRADER-TB] 📊 Trendbars recibidos: ${ticker} ×${newCandles.length} (${tsFirst} → ${tsLast})`);
-                        
-                        // Agregar o actualizar las velas en el buffer
-                        const [baseTicker, period] = ticker.split(':');
-                        import('../db/market_data.js').then(({ addCandles }) => {
-                            addCandles(baseTicker, period, newCandles);
-                            
-                            // Enviar al motor SMC (heavy processing)
-                            import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
-                                smcManager.processLiveCandles(baseTicker, period, newCandles);
-                            }).catch(err => console.error('[CTRADER] Error procesando SMC:', err));
-                        });
+                    const baseTicker = symbolToTicker.get(symbolId);
+                    if (baseTicker) {
+                        // 🔧 FIX (19-ago): cada Trendbar trae su propio `period` (M5=5, M15=7, H1=9…).
+                        // Antes se enrutaba por `.find()` sobre subscribedSymbols → SIEMPRE caía en la
+                        // primera key del símbolo (M5, que se suscribe primero). Eso dejó M15/H1/H4/D1
+                        // sin velas desde ~14-ago y contaminó la serie M5 con barras de otros TFs.
+                        // Ahora agrupamos por period y enrutamos cada grupo a su key correcta.
+                        const PERIOD_TO_STR: Record<number, string> = {
+                            5: 'M5', 7: 'M15', 8: 'M30', 9: 'H1', 10: 'H4', 12: 'D1', 13: 'W1',
+                        };
+                        const groups = new Map<string, any[]>();
+                        for (const tb of msg.trendbar as any[]) {
+                            const p = tb.period;
+                            const periodStr = PERIOD_TO_STR[p] ?? null;
+                            if (!periodStr) continue; // TF no suscripto → ignorar
+                            if (!groups.has(periodStr)) groups.set(periodStr, []);
+                            groups.get(periodStr)!.push(tb);
+                        }
+                        for (const [periodStr, tbs] of groups) {
+                            const key = `${baseTicker}:${periodStr}`;
+                            const newCandles = tbs.map((tb: any) => {
+                                const lowRaw = tb.low || 0;
+                                return {
+                                    timestamp: (tb.utcTimestampInMinutes || 0) * 60000,
+                                    open: (lowRaw + (tb.deltaOpen || 0)) / divider,
+                                    high: (lowRaw + (tb.deltaHigh || 0)) / divider,
+                                    low: lowRaw / divider,
+                                    close: (lowRaw + (tb.deltaClose || 0)) / divider,
+                                    volume: tb.volume || 0
+                                };
+                            });
+
+                            // 🔍 DIAGNÓSTICO: loguear trendbars recibidos para confirmar que cTrader los envía
+                            const tsFirst = newCandles[0]?.timestamp ? new Date(newCandles[0].timestamp).toISOString() : '???';
+                            const tsLast = newCandles[newCandles.length - 1]?.timestamp ? new Date(newCandles[newCandles.length - 1].timestamp).toISOString() : '???';
+                            console.log(`[CTRADER-TB] 📊 Trendbars recibidos: ${key} ×${newCandles.length} (${tsFirst} → ${tsLast})`);
+
+                            // Agregar o actualizar las velas en el buffer
+                            import('../db/market_data.js').then(({ addCandles }) => {
+                                addCandles(baseTicker, periodStr, newCandles);
+
+                                // Enviar al motor SMC (heavy processing)
+                                import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
+                                    smcManager.processLiveCandles(baseTicker, periodStr, newCandles);
+                                }).catch(err => console.error('[CTRADER] Error procesando SMC:', err));
+                            });
+                        }
                     }
                 }
             } catch (err: any) {
@@ -340,6 +410,17 @@ function setupCTraderEvents(client: any) {
 const subscribedSymbols = new Map<string, number>();
 // Mapa inverso symbolId -> baseTicker (para tickFlow: 1 llamada por tick, no por TF)
 const symbolToTicker = new Map<number, string>();
+// 🛡️ FIX C: Set de suscripciones ya activas en la conexión ACTUAL (symbolId y symbolId:period).
+// Evita el ALREADY_SUBSCRIBED al re-suscribir tras una reconexión en caliente.
+const subscribedSpots = new Set<number>();
+const subscribedTrendbars = new Set<string>();
+
+function clearSubscriptionState(): void {
+    subscribedSymbols.clear();
+    symbolToTicker.clear();
+    subscribedSpots.clear();
+    subscribedTrendbars.clear();
+}
 
 // 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
 // Se invoca con (baseTicker, vela actualizada por el tick) desde el handler de SpotEvent.
@@ -380,8 +461,16 @@ export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarP
         
         // Suscribirse vía la API de bajo nivel
         // REQUIRES subscribing to Spots first!
-        await ctClient.raw.market.subscribeSpots([symbolId]);
-        await ctClient.raw.market.subscribeLiveTrendbar(symbolId, period);
+        // 🛡️ FIX C: solo suscribir si no está ya activo en esta conexión (evita ALREADY_SUBSCRIBED)
+        if (!subscribedSpots.has(symbolId)) {
+            await ctClient.raw.market.subscribeSpots([symbolId]);
+            subscribedSpots.add(symbolId);
+        }
+        const tbKey = `${symbolId}:${period}`;
+        if (!subscribedTrendbars.has(tbKey)) {
+            await ctClient.raw.market.subscribeLiveTrendbar(symbolId, period);
+            subscribedTrendbars.add(tbKey);
+        }
         console.log(`[CTRADER] 📡 Suscrito exitosamente a Live Trendbars para ${ctraderSymbol} (${periodStr})`);
         
     } catch (err: any) {
@@ -565,6 +654,14 @@ export function calculateLotSize(
         const costPerPoint = 1; // $1 per point per 1 lot (varies)
         const lotSize = riskAmount / (slDistance * costPerPoint);
         return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+    } else if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) {
+        // 🛡️ FIX: Oil (USOIL/XTIUSD): 1 pip = 0.01 (1 cent), lot = 100 barriles.
+        // Con SL distance en dólares y costPerPip=1 (100 barriles × $0.01 = $1 por pip por lote),
+        // el lote sale correcto y NO cae por debajo del mínimo del broker (minVolume=0.1 lotes).
+        const pips = slDistance / 0.01;
+        const costPerPip = 1; // $1 por pip por lote (100 barriles × 1 centavo)
+        const lotSize = riskAmount / (pips * costPerPip);
+        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
     } else {
         // Standard Forex: 1 pip = 0.0001, lot = 100,000 units
         const pips = slDistance / 0.0001;
@@ -681,23 +778,34 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 
         // Alinear al stepVolume (incremento mínimo)
         let correctVolumeCents = Math.round(exactRequiredCents / stepVolumeCents) * stepVolumeCents;
-        
+
         if (info && info.maxVolume) {
             correctVolumeCents = Math.min(info.maxVolume, correctVolumeCents);
         }
-        
-        // Convertir al abstracción "lots" de ctrader-ts (siempre divide por 100,000)
-        lots = correctVolumeCents / 100000;
+
+        // Convertir a lotes reales SOLO para el display y el fallback MARKET (ctClient.buy/sell).
+        // 🛡️ FIX display: correctVolumeCents está en CENTAVOS de moneda base (1 lote forex = 10,000,000 centavos).
+        // Antes se dividía por 100,000 (factor de unidades) → el log mostraba "24 lotes" cuando eran 0.24.
+        // El `volume` que se manda al protocolo SIGUE siendo correctVolumeCents (centavos), sin tocar.
+        lots = correctVolumeCents / (lotSizeCents || 10000000);
 
         console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
 
         // ─── Ejecución con cap de slippage + telemetría (arrival vs fill) ───
-        const digits = info?.digits ?? 5;
+        const digits = info?.digits ?? await getSymbolDigits(info?.symbolId, ctraderSymbol);
         const roundTo = (val: number, d: number) => Number(val.toFixed(d));
         // pipSize derivado de digits: 5d→0.0001, 4d→0.0001, 3d→0.01, 2d→0.01, 1d→1 punto
         const pipSize = digits % 2 === 1 ? 10 * Math.pow(10, -digits) : Math.pow(10, -digits);
 
-        const arrivalPrice = currentPrice; // precio al decidir (proxy de arrival)
+        // 🆕 ago-2026: anclar el rango al ÚLTIMO precio VIVO del feed (SpotEvent de cTrader).
+        // El currentPrice del radar puede tener minutos de atraso en pares de bajo tickeo
+        // (madrugada asiática) → el MARKET_RANGE quedaba anclado a un precio viejo, el
+        // mercado se había movido → INTERNALLY_REJECTED. Con el precio vivo (<10s), el
+        // rango se calcula contra el mercado REAL del instante.
+        const live = lastBidAsk.get(ticker);
+        const arrivalPrice = (live && Date.now() - live.ts < 10_000)
+            ? (direction === 'BUY' ? live.ask : live.bid)
+            : currentPrice;
         const t0 = Date.now();
         const tp = tp2Price || tp1Price;
         const formattedSl = roundTo(slPrice, digits);
@@ -720,7 +828,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 const ev: any = await (ctClient as any).raw.trading.marketRangeOrder({
                     symbolId: info.symbolId,
                     tradeSide: direction === 'BUY' ? 1 : 2, // TradeSide.BUY=1, SELL=2
-                    volume: correctVolumeCents, // unidades de protocolo (1 lote = 100.000)
+                    volume: correctVolumeCents, // centavos de moneda base (protocolo cTrader)
                     baseSlippagePrice: arrivalPrice,
                     slippageInPoints,
                     stopLoss: formattedSl,
@@ -731,6 +839,21 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 if (ev?.errorCode) {
                     // Rechazo limpio del servidor → NO se llenó nada, es seguro el fallback
                     throw Object.assign(new Error(`MARKET_RANGE rechazada (${ev.errorCode})`), { rejected: true });
+                }
+                // 🛡️ FIX: cTrader puede reservar positionId PERO rechazar el deal internamente.
+                // Señal confiable de rechazo = dealStatus >= 4 (REJECTED/INTERNALLY_REJECTED/ERROR/MISSED)
+                // o executionType ORDER_REJECTED (7).
+                // ⚠️ NO tratar ORDER_ACCEPTED (execType=2) con filled=0 como rechazo: el fill llega
+                // en un evento posterior. Eso disparaba el fallback MARKET y DUPLICABA la orden.
+                const dealStatus = Number(ev?.deal?.dealStatus ?? 0);
+                const execType = Number(ev?.executionType ?? 0);
+                // DealStatus: FILLED=2, PARTIALLY_FILLED=3, REJECTED=4, INTERNALLY_REJECTED=5, ERROR=6, MISSED=7
+                const rejectedDeal = dealStatus >= 4; // 4,5,6,7 = rechazos/errores
+                if (execType === 7 || rejectedDeal) {
+                    throw Object.assign(
+                        new Error(`MARKET_RANGE rechazada internamente (dealStatus=${dealStatus}, execType=${execType})`),
+                        { rejected: true }
+                    );
                 }
                 const rawPid = ev?.position?.positionId ?? ev?.order?.positionId;
                 if (rawPid === undefined || rawPid === null) {
@@ -750,26 +873,89 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         }
 
         if (orderType === 'MARKET') {
-            const position: any = direction === 'BUY'
-                ? await ctClient.buy(ctraderSymbol, { lots })
-                : await ctClient.sell(ctraderSymbol, { lots });
-
-            const rawPositionId = position?.positionId ?? position?.id;
+            // 🛡️ FIX: fallback MARKET clásico. Usamos el raw protocol con correctVolumeCents (centavos),
+            // igual que MARKET_RANGE. NO usar ctClient.buy/sell: su lotsToUnits() asume 1 lote=100,000
+            // unidades, pero el protocolo cTrader espera centavos (1 lote=10,000,000) → mandaría 100× menos.
+            let symbolId = info?.symbolId;
+            if (symbolId === undefined) {
+                symbolId = await (ctClient as any).symbols.resolveId(ctraderSymbol);
+            }
+            const ev: any = await (ctClient as any).raw.trading.marketOrder({
+                symbolId,
+                tradeSide: direction === 'BUY' ? 1 : 2,
+                volume: correctVolumeCents,
+            });
+            // 🛡️ FIX ago-2026: el fallback MARKET no leía el errorCode — un rechazo limpio del
+            // servidor (errorCode presente) dejaba pasar una "posición fantasma".
+            if (ev?.errorCode) {
+                throw Object.assign(
+                    new Error(`MARKET rechazada por el broker (${ev.errorCode})`),
+                    { rejected: true }
+                );
+            }
+            const dealStatus = Number(ev?.deal?.dealStatus ?? 0);
+            if (dealStatus >= 4) { // REJECTED / INTERNALLY_REJECTED / ERROR / MISSED
+                throw Object.assign(
+                    new Error(`MARKET rechazada internamente (dealStatus=${dealStatus})`),
+                    { rejected: true }
+                );
+            }
+            const rawPositionId = ev?.position?.positionId ?? ev?.order?.positionId;
             if (rawPositionId === undefined || rawPositionId === null) {
                 throw new Error('Orden ejecutada pero sin positionId en la respuesta.');
             }
             positionId = String(rawPositionId);
-            executedPrice = position?.entryPrice || position?.price || currentPrice;
+            executedPrice = Number(ev?.deal?.executionPrice ?? ev?.position?.price ?? currentPrice) || currentPrice;
+        }
+
+        // 🛡️ FIX ago-2026: confirmar el FILL antes de tocar SL/TP (ver confirmOrderFilled).
+        // Si el broker rechazó el deal, NO hay posición: error limpio, sin cierre de emergencia
+        // ni ghost alerts. Si llenó (o no se confirma a tiempo), se sigue el flujo normal.
+        const fillConfirm = await confirmOrderFilled(Number(positionId));
+        if (fillConfirm.rejected) {
+            throw new Error(`Orden rechazada por el broker (${fillConfirm.dealStatusName}): el deal no se llenó. No se abrió posición.`);
+        }
+        // 🆕 ago-2026: corregir el precio de ejecución con el deal REAL del broker. El evento
+        // inmediato de la orden puede reportar el precio del radar (ej. USOIL: bot creía 83.1312,
+        // deal real 83.22). Con el precio real, slippage/journal/Telegram quedan exactos.
+        if (fillConfirm.deal && Number(fillConfirm.deal.executionPrice) > 0) {
+            const realPx = Number(fillConfirm.deal.executionPrice);
+            if (Math.abs(realPx - executedPrice) > pipSize / 10) {
+                console.log(`[CTRADER] 🔧 Precio de entrada corregido con deal real: ${executedPrice} → ${realPx} (${ticker})`);
+                executedPrice = realPx;
+            }
         }
 
         // SL/TP ABSOLUTOS sobre la posición ya abierta (skip si MARKET_RANGE ya los adjuntó)
-        if (!sltpAttached) {
-            try {
-                await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), {
+        try {
+            if (!sltpAttached) {
+                // 🛡️ FIX ago-2026: reintentar el amend ante POSITION_NOT_OPEN — en aperturas de
+                // mercado el fill puede registrarse segundos después del ExecutionEvent.
+                const sltpParams = {
                     stopLoss: formattedSl,
-                    ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {})
-                });
-            } catch (amendErr: any) {
+                    ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
+                };
+                let amendRes = await amendSltpChecked(Number(positionId), sltpParams);
+                for (let retry = 0; retry < 3 && !amendRes.ok && amendRes.errorCode === 'POSITION_NOT_OPEN'; retry++) {
+                    console.warn(`[CTRADER] ⏳ Amend SL/TP con POSITION_NOT_OPEN (fill demorado?). Reintento ${retry + 1}/3 en 1.5s...`);
+                    await new Promise(r => setTimeout(r, 1500));
+                    amendRes = await amendSltpChecked(Number(positionId), sltpParams);
+                }
+                if (!amendRes.ok) {
+                    throw new Error(`Broker rechazó SL/TP (${amendRes.errorCode}): ${amendRes.description ?? ''}`);
+                }
+            }
+            // 🛡️ VERIFICACIÓN OBLIGATORIA: el broker debe reflejar la protección antes de declarar éxito.
+            // (La lib descarta respuestas con errorCode → sin esto, un rechazo silencioso dejaría la
+            // posición ABIERTA SIN SL/TP. Caso real: XTIUSD, TRADING_BAD_STOPS por decimales.)
+            const verified = await verifyPositionProtection(Number(positionId), {
+                stopLoss: formattedSl,
+                ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
+            }, 5, 1000);
+            if (!verified) {
+                throw new Error('SL/TP no verificados en el broker tras la orden (posible rechazo silencioso).');
+            }
+        } catch (amendErr: any) {
                 console.error(`[CTRADER] 🚨 Error al establecer SL/TP en posID ${positionId}:`, amendErr.message);
                 console.error(`[CTRADER] 🔴 Cerrando posición de emergencia para evitar riesgo no acotado...`);
                 try {
@@ -827,7 +1013,6 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     }
                 }
                 throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
-            }
         }
 
         // 📈 Telemetría de ejecución: slippage (arrival vs fill) y latencia decisión→ack
@@ -862,6 +1047,139 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
     }
 }
 
+// ─── SL/TP helpers (verificación contra el broker) ───
+// 🛡️ FIX ago-2026 (posición XTIUSD abierta SIN SL/TP): el broker rechaza protecciones
+// con más decimales de los que el símbolo permite (TRADING_BAD_STOPS), y la lib ctrader-ts
+// DESCARTA la respuesta de los amend/close → rechazo silencioso. Estos helpers:
+// 1) resuelven los digits reales por symbolId (nunca 5 a ciegas),
+// 2) leen el errorCode del server vía connection.request directo,
+// 3) verifican el estado real de la posición tras cada operación.
+
+const digitsCache = new Map<number, number>();
+
+async function getSymbolDigits(symbolId?: number, fallbackName?: string): Promise<number> {
+    if (symbolId && digitsCache.has(symbolId)) return digitsCache.get(symbolId)!;
+    let digits: number | undefined;
+    try {
+        if (symbolId) {
+            const info = await ctClient.getSymbolInfo(symbolId);
+            if (info?.digits != null) digits = info.digits;
+        }
+    } catch { /* reintentamos por nombre */ }
+    if (digits == null && fallbackName) {
+        try {
+            const info = await ctClient.getSymbolInfo(fallbackName);
+            if (info?.digits != null) digits = info.digits;
+        } catch { /* último recurso por clase de activo */ }
+    }
+    if (digits == null) {
+        const n = (fallbackName ?? '').toUpperCase();
+        if (n.includes('JPY') || n.includes('BTC') || n.includes('ETH')) digits = 3;
+        else if (n.includes('XAU') || n.includes('XAG') || n.includes('XTI') || n.includes('OIL')
+            || n.includes('500') || n.includes('TECH') || n.includes('SPX') || n.includes('NAS')
+            || n.includes(' 30') || n.includes('US30')) digits = 2;
+        else digits = 5; // forex
+    }
+    if (symbolId) digitsCache.set(symbolId, digits);
+    return digits;
+}
+
+async function amendSltpChecked(
+    positionId: number,
+    params: { stopLoss?: number; takeProfit?: number }
+): Promise<{ ok: boolean; errorCode?: string; description?: string }> {
+    const payload: any = {
+        ctidTraderAccountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
+        positionId,
+    };
+    if (params.stopLoss !== undefined) payload.stopLoss = params.stopLoss;
+    if (params.takeProfit !== undefined) payload.takeProfit = params.takeProfit;
+    const res = await (ctClient as any).connection.request(PayloadType.AMEND_POSITION_SLTP_REQ, payload);
+    if (res?.errorCode) {
+        return { ok: false, errorCode: String(res.errorCode), description: String(res.description ?? '') };
+    }
+    return { ok: true };
+}
+
+// 🛡️ FIX ago-2026: confirmar el FILL de la orden antes de tocar SL/TP.
+// cTrader acepta la orden, devuelve positionId, y puede rechazar el deal internamente
+// ~400ms después (filledVolume=0, dealStatus=5 INTERNALLY_REJECTED). La respuesta del
+// marketOrder/marketRangeOrder llega ANTES del rechazo → el bot trataba una orden muerta
+// como posición viva ("SL/TP no verificados" + cierre fantasma "Position not found").
+async function confirmOrderFilled(positionId: number, timeoutMs = 8000): Promise<{ rejected: boolean; dealStatusName?: string; deal?: any }> {
+    const deadline = Date.now() + timeoutMs;
+    const names: Record<number, string> = { 1: 'UNKNOWN', 2: 'FILLED', 3: 'PARTIALLY_FILLED', 4: 'REJECTED', 5: 'INTERNALLY_REJECTED', 6: 'ERROR', 7: 'MISSED' };
+    while (Date.now() < deadline) {
+        try {
+            const deals = await (ctClient as any).getDealsByPosition(positionId, Date.now() - 10 * 60 * 1000, Date.now());
+            if (deals && deals.length > 0) {
+                const last = deals[deals.length - 1];
+                const st = Number(last.dealStatus ?? 0);
+                if (st >= 4) {
+                    return { rejected: true, dealStatusName: names[st] ?? `status_${st}`, deal: last };
+                }
+                if (st === 2 || st === 3) {
+                    return { rejected: false, dealStatusName: names[st], deal: last };
+                }
+                // st 0/1 (in progress/unknown): seguir esperando el deal definitivo
+            }
+        } catch { /* reintentar */ }
+        await new Promise(r => setTimeout(r, 500));
+    }
+    // Timeout sin deal definitivo → optimista (fills demorados los cubre verifyPositionProtection)
+    return { rejected: false, dealStatusName: 'UNCONFIRMED' };
+}
+
+async function verifyPositionProtection(
+    positionId: number,
+    expected: { stopLoss?: number; takeProfit?: number },
+    maxAttempts = 3,
+    delayMs = 800
+): Promise<boolean> {
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            const state = await ctClient.getState();
+            const pos = (state?.positions || []).find((p: any) => Number(p.positionId || p.id) === positionId);
+            // 🛡️ FIX ago-2026: si la posición aún no aparece en el snapshot local (lag del broker
+            // tras la orden, fill demorado), NO devolver false de inmediato — esperar y reintentar.
+            // Sin esto, trades con fill demorado (apertura de semana) se abortaban en falso.
+            if (!pos) {
+                if (i < maxAttempts - 1) {
+                    await new Promise(r => setTimeout(r, delayMs));
+                    continue;
+                }
+                return false;
+            }
+            const slOk = expected.stopLoss === undefined
+                || Math.abs(Number(pos.stopLoss ?? NaN) - expected.stopLoss) < 1e-6;
+            const tpOk = expected.takeProfit === undefined
+                || Math.abs(Number(pos.takeProfit ?? NaN) - expected.takeProfit) < 1e-6;
+            if (slOk && tpOk) return true;
+            await new Promise(r => setTimeout(r, delayMs));
+        } catch { /* reintentar */ }
+    }
+    return false;
+}
+
+async function verifyVolumeReduced(
+    positionId: number,
+    expectedVolume: number,
+    maxAttempts = 4,
+    delayMs = 1000
+): Promise<{ ok: boolean; volume?: number }> {
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            const state = await ctClient.getState();
+            const pos = (state?.positions || []).find((p: any) => Number(p.positionId || p.id) === positionId);
+            if (!pos) return { ok: true, volume: 0 }; // posición cerrada por completo: éxito
+            const vol = Number(pos.tradeData?.volume ?? 0);
+            if (vol <= expectedVolume + 1e-6) return { ok: true, volume: vol };
+        } catch { /* reintentar */ }
+        await new Promise(r => setTimeout(r, delayMs));
+    }
+    return { ok: false };
+}
+
 // ─── Position Management ───
 
 /**
@@ -877,31 +1195,44 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, _cu
         const state = await ctClient.getState();
         const positions = state?.positions || [];
         const pos = positions?.find((p: any) => Number(p.positionId || p.id) === Number(positionId));
-        
-        // Obtener digits para el símbolo (fallback a 5)
-        let digits = 5;
-        try {
-            const symbolName = pos.symbolName || pos.tradeData?.symbolName || '';
-            if (symbolName) {
-                const symInfo = await ctClient.getSymbolInfo(symbolName);
-                if (symInfo?.digits) digits = symInfo.digits;
-            }
-        } catch { /* ignorar error y usar 5 */ }
+        if (!pos) {
+            console.warn(`[CTRADER] ⚠️ Posición ${positionId} no encontrada para modificar SL.`);
+            return false;
+        }
+
+        // 🛡️ digits REALES por symbolId — el payload de Position NO trae symbolName,
+        // así que el camino viejo (symbolName → getSymbolInfo('')) SIEMPRE fallaba y
+        // usaba digits=5 → TRADING_BAD_STOPS en símbolos de 2-3 dec (XTIUSD, XAUUSD...).
+        const symbolId = Number(pos.tradeData?.symbolId ?? pos.symbolId ?? 0);
+        const fallbackTicker = symbolToTicker.get(symbolId) ?? '';
+        const digits = await getSymbolDigits(symbolId, fallbackTicker);
 
         const roundTo = (val: number, d: number) => Number(val.toFixed(d));
         const formattedSl = roundTo(newSlPrice, digits);
-        
+
         let existingTp = undefined;
         if (pos && pos.takeProfit) {
             existingTp = pos.takeProfit;
         }
 
-        // Usar la API de bajo nivel de ctrader-ts para forzar el absolutePrice y preservar el TP si existe
-        await (ctClient as any).raw.trading.amendPositionSltp(Number(positionId), { 
+        // 🛡️ amend directo para leer el errorCode del server (la lib lo descarta)
+        const amendRes = await amendSltpChecked(Number(positionId), {
             stopLoss: formattedSl,
-            ...(existingTp !== undefined ? { takeProfit: existingTp } : {})
+            ...(existingTp !== undefined ? { takeProfit: existingTp } : {}),
         });
-        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${formattedSl} (Mantenido TP: ${existingTp || 'Ninguno'})`);
+        if (!amendRes.ok) {
+            console.error(`[CTRADER] ❌ Amend SL rechazado por el broker (${amendRes.errorCode}): ${amendRes.description ?? ''}`);
+            return false;
+        }
+
+        // 🛡️ Verificación post-amend: el broker debe reflejar el SL pedido
+        const verified = await verifyPositionProtection(Number(positionId), { stopLoss: formattedSl });
+        if (!verified) {
+            console.error(`[CTRADER] ❌ El broker no refleja el SL pedido (${formattedSl}) para posID ${positionId}.`);
+            return false;
+        }
+
+        console.log(`[CTRADER] 🔧 SL modificado para posición ${positionId} → ${formattedSl} (Mantenido TP: ${existingTp ?? 'Ninguno'}) [verificado en broker]`);
         return true;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error modificando SL de ${positionId}:`, err.message);
@@ -950,27 +1281,53 @@ export async function closePartial(positionId: string, percentToClose: number = 
 
         const totalVolume = pos.tradeData.volume;
         
-        // stepVolume REAL del símbolo, no deducido por divisibilidad
-        const symbolName = pos.symbolName || pos.tradeData?.symbolName || '';
+        // stepVolume REAL del símbolo por symbolId (el payload de Position NO trae symbolName)
+        const symbolId = Number(pos.tradeData?.symbolId ?? pos.symbolId ?? 0);
         let step = 1;
-        try {
-            const info = await ctClient.getSymbolInfo(symbolName);
-            if (info?.stepVolume) step = info.stepVolume;
-        } catch { /* fallback step=1 */ }
+        if (symbolId > 0) {
+            try {
+                const info = await ctClient.getSymbolInfo(symbolId);
+                if (info?.stepVolume) step = info.stepVolume;
+            } catch { /* fallback step=1 */ }
+        }
 
         const volumeToClose = Math.floor((totalVolume * (percentToClose / 100)) / step) * step;
+
+        // 🛡️ request directo para leer el errorCode (la lib lo descarta → falsos éxitos)
+        const sendClose = async (vol: number) => {
+            const res = await (ctClient as any).connection.request(PayloadType.CLOSE_POSITION_REQ, {
+                ctidTraderAccountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
+                positionId: Number(positionId),
+                volume: vol,
+            });
+            if (res?.errorCode) {
+                throw new Error(`Broker rechazó el cierre (${res.errorCode}): ${res.description ?? ''}`);
+            }
+        };
 
         if (volumeToClose < step) {
             // Cerrar el mínimo permitido en lugar de no cerrar nada
             const minClose = Math.min(step, totalVolume);
-            await (ctClient as any).raw.trading.closePosition(Number(positionId), minClose);
-            console.log(`[CTRADER] 🟡 Posición ${positionId}: cerrado mínimo posible (${minClose} unidades).`);
+            await sendClose(minClose);
+            const vrf = await verifyVolumeReduced(Number(positionId), totalVolume - minClose);
+            if (!vrf.ok) {
+                console.error(`[CTRADER] ❌ El broker no refleja el cierre mínimo (${minClose} unidades).`);
+                return false;
+            }
+            console.log(`[CTRADER] 🟡 Posición ${positionId}: cerrado mínimo posible (${minClose} unidades). Restante en broker: ${vrf.volume} unidades.`);
             return true;
         }
 
         // Llamada a bajo nivel para cerrar exactamente el volumen deseado
-        await (ctClient as any).raw.trading.closePosition(Number(positionId), volumeToClose);
-        console.log(`[CTRADER] 🟡 Posición ${positionId}: ${percentToClose}% cerrado (${volumeToClose} unidades).`);
+        await sendClose(volumeToClose);
+
+        // 🛡️ Verificación post-cierre: el broker debe reflejar el volumen reducido
+        const verified = await verifyVolumeReduced(Number(positionId), totalVolume - volumeToClose);
+        if (!verified.ok) {
+            console.error(`[CTRADER] ❌ El broker no refleja el cierre parcial de ${volumeToClose} unidades (volumen sin cambios).`);
+            return false;
+        }
+        console.log(`[CTRADER] 🟡 Posición ${positionId}: ${percentToClose}% cerrado (${volumeToClose} unidades). Restante en broker: ${verified.volume} unidades.`);
         return true;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error cerrando parcial de ${positionId}:`, err.message);
@@ -1042,11 +1399,17 @@ export async function getOpenPositions(ticker?: string): Promise<any[]> {
  */
 /**
  * Deals históricos de una posición (para reconciliar cierres que el stream perdió).
+ * 🛡️ FIX: el proto ProtoOADealListByPositionIdReq exige fromTimestamp/toTimestamp
+ * como REQUERIDOS, pero el SDK ctrader-ts solo los envía si se los pasás. Sin rango,
+ * el encode hace int64(undefined) → crash "Cannot read properties of undefined (reading 'low')".
+ * Por eso pasamos un rango amplio (30 días) siempre.
  */
 export async function getDealsByPosition(positionId: string): Promise<any[]> {
     if (!isCTraderReady()) return [];
     try {
-        return await ctClient.getDealsByPosition(Number(positionId));
+        const to = Date.now();
+        const from = to - 30 * 24 * 60 * 60 * 1000;
+        return await ctClient.getDealsByPosition(Number(positionId), from, to);
     } catch (err: any) {
         console.error('[CTRADER] ❌ Error obteniendo deals de posición:', err.message);
         return [];

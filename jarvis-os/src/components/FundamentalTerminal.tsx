@@ -268,7 +268,7 @@ export default function FundamentalTerminal() {
       const tickers = new Set<string>();
       let unsubWs: (() => void) | null = null;
       import('../services/wsClient').then(({ wsClient }) => {
-        wsClient.connect('ws://169.58.163.132:8081');
+        wsClient.connect(`ws://${window.location.hostname}:8081`);
         unsubWs = wsClient.subscribe((msg: any) => {
           if (msg.type !== 'RADAR_STATE') return;
           tickers.add(msg.ticker);

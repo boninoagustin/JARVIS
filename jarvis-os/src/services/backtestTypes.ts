@@ -21,6 +21,9 @@ export interface BacktestTrade {
   vwapStatus?: Record<string, string>;
   /** 🆕 ROI time-decay que cerró/ajustó este trade ("30m_0.5%" o "breakeven") */
   roiDecayApplied?: string;
+  /** 🆕 ML F2: features del estado al momento de la entrada (mismas 12 dims que MLFilter.extractFeatures).
+   *  Se congelan en el trade para que train_ml_model.py entrene con datos REALES (no sintéticos). */
+  mlFeatures?: Record<string, number>;
 }
 
 export interface BaseTriggerConfig {
@@ -79,6 +82,10 @@ export interface BacktestConfig {
   /** 🆕 ROI time-decay table: {"0":0.015,"30":0.005,"60":0}
    *  "0"=1.5% initial target, after 30m→0.5%, after 60m→breakeven */
   minimal_roi?: Record<string, number>;
+
+  /** 🆕 F3-etapa1: TP1 estructural — el extremo del impulso se usa como TP1
+   *  solo si queda a >= minRR × riesgo; si no, fallback al 1R fijo (AlphaModel.ts:391-394). */
+  tp1StructuralMinRR?: number;
 
   /** 🆕 TimesFM F1: config del filtro (ver src/engine/TimesfmFilter.ts). Ausente = filtro off. */
   timesfm?: Partial<import('../../../src/engine/TimesfmFilter').TimesfmFilterConfig>;
