@@ -20,7 +20,7 @@ import {
     gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
-import { evaluateNetTrade, getPipValue, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
+import { evaluateNetTrade, getPipValue, getAssetClass, defaultFrictionConfig, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
 import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
 import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit } from '../services/correlation.js';
 
@@ -188,7 +188,7 @@ async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{
         const rawProfit = Number(cp.grossProfit || 0);
         const pnl = rawProfit / Math.pow(10, moneyDigits);
         const slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
-        const result = pnl > 0.5 ? 'WIN' : pnl < -0.5 ? 'LOSS' : 'BREAKEVEN';
+        const result = pnl > 0.1 ? 'WIN' : pnl < -0.1 ? 'LOSS' : 'BREAKEVEN';
         return { result, pnl, rMultiple: computeRMultipleFromRealPnl(trade, pnl), slHit };
     } catch (e: any) {
         console.warn(`[RECONCILE] no se pudo leer historial de posID ${positionId}: ${e.message}`);
@@ -456,6 +456,23 @@ export async function reconcileCTraderPositions(): Promise<void> {
 
 
 // Detecta la sesión actual basándose en hora de Argentina (UTC-3)
+
+/**
+ * 🛡️ ago-2026 — Buffer de fricción para el SL de breakeven.
+ * El fill de un stop paga el spread del lado de cierre: un SL clavado en el entry
+ * cierra en negativo chico (fuga medida: −0.15..−0.47 USD por trade BE).
+ * Con buffer = max(spread real bid/ask, spread modelado por clase) el fill queda ≈ 0 neto.
+ */
+function breakevenBufferPrice(ticker: string, entryPrice: number, direction: 'BUY' | 'SELL'): number {
+    const pipSize = getPipValue(ticker, entryPrice);
+    const cls = getAssetClass(ticker);
+    let buffer = (defaultFrictionConfig[cls]?.baseSpreadPips ?? 1) * pipSize;
+    const ba = getLastBidAsk(ticker);
+    if (ba && Number.isFinite(ba.ask) && Number.isFinite(ba.bid) && ba.ask > ba.bid) {
+        buffer = Math.max(buffer, ba.ask - ba.bid);
+    }
+    return direction === 'BUY' ? entryPrice + buffer : entryPrice - buffer;
+}
 
 /**
  * 🆕 ROI Time-Decay: devuelve el profit mínimo requerido (%) según la antigüedad del trade.
@@ -1240,22 +1257,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 continue;
                             }
                         } else if (effectiveROI === 0 && !trade.roiDecayApplied) {
-                            // ROI = 0 (breakeven): ajustar SL a precio de entrada para proteger el trade
+                            // ROI = 0 (breakeven): ajustar SL con buffer de fricción para que el cierre real quede ≈ 0
                             trade.roiDecayApplied = 'breakeven';
+                            const beSl = breakevenBufferPrice(ticker, trade.entryPrice, trade.direction);
                             if (isBacktest) {
-                                trade.slPrice = trade.entryPrice;
+                                trade.slPrice = beSl;
                             } else {
-                                trade.targetSlPrice = trade.entryPrice;
+                                trade.targetSlPrice = beSl;
                                 trade.targetSlPending = true;
                                 trade.targetSlRetries = 0;
                                 if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({
-                                    slPrice: trade.entryPrice,
-                                    targetSlPrice: trade.entryPrice,
+                                    slPrice: beSl,
+                                    targetSlPrice: beSl,
                                     targetSlPending: true,
                                     roiDecayApplied: 'breakeven',
                                 }).catch(() => { });
                             }
-                            console.log(`[ROI] 🛡️ ${ticker} ${trade.direction} #${tradeId}: ROI breakeven → SL ajustado a entry ${trade.entryPrice}`);
+                            console.log(`[ROI] 🛡️ ${ticker} ${trade.direction} #${tradeId}: ROI breakeven → SL ajustado a ${beSl} (buffer fricción)`);
                         }
                     }
 
@@ -1317,7 +1335,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (mgmtSlModeT === 'midpoint') {
                                 targetSl = parseFloat((trade.originalSlPrice + (distanceToEntry * 0.5)).toFixed(5));
                             } else if (mgmtSlModeT === 'breakeven') {
-                                targetSl = parseFloat(trade.entryPrice.toFixed(5));
+                                targetSl = breakevenBufferPrice(ticker, trade.entryPrice, trade.direction);
                             }
 
                             if (targetSl !== null) {
@@ -1507,10 +1525,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (isDuplicate(`BE_${trade.tradeId}_${ticker}`, nowTrade)) continue;
 
                             trade.slHalfwayHit = true;
+                            const beSlHalf = breakevenBufferPrice(ticker, trade.entryPrice, trade.direction);
                             if (isBacktest) {
-                                trade.slPrice = trade.entryPrice;
+                                trade.slPrice = beSlHalf;
                             } else {
-                                trade.targetSlPrice = trade.entryPrice;
+                                trade.targetSlPrice = beSlHalf;
                                 trade.targetSlPending = true;
                                 trade.targetSlRetries = 0;
                             }

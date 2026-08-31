@@ -17,6 +17,18 @@ import { extractFeatures } from '../../../src/engine/MLFilter';
 // 🆕 TimesFM F1: cache de forecasts precomputados, cargado una vez por corrida en runBacktest
 let timesfmForecastCache: Map<number, TimesfmForecast> | undefined;
 
+/**
+ * 🛡️ ago-2026 — Buffer de fricción en el SL de breakeven (espejo del vivo trading.ts).
+ * El fill de un stop paga el spread del lado de cierre; el backtest modela ese fill
+ * cobrando la fricción, así que el SL de BE se coloca entry + spread modelado para
+ * que el cierre neto quede ≈ 0 (paridad con el vivo, que usa el spread real).
+ */
+function btBreakevenBuffer(ticker: string, entryPrice: number, direction: 'BUY' | 'SELL'): number {
+    const pipSize = getPipValue(ticker, entryPrice);
+    const buffer = (defaultFrictionConfig[getAssetClass(ticker)]?.baseSpreadPips ?? 1) * pipSize;
+    return direction === 'BUY' ? entryPrice + buffer : entryPrice - buffer;
+}
+
 export type { BacktestTrade, BacktestResult, BacktestConfig } from './backtestTypes';
 
 export interface DailyStats {
@@ -521,7 +533,7 @@ function processAlert(
           }
         } else if (effectiveROI === 0 && !(trade as any).roiDecayApplied) {
           (trade as any).roiDecayApplied = 'breakeven';
-          trade.slPrice = trade.entryPrice;
+          trade.slPrice = btBreakevenBuffer(config.ticker, trade.entryPrice, trade.direction);
         }
       }
 
@@ -649,7 +661,7 @@ function processAlert(
             trade.slPrice = originalSl + (trade.entryPrice - originalSl) * 0.5;
             trade.slHalfwayHit = true;
           } else if (slAfterTp1Mode === 'breakeven') {
-            trade.slPrice = trade.entryPrice;
+            trade.slPrice = btBreakevenBuffer(config.ticker, trade.entryPrice, trade.direction);
           }
             
           trade.resultTp1 = 'WIN';
@@ -673,7 +685,7 @@ function processAlert(
         const tp1_5Hit = trade.direction === 'BUY' ? highPrice >= tp1_5Price : lowPrice <= tp1_5Price;
         if (tp1_5Hit) {
           trade.tp1_5Hit = true;
-          trade.slPrice = trade.entryPrice;
+          trade.slPrice = btBreakevenBuffer(config.ticker, trade.entryPrice, trade.direction);
         }
       }
 
