@@ -728,7 +728,8 @@ if (db) {
                     riderTf: data.riderTf,
                     autoTrading: data.autoTrading,
                     maxSmartRiskPercent: data.maxSmartRiskPercent,
-                    timesfm: (data as any).timesfm // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
+                    timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
+                    correlationFilter: (data as any).correlationFilter, // 🧲 ago-2026: sin esto, asset_configs correlationFilter={shadow:false} NO activa el bloqueo real
                 });
             });
             const actualAssets = [...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');

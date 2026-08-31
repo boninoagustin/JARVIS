@@ -15,7 +15,10 @@ function mapToCTraderSymbol(ticker: string): string {
         'AUDCAD': 'AUDCAD',
         'NZDUSD': 'NZDUSD',
         'USOIL': 'XTIUSD',
-        'BTCUSD': 'BTCUSD'
+        'BTCUSD': 'BTCUSD',
+        'GBPJPY': 'GBPJPY',
+        'AUDJPY': 'AUDJPY',
+        'GER40': 'GERMANY 40'
     };
     return map[ticker] || ticker;
 }
