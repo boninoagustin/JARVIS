@@ -88,6 +88,7 @@ def main() -> None:
     ap.add_argument("--tag", default="", help="sufijo para audit/report (sensibilidad)")
     ap.add_argument("--dry-run", action="store_true", help="shadow: audita sin aplicar (paridad con baseline)")
     ap.add_argument("--tp2-q90-step", type=int, help="Fase C: TP2 dinámico = q90[step] (habilita tp2Dynamic='q90')")
+    ap.add_argument("--preset-path", help="ruta explícita del preset (para tickers sin preset hyperopt en la raíz)")
     args = ap.parse_args()
 
     ticker = args.ticker.lower()
@@ -101,13 +102,18 @@ def main() -> None:
     for p in (triggers_p, audit_p):
         p.unlink(missing_ok=True)
 
-    preset = REPO_ROOT / f"optimized_preset_{ticker.upper()}_hyperopt.json"
-    if not preset.exists():
-        preset = REPO_ROOT / f"optimized_preset_{ticker.upper()}.json"
-    if not preset.exists():
-        preset = REPO_ROOT / f"optimized_preset_{ticker}_hyperopt.json"
-    if not preset.exists():
-        preset = REPO_ROOT / f"optimized_preset_{ticker}.json"
+    if args.preset_path:
+        preset = Path(args.preset_path)
+        if not preset.exists():
+            raise FileNotFoundError(f"preset-path no existe: {preset}")
+    else:
+        preset = REPO_ROOT / f"optimized_preset_{ticker.upper()}_hyperopt.json"
+        if not preset.exists():
+            preset = REPO_ROOT / f"optimized_preset_{ticker.upper()}.json"
+        if not preset.exists():
+            preset = REPO_ROOT / f"optimized_preset_{ticker}_hyperopt.json"
+        if not preset.exists():
+            preset = REPO_ROOT / f"optimized_preset_{ticker}.json"
     cfg_all = json.loads(preset.read_text())
     base_config = cfg_all.get("best_config", cfg_all)
     print(f"[AB] config ← {preset.name}", flush=True)
