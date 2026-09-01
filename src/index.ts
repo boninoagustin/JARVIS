@@ -214,24 +214,41 @@ async function main() {
             try {
                 const { globalState } = await import('./db/trading.js');
                 const { broadcastPositions } = await import('./services/ws_server.js');
+                const { getLastBidAsk } = await import('./services/ctrader.js');
                 const positions = [...globalState.activeTrades.values()]
                     .filter((t: any) => !t.isBacktest)
-                    .map((t: any) => ({
-                        tradeId: t.tradeId,
-                        ticker: t.ticker,
-                        direction: t.direction,
-                        entryPrice: t.entryPrice,
-                        slPrice: t.slPrice,
-                        originalSlPrice: t.originalSlPrice,
-                        tp1Price: t.tp1Price,
-                        tp2Price: t.tp2Price,
-                        tp1Hit: !!t.tp1Hit,
-                        managementMode: t.managementMode ?? null,
-                        ctraderPositionId: t.ctraderPositionId ?? null,
-                        adopted: !!t.adopted,
-                        openTs: t.openTs ?? t.timestamp,
-                        timestamp: t.timestamp,
-                    }));
+                    .map((t: any) => {
+                        // 🛡️ PnL (R) contra el SL ESTRUCTURAL original (no el vigente, que se
+                        // mueve a breakeven/trailing) y con el precio del BROKER del lado
+                        // correcto (bid para BUY, ask para SELL) — cuadra con cTrader.
+                        const initialSl = t.initialSlPrice ?? t.originalSlPrice ?? t.slPrice;
+                        const risk = t.entryPrice != null && initialSl != null ? Math.abs(t.entryPrice - initialSl) : 0;
+                        const ba = getLastBidAsk(t.ticker);
+                        const baFresh = ba != null && Date.now() - ba.ts < 30_000;
+                        const last = baFresh ? (t.direction === 'BUY' ? ba!.bid : ba!.ask) : null;
+                        const pnlR = risk > 0 && last != null
+                            ? (t.direction === 'BUY' ? (last - t.entryPrice) / risk : (t.entryPrice - last) / risk)
+                            : null;
+                        return {
+                            tradeId: t.tradeId,
+                            ticker: t.ticker,
+                            direction: t.direction,
+                            entryPrice: t.entryPrice,
+                            slPrice: t.slPrice,
+                            initialSlPrice: initialSl,
+                            originalSlPrice: t.originalSlPrice,
+                            tp1Price: t.tp1Price,
+                            tp2Price: t.tp2Price,
+                            tp1Hit: !!t.tp1Hit,
+                            managementMode: t.managementMode ?? null,
+                            ctraderPositionId: t.ctraderPositionId ?? null,
+                            adopted: !!t.adopted,
+                            openTs: t.openTs ?? t.timestamp,
+                            timestamp: t.timestamp,
+                            pnlR,
+                            priceTs: baFresh ? ba!.ts : null,
+                        };
+                    });
                 broadcastPositions(positions);
             } catch (e: any) {
                 console.error('[POSITIONS] Error en broadcast:', e.message);

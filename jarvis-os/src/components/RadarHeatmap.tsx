@@ -515,10 +515,18 @@ export default function RadarHeatmap() {
               {positions.map((p: any) => {
                 const st = states.find(s => s.id === p.ticker);
                 const last = st?.lastPrice;
-                const risk = p.entryPrice != null && p.slPrice != null ? Math.abs(p.entryPrice - p.slPrice) : 0;
-                const pnlR = risk > 0 && last != null
-                  ? (p.direction === 'BUY' ? (last - p.entryPrice) / risk : (p.entryPrice - last) / risk)
-                  : null;
+                // 🛡️ PnL (R): lo calcula el backend contra el SL ESTRUCTURAL original y con
+                // el precio del broker del lado correcto. Fallback local solo si no llega.
+                let pnlR: number | null;
+                if (typeof p.pnlR === 'number' && Number.isFinite(p.pnlR)) {
+                  pnlR = p.pnlR;
+                } else {
+                  const riskSl = p.initialSlPrice ?? p.originalSlPrice ?? p.slPrice;
+                  const risk = p.entryPrice != null && riskSl != null ? Math.abs(p.entryPrice - riskSl) : 0;
+                  pnlR = risk > 0 && last != null
+                    ? (p.direction === 'BUY' ? (last - p.entryPrice) / risk : (p.entryPrice - last) / risk)
+                    : null;
+                }
                 return (
                 <tr key={p.tradeId ?? p.ctraderPositionId ?? `${p.ticker}-${p.openTs}`}>
                   <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>{p.tradeId ?? '—'}</td>

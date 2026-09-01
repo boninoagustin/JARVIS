@@ -3508,6 +3508,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : oteData.entryPrice * 1.5,
                     slPrice: parseFloat(oteData.stopLoss),
+                    initialSlPrice: parseFloat(oteData.stopLoss), // 🛡️ SL estructural original (el PnL R se calcula contra este, no contra el SL vigente)
                     tp1Hit: false,
                     tp2Hit: false,
                     slHalfwayHit: false,
