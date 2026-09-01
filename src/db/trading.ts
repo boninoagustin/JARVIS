@@ -186,11 +186,17 @@ async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{
         if (!closeDeal) return null;
         const cp = closeDeal.closePositionDetail;
         const moneyDigits = Number(closeDeal.moneyDigits ?? cp.moneyDigits ?? 2);
-        const rawProfit = Number(cp.grossProfit || 0);
+        // 🛡️ sep-2026: PnL NETO = grossProfit + commission + swap (lo que muestra cTrader).
+        // Antes se usaba solo grossProfit → trades con comisión negativa se marcaban WIN
+        // cuando cTrader los muestra en negativo (la banda ±0.10 expuso el bug).
+        const rawProfit = Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
         const pnl = rawProfit / Math.pow(10, moneyDigits);
         const slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
         const result = pnl > 0.1 ? 'WIN' : pnl < -0.1 ? 'LOSS' : 'BREAKEVEN';
-        return { result, pnl, rMultiple: computeRMultipleFromRealPnl(trade, pnl), slHit };
+        // 🛡️ sep-2026: el rMultiple se calcula contra el SL ESTRUCTURAL original, no el vigente
+        // (que con BE-buffer/trailing queda ≈ entry → riesgo ~0.1 pip → R inflado/falso).
+        const effTrade = { ...trade, slPrice: trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice };
+        return { result, pnl, rMultiple: computeRMultipleFromRealPnl(effTrade, pnl), slHit };
     } catch (e: any) {
         console.warn(`[RECONCILE] no se pudo leer historial de posID ${positionId}: ${e.message}`);
         return null;
