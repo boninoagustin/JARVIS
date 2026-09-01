@@ -4,6 +4,7 @@ import type {
 } from './backtestTypes';
 import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, calculateDynamicSlBuffer, getMinPipDistance } from '../engine/AlphaModel';
 import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
+import { capTp2Price } from '../../../src/engine/tp2Cap';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
@@ -1571,7 +1572,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     direction: oteData.direction,
     entryPrice: oteData.entryPrice,
     tp1Price: parseFloat(oteData.tp1 || oteData.tp1Price),
-    tp2Price: parseFloat(oteData.tp2 || oteData.tp2Price) || 0,
+    tp2Price: capTp2Price(config.ticker, oteData.direction, oteData.entryPrice, parseFloat(oteData.stopLoss || oteData.slPrice), parseFloat(oteData.tp2 || oteData.tp2Price) || 0),
     slPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
     originalSlPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
     points: oteData.points,
@@ -1584,6 +1585,28 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     timesfmDir: oteData.timesfmDir,
     timesfmSpreadAtr: oteData.timesfmSpreadAtr,
   };
+
+  // 🧪 A/B de gestión (sep-2026): overrides de TP en R desde la config del backtest.
+  // tp1RR / tp2RR re-calculan los TP como entry ± riskDist × RR (sin tocar AlphaModel vivo).
+  // Default undefined = comportamiento actual (TPs del oteData).
+  if ((config as any).tp1RR != null || (config as any).tp2RR != null) {
+    const riskDist = Math.abs(trade.slPrice - trade.entryPrice);
+    if (riskDist > 0) {
+      if ((config as any).tp1RR != null) {
+        trade.tp1Price = trade.direction === 'BUY'
+          ? trade.entryPrice + riskDist * (config as any).tp1RR
+          : trade.entryPrice - riskDist * (config as any).tp1RR;
+      }
+      if ((config as any).tp2RR != null) {
+        trade.tp2Price = trade.direction === 'BUY'
+          ? trade.entryPrice + riskDist * (config as any).tp2RR
+          : trade.entryPrice - riskDist * (config as any).tp2RR;
+      }
+    }
+  }
+
+  // 🛡️ Techo de TP2 de producción (sep-2026): aplica SIEMPRE, incluso sobre overrides tp2RR.
+  trade.tp2Price = capTp2Price(config.ticker, trade.direction, trade.entryPrice, trade.slPrice, trade.tp2Price);
 
   // 🛡️ ML F2: congelar las 12 features REALES del estado al momento de la entrada.
   // Usa exactamente extractFeatures de MLFilter.ts (la misma que evalúa el runtime),

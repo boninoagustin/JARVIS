@@ -21,6 +21,7 @@ import {
 } from '../engine/AlphaModel.js';
 
 import { evaluateNetTrade, getPipValue, getAssetClass, defaultFrictionConfig, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
+import { capTp2Price } from '../engine/tp2Cap.js';
 import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
 import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit } from '../services/correlation.js';
 
@@ -392,7 +393,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
             const trade: any = {
                 tradeId, ticker: sym, direction: dir as 'BUY' | 'SELL',
                 entryPrice: entry, slPrice: slPrice ?? entry, tp1Price: tpPrice ?? entry,
-                tp2Price: tpPrice ?? entry, originalSlPrice: slPrice ?? entry,
+                tp2Price: capTp2Price(sym, dir as 'BUY' | 'SELL', entry, slPrice ?? entry, tpPrice ?? entry), originalSlPrice: slPrice ?? entry,
                 timestamp: now, score: 0, ctraderPositionId: pid,
                 adopted: true, adoptedFromCTrader: true, openTs,
             };
@@ -3389,7 +3390,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 entryPrice: oteData.entryPrice,
                                 stopLoss: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
-                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
+                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        : undefined,
                                 points: oteData.points,
                                 events: oteData.events || [],
                                 confluenceReport: oteData.confluenceReport || '',
@@ -3483,7 +3486,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     sessionId,
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
-                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                    tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
+                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
                     isChochEntry: oteData.isChochEntry,
                     // 🧠 MACHINE LEARNING FEATURES (Fase 1)
@@ -3506,7 +3511,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     direction: oteData.direction as 'BUY' | 'SELL',
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
-                    tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : oteData.entryPrice * 1.5,
+                    tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
+                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        : oteData.entryPrice * 1.5,
                     slPrice: parseFloat(oteData.stopLoss),
                     initialSlPrice: parseFloat(oteData.stopLoss), // 🛡️ SL estructural original (el PnL R se calcula contra este, no contra el SL vigente)
                     tp1Hit: false,
@@ -3573,7 +3580,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 entryPrice: oteData.entryPrice,
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
-                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
+                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        : undefined,
                                 tradeId: oteData.tradeId,
                                 riskPercent: envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1), // 🆕 TimesFM F1: riesgo modulado
                             });
@@ -3640,7 +3649,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 entryPrice: oteData.entryPrice,
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
-                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' ? parseFloat(oteData.tp2) : undefined,
+                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
+                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        : undefined,
                                 points: oteData.points,
                                 grade: oteData.points >= 8 ? 'A+' : 'B',
                                 events: oteData.events || [],
