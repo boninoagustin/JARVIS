@@ -24,6 +24,9 @@ const LOGS_ROOT = path.join(__dirname, '..', 'logs');
 
 const ALL_SESSIONS = ['OFF', 'LONDON', 'NY', 'ASIA'];
 const ALL_TRIGGERS = ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m', 'choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
+// 🛡️ sep-2026: gatillos 15m RETIRADOS (A/B temporalidades: solo-5M +94% PnL, solo-15M −37%).
+// El tune los excluye SIEMPRE para no reactivarlos (el domingo solo tunea 5m).
+const DISABLED_15M = ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
 
 function loadLogs(ticker: string, tfs: string[]): Map<string, string[]> {
   const tickerDir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
@@ -95,14 +98,14 @@ async function main() {
     if (sessionFilter && !sessionFilter.includes(s)) continue;
     const trigs = currentSessions[s] || {};
     for (const t of Object.keys(trigs)) {
-      if (trigs[t] && typeof trigs[t] === 'object' && trigs[t].enabled === true) push(s, t);
+      if (trigs[t] && typeof trigs[t] === 'object' && trigs[t].enabled === true && !DISABLED_15M.includes(t)) push(s, t);
     }
   }
-  // 2) Si no hay ninguno habilitado, usar default conservador (15m en todas las sesiones)
+  // 2) Si no hay ninguno habilitado, usar default conservador (5m en todas las sesiones)
   if (tasks.length === 0) {
-    console.error('[tune] ⚠️ No hay gatillos habilitados en Firestore → usando default 15m × 4 sesiones');
+    console.error('[tune] ⚠️ No hay gatillos habilitados en Firestore → usando default 5m × 4 sesiones');
     for (const s of sessionFilter || ALL_SESSIONS) {
-      for (const t of ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m']) push(s, t);
+      for (const t of ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m']) push(s, t);
     }
   }
 
