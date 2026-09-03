@@ -1267,7 +1267,19 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             // ROI = 0 (breakeven): ajustar SL con buffer de fricción para que el cierre real quede ≈ 0
                             trade.roiDecayApplied = 'breakeven';
                             const beSl = breakevenBufferPrice(ticker, trade.entryPrice, trade.direction);
-                            if (isBacktest) {
+                            // 🛡️ ago-2026 Fix: no mover a breakeven si el precio ya quedó del lado
+                            // equivocado (trade en pérdida). El broker rechaza un SL de BUY por encima
+                            // del bid (o de SELL por debajo del ask) con TRADING_BAD_STOPS y el
+                            // reintento spamea para siempre. Se mantiene el SL estructural.
+                            const ba = getLastBidAsk(ticker);
+                            const sideOk = !ba
+                                ? true
+                                : trade.direction === 'BUY'
+                                    ? ba.bid >= beSl
+                                    : ba.ask <= beSl;
+                            if (!sideOk) {
+                                console.log(`[ROI] ⚠️ ${ticker} ${trade.direction} #${tradeId}: breakeven omitido — el precio (bid=${ba?.bid}, ask=${ba?.ask}) ya pasó el nivel BE ${beSl}. Se mantiene SL estructural.`);
+                            } else if (isBacktest) {
                                 trade.slPrice = beSl;
                             } else {
                                 trade.targetSlPrice = beSl;
@@ -1280,31 +1292,41 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     roiDecayApplied: 'breakeven',
                                 }).catch(() => { });
                             }
-                            console.log(`[ROI] 🛡️ ${ticker} ${trade.direction} #${tradeId}: ROI breakeven → SL ajustado a ${beSl} (buffer fricción)`);
+                            if (sideOk) console.log(`[ROI] 🛡️ ${ticker} ${trade.direction} #${tradeId}: ROI breakeven → SL ajustado a ${beSl} (buffer fricción)`);
                         }
                     }
 
                     // 🔄 REINTENTO DE MODIFICACIÓN DE SL (Si quedó pendiente de un tick anterior)
                     if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId) {
                         trade.targetSlRetries = (trade.targetSlRetries || 0) + 1;
-                        console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${trade.targetSlPrice} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
-                        import('../services/ctrader.js').then(async (ctrader) => {
-                            const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
-                            if (success) {
-                                console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice} en reintento.`);
-                                trade.slPrice = trade.targetSlPrice!;
-                                trade.targetSlPending = false;
-                                trade.targetSlRetries = 0;
-                                if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({
-                                    slPrice: trade.slPrice,
-                                    targetSlPending: false
-                                }).catch(() => { });
-                            } else {
-                                console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice} en reintento, se seguirá intentando.`);
-                            }
-                        }).catch(err => {
-                            console.error(`[CTRADER] ❌ Error importando módulo para reintento de Breakeven: ${err.message}`);
-                        });
+                        // 🛡️ ago-2026 Fix: tope de reintentos. Un SL rechazado de forma persistente
+                        // (TRADING_BAD_STOPS, posición cerrada/inexistente) no se va a resolver solo;
+                        // reintentar en cada tick spamea el log y recalienta el loop. Se abandona.
+                        if (trade.targetSlRetries > 5) {
+                            console.log(`[CTRADER] ⛔ Abandono modificación de SL a ${trade.targetSlPrice} tras ${trade.targetSlRetries} intentos (posID ${trade.ctraderPositionId}) — el broker la rechaza de forma persistente.`);
+                            trade.targetSlPending = false;
+                            trade.targetSlRetries = 0;
+                            if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPending: false }).catch(() => { });
+                        } else {
+                            console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${trade.targetSlPrice} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
+                            import('../services/ctrader.js').then(async (ctrader) => {
+                                const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                                if (success) {
+                                    console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice} en reintento.`);
+                                    trade.slPrice = trade.targetSlPrice!;
+                                    trade.targetSlPending = false;
+                                    trade.targetSlRetries = 0;
+                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({
+                                        slPrice: trade.slPrice,
+                                        targetSlPending: false
+                                    }).catch(() => { });
+                                } else {
+                                    console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice} en reintento, se seguirá intentando.`);
+                                }
+                            }).catch(err => {
+                                console.error(`[CTRADER] ❌ Error importando módulo para reintento de Breakeven: ${err.message}`);
+                            });
+                        }
                     }
 
                     const openTimeStr = new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' });

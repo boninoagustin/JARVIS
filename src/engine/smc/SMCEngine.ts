@@ -63,12 +63,13 @@ export class SMCEngine {
 
     public constructor(preset: SMCPreset | string, period: string = '1h') {
         if (typeof preset === 'string') {
-            this.preset = getPreset(preset);
+            this.preset = { ...getPreset(preset) };
         } else {
-            this.preset = preset;
+            this.preset = { ...preset };
         }
         this.period = period;
         this.periodMs = SMCEngine.parsePeriodMinutes(period) * 60000;
+        this.deriveGates();
 
         this.state = {
             pivotsHigh: [],
@@ -108,6 +109,7 @@ export class SMCEngine {
 
     public setPreset(presetName: string) {
         this.preset = getPreset(presetName);
+        this.deriveGates();
         this.updateStrBars(this.period, this.preset);
         // C8: reconstruir todo lo que depende de parámetros del preset.
         // Se pierde el estado interno (p.ej. el RMA de Wilder del RSI): esperado al cambiar de preset.
@@ -116,6 +118,41 @@ export class SMCEngine {
         this.zscore = new ZScoreCalculator();
         const divLen = this.preset.div_pivot_len || 5;
         this.rsiPivotEngine = new PivotEngine(divLen, divLen);
+    }
+
+    /**
+     * 🆕 Paridad Pine: deriva los gates anti-whipsaw del motor de estructura a partir
+     * del risk_level del preset y del timeframe del engine. El Pine original los
+     * auto-deriva (auto_1h/auto_4h/auto_D + risk_lvl); al migrar a TS se perdieron y
+     * quedaron apagados, causando flip-flop de tendencia y señales basura en vivo
+     * (WR ≈ 0% desde ago-2026).
+     *
+     * Solo deriva si el preset NO los define explícitamente (override manual > auto).
+     * Mapeo fiel a SMC_Master_5.2:
+     *   - choch_req_sweep  = risk_lvl <= 2 OR auto_1h OR auto_4h OR auto_D
+     *   - choch_req_mom    = risk_lvl == 1 OR auto_4h OR auto_D
+     *   - valid_bos_displacement = true (require_displacement default true)
+     *   - displ_atr_mult   = dyn_displ = 0.5 (forex) + (3 - risk_lvl) * 0.1
+     */
+    private deriveGates(): void {
+        const pMin = this.periodMs / 60000;
+        const isIntraday = pMin < 1440;
+        const auto_1h = isIntraday && pMin > 30 && pMin <= 120;
+        const auto_4h = isIntraday && pMin > 120;
+        const auto_D = pMin >= 1440;
+        const rl = this.preset.risk_level;
+        if (this.preset.choch_require_sweep === undefined) {
+            this.preset.choch_require_sweep = rl <= 2 || auto_1h || auto_4h || auto_D;
+        }
+        if (this.preset.choch_require_momentum === undefined) {
+            this.preset.choch_require_momentum = rl === 1 || auto_4h || auto_D;
+        }
+        if (this.preset.valid_bos_displacement === undefined) {
+            this.preset.valid_bos_displacement = true;
+        }
+        if (this.preset.displ_atr_mult === undefined) {
+            this.preset.displ_atr_mult = 0.5 + (3 - rl) * 0.1;
+        }
     }
 
     // E10: parser único de período — acepta 'M5','H4','D1','W1' (SMCManager) y '5m','4h','1d'

@@ -41,7 +41,11 @@ export const PRESETS: Record<string, SMCPreset> = {
 };
 
 export function getPreset(name: string): SMCPreset {
-    return PRESETS[name] || PRESETS['Forex - 3. Balanceado'];
+    const preset = PRESETS[name] || PRESETS['Forex - 3. Balanceado'];
+    // 🛡️ Devolver SIEMPRE una copia: deriveGates() (SMCEngine) muta el preset con
+    // los gates derivados por TF; si se devolviera el objeto compartido del mapa,
+    // la primera instancia contaminaría el preset global para el resto.
+    return { ...preset };
 }
 
 import fs from 'fs';

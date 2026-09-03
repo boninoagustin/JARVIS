@@ -28,6 +28,7 @@ export interface SMCPreset {
     choch_require_sweep?: boolean;
     choch_require_momentum?: boolean;
     choch_require_bos_prior?: boolean;  // 🆕 E6: exige al menos un BOS antes de validar un CHoCH
+    displ_atr_mult?: number;            // 🆕 paridad Pine: tamaño mínimo de vela de desplazamiento (x ATR)
     
     // Engine Optimization Parameters
     max_ob_age?: number;

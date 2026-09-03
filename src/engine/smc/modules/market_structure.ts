@@ -27,6 +27,7 @@ export class MarketStructureEngine {
     private chochReqSweep: boolean = false;
     private chochReqMom: boolean = false;
     private chochReqBosPrior: boolean = false;  // 🆕 E6: exige BOS previo para CHoCH
+    private displAtrMult: number = 0.5;         // 🆕 paridad Pine: tamaño mínimo de vela de desplazamiento (x ATR)
 
     constructor() {
         // Gates are now read from preset in processCandle
@@ -96,6 +97,7 @@ export class MarketStructureEngine {
         this.chochReqSweep = preset.choch_require_sweep ?? false;
         this.chochReqMom = preset.choch_require_momentum ?? false;
         this.chochReqBosPrior = preset.choch_require_bos_prior ?? false;  // 🆕 E6
+        this.displAtrMult = preset.displ_atr_mult ?? 0.5;  // 🆕 paridad Pine
         
         // 🆕 Alimentar el buffer de historia para origin/extreme
         this.history.push(candle);
@@ -350,9 +352,9 @@ export class MarketStructureEngine {
             const correctDirection = direction === 'Bullish' ? zScore > 0 : zScore < 0;
             return absZ >= 2.0 && correctDirection;
         }
-        // Fallback: ATR*1.2 solo durante warm-up del Z-Score
-        const bodySize = Math.abs(candle.close - candle.open);
-        if (bodySize < atr * 1.2) return false;
+        // 🆕 Paridad Pine: valid_bos_break = (high - low) > atr * displ_atr_mult (rango, no cuerpo)
+        const range = candle.high - candle.low;
+        if (range < atr * this.displAtrMult) return false;
         if (direction === 'Bullish') return candle.close > candle.open;
         if (direction === 'Bearish') return candle.close < candle.open;
         return false;
