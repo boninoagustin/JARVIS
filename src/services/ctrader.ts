@@ -642,23 +642,23 @@ export function calculateLotSize(
         // JPY pairs: 1 pip = 0.01, lot = 100,000 units
         pipValue = slDistance / 0.01;
         const lotSize = riskAmount / (pipValue * (1000 / 100)); // ~$9.xx per pip per lot
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else if (t.includes('XAU') || t.includes('GOLD')) {
         // Gold: 1 pip = 0.1, lot = 100 oz
         const pips = slDistance / 0.1;
         const costPerPip = 10; // ~$10 per pip for 1 lot of gold
         const lotSize = riskAmount / (pips * costPerPip);
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else if (t.includes('BTC')) {
         // Bitcoin: no standard pip, use raw price distance
         const costPerUnit = 1; // $1 per unit per 1 lot (varies by broker)
         const lotSize = riskAmount / (slDistance * costPerUnit);
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX') || t.includes('GER') || t.includes('DE40') || t.includes('DAX')) {
         // Indices: 1 pip = 1 point
         const costPerPoint = 1; // $1 per point per 1 lot (varies)
         const lotSize = riskAmount / (slDistance * costPerPoint);
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) {
         // 🛡️ FIX: Oil (USOIL/XTIUSD): 1 pip = 0.01 (1 cent), lot = 100 barriles.
         // Con SL distance en dólares y costPerPip=1 (100 barriles × $0.01 = $1 por pip por lote),
@@ -666,13 +666,13 @@ export function calculateLotSize(
         const pips = slDistance / 0.01;
         const costPerPip = 1; // $1 por pip por lote (100 barriles × 1 centavo)
         const lotSize = riskAmount / (pips * costPerPip);
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else {
         // Standard Forex: 1 pip = 0.0001, lot = 100,000 units
         const pips = slDistance / 0.0001;
         const costPerPip = 10; // ~$10 per pip for 1 standard lot
         const lotSize = riskAmount / (pips * costPerPip);
-        return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
     }
 }
 
@@ -776,7 +776,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         // GUARDRAIL DE RIESGO: Si el volumen necesario para mantener el 1% es menor al mínimo del broker,
         // no debemos forzar el mínimo ni redondear hacia arriba, porque expondríamos la cuenta a una pérdida mayor.
         if (exactRequiredCents < minVolumeCents) {
-            const riskMsg = `Volumen requerido exacto (${(exactRequiredCents / 100).toFixed(2)} lotes) es menor al mínimo del broker (${minVolumeCents / 100} lotes). Trade abortado por exceso de riesgo.`;
+            const riskMsg = `Volumen requerido exacto (${(exactRequiredCents / lotSizeCents).toFixed(4)} lotes) es menor al mínimo del broker (${minVolumeCents / lotSizeCents} lotes). Trade abortado por exceso de riesgo.`;
             console.warn(`[CTRADER] ⛔ ${riskMsg}`);
             return { success: false, error: riskMsg };
         }
