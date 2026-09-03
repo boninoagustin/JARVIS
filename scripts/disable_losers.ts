@@ -33,7 +33,10 @@ function metrics(trades: any[]) {
   return { n, wr: n ? (wins / n) * 100 : 0, pf: gl > 0 ? gp / gl : (gp > 0 ? 99 : 0), pnl, mdd };
 }
 
-const ASSETS = ['XAUUSD', 'AUDCAD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'NZDUSD', 'USDCAD', 'USDJPY', 'USOIL'];
+const arg = process.argv[2] || 'all';
+const ASSETS = arg === 'all'
+  ? ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40']
+  : arg.split(',').map(s => s.trim().toUpperCase());
 
 for (const ticker of ASSETS) {
   const current = (await db.doc(`asset_configs/${ticker}`).get()).data() || {};

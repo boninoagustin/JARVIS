@@ -38,7 +38,7 @@ const MCL = [0, 2, 3, 4, 5, 6];
 
 const arg = process.argv[2] || 'all';
 const ASSETS = arg === 'all'
-  ? ['XAUUSD', 'AUDCAD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'NZDUSD', 'USDCAD', 'USDJPY', 'USOIL']
+  ? ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40']
   : arg.split(',').map(s => s.trim().toUpperCase());
 
 for (const ticker of ASSETS) {
