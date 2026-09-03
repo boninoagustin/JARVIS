@@ -18,7 +18,9 @@ function mapToCTraderSymbol(ticker: string): string {
         'BTCUSD': 'BTCUSD',
         'GBPJPY': 'GBPJPY',
         'AUDJPY': 'AUDJPY',
-        'GER40': 'GERMANY 40'
+        'GER40': 'GERMANY 40',
+        'JP225': 'JAPAN 225',
+        'NIKKEI225': 'JAPAN 225'
     };
     return map[ticker] || ticker;
 }

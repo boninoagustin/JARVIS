@@ -654,7 +654,7 @@ export function calculateLotSize(
         const costPerUnit = 1; // $1 per unit per 1 lot (varies by broker)
         const lotSize = riskAmount / (slDistance * costPerUnit);
         return Math.max(0, parseFloat(lotSize.toFixed(4)));
-    } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX') || t.includes('GER') || t.includes('DE40') || t.includes('DAX')) {
+    } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX') || t.includes('GER') || t.includes('DE40') || t.includes('DAX') || t.includes('JP225') || t.includes('NIKKEI') || t.includes('JAPAN')) {
         // Indices: 1 pip = 1 point
         const costPerPoint = 1; // $1 per point per 1 lot (varies)
         const lotSize = riskAmount / (slDistance * costPerPoint);
@@ -1525,6 +1525,10 @@ function mapToCTraderSymbol(ticker: string): string {
         'AUDJPY': 'AUDJPY',
         'GER40': 'GERMANY 40',
         'DE40': 'GERMANY 40',
+        'JP225': 'JAPAN 225',
+        'NIKKEI225': 'JAPAN 225',
+        'JAPAN225': 'JAPAN 225',
+        'NIKKEI': 'JAPAN 225',
         'US100': 'US TECH 100',   // Usuario reporta que su broker lo llama 'US TECH 100'
         'NAS100': 'US TECH 100',
         'US30': 'US 30',          // Mapeo corregido a 'US 30'
