@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
-import { Rocket, RefreshCw, AlertTriangle, Clock, ShieldCheck } from 'lucide-react';
+import { Rocket, RefreshCw, AlertTriangle, Clock, ShieldCheck, HeartPulse } from 'lucide-react';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -23,6 +23,10 @@ interface OptReport {
     data_refreshed_at?: number;
     appliedAt?: number; new_trades?: number;
 }
+
+// ─── Health-check (health_check/latest) ───────────────────────────────────────
+interface HealthItem { check: string; status: 'PASS' | 'WARN' | 'FAIL'; detail: string }
+interface HealthReport { timestamp: number; status: 'OK' | 'FAIL'; items: HealthItem[] }
 
 // Mapeo best_config (espacio hyperopt) → asset_configs (producción).
 // 🚫 sessions/quedan fuera: el hyperopt las optimiza con el esquema del backtest
@@ -51,6 +55,7 @@ export default function PeriodicOptPanel() {
         mergedSessions: Record<string, Record<string, any>> | null;
     } | null>(null);
     const [applying, setApplying] = useState<string | null>(null);
+    const [health, setHealth] = useState<HealthReport | null>(null);
 
     const fetchReports = async () => {
         setLoading(true);
@@ -66,7 +71,16 @@ export default function PeriodicOptPanel() {
         }
     };
 
-    useEffect(() => { fetchReports(); }, []);
+    const fetchHealth = async () => {
+        try {
+            const hsnap = await getDoc(doc(db, 'health_check', 'latest'));
+            if (hsnap.exists()) setHealth(hsnap.data() as HealthReport);
+        } catch (err) {
+            console.error('Error fetching health_check:', err);
+        }
+    };
+
+    useEffect(() => { fetchReports(); fetchHealth(); }, []);
 
     const prepareApply = async (report: OptReport) => {
         const ticker = report.ticker;
@@ -162,6 +176,29 @@ export default function PeriodicOptPanel() {
                     <RefreshCw size={14} /> Refrescar
                 </button>
             </div>
+
+            {/* 🩺 Health-check del sistema (health_check/latest) */}
+            {health && (
+                <div style={{ ...card, borderColor: health.status === 'OK' ? '#00e67640' : '#ff333350' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                        <h3 style={{ margin: 0, color: '#e6e6e6', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <HeartPulse size={18} color={health.status === 'OK' ? '#00e676' : '#ff3333'} />
+                            {health.status === 'OK' ? 'Sistema sano' : 'Algo falla — revisar'}
+                        </h3>
+                        <span style={{ fontSize: '0.75rem', color: '#666' }}>
+                            {new Date(health.timestamp).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}
+                        </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
+                        {health.items.map(i => (
+                            <div key={i.check} style={{ display: 'flex', gap: '8px', fontSize: '0.8rem', alignItems: 'flex-start' }}>
+                                <span style={{ flexShrink: 0 }}>{i.status === 'PASS' ? '✅' : i.status === 'FAIL' ? '❌' : '⚠️'}</span>
+                                <span style={{ color: i.status === 'FAIL' ? '#ff3333' : i.status === 'WARN' ? '#ffaa00' : '#aaa' }}>{i.detail}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {reports.length === 0 && (
                 <div style={{ ...card, textAlign: 'center', padding: '48px' }}>

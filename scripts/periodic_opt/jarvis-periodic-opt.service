@@ -7,6 +7,10 @@ Type=oneshot
 WorkingDirectory=/opt/JARVIS
 ExecStart=/usr/bin/python3 /opt/JARVIS/scripts/periodic_opt/run_weekly.py
 ExecStartPost=/root/.nvm/versions/node/v24.19.0/bin/npx tsx /opt/JARVIS/scripts/periodic_opt/push_reports.js
+# 🩺 Health-check (sello de calidad): corre SIEMPRE al final (prefijo -), valida que el
+# sistema quedó sano tras toda la maquinaria del domingo. Escribe a health_check/latest
+# (el panel de Optimización Periódica lo muestra). No muta configs ni journal.
+ExecStartPost=-/root/.nvm/versions/node/v24.19.0/bin/npx tsx /opt/JARVIS/scripts/health_check.ts
 # node/npx en PATH para el worker del hyperopt (venv python lo invoca)
 Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/usr/bin:/bin
 Nice=5
