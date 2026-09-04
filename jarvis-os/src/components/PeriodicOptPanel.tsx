@@ -61,7 +61,12 @@ export default function PeriodicOptPanel() {
         setLoading(true);
         try {
             const snap = await getDocs(collection(db, 'opt_reports'));
-            const data = snap.docs.map(d => ({ ...(d.data() as OptReport), id: d.id }));
+            // 🩺 FIX key-warning: opt_reports también guarda docs sin ticker (ej. PARITY_LIVE_VS_BACKTEST
+            // del report de paridad), que no son reports por activo. Filtrarlos evita key={undefined}
+            // en el map de abajo (warning de React) y que aparezcan como tarjetas fantasma.
+            const data = snap.docs
+                .map(d => ({ ...(d.data() as OptReport), id: d.id }))
+                .filter(r => typeof r.ticker === 'string' && r.ticker.length > 0);
             setReports(data.sort((a, b) => b.timestamp - a.timestamp));
         } catch (err) {
             console.error('Error fetching opt_reports:', err);

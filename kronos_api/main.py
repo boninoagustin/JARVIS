@@ -26,7 +26,9 @@ app = FastAPI(title="Kronos Prediction API")
 # CORS — permitir requests desde el dashboard (Vite :5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://169.58.163.132:5173", "http://localhost:5173", "http://127.0.0.1:5173"],
+    # El dashboard se accede por IP pública (169.58.163.132), Tailscale (100.x, IP dinámica)
+    # o localhost. Regex para cubrirlas todas sin listar cada IP Tailscale.
+    allow_origin_regex=r"http://(169\.58\.163\.132|100\.\d+\.\d+\.\d+|localhost|127\.0\.0\.1):5173",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
