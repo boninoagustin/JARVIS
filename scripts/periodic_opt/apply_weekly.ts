@@ -94,6 +94,41 @@ async function main() {
   const applied: string[] = [];
   const skipped: string[] = [];
 
+  // 🆕 27-sep-2026: estado de auto-gestión (optimization_config/auto_state) —
+  // { applied: {T: {at, prodOosRef}}, failing: {T: {weeks, lastTs}} }
+  const AUTO_STATE_REF = db.collection('optimization_config').doc('auto_state');
+  const autoSnap = await AUTO_STATE_REF.get();
+  const autoState: any = autoSnap.exists ? (autoSnap.data() || {}) : {};
+  const stApplied: Record<string, { at: number; prodOosRef: number }> = autoState.applied || {};
+  const stFailing: Record<string, { weeks: number; lastTs: number }> = autoState.failing || {};
+
+  // 🛡️ Rollback AUTOMÁTICO (decisión de Bon 27-sep): si un cambio auto-aplicado la semana
+  // anterior cae >0.10R/t de producción OOS esta semana (y no sale RECOMMEND), revertir
+  // al snapshot prev_* más reciente.
+  for (const [t, st] of Object.entries<any>(stApplied)) {
+    const rf = path.join(REPORTS_DIR, `${t}.json`);
+    if (!fs.existsSync(rf)) continue; // sin reporte → no evaluar
+    const rep = JSON.parse(fs.readFileSync(rf, 'utf8'));
+    if (!fresh(rep)) continue;
+    const prodOos = Number(rep.production_oos?.net_pnl_r);
+    if (Number.isFinite(prodOos) && prodOos < st.prodOosRef - 0.10 && rep.status !== 'RECOMMEND') {
+      const cand = fs.readdirSync(REPORTS_DIR).filter(x => x.startsWith(`prev_${t}_`)).sort();
+      if (cand.length > 0) {
+        const prev = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, cand[cand.length - 1]), 'utf8'));
+        await db.doc(`asset_configs/${t}`).set({
+          ...prev,
+          rolledBackAt: new Date().toISOString(),
+          rollbackReason: `auto: prod OOS ${prodOos.toFixed(2)}R/t < ref ${(st.prodOosRef - 0.10).toFixed(2)}R/t`,
+          source: 'rollback_auto',
+        });
+        applied.push(`rollback-auto: ${t} (prod OOS ${prodOos.toFixed(2)} vs ref ${st.prodOosRef.toFixed(2)}R/t) → ${cand[cand.length - 1]}`);
+        delete stApplied[t];
+        continue;
+      }
+    }
+    delete stApplied[t]; // no cayó → aplicación consolidada
+  }
+
   for (const f of fs.readdirSync(REPORTS_DIR).filter(x => /^[A-Z][A-Z0-9]*\.json$/.test(x))) {
     const report = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf8'));
     const ticker = report.ticker;
@@ -169,6 +204,8 @@ async function main() {
     fs.writeFileSync(prevPath, JSON.stringify(current, null, 2));
 
     await docRef.set({ ...payload, appliedAt: new Date().toISOString(), source: 'apply_weekly' }, { merge: true });
+    // 🆕 27-sep-2026: registrar aplicación para el rollback automático de la semana siguiente
+    stApplied[ticker] = { at: Date.now(), prodOosRef: Number(report.production_oos?.net_pnl_r) };
     const presetSync = syncEnginePreset(ticker);
     applied.push(`${ticker}: ${appliedFields.join(', ')} (prev → ${path.basename(prevPath)}) [${presetSync}]`);
   }
@@ -197,8 +234,87 @@ async function main() {
       applied.push(`loser-disable: ${ticker} ${session}/${trigger} → minScore=99 (n=${d.n}, exp=${d.exp})`);
     }
     if (lt.enables?.length) {
-      skipped.push(`loser ENABLES pendientes de decisión manual: ${lt.enables.length} (${lt.enables.slice(0, 3).map((e: any) => `${e.ticker} ${e.session}/${e.trigger}`).join('; ')}...)`);
+      // 🆕 27-sep-2026 (decisión de Bon): enables AUTO con los mismos gates del proposal
+      // (n≥8, exp≥+0.15R/t, ya filtrados en loser_triggers_proposal.ts). Espejo de los disables:
+      // activar gatillo en ESA sesión con minScore=4.
+      for (const e of lt.enables) {
+        const { ticker, session, trigger } = e;
+        const docRef = db.doc(`asset_configs/${ticker}`);
+        const docSnap = await docRef.get();
+        if (!docSnap.exists) continue;
+        const current = docSnap.data() as any;
+        if (current.enabled === false) continue;
+        const tgt = current.sessions?.[session]?.[trigger];
+        if (tgt?.enabled === true && (tgt.minScore ?? 99) < 99) continue; // ya activo
+        if (DRY_RUN) {
+          applied.push(`[DRY] loser-enable: ${ticker} ${session}/${trigger} → minScore=4 (n=${e.n}, exp=${e.exp})`);
+          continue;
+        }
+        const merged = JSON.parse(JSON.stringify(current.sessions || {}));
+        merged[session] = merged[session] || {};
+        merged[session][trigger] = { ...(merged[session][trigger] || {}), enabled: true, minScore: 4 };
+        await db.doc(`asset_configs/${ticker}`).update({ sessions: merged, source: 'apply_weekly_losers' });
+        applied.push(`loser-enable: ${ticker} ${session}/${trigger} → minScore=4 (n=${e.n}, exp=${e.exp})`);
+      }
     }
+  }
+
+  // 🆕 27-sep-2026 (decisión de Bon): auto-DESACTIVACIÓN — HOLD_MC + producción OOS<0 dos
+  // semanas seguidas → enabled=false con disabledReason (reversible desde el panel).
+  for (const f of fs.readdirSync(REPORTS_DIR).filter(x => /^[A-Z][A-Z0-9]*\.json$/.test(x))) {
+    const rep = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf8'));
+    const t = rep.ticker;
+    if (!t || !fresh(rep)) continue;
+    const docRef = db.doc(`asset_configs/${t}`);
+    const docSnap = await docRef.get();
+    const current = docSnap.exists ? (docSnap.data() as any) : {};
+    if (current.enabled === false) { delete stFailing[t]; continue; } // ya apagado (manual o auto)
+    const prodOos = Number(rep.production_oos?.net_pnl_r);
+    const failing = rep.status === 'HOLD_MC' && Number.isFinite(prodOos) && prodOos < 0;
+    if (!failing) { delete stFailing[t]; continue; }
+    const weeks = (stFailing[t]?.weeks ?? 0) + 1;
+    if (weeks >= 2) {
+      if (!DRY_RUN) {
+        await db.doc(`asset_configs/${t}`).update({
+          enabled: false,
+          disabledReason: `auto-disable: HOLD_MC ${weeks} semanas seguidas con producción OOS negativa`,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'apply_weekly_auto',
+        });
+      }
+      applied.push(`auto-disable: ${t} (HOLD_MC ×${weeks}, prod OOS ${prodOos.toFixed(1)}R)`);
+      delete stFailing[t];
+    } else {
+      stFailing[t] = { weeks, lastTs: Date.now() };
+      skipped.push(`${t}: HOLD_MC con OOS<0 (semana ${weeks}/2 hacia auto-disable)`);
+    }
+  }
+
+  // 🆕 27-sep-2026 (decisión de Bon): sizing fraccional por sesión — auto-aplicar a bot_config
+  // solo si RECOMMEND (el MC no degrada survival >2pp) Y survival ponderado ≥ 0.85.
+  // El bot vivo lo consume vía getSessionSizingFactor() (trading.ts, listener bot_config).
+  const spPath = path.join(REPORTS_DIR, 'sizing_proposal.json');
+  if (fs.existsSync(spPath)) {
+    const sp = JSON.parse(fs.readFileSync(spPath, 'utf8'));
+    const survW = Number(sp.mc?.survival_weighted);
+    const factors = sp.factors && typeof sp.factors === 'object' ? sp.factors : {};
+    if (sp.status === 'RECOMMEND' && Number.isFinite(survW) && survW >= 0.85 && Object.keys(factors).length > 0) {
+      const fullFactors: Record<string, number> = { ASIA: 1, LONDON: 1, NY: 1, OFF: 1, ...factors };
+      if (!DRY_RUN) {
+        await db.collection('app_settings').doc('bot_config').set({
+          sizingFactors: fullFactors,
+          sizingUpdatedAt: new Date().toISOString(),
+        }, { merge: true });
+      }
+      applied.push(`sizing: ${Object.entries(factors).map(([s, v]) => `${s}=×${Number(v).toFixed(2)}`).join(' ')} [MC survW=${(survW * 100).toFixed(0)}%]`);
+    } else {
+      skipped.push(`sizing: ${sp.status ?? 'n/a'} (survW=${Number.isFinite(survW) ? (survW * 100).toFixed(0) + '%' : 'n/a'}) — no se aplica`);
+    }
+  }
+
+  // 🆕 27-sep-2026: persistir estado de auto-gestión (rollback + failing) — solo en modo real
+  if (!DRY_RUN) {
+    await AUTO_STATE_REF.set({ applied: stApplied, failing: stFailing, updatedAt: new Date().toISOString() });
   }
 
   console.log(DRY_RUN ? '=== APPLY WEEKLY (DRY-RUN) ===' : '=== APPLY WEEKLY (AUTO) ===');

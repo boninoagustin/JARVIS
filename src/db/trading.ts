@@ -100,6 +100,13 @@ function buildBotStatus(ticker: string, s: any): any {
     };
 }
 
+// 🆕 27-sep-2026: sizing fraccional por sesión (sizing_weekly_proposal → bot_config.sizingFactors).
+// Factor 0.4..1.6 multiplica el riesgo del trade en esa sesión; default 1 (sin efecto).
+export function getSessionSizingFactor(session: string): number {
+    const f = (globalState.dynamicBotConfig as any).sizingFactors?.[session];
+    return typeof f === 'number' && Number.isFinite(f) && f > 0 ? f : 1;
+}
+
 function scheduleStateSave(ticker: string, state: RadarState) {
     // 🔧 Reemplazo de Firebase: guardar radar states en archivo JSON local
     // Elimina ~777K escrituras/día de Firestore. La cuota se libera para journal + trades.
@@ -807,6 +814,8 @@ if (db) {
                     autoTrading: data.autoTrading !== undefined ? data.autoTrading : globalState.dynamicBotConfig.autoTrading,
                     maxSmartRiskPercent: data.maxSmartRiskPercent !== undefined ? Number(data.maxSmartRiskPercent) : globalState.dynamicBotConfig.maxSmartRiskPercent
                 };
+                // 🆕 27-sep-2026: sizing fraccional por sesión (auto-aplicado por apply_weekly).
+                (globalState.dynamicBotConfig as any).sizingFactors = (data as any).sizingFactors ?? (globalState.dynamicBotConfig as any).sizingFactors;
             }
         }));
 
@@ -4160,7 +4169,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
                         : undefined,
                                 tradeId: oteData.tradeId,
-                                riskPercent: envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1), // 🆕 TimesFM F1: riesgo modulado
+                                riskPercent: envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now())), // 🆕 TimesFM F1: riesgo modulado + sizing fraccional por sesión (27-sep-2026)
                             });
 
                             if (result.success && result.positionId) {
