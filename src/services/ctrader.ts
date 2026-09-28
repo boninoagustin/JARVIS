@@ -13,10 +13,12 @@
  */
 
 import { config } from '../config.js';
+import { refreshIfNeeded, startTokenAutoRenewal, refreshCtraderToken } from './ctraderToken.js';
 import { TrendbarPeriod, PayloadType } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
 import { tickFlow } from '../engine/TickFlow.js';
+import { computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
 
 // ─── Types ───
 
@@ -49,6 +51,28 @@ export interface CTraderAccountInfo {
 // ─── Connection State ───
 
 export let ctClient: any = null;
+// 🛡️ 24-sep-2026: moneda de depósito de la cuenta detectada de cTrader (no fija).
+// detectAccountCurrency() la setea al conectar; getAccountInfo la usa para account_state.
+let accountCurrency: string | null = null;
+export function getAccountCurrency(): string { return accountCurrency || 'USD'; }
+
+/** Lee trader.depositAssetId y lo mapea con el catálogo de activos → "EUR"/"USD"/... */
+async function detectAccountCurrency(): Promise<string> {
+    if (!ctClient) return 'USD';
+    try {
+        const traderResp: any = await ctClient.raw.account.getTrader();
+        const trader = traderResp?.trader ?? traderResp;
+        const depId = Number(trader?.depositAssetId);
+        if (!depId) return 'USD';
+        const assets: any[] = await ctClient.raw.market.getAssets();
+        const a = assets.find(x => Number(x.assetId) === depId);
+        const name = String(a?.name ?? a?.displayName ?? '').toUpperCase();
+        if (name.length >= 3 && name.length <= 6 && /^[A-Z]+$/.test(name)) return name;
+        return 'USD';
+    } catch {
+        return 'USD';
+    }
+}
 let isConnected = false;
 let connectingPromise: Promise<boolean> | null = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -73,6 +97,11 @@ export async function connectCTrader(): Promise<boolean> {
         console.warn('[CTRADER] ⚠️ Credenciales no configuradas en .env. Servicio deshabilitado.');
         return false;
     }
+
+    // 🆕 sep-2026 renovación automática del token: al primer connect se chequea el vencimiento
+    // (renueva si falta <3 días) y se arranca el chequeo periódico cada 12h.
+    void refreshIfNeeded().catch(() => { });
+    startTokenAutoRenewal();
 
     if (isConnected && ctClient) return true;
     if (connectingPromise) return connectingPromise; // single-flight
@@ -110,6 +139,13 @@ async function connectWithRetry(): Promise<boolean> {
             ctClient = client;
             isConnected = true;
             console.log('[CTRADER] ✅ Conectado exitosamente a cTrader.');
+            // 🛡️ 24-sep-2026: detectar la moneda REAL de depósito de la cuenta (EUR, USD, …).
+            // ctrader-ts getState() NO expone currency — se lee trader.depositAssetId y se
+            // mapea con el catálogo de activos. Fallback 'USD' solo si no se puede detectar.
+            detectAccountCurrency().then(c => {
+                accountCurrency = c;
+                console.log(`[CTRADER] 💱 Moneda de la cuenta detectada: ${c}`);
+            }).catch(() => { /* sin moneda → queda 'USD' */ });
             
             setupCTraderEvents(client);
 
@@ -130,6 +166,14 @@ async function connectWithRetry(): Promise<boolean> {
             
             return true;
         } catch (err: any) {
+            // 🆕 sep-2026: si el error es de CREDENCIALES (token), renovar con el refresh token
+            // y dejar que el próximo intento del loop use el token nuevo (config actualizada).
+            // Errores de red (timeout, CANT_ROUTE_REQUEST) NO matchean → no se malgasta el refresh.
+            const msg = String(err?.message || '');
+            if (/token|access|auth|credential|authoriz/i.test(msg)) {
+                console.error(`[CTRADER-TOKEN] 🔑 Error de credenciales detectado (${msg}). Intentando renovar el token...`);
+                await refreshCtraderToken(true);
+            }
             console.error(`[CTRADER] ❌ Error de conexión (intento ${attempt}):`, err.message);
             try { ctClient?.disconnect(); } catch { /* noop */ } // ✅ matar al huérfano
             ctClient = null;
@@ -233,20 +277,21 @@ function setupCTraderEvents(client: any) {
             const tradeDoc = snapshot.docs[0];
             const trade = tradeDoc.data();
             
-            // ─── Extraer PnL del deal ───
-            // El grossProfit en cTrader Open API viene en centavos (moneyDigits=2),
-            // pero para ser robustos, usamos moneyDigits si está disponible.
+            // ─── Extraer PnL NETO del deal (gross + commission + swap) ───
+            // 🛡️ sep-2026: antes se sumaba SOLO grossProfit → el acumulado no coincidía
+            // con el neto del historial de cTrader (la comisión se cobra en CADA deal:
+            // apertura, parcial TP1 y cierre final). Ahora: neto real por deal.
             let dealPnl = 0;
             if (event.deal && event.deal.closePositionDetail) {
-                const rawProfit = Number(event.deal.closePositionDetail.grossProfit || 0);
-                const moneyDigits = event.deal.moneyDigits || 2;
+                const cp = event.deal.closePositionDetail;
+                const rawProfit = Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
+                const moneyDigits = event.deal.moneyDigits || cp.moneyDigits || 2;
                 dealPnl = rawProfit / Math.pow(10, moneyDigits);
-            } else if (event.deal && event.deal.grossProfit) {
-                const rawProfit = Number(event.deal.grossProfit);
+            } else if (event.deal && (event.deal.commission || event.deal.grossProfit)) {
                 const moneyDigits = event.deal.moneyDigits || 2;
-                dealPnl = rawProfit / Math.pow(10, moneyDigits);
+                dealPnl = Number(event.deal.commission || 0) / Math.pow(10, moneyDigits);
             }
-            
+
             const positionStatus = event.position.positionStatus; // 1 = OPEN, 2 = CLOSED, 3 = CREATED
 
             // Acumular PnL de deals parciales (no sobreescribir)
@@ -264,14 +309,31 @@ function setupCTraderEvents(client: any) {
                 else if (accumulatedPnl < -0.5) resultStatus = 'LOSS';
                 else resultStatus = 'BREAKEVEN';
                 const trigger = (event.deal?.stopTriggerBase ?? event.deal?.closePositionDetail?.closeTriggerBase ?? '').toString().toUpperCase();
-                await tradeDoc.ref.update({
-                    result: resultStatus,
-                    ctrader_real_pnl: accumulatedPnl,
-                    status: 'CLOSED',
-                    slHit: trigger === 'STOP_LOSS',
-                    tp2Hit: trigger === 'TAKE_PROFIT',
-                });
-                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL Acumulado: $${accumulatedPnl} -> ${resultStatus} (trigger: ${trigger || 'n/d'})`);
+                // 🛡️ sep-2026: rMultiple real = PnL neto / riesgo real (SL estructural, lots reales).
+                // Sanidad: SL del lado correcto (BUY: sl<entry | SELL: sl>entry); si no, null.
+                const evEntry = Number(trade.entryPrice ?? 0);
+                const evSl = Number(trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice ?? evEntry);
+                const evDir = String(trade.direction || '').toUpperCase();
+                const evSlOk = !evDir || (evDir === 'BUY' ? evSl < evEntry : evSl > evEntry);
+                const usdjpy = (trade.ticker || '').toUpperCase().includes('JPY')
+                    ? (lastBidAsk.get('USDJPY')?.bid ?? undefined) : undefined;
+                const rMultiple = evSlOk ? computeRMultipleFromPnlUsd(
+                    trade.ticker || '', evEntry, evSl,
+                    Number(trade.ctraderLots ?? trade.lots ?? 0), accumulatedPnl, usdjpy,
+                ) : null;
+                if (trade.manualResult) {
+                    console.log(`[CTRADER-EVENT] ⏭️ #${tradeDoc.id} manualResult — se respeta, no se escribe resultado automático.`);
+                } else {
+                    await tradeDoc.ref.update({
+                        result: resultStatus,
+                        ctrader_real_pnl: accumulatedPnl,
+                        rMultiple,
+                        status: 'CLOSED',
+                        slHit: trigger === 'STOP_LOSS',
+                        tp2Hit: trigger === 'TAKE_PROFIT',
+                    });
+                }
+                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL neto acumulado: $${accumulatedPnl} -> ${resultStatus} (${rMultiple}R, trigger: ${trigger || 'n/d'})`);
             }
             // 1 = OPEN + deal con closePositionDetail: cierre parcial (TP1)
             else if (positionStatus === 1 && event.deal && event.deal.closePositionDetail) {
@@ -321,6 +383,10 @@ function setupCTraderEvents(client: any) {
                                 const candles = getCandles(baseTicker, periodStr);
                                 if (candles && candles.length > 0) {
                                     const lastCandle = { ...candles[candles.length - 1] }; // Clonamos para no mutar el buffer directamente de forma sucia
+                                    // 🛡️ sep-2026 fix OTE: la vela ANTERIOR es la última CERRADA — el
+                                    // estiramiento del extreme del leg debe usar vela cerrada, no la
+                                    // vela en formación (la OTE "huía" del precio).
+                                    const prevCandle = candles.length >= 2 ? { ...candles[candles.length - 2] } : null;
                                     let updated = false;
                                     
                                     if (currentPrice !== lastCandle.close) {
@@ -339,7 +405,7 @@ function setupCTraderEvents(client: any) {
                                     if (updated) {
                                         // 🆕 Hook para SMCBridge: PING de precio nativo hacia JARVIS
                                         // (el bridge throttlear por ticker; reemplaza al PING de TradingView)
-                                        spotTickListener?.(baseTicker, lastCandle);
+                                        spotTickListener?.(baseTicker, lastCandle, prevCandle ?? undefined);
 
                                         // Broadcast tick to UI without triggering heavy SMC Engine logic
                                         import('./ws_server.js').then(({ broadcastCandle }) => {
@@ -425,11 +491,12 @@ function clearSubscriptionState(): void {
     symbolToTicker.clear();
     subscribedSpots.clear();
     subscribedTrendbars.clear();
+    scannerProcessed.clear();
 }
 
 // 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
 // Se invoca con (baseTicker, vela actualizada por el tick) desde el handler de SpotEvent.
-type SpotTickListener = (baseTicker: string, candle: OHLCV) => void;
+type SpotTickListener = (baseTicker: string, candle: OHLCV, prevCandle?: OHLCV) => void;
 let spotTickListener: SpotTickListener | null = null;
 export function setSpotTickListener(fn: SpotTickListener | null) {
     spotTickListener = fn;
@@ -487,8 +554,52 @@ export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarP
 /**
  * Inicializa el escáner global suscribiéndose a todos los activos y temporalidades.
  */
+// 🆕 27-sep-2026: roster dinámico del escáner — seed = los 10 clásicos; se actualiza
+// desde el listener de asset_configs (trading.ts) vía syncScannerRoster. En reconexión
+// de cTrader, initializeScanner re-suscribe TODO el roster cacheado.
+const DEFAULT_SCANNER_TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
+const scannerRoster = new Set<string>(DEFAULT_SCANNER_TICKERS);
+// tickers cuyo histórico + suscripciones ya se procesaron en la conexión ACTUAL
+const scannerProcessed = new Set<string>();
+
+const SCANNER_TFS = [
+    { p: TrendbarPeriod.M5, str: 'M5' },
+    { p: TrendbarPeriod.M15, str: 'M15' },
+    { p: TrendbarPeriod.H1, str: 'H1' },
+    { p: TrendbarPeriod.H4, str: 'H4' },
+    { p: TrendbarPeriod.D1, str: 'D1' },
+    { p: TrendbarPeriod.W1, str: 'W1' },
+];
+
+export function getScannerRoster(): string[] {
+    return [...scannerRoster];
+}
+
+export async function syncScannerRoster(tickers: string[]): Promise<void> {
+    const wanted = [...new Set(tickers.map(t => t.toUpperCase()).filter(t => t && t !== 'GLOBAL'))];
+    if (wanted.length === 0) return;
+    for (const t of wanted) scannerRoster.add(t);
+    const newOnes = wanted.filter(t => !scannerProcessed.has(t));
+    if (newOnes.length === 0) return;
+    console.log(`[CTRADER] 🛰️ Roster dinámico: ${newOnes.length} activo(s) nuevo(s) → ${newOnes.join(', ')}`);
+    for (const asset of newOnes) {
+        for (const tf of SCANNER_TFS) {
+            try {
+                // 1. Historial (alimenta el motor SMC) + 2. suscripción live
+                await getHistoricalCandles(asset, tf.p, 500);
+                await subscribeToLiveTrendbars(asset, tf.p, tf.str);
+                await new Promise(r => setTimeout(r, 100));
+            } catch (err) {
+                console.error(`[CTRADER] ⚠️ Error roster dinámico ${asset}:${tf.str}`);
+            }
+        }
+        scannerProcessed.add(asset);
+    }
+    console.log(`[CTRADER] ✅ Roster dinámico completo: ${scannerProcessed.size} activos con streams.`);
+}
+
 export async function initializeScanner() {
-    console.log('[CTRADER] 🚀 Inicializando Escáner Global SMC...');
+    console.log(`[CTRADER] 🚀 Inicializando Escáner Global SMC (roster: ${scannerRoster.size} activos)...`);
     
     if (!isConnected || !ctClient) {
         const connected = await connectCTrader();
@@ -498,15 +609,8 @@ export async function initializeScanner() {
         }
     }
 
-    const assets = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
-    const timeframes = [
-        { p: TrendbarPeriod.M5, str: 'M5' },
-        { p: TrendbarPeriod.M15, str: 'M15' },
-        { p: TrendbarPeriod.H1, str: 'H1' },
-        { p: TrendbarPeriod.H4, str: 'H4' },
-        { p: TrendbarPeriod.D1, str: 'D1' },
-        { p: TrendbarPeriod.W1, str: 'W1' }
-    ];
+    const assets = [...scannerRoster];
+    const timeframes = SCANNER_TFS;
 
     let successCount = 0;
     
@@ -527,6 +631,7 @@ export async function initializeScanner() {
                 console.error(`[CTRADER] ⚠️ Error inicializando escáner para ${asset}:${tf.str}`);
             }
         }
+        scannerProcessed.add(asset);
     }
     
     console.log(`[CTRADER] ✅ Escáner SMC Global inicializado. (${successCount}/${assets.length * timeframes.length} streams activos)`);
@@ -617,6 +722,20 @@ export async function getHistoricalCandles(ticker: string, period: TrendbarPerio
  * @param ticker Symbol to trade
  * @returns Lot size (e.g., 0.10)
  */
+// 🛡️ 16-sep-2026: centavos de moneda base por LOTE según clase de activo.
+// Forex = 10,000,000 (100k unidades × 100 centavos); XAU/XAG/OIL = 10,000 (100 unidades);
+// BTC/índices = 100 (1 unidad). Convierte filledVolume (centavos del proto) → lotes reales.
+export function getLotSizeCents(ticker: string): number {
+    const t = (ticker || '').toUpperCase();
+    if (t.includes('XAU') || t.includes('GOLD')) return 10000;
+    if (t.includes('BTC') || t.includes('ETH') || t.includes('US30') || t.includes('NAS')
+        || t.includes('SPX') || t.includes('US100') || t.includes('USTEC')
+        || t.includes('US500') || t.includes('GER') || t.includes('DE40') || t.includes('DAX') || t.includes('JP225')) return 100;
+    if (t.includes('XAG') || t.includes('SILVER')) return 500000;
+    if (t.includes('OIL') || t.includes('WTI') || t.includes('BRENT') || t.includes('XTI')) return 10000;
+    return 10000000; // forex por defecto
+}
+
 export function calculateLotSize(
     equity: number,
     entryPrice: number,
@@ -748,6 +867,17 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         let lotSizeCents = info?.lotSize;
         let stepVolumeCents = info?.stepVolume || 100000; // default for forex
         let minVolumeCents = info?.minVolume || stepVolumeCents;
+
+        // 🛡️ FIX (15-sep-2026): micro-lotes en XAUUSD VERIFICADOS empíricamente en demo —
+        // orden de 0.01 lote enviada y ACEPTADA por el broker. El override previo de
+        // 1.00 lote se basaba en UN rechazo del 07-sep (cuando el API reportaba minVolume
+        // inconsistente) y abortaba los trades de oro sin motivo (ej. 15/9: 0.0648 lotes
+        // necesarios vs "mínimo" falso de 1.00). minVolumeCents=100 = 0.01 lote (lotSize 10000).
+        // NOTA: US 500 SÍ exige 1.00 lote real (TRADING_BAD_VOLUME verificado) — sin override,
+        // se respeta el minVolume reportado por el broker.
+        if (tUpper.includes('XAU') || tUpper.includes('GOLD')) {
+            minVolumeCents = Math.max(minVolumeCents, 100); // 0.01 lote de oro (mínimo real)
+        }
         
         if (!lotSizeCents) {
             if (tUpper.includes('XAU') || tUpper.includes('GOLD')) lotSizeCents = 10000; // 100 units
@@ -1381,7 +1511,7 @@ export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
         return {
             balance: state?.balance || 0,
             equity: state?.equity || state?.balance || 0,
-            currency: state?.currency || 'USD',
+            currency: accountCurrency || 'USD', // 🛡️ 24-sep-2026: moneda DETECTADA de cTrader (depositAssetId), no fija
             openPositions: state?.positions?.length || 0,
         };
     } catch (err: any) {
@@ -1438,6 +1568,8 @@ export async function getDealsByPosition(positionId: string): Promise<any[]> {
     try {
         const to = Date.now();
         const from = to - 30 * 24 * 60 * 60 * 1000;
+        // Nota: ctClient es el cliente HIGH-LEVEL de ctrader-ts → firma POSICIONAL
+        // getDealsByPosition(positionId, from, to), que mapea a fromTimestamp/toTimestamp.
         return await ctClient.getDealsByPosition(Number(positionId), from, to);
     } catch (err: any) {
         console.error('[CTRADER] ❌ Error obteniendo deals de posición:', err.message);
@@ -1535,6 +1667,36 @@ function mapToCTraderSymbol(ticker: string): string {
         'DOW30': 'US 30',
         'US500': 'US 500',        // Mapeo corregido a 'US 500'
         'SPX500': 'US 500',
+        // 🆕 27-sep-2026: universo completo Funding Pips (fuente: scripts/asset_scout.ts UNIVERSE)
+        'USTECH100': 'US TECH 100',
+        'FRA40': 'FRANCE 40',
+        'UK100': 'UK 100',
+        'SPAIN35': 'SPAIN 35',
+        'NL25': 'NETHERLANDS 25',
+        'ITALY40': 'ITALY 40',
+        'EUROPE50': 'EUROPE 50',
+        'AUSTRALIA200': 'AUSTRALIA 200',
+        'XAGUSD': 'XAGUSD',
+        'XPTUSD': 'XPTUSD',
+        'XPDUSD': 'XPDUSD',
+        'XBRUSD': 'XBRUSD',
+        'NATGAS': 'NAT.GAS',
+        'CADJPY': 'CADJPY',
+        'GBPAUD': 'GBPAUD',
+        'AUDNZD': 'AUDNZD',
+        'EURAUD': 'EURAUD',
+        'EURCAD': 'EURCAD',
+        'GBPCAD': 'GBPCAD',
+        'AUDCHF': 'AUDCHF',
+        'GBPNZD': 'GBPNZD',
+        'CADCHF': 'CADCHF',
+        'GBPCHF': 'GBPCHF',
+        'NZDCHF': 'NZDCHF',
+        'NZDCAD': 'NZDCAD',
+        'EURNZD': 'EURNZD',
+        'NZDJPY': 'NZDJPY',
+        'CHFJPY': 'CHFJPY',
+        'EURCHF': 'EURCHF',
     };
 
     // Try exact match first

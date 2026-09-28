@@ -2,11 +2,11 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
-import { getLastBidAsk } from '../services/ctrader.js';
+import { getLastBidAsk, syncScannerRoster } from '../services/ctrader.js';
 import * as fs from 'fs';
 
 import { z } from 'zod';
-import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema, extractMgmtOverrides } from '../engine/Types.js';
+import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema, extractMgmtOverrides, DEFAULT_BIAS_CONFLUENCE, BiasConfluenceConfig } from '../engine/Types.js';
 
 type SessionConfig = z.infer<typeof SessionSchema>;
 import { StateStore, createStateStore } from '../engine/StateStore.js';
@@ -22,8 +22,9 @@ import {
 
 import { evaluateNetTrade, getPipValue, getAssetClass, defaultFrictionConfig, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
 import { capTp2Price } from '../engine/tp2Cap.js';
+import { setMLGateOverride } from '../engine/MLFilter.js';
 import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
-import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit } from '../services/correlation.js';
+import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit, syncCorrTickers } from '../services/correlation.js';
 
 import { tickFlow } from '../engine/TickFlow.js';
 import { telemetry } from '../services/telemetry.js';
@@ -63,8 +64,12 @@ function buildBotStatus(ticker: string, s: any): any {
     let position: any = null;
     for (const t of globalState.activeTrades.values()) {
         if (t.ticker === ticker && !t.isBacktest) {
-            const risk = Math.abs(t.entryPrice - t.slPrice) || 1;
-            const pnlR = s.lastPrice != null
+            // 🛡️ 16-sep-2026: el R va contra el SL ESTRUCTURAL ORIGINAL (initial/original), nunca
+            // contra el SL vigente (que se mueve a breakeven/trailing → riesgo degenerado → R gigante).
+            const initSl = t.initialSlPrice ?? t.originalSlPrice ?? t.slPrice;
+            const risk = initSl != null ? Math.abs(t.entryPrice - initSl) : 0;
+            const eps = Math.max(0.1, Math.abs(t.entryPrice) * 0.0005); // riesgo degenerado → null
+            const pnlR = s.lastPrice != null && risk > eps
                 ? (t.direction === 'BUY' ? (s.lastPrice - t.entryPrice) / risk : (t.entryPrice - s.lastPrice) / risk)
                 : null;
             position = { direction: t.direction, pnlR: pnlR == null ? null : +pnlR.toFixed(2), managementMode: t.managementMode };
@@ -161,12 +166,14 @@ export const getLastPingTime = () => globalState.lastPingTime;
 // 🛡️ FIX C: calcula el rMultiple real = PnL en USD / riesgo en USD del trade.
 // El riesgo real = distancia entry→SL en pips × valor por pip × lotes.
 // Ya no se usa el $50 fijo (que era falso para lotes de 23-31 en cuenta ~$4.6k).
+// 🛡️ sep-2026: usa USDJPY medido (lastBidAsk) para pares xxxJPY → riesgo real, no $10/pip.
 function computeRMultipleFromRealPnl(trade: any, pnlUsd: number): number {
     const ticker = (trade.ticker || '').toUpperCase();
     const entry = Number(trade.entryPrice);
     const sl = Number(trade.slPrice ?? trade.originalSlPrice);
     const lots = Number(trade.ctraderLots ?? trade.lots ?? trade.volume ?? 0);
-    return computeRMultipleFromPnlUsd(ticker, entry, sl, lots, pnlUsd);
+    const usdjpy = ticker.includes('JPY') ? (getLastBidAsk('USDJPY')?.bid ?? undefined) : undefined;
+    return computeRMultipleFromPnlUsd(ticker, entry, sl, lots, pnlUsd, usdjpy);
 }
 
 // 👻 RECONCILIACIÓN cTrader ↔ RAM/Firestore: si el stream de cTrader pierde un evento
@@ -178,29 +185,98 @@ let lastReconcileTs = 0;
 
 // Resuelve el resultado REAL de una posición cerrada consultando los deals del broker.
 // Devuelve null si no hay deal de cierre (no se fabrica resultado).
-async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number; slHit: boolean } | null> {
+// 🛡️ sep-2026: suma TODOS los deals de la posición (apertura + parciales + cierre final),
+// con comisión y swap de cada uno → PnL neto idéntico al historial de cTrader.
+// Antes tomaba solo el primer deal con closePositionDetail → en trades con parcial TP1
+// el PnL quedaba incompleto (ej. $1.87 guardado vs $27.08 real).
+async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number | null; slHit: boolean; balanceAfterUsd: number | null } | null> {
     try {
         const { getDealsByPosition } = await import('../services/ctrader.js');
         const deals = await getDealsByPosition(positionId);
-        const closeDeal = deals.find((d: any) => d?.closePositionDetail);
-        if (!closeDeal) return null;
-        const cp = closeDeal.closePositionDetail;
-        const moneyDigits = Number(closeDeal.moneyDigits ?? cp.moneyDigits ?? 2);
-        // 🛡️ sep-2026: PnL NETO = grossProfit + commission + swap (lo que muestra cTrader).
-        // Antes se usaba solo grossProfit → trades con comisión negativa se marcaban WIN
-        // cuando cTrader los muestra en negativo (la banda ±0.10 expuso el bug).
-        const rawProfit = Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
+        const closeDeals = deals.filter((d: any) => d?.closePositionDetail);
+        if (closeDeals.length === 0) return null;
+        // 🛡️ FIX 24-sep-2026: cTrader devuelve deals en orden DESCENDENTE → el último del
+        // array es el MÁS VIEJO (el parcial TP1), no el cierre final. Con parciales, el
+        // saldo quedaba "a mitad de trade" (medido: journal $3983 vs broker $3998.87).
+        // El cierre FINAL es el deal con mayor balanceVersion (contador monotónico por cuenta).
+        const finalDeal = closeDeals.reduce((best: any, d: any) => {
+            if (!best) return d;
+            return Number(d.closePositionDetail?.balanceVersion ?? 0) > Number(best.closePositionDetail?.balanceVersion ?? 0) ? d : best;
+        }, null as any);
+        const finalCp = finalDeal?.closePositionDetail;
+        // 🛡️ sep-2026: PnL NETO = Σ over todos los deals (grossProfit + commission + swap).
+        // El volumen del protocolo viene en centavos: 1 lote forex = 10.000.000 centavos.
+        const moneyDigits = Number(finalCp?.moneyDigits ?? finalDeal?.moneyDigits ?? 2);
+        // 🛡️ 24-sep-2026 (MEDIDO con balanceVersion): la comisión del deal de APERTURA NO se
+        // debita del saldo en esta cuenta (campo informativo). Antes se restaba → P&L subestimado
+        // (período: panel +1.92 vs saldo real +33.50). PnL = Σ deals de CIERRE (gross+comm+swap).
+        // Verificación: NCBETA pre-TP1 3972.48 → post-TP1 3983.00 = +10.52 = gross 11.86 − comm 1.34.
+        let rawProfit = 0;
+        for (const d of deals) {
+            const cp = d?.closePositionDetail;
+            if (cp) {
+                rawProfit += Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
+            }
+        }
         const pnl = rawProfit / Math.pow(10, moneyDigits);
-        const slHit = closeDeal.stopTriggerBase === 'STOP_LOSS' || cp.closeTriggerBase === 'STOP_LOSS';
+        // Saldo post-cierre del deal FINAL (no del parcial) → curva de saldo real del broker.
+        const balanceAfterUsd = finalCp?.balance != null ? Number(finalCp.balance) / Math.pow(10, moneyDigits) : null;
+        const slHit = deals.some((d: any) => d?.stopTriggerBase === 'STOP_LOSS' || d?.closePositionDetail?.closeTriggerBase === 'STOP_LOSS');
         const result = pnl > 0.1 ? 'WIN' : pnl < -0.1 ? 'LOSS' : 'BREAKEVEN';
-        // 🛡️ sep-2026: el rMultiple se calcula contra el SL ESTRUCTURAL original, no el vigente
-        // (que con BE-buffer/trailing queda ≈ entry → riesgo ~0.1 pip → R inflado/falso).
-        const effTrade = { ...trade, slPrice: trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice };
-        return { result, pnl, rMultiple: computeRMultipleFromRealPnl(effTrade, pnl), slHit };
+        // 🛡️ sep-2026: rMultiple contra el SL ESTRUCTURAL original (no el vigente con BE-buffer
+        // → riesgo ≈ 0 → R inflado). Lots reales desde el deal de apertura si el trade no los trae.
+        // Sanidad: SL del lado correcto (BUY: sl<entry | SELL: sl>entry); si no, rMultiple null.
+        const openDeal = deals.find((d: any) => !d?.closePositionDetail);
+        // 🛡️ 16-sep-2026: filledVolume está en centavos de moneda base; el divisor DEBE ser el
+        // lotSize del activo (antes 10^7 fijo → XAU quedaba con 0.00001 lotes → riesgo ~$0.014
+        // → rMultiple 3763). getLotSizeCents: forex 10^7, XAU/OIL 10^4, BTC/índices 100.
+        const lotSizeCents = (await import('../services/ctrader.js')).getLotSizeCents(String(trade.ticker || ''));
+        const dealLots = openDeal?.filledVolume ? Number(openDeal.filledVolume) / lotSizeCents : 0;
+        const slPrice = Number(trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice);
+        const entryPrice = Number(trade.entryPrice ?? openDeal?.executionPrice ?? 0);
+        const dir = String(trade.direction || '').toUpperCase();
+        const slOk = !dir || (dir === 'BUY' ? slPrice < entryPrice : slPrice > entryPrice);
+        const effTrade = {
+            ...trade,
+            slPrice,
+            ctraderLots: Number(trade.ctraderLots ?? trade.lots ?? trade.volume ?? 0) || dealLots,
+        };
+        const rMultiple = slOk ? computeRMultipleFromRealPnl(effTrade, pnl) : null;
+        return { result, pnl, rMultiple, slHit, balanceAfterUsd };
     } catch (e: any) {
         console.warn(`[RECONCILE] no se pudo leer historial de posID ${positionId}: ${e.message}`);
         return null;
     }
+}
+
+/** 🛡️ 24-sep-2026: resuelve el PnL REAL de una posición recién cerrada por SAR/reversión.
+ *  closePosition() cierra en el broker pero el deal puede tardar unos segundos en
+ *  propagarse a la historia — por eso reintenta con backoff. Antes el cierre SAR solo
+ *  escribía recordResult('REVERSAL') sin PnL y el trade quedaba para SIEMPRE con '—'
+ *  en el Diario (el reconcile de arranque no lo revisa: el doc de active_trades ya
+ *  estaba borrado). Medido 23-sep-2026: 2 reversiones sin PnL real en el journal. */
+export async function finalizeClosedPositionFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number | null; slHit: boolean; balanceAfterUsd: number | null } | null> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+        const resolved = await resolveClosedFromDeals(positionId, trade);
+        if (resolved) return resolved;
+        if (attempt < 3) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+    return null;
+}
+
+// 🛑 16-sep-2026: registro de señales BLOQUEADAS para el contrafactual semanal
+// (scripts/blocked_signals_eval.ts simula qué habría pasado con cada una usando
+// velas M5 reales de cTrader). Un JSONL por señal, con los parámetros completos.
+function logBlockedSignal(reason: string, o: any, ts: number): void {
+    if (!o || !o.ticker) return;
+    try {
+        fs.appendFileSync('/opt/JARVIS/logs/blocked_signals.jsonl', JSON.stringify({
+            ts, ticker: o.ticker, direction: o.direction, reason,
+            points: o.points, entry: o.entryPrice,
+            sl: parseFloat(o.stopLoss), tp1: parseFloat(o.tp1), tp2: parseFloat(o.tp2),
+            isChochEntry: o.isChochEntry === true,
+        }) + '\n');
+    } catch { /* best-effort */ }
 }
 
 export async function reconcileCTraderPositions(): Promise<void> {
@@ -243,10 +319,19 @@ export async function reconcileCTraderPositions(): Promise<void> {
             globalState.activeTrades.delete(trade.tradeId);
             if (db) {
                 const journalId = trade.journalId || trade.tradeId;
-                db.collection('trade_journal').doc(journalId).set(
-                    { result, rMultiple, ctrader_real_pnl: pnl, slHit, reconciled: true, closedAt: new Date().toISOString() },
-                    { merge: true }
-                ).catch(() => {});
+                // 🛡️ sep-2026: no pisar un resultado registrado a mano desde el panel.
+                const jSnap = await db.collection('trade_journal').doc(journalId).get().catch(() => null);
+                if (jSnap?.data()?.manualResult) {
+                    console.log(`[RECONCILE] ⏭️ #${journalId} tiene resultado MANUAL — se respeta, no se reconcilia.`);
+                } else {
+                    db.collection('trade_journal').doc(journalId).set(
+                        { result, rMultiple, ctrader_real_pnl: pnl, balanceAfterUsd: resolved?.balanceAfterUsd ?? null, slHit, reconciled: true, closedAt: new Date().toISOString() },
+                        { merge: true }
+                    ).catch(() => {});
+                }
+                // 🛡️ FIX 16-sep-2026: borrar SIEMPRE el doc de active_trades al reconciliar un
+                // fantasma (antes solo se borraba en el branch manual → los docs cerrados por
+                // stream perdido quedaban para siempre y reaparecían como fantasmas en cada boot).
                 db.collection('active_trades').doc(trade.tradeId).delete().catch(() => {});
                 // 🆕 Dedupe: otros docs abiertos con el mismo posID son duplicados de este cierre.
                 try {
@@ -315,7 +400,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
             const dirNum = typeof side === 'number' ? side : String(side || '').toUpperCase();
             const dir = dirNum === 1 || dirNum === 'BUY' ? 'BUY' : dirNum === 2 || dirNum === 'SELL' ? 'SELL' : null;
             if (!dir) { console.warn('[RECONCILE] sin dirección clara — no se adopta'); continue; }
-            const entry = Number(p.price ?? td.openPrice ?? 0) || null;
+            const entry = Number(td.openPrice ?? p.price ?? 0) || null;
             const slPrice = Number(p.stopLoss ?? 0) || null;
             const tpPrice = Number(p.takeProfit ?? 0) || null;
             const openTs = Number(td.openTimestamp ?? Date.now()) || Date.now();
@@ -438,6 +523,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
                         result: resolved.result,
                         rMultiple: resolved.rMultiple,
                         ctrader_real_pnl: resolved.pnl,
+                        balanceAfterUsd: resolved.balanceAfterUsd,
                         slHit: resolved.slHit,
                         reconciled: true,
                         closedAt: new Date().toISOString(),
@@ -557,6 +643,18 @@ function getCurrentSession(nowMs?: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
     return 'OFF';
 }
 
+// 🆕 sep-2026 (Capa 1 del optimizador del motor): multiplicadores por familia de zona
+// × sesión (config.zoneWeights, tuneado por el hyperopt). 0 = desactivar la familia en
+// esa sesión; default 1 = comportamiento actual. Paridad exacta con backtestEngine.
+function zoneWeightMultLive(config: any, family: string, session: string): number {
+    const zw = (config as any)?.zoneWeights;
+    if (!zw || typeof zw !== 'object') return 1;
+    const perFam = zw[family];
+    if (!perFam || typeof perFam !== 'object') return 1;
+    const v = perFam[session];
+    return typeof v === 'number' ? v : 1;
+}
+
 // Resuelve la config para un ticker: ticker+session > ticker+ALL > global
 function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.dynamicBotConfig & {
     sessionEnabled: boolean;
@@ -585,6 +683,8 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     timesfm?: any;
     /** 🧲 Filtro de correlación cross-asset EWMA (asset_configs/{ticker}.correlationFilter) */
     correlationFilter?: any;
+    /** 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación parametrizado) */
+    biasConfluence?: BiasConfluenceConfig;
     sessions?: Record<string, {
         choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
         choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -646,6 +746,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             riderTf: config.riderTf as string | undefined,
             timesfm: (config as any).timesfm, // 🆕 F1/F2: filtro direccional TimesFM (asset_configs/{ticker}.timesfm)
             correlationFilter: (config as any).correlationFilter, // 🧲 filtro de correlación cross-asset
+            biasConfluence: (config as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo
             sessions: config.sessions as any
         };
     }
@@ -662,8 +763,18 @@ if (db) {
         db.collection('active_trades').get().then((snap: any) => {
             snap.forEach((doc: any) => {
                 globalState.activeTrades.set(doc.id, structuredClone(doc.data() as ActiveTrade));
+                // 🛡️ Regla D: recuperar SL ensanchados del rollover si el bot se reinició en la ventana
+                const x = doc.data() as any;
+                if (x.rolloverDWidened && Number.isFinite(Number(x.rolloverDSlOriginal)) && Number.isFinite(Number(x.rolloverDSlWide))) {
+                    rolloverDWideMap.set(doc.id, { orig: Number(x.rolloverDSlOriginal), wide: Number(x.rolloverDSlWide), tries: 0, at: Number(x.rolloverDWidenedAt) || Date.now() });
+                }
             });
             console.log(`[RADAR] 🧠 Memoria restaurada: ${globalState.activeTrades.size} trades activos cargados.`);
+            // 🛡️ Regla D: si quedaron SL ensanchados por un reinicio y ya pasó la ventana de
+            // restauración, restaurarlos YA (el rollover ya terminó, el spread está normal).
+            if (rolloverDWideMap.size > 0) {
+                applyRolloverRestore(Date.now(), true).catch((e: any) => console.error('[ROLLOVER] ❌ Restore post-reinicio:', e.message));
+            }
 
             // 🏇 Inyectar SMCManager para consultas HTF (RIDER mode y otros usos futuros)
             import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
@@ -754,8 +865,24 @@ if (db) {
                     maxSmartRiskPercent: data.maxSmartRiskPercent,
                     timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
                     correlationFilter: (data as any).correlationFilter, // 🧲 ago-2026: sin esto, asset_configs correlationFilter={shadow:false} NO activa el bloqueo real
+                    biasConfluence: (data as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación)
+                    rolloverBeEnabled: (data as any).rolloverBeEnabled !== false, // 🛡️ Regla A (sep-2026): SL→BE pre-rollover, default ON
+                    rolloverEntryBlock: (data as any).rolloverEntryBlock !== false, // 🛡️ Regla C (sep-2026): bloquear entradas 20:29-21:30 UTC, default ON
+                    disabledReason: (data as any).disabledReason, // 🆕 27-sep-2026: retiro explícito (panel/optimizador) — el roster dinámico lo respeta
                 });
+                // 🛡️ 16-sep-2026: gate ML por activo en CALIENTE (default OFF — los modelos de
+                // 11-ago restan PnL). mlGateEnabled=true en el doc → gate ON en vivo sin restart.
+                setMLGateOverride(doc.id, (doc.data() as any).mlGateEnabled === true);
             });
+            // 🛡️ 16-sep-2026: matriz de correlación DINÁMICA — todo activo habilitado entra
+            // al set EWMA (incluye promovidos del Asset Scout; sin esto, ρ vs no-core = undefined).
+            syncCorrTickers([...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL'));
+            // 🆕 27-sep-2026: roster dinámico del escáner cTrader — todo activo habilitado
+            // (sin retiro explícito vía disabledReason) recibe velas → opera y aparece en la matriz.
+            const rosterTickers = [...globalState.assetSessionConfigs.entries()]
+                .filter(([k, c]) => k !== 'GLOBAL' && (c as any).enabled === true && !(c as any).disabledReason)
+                .map(([k]) => k);
+            syncScannerRoster(rosterTickers).catch(e => console.error('[CTRADER] syncScannerRoster:', (e as any)?.message ?? e));
             const actualAssets = [...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL');
             console.log(`[CONFIG] 🧠 ${actualAssets.length} configs por activo+sesión cargadas:`, actualAssets.join(', '));
         }));
@@ -837,13 +964,15 @@ async function sendTelegramAlert(message: string) {
 
 
 
-function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, ticker: string, state: RadarState, nowMs: number, store: StateStore = globalState, isBacktest: boolean = false) {
+function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, prevHighPrice: number | undefined, prevLowPrice: number | undefined, ticker: string, state: RadarState, nowMs: number, store: StateStore = globalState, isBacktest: boolean = false) {
     const config = getConfigForTicker(ticker, nowMs);
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
 
     const decision = evaluateImpulseCore(leg, currentPrice, highPrice, lowPrice, ticker, state, nowMs, {
-        config, currentSession, sessionConfig
+        config, currentSession, sessionConfig,
+        // 🛡️ sep-2026 fix OTE: vela cerrada para estirar el extreme (paridad live↔backtest)
+        prevHigh: prevHighPrice, prevLow: prevLowPrice,
     });
 
     if (decision.newTrade) {
@@ -1119,7 +1248,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
             const payloadStr = alertText.substring(alertText.indexOf('Payload:') + 8).trim();
             const trendMatch = alertText.match(/Trend:\s*(BUY|SELL)/i);
-            if (trendMatch) state.marketBias[sourceTf] = trendMatch[1].toUpperCase() as 'BUY' | 'SELL';
+            if (trendMatch) {
+                state.marketBias[sourceTf] = trendMatch[1].toUpperCase() as 'BUY' | 'SELL';
+                // 🆕 sep-2026: registrar el momento del cambio de bias (para smartBiasFreshGuard)
+                if (!state.biasTs) state.biasTs = {};
+                state.biasTs[sourceTf] = nowMs;
+            }
 
             try {
                 const rawZones = JSON.parse(payloadStr) as any[];
@@ -1151,6 +1285,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             const lowMatch = alertText.match(/Low:\s*([0-9.,]+)/i);
             const highPrice = highMatch ? parseTVPrice(highMatch[1]) : currentPrice;
             const lowPrice = lowMatch ? parseTVPrice(lowMatch[1]) : currentPrice;
+            // 🛡️ sep-2026 fix OTE: high/low de la última vela CERRADA (estiramiento del
+            // extreme con vela cerrada, paridad live↔backtest). Opcional (backtest no los trae).
+            const prevHighMatch = alertText.match(/PrevHigh:\s*([0-9.,]+)/i);
+            const prevLowMatch = alertText.match(/PrevLow:\s*([0-9.,]+)/i);
+            const prevHighPrice = prevHighMatch ? parseTVPrice(prevHighMatch[1]) : undefined;
+            const prevLowPrice = prevLowMatch ? parseTVPrice(prevLowMatch[1]) : undefined;
+            // 🆕 sep-2026 climax por rango: guardar high/low de la última vela CERRADA (paridad backtest)
+            if (prevHighPrice !== undefined) state.prevClosedHigh = prevHighPrice;
+            if (prevLowPrice !== undefined) state.prevClosedLow = prevLowPrice;
 
             // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice;
@@ -1194,11 +1337,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
                 }
 
-                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, store, isBacktest);
+                const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, prevHighPrice, prevLowPrice, ticker, state, nowMs, store, isBacktest);
                 state.activeImpulseBuy = buyRes.updatedLeg;
                 if (buyRes.triggerOte) { triggerOte = true; oteData = buyRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse BUY → triggerOte=true para ${ticker}`); }
 
-                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, ticker, state, nowMs, store, isBacktest);
+                const sellRes = evaluateImpulse(state.activeImpulseSell, currentPrice, highPrice, lowPrice, prevHighPrice, prevLowPrice, ticker, state, nowMs, store, isBacktest);
                 state.activeImpulseSell = sellRes.updatedLeg;
                 if (sellRes.triggerOte) { triggerOte = true; oteData = sellRes.oteData; console.log(`[SNIPER] 🔫 evaluateImpulse SELL → triggerOte=true para ${ticker}`); }
             }
@@ -1939,7 +2082,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 `OB_${zone.medal}_${zTf}`;
 
                     let tfMultiplier = zTf === '4H' ? 2 : zTf === '1H' ? 1.5 : 1;
-                    let pts = Math.floor(basePts * tfMultiplier * confluenceMultiplier);
+                    // 🆕 sep-2026 (Capa 1): multiplicador por familia × sesión (config.zoneWeights)
+                    const zwFamily = zone.medal?.includes('God') ? 'GOD' :
+                        zone.medal?.includes('CHoCH') ? 'SB' :
+                            zone.medal?.includes('Breaker') ? 'BREAKER' : 'OB';
+                    const zwMultLive = zoneWeightMultLive(config, zwFamily, getCurrentSession(nowMs));
+                    let pts = Math.floor(basePts * tfMultiplier * confluenceMultiplier * zwMultLive);
 
                     if (addScoreEvent(activeScore, { id: eventName, pts, tf: zone.tf || eventTf, ts: nowMs })) {
                         touchedThisPing.push({ zone, eventName, pts });
@@ -1988,6 +2136,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 // 🔍 DIAGNÓSTICO
                 console.log(`[RADAR] 📡 ${prefix} ${currentDirection} ${ticker} TF=${eventTf} price=${state.lastPrice}`);
                 state.marketBias[eventTf] = currentDirection;
+                // 🆕 sep-2026: registrar el momento del cambio de bias (para smartBiasFreshGuard)
+                if (!state.biasTs) state.biasTs = {};
+                state.biasTs[eventTf] = nowMs;
 
                 // 💥 Invalidación estructural acotada: el CHoCH/BOS borra del score CONTRARIO
                 // los eventos de TF de igual o menor jerarquía que el gatillo
@@ -2045,8 +2196,23 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                         if (shouldCreateNew) {
                             let macroTarget: number | null = null;
-                            if (isBuy && state.activeImpulseSell) { macroTarget = state.activeImpulseSell.origin; state.activeImpulseSell = null; }
-                            else if (!isBuy && state.activeImpulseBuy) { macroTarget = state.activeImpulseBuy.origin; state.activeImpulseBuy = null; }
+                            // 🆕 sep-2026 telemetría: los legs pisados por el impulso nuevo morían
+                            // sin registro (el embudo subcontaba muertes → "esperas sin muerte").
+                            // Registrar 'reemplazado' para el leg del mismo sentido (activeLeg) y
+                            // para el del sentido opuesto si existe.
+                            const registerReplacedDeath = (dyingLeg: ImpulseLeg | null) => {
+                                if (!dyingLeg || !dyingLeg.createdAt) return;
+                                let fam = 'Choch'; let tf = '5m';
+                                for (const e of (dyingLeg.chochEvents ?? [])) {
+                                    if (String(e).includes('BOS')) fam = 'Bos';
+                                    const m = String(e).match(/_(\d+M)$/);
+                                    if (m && ['3M', '5M', '15M'].includes(m[1])) tf = m[1].toLowerCase();
+                                }
+                                telemetry.oteDeath(ticker, getCurrentSession(nowMs), `ote${fam}${tf}`, 'reemplazado');
+                            };
+                            registerReplacedDeath(activeLeg);
+                            if (isBuy && state.activeImpulseSell) { registerReplacedDeath(state.activeImpulseSell); macroTarget = state.activeImpulseSell.origin; state.activeImpulseSell = null; }
+                            else if (!isBuy && state.activeImpulseBuy) { registerReplacedDeath(state.activeImpulseBuy); macroTarget = state.activeImpulseBuy.origin; state.activeImpulseBuy = null; }
 
                             const newLeg: ImpulseLeg = {
                                 dir: currentDirection as 'BUY' | 'SELL',
@@ -2185,7 +2351,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
                 if (!activeScore.events.some((e: any) => e.id === `Sweep_${readableTf}` || e.id === `🩸_V-Shape_Absorb_${readableTf}`)) {
                     const basePoints = upperText.includes('ABSORCION') ? 6 : 3;
-                    addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
+                    // 🆕 sep-2026 (Capa 1): multiplicador SWEEP × sesión
+                    const sweepMultLive = zoneWeightMultLive(config, 'SWEEP', getCurrentSession(nowMs));
+                    addedPoints = Math.round(basePoints * (TF_WEIGHT[eventTf] || 1) * sweepMultLive);
                     addedEventId = upperText.includes('ABSORCION') ? `🩸_V-Shape_Absorb_${readableTf}` : `Sweep_${readableTf}`;
                 }
             }
@@ -2200,6 +2368,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     } else if (eventTf === '240') {
                         addedPoints = Math.min(addedPoints, 2); // Cap de 2 puntos en 4H
                     }
+                    // 🆕 sep-2026 (Capa 1): multiplicador DIV × sesión
+                    addedPoints = Math.round(addedPoints * zoneWeightMultLive(config, 'DIV', getCurrentSession(nowMs)));
 
                     addedEventId = `DIV_${readableTf}`;
                 }
@@ -2341,6 +2511,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     }
                                 }
 
+                                // 🆕 sep-2026 biasGateStrict: mismo gate estricto en la re-validación tardía
+                                const biasGateLate = (lateConfig as any).biasGateStrict === true
+                                    && (state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL')
+                                    && (state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL');
+                                if (biasGateLate) {
+                                    fireNow = false;
+                                    console.log(`[RADAR] 🚫 BiasGate estricto (re-val tardía): 4H y 1H en contra en ${ticker}.`);
+                                }
+
                                 if (fireNow) {
                                     telemetry.directEntry(ticker, lateSessionKey, lateTriggerKey);
                                     const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
@@ -2355,6 +2534,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         stopLoss: adjSL.toFixed(dec), tp1: fTP1.toFixed(dec), tp2: fTP2.toFixed(dec),
                                         entryPrice: curPrice,
                                         points: lateTotalPts, events: pendingLeg.chochEvents || activeScore.events.map((e: any) => e.id),
+                                        chochPoints: pendingLeg.chochPoints ?? 0, // 🆕 16-sep: feature para el gate ML extendido
                                         confluenceReport: (pendingLeg.chochReport || '') + `\n🔄 <b>Re-validación Tardía:</b> Leg validado por ${prefix} (+${addedPoints} pts).`,
                                         bestZone: pendingLeg.bestZone || null,
                                         marketBias: { ...state.marketBias },
@@ -2455,16 +2635,28 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 if (caseC_TrapZone > 0) console.log(`[RADAR] ⚠️ Caso C | ${caseC_TrapZone} zona(s) contraria(s) dentro del CHoCH → posible trampa.`);
 
                 const is15MAgainst = state.marketBias['15'] !== currentDirection && state.marketBias['15'] !== 'NEUTRAL';
-                const isMacroAligned = (state.marketBias['D'] === currentDirection) || (state.marketBias['240'] === currentDirection) || (state.marketBias['60'] === currentDirection);
+                // 🛡️ sep-2026: bono de alineación parametrizado por activo (biasConfluence, Paso 1).
+                // Default = escalonado macro (3/3=+5, 2/3=+2, ≤1=0). El set puede incluir TFs rápidos
+                // ('5','15'): el TF del gatillo cuenta como alineado con la dirección por definición.
+                // El optimizador puede sortear esta config por activo (el optimizador propone, nunca aplica).
+                const bcLive = (config as any).biasConfluence ?? DEFAULT_BIAS_CONFLUENCE;
+                const biasAlignedForLive = (tf: string): boolean => {
+                    if (tf === eventTf) return true; // el gatillo es el bias más fresco de su TF
+                    return state.marketBias[tf] === currentDirection;
+                };
+                const macroAlignedCount = bcLive.tfs.reduce((acc: number, tf: string) => acc + (biasAlignedForLive(tf) ? 1 : 0), 0);
                 const isDAgainst = state.marketBias['D'] !== currentDirection && state.marketBias['D'] !== 'NEUTRAL';
                 const is4HAgainst = state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL';
                 const is1HAgainst = state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL';
 
-                let baseBiasPoints = isMacroAligned ? 5 : 0;
+                let baseBiasPoints = macroAlignedCount >= bcLive.minForFull ? bcLive.fullPts
+                    : macroAlignedCount >= bcLive.minForHalf ? bcLive.halfPts : 0;
 
                 // Los bonus VWAP / Macro OTE entran como eventos (pts incluidos en computePoints)
-                if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: 2, tf: eventTf, ts: nowMs });
-                else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: 2, tf: eventTf, ts: nowMs });
+                // 🆕 sep-2026: peso VWAP por activo (hyperopt → Firestore vwapPts), default 2
+                const vwapPtsLive = (config as any).vwapPts ?? 2;
+                if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: vwapPtsLive, tf: eventTf, ts: nowMs });
+                else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: vwapPtsLive, tf: eventTf, ts: nowMs });
 
                 // Sumamos todo el puntaje bruto inicial
                 let macroOteBonus = 0;
@@ -2501,6 +2693,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 }
                 if (isDAgainst) totalPoints -= 2;
                 if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+                // 🆕 sep-2026 biasGateStrict (flag OFF por defecto; para A/B backtest):
+                // bloquea entradas con 4H y 1H en contra (más estricto que la penalización).
+                const biasGateStrict = (config as any).biasGateStrict === true;
+                const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
+                if (biasBlocked) {
+                    console.log(`[RADAR] 🚫 BiasGate estricto: 4H y 1H en contra → entrada bloqueada en ${ticker} ${currentDirection}.`);
+                }
                 // Penalización por zona trampa (Caso C)
                 const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
                 if (trapPenalty > 0) totalPoints -= trapPenalty;
@@ -2633,7 +2832,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         activeLeg.chochReport = confluenceReport;
                         activeLeg.bestZone = bestZone;
 
-                        if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
+                        if (efectiveValidation && triggerEnabled && !biasBlocked && totalPoints >= minPtsRequired) {
                             const decimals = getDecimals(ticker);
                             const currentSession = getCurrentSession(nowMs);
                             const sessionConfig = config.sessions?.[currentSession] ?? (config.sessions as any)?.['ALL'];
@@ -2669,6 +2868,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 dirText: currentDirection === 'BUY' ? 'COMPRA' : 'VENTA',
                                 stopLoss, tp1, tp2, entryPrice: currentPrice,
                                 points: totalPoints, events: [...activeScore.events.map((e: any) => e.id), `${triggerType}_${readableTf}`],
+                                chochPoints: activeLeg?.chochPoints ?? 0, // 🆕 16-sep: feature para el gate ML extendido
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true,
@@ -2742,6 +2942,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5; // ej: si min es 8, 13 es extremo
                                 const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
 
+                                // 🆕 sep-2026 flags de experimento (OFF por defecto, medibles en A/B):
+                                const rrThresholdLive = ((config as any).smartAsiaStrict === true && currentSession === 'ASIA') ? 2.0 : 1.5;
+                                const biasFreshWindowMsLive = (config as any).smartBiasFreshWindowMs ?? 4 * 3600e3;
+                                const biasFreshGuardLive = (config as any).smartBiasFreshGuard === true
+                                    && ((state.biasTs?.['240'] && nowMs - state.biasTs['240'] < biasFreshWindowMsLive)
+                                        || (state.biasTs?.['60'] && nowMs - state.biasTs['60'] < biasFreshWindowMsLive));
+
                                 // 🔧 MEJORA 3: Límite de distancia al origen (Forzar OTE si el SL queda demasiado lejos)
                                 const maxSmartRisk = config.maxSmartRiskPercent !== undefined ? config.maxSmartRiskPercent : 0.15;
                                 const limitByPercent = currentPrice * (maxSmartRisk / 100);
@@ -2753,16 +2960,26 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                                 const maxAllowedRiskDist = latestAtr > 0 ? latestAtr * 1.5 : limitByPercent;
 
+                                // 🆕 sep-2026 climax por rango (paridad backtest): el tag 'Vol: CLIMAX' no
+                                // viaja en los CSVs exportados → el backtest usa rango > 2×ATR. Acá: ambos.
+                                const climaxByRangeLive = latestAtr > 0
+                                    && ((state.prevClosedHigh ?? 0) - (state.prevClosedLow ?? 0)) > latestAtr * 2;
+
                                 if (riskDist > maxAllowedRiskDist) {
                                     const limitType = latestAtr > 0 ? '1.5x ATR' : `${maxSmartRisk}%`;
                                     smartReport = `\n🧠 <b>Modo SMART:</b> Distancia al origen excesiva (${riskDist.toFixed(decimals)} > ${maxAllowedRiskDist.toFixed(decimals)} [${limitType}]). Vela demasiado extendida. Se fuerza retroceso OTE.`;
                                     takeChoch = false;
                                     disableOte = false;
-                                } else if (isClimaxCandle) {
+                                } else if (isClimaxCandle || climaxByRangeLive) {
                                     smartReport = `\n🧠 <b>Modo SMART:</b> Vela de quiebre (CHoCH/BOS) con VOLUMEN EXTREMO detectada. Posible agotamiento. Se fuerza espera a retroceso OTE.`;
                                     takeChoch = false;
                                     disableOte = false;
-                                } else if (rrChoch >= 1.5 || hasExtremeMomentum) {
+                                } else if (biasFreshGuardLive && !hasExtremeMomentum) {
+                                    // 🆕 sep-2026 smartBiasFreshGuard: bias HTF recién cambiado → OTE
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Bias 4H/1H recién cambiado (ventana ${(biasFreshWindowMsLive / 3600e3).toFixed(0)}h). Riesgo de trampa — se espera retroceso OTE.`;
+                                    takeChoch = false;
+                                    disableOte = false;
+                                } else if (rrChoch >= rrThresholdLive || hasExtremeMomentum) {
                                     if (rrChoch < 1.5) {
                                         smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Obstáculo detectado, pero ignorado por MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
                                     } else {
@@ -2876,6 +3093,246 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
 let watchdogStarted = false;
 
+// =========================================================
+// 🛡️ PROTECCIÓN ROLLOVER (Regla A, sep-2026)
+// El broker cierra la vela diaria a las 21:00 UTC (18:00 ARG): el feed muere 20:29→21:00 UTC
+// y el spread se abre a ~15-20 pips (medido sobre M1: barrió 4 SL por spread en 3 semanas, -$133).
+// Regla: en la ventana 20:20-20:28 UTC, toda posición con ganancia flotante suficiente
+// mueve su SL a breakeven + buffer. No cierra nada; solo protege lo que ya está en verde.
+// =========================================================
+const ROLLOVER_BE_START_MIN_UTC = 20 * 60 + 20; // 20:20 UTC (17:20 ARG)
+const ROLLOVER_BE_END_MIN_UTC = 20 * 60 + 28;   // 20:28 UTC — el feed muere 20:29
+const rolloverBeAppliedToday = new Set<string>();
+let rolloverBeDayKey = '';
+
+function rolloverPipSize(ticker: string): number {
+    const t = (ticker || '').toUpperCase();
+    if (t.includes('JPY')) return 0.01;
+    if (t.includes('XAU') || t.includes('GOLD')) return 0.1;
+    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return 1.0;
+    if (t.includes('BTC') || t.includes('ETH')) return 0; // crypto: se compara por % de precio
+    return 0.0001;
+}
+
+function rolloverMinFloat(ticker: string, price: number): number {
+    const t = (ticker || '').toUpperCase();
+    const pip = rolloverPipSize(t);
+    if (pip === 0) return price * 0.005;             // crypto: 0.5%
+    if (pip >= 1) return 5 * pip;                    // índices: 5 puntos
+    if (pip === 0.1) return 10 * pip;                // metales: 10 pips ($1 en oro)
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 5 * pip; // oil: 5 centavos
+    return 2 * pip;                                  // forex: 2 pips
+}
+
+function rolloverBeBuffer(ticker: string): number {
+    const t = (ticker || '').toUpperCase();
+    const pip = rolloverPipSize(t);
+    if (pip === 0) return 0;
+    if (pip >= 0.1) return 5 * pip;                  // índices/metales: buffer de 5 unidades
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 3 * pip;
+    return 1 * pip;                                  // forex/JPY: 1 pip sobre el entry
+}
+
+function roundRolloverPrice(v: number, ticker: string): number {
+    const pip = rolloverPipSize(ticker);
+    if (pip === 0) return Number(v.toFixed(1));
+    if (pip >= 0.1) return Number(v.toFixed(2));
+    if (pip === 0.01) return Number(v.toFixed(3));
+    return Number(v.toFixed(5));
+}
+
+async function applyRolloverProtection(nowMs: number): Promise<void> {
+    if (globalState.activeTrades.size === 0) return;
+    const d = new Date(nowMs);
+    const day = d.getUTCDay();
+    if (day === 0 || day === 6) return; // solo días hábiles
+    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (minOfDay < ROLLOVER_BE_START_MIN_UTC || minOfDay >= ROLLOVER_BE_END_MIN_UTC) return;
+
+    const dayKey = d.toISOString().slice(0, 10);
+    if (rolloverBeDayKey !== dayKey) {
+        rolloverBeDayKey = dayKey;
+        rolloverBeAppliedToday.clear();
+    }
+
+    for (const [tradeId, trade] of globalState.activeTrades) {
+        if (rolloverBeAppliedToday.has(tradeId)) continue;
+        if (!trade.ctraderPositionId || trade.isBacktest) continue; // sin posición real → nada que proteger
+
+        const rawCfg: any = globalState.assetSessionConfigs.get(trade.ticker);
+        if (rawCfg && rawCfg.rolloverBeEnabled === false) continue; // desactivado por activo
+
+        const state = globalState.localRadarStates.get(trade.ticker);
+        const px = state?.lastPrice;
+        if (!px || !Number.isFinite(px)) continue; // sin precio aún → próximo tick reintenta
+
+        const pip = rolloverPipSize(trade.ticker);
+        const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
+        if (floatDist < rolloverMinFloat(trade.ticker, px)) continue; // sin margen todavía
+
+        const buffer = rolloverBeBuffer(trade.ticker);
+        const bePrice = trade.direction === 'BUY' ? trade.entryPrice + buffer : trade.entryPrice - buffer;
+        const improves = trade.direction === 'BUY' ? bePrice > trade.slPrice : bePrice < trade.slPrice;
+        if (!improves) continue;
+
+        try {
+            const { modifyStopLoss } = await import('../services/ctrader.js');
+            const newSl = roundRolloverPrice(bePrice, trade.ticker);
+            const ok = await modifyStopLoss(trade.ctraderPositionId, newSl);
+            if (!ok) {
+                console.warn(`[ROLLOVER] ⚠️ modifyStopLoss falló para ${trade.ticker} #${tradeId} — reintento en el próximo tick`);
+                continue;
+            }
+            trade.slPrice = newSl;
+            rolloverBeAppliedToday.add(tradeId);
+            if (db) {
+                db.collection('active_trades').doc(trade.tradeId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
+                if (trade.journalId) {
+                    db.collection('trade_journal').doc(trade.journalId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
+                }
+            }
+            const floatPips = pip === 0 ? (floatDist / trade.entryPrice) * 100 : floatDist / pip;
+            const msg = `🛡️ <b>PROTECCIÓN ROLLOVER | ${trade.ticker} | ${trade.direction}</b>\n\n` +
+                `📈 Posición en verde (+${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'}) antes del cierre diario del broker (18:00 ARG).\n` +
+                `🛑 SL movido a Breakeven${buffer > 0 ? ' + buffer' : ''}: <b>${newSl}</b>\n` +
+                `ℹ️ El feed del broker muere 17:29-18:00 ARG y el spread se abre ~15-20 pips.\n\n` +
+                `⏰ ${new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })} ARG`;
+            sendTelegramAlert(msg).catch(() => {});
+            console.log(`[ROLLOVER] 🛡️ ${trade.ticker} #${tradeId} ${trade.direction}: SL→BE ${newSl} (flotante +${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'})`);
+        } catch (e: any) {
+            console.error(`[ROLLOVER] ❌ Error protegiendo ${trade.ticker} #${tradeId}:`, e.message);
+        }
+    }
+}
+
+// =========================================================
+// 🛡️ REGLA D (sep-2026, aprobada por Bon tras backtest)
+// A protege ganadoras (SL→BE). D cubre el resto: posiciones perdiendo/marginales.
+// 20:25-20:28 UTC: ensancha SL +20 pips (antes de que muera el feed a las 20:29).
+// 21:15-21:25 UTC: restaura el SL original (feed ya volvió, spread normalizado).
+// Medido: barrido de spread puro mató -$47 (07/09) y movimientos reales máx 11 pips en 7 días → +20 cubre.
+// Riesgo aceptado: si un movimiento REAL supera +20 pips en la ventana, se pierde hasta 20 pips más.
+// =========================================================
+const ROLLOVER_D_WIDEN_PIPS = 20;
+const rolloverDWideMap = new Map<string, { orig: number; wide: number; tries: number; at: number }>();
+
+function rolloverIsOtcFx(ticker: string): boolean {
+    const t = (ticker || '').toUpperCase();
+    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return false; // índices: break diario en otro horario
+    if (t.includes('BTC') || t.includes('ETH')) return false; // crypto: sin rollover diario
+    return true;
+}
+
+async function applyRolloverWiden(nowMs: number): Promise<void> {
+    if (globalState.activeTrades.size === 0) return;
+    const d = new Date(nowMs);
+    const day = d.getUTCDay();
+    if (day === 0 || day === 6) return; // solo días hábiles
+    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (minOfDay < 20 * 60 + 25 || minOfDay >= ROLLOVER_BE_END_MIN_UTC) return; // 20:25-20:28 UTC
+
+    for (const [tradeId, trade] of globalState.activeTrades) {
+        if (rolloverDWideMap.has(tradeId)) continue;
+        if (rolloverBeAppliedToday.has(tradeId)) continue; // A ya la protegió con BE
+        if (!trade.ctraderPositionId || trade.isBacktest) continue;
+        if (!rolloverIsOtcFx(trade.ticker)) continue;
+
+        const rawCfg: any = globalState.assetSessionConfigs.get(trade.ticker);
+        if (rawCfg && rawCfg.rolloverBeEnabled === false) continue; // misma llave que A
+
+        const state = globalState.localRadarStates.get(trade.ticker);
+        const px = state?.lastPrice;
+        if (!px || !Number.isFinite(px)) continue; // sin precio → próximo tick reintenta
+
+        const pip = rolloverPipSize(trade.ticker);
+        const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
+        if (floatDist >= rolloverMinFloat(trade.ticker, px)) continue; // A puede cubrirla → no ensanchar
+
+        const widen = ROLLOVER_D_WIDEN_PIPS * pip;
+        const wideSl = trade.direction === 'BUY' ? trade.slPrice - widen : trade.slPrice + widen;
+        const origSl = trade.slPrice;
+
+        try {
+            const { modifyStopLoss } = await import('../services/ctrader.js');
+            const newSl = roundRolloverPrice(wideSl, trade.ticker);
+            const ok = await modifyStopLoss(trade.ctraderPositionId, newSl);
+            if (!ok) {
+                console.warn(`[ROLLOVER-D] ⚠️ widen falló para ${trade.ticker} #${tradeId} — reintento en el próximo tick`);
+                continue;
+            }
+            trade.slPrice = newSl;
+            rolloverDWideMap.set(tradeId, { orig: origSl, wide: newSl, tries: 0, at: nowMs });
+            if (db) {
+                db.collection('active_trades').doc(trade.tradeId).update({
+                    slPrice: newSl,
+                    rolloverDWidened: true,
+                    rolloverDSlOriginal: origSl,
+                    rolloverDSlWide: newSl,
+                    rolloverDWidenedAt: nowMs,
+                }).catch(() => {});
+            }
+            const floatPips = pip === 0 ? 0 : floatDist / pip;
+            const msg = `🛡️ <b>REGLA D (ROLLOVER) | ${trade.ticker} | ${trade.direction}</b>\n\n` +
+                `📉 Posición en rojo (${floatPips.toFixed(1)} pips) — SL ensanchado <b>+${ROLLOVER_D_WIDEN_PIPS} pips</b> para atravesar el cierre diario del broker.\n` +
+                `🛑 SL temporal: <b>${newSl}</b> (original: ${origSl})\n` +
+                `🔄 Se restaura automáticamente ~18:15 ARG, cuando el spread se normaliza.`;
+            sendTelegramAlert(msg).catch(() => {});
+            console.log(`[ROLLOVER-D] 🛡️ ${trade.ticker} #${tradeId} ${trade.direction}: SL ${origSl} → ${newSl} (widen +20 pips, se restaura 21:15-21:25 UTC)`);
+        } catch (e: any) {
+            console.error(`[ROLLOVER-D] ❌ Error ensanchando ${trade.ticker} #${tradeId}:`, e.message);
+        }
+    }
+}
+
+async function applyRolloverRestore(nowMs: number, force = false): Promise<void> {
+    if (rolloverDWideMap.size === 0) return;
+    const d = new Date(nowMs);
+    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (!force && (minOfDay < 21 * 60 + 15 || minOfDay >= 21 * 60 + 25)) return; // 21:15-21:25 UTC
+
+    for (const [tradeId, entry] of [...rolloverDWideMap]) {
+        const trade = globalState.activeTrades.get(tradeId);
+        if (!trade) {
+            // Ya cerró (barrió el SL ensanchado o TP) → solo limpiar el registro
+            rolloverDWideMap.delete(tradeId);
+            if (db) db.collection('active_trades').doc(tradeId).update({ rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
+            continue;
+        }
+        if (trade.slPrice !== entry.wide) {
+            // Alguien lo movió en el medio (A→BE, TP1→midpoint, trail) → no restaurar
+            rolloverDWideMap.delete(tradeId);
+            if (db) db.collection('active_trades').doc(tradeId).update({ rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
+            console.log(`[ROLLOVER-D] ℹ️ ${trade.ticker} #${tradeId}: SL ya fue movido por otro gestor (${trade.slPrice}) — no se restaura.`);
+            continue;
+        }
+        if (entry.tries >= 3) {
+            console.warn(`[ROLLOVER-D] ⚠️ ${trade.ticker} #${tradeId}: 3 intentos de restauración fallidos — se limpia el registro, SL queda ensanchado (revisar manual).`);
+            rolloverDWideMap.delete(tradeId);
+            continue;
+        }
+        entry.tries++;
+        try {
+            const { modifyStopLoss } = await import('../services/ctrader.js');
+            const ok = await modifyStopLoss(trade.ctraderPositionId!, entry.orig);
+            if (!ok) {
+                console.warn(`[ROLLOVER-D] ⚠️ restore falló para ${trade.ticker} #${tradeId} (intento ${entry.tries}/3) — reintento en el próximo tick`);
+                continue;
+            }
+            trade.slPrice = entry.orig;
+            rolloverDWideMap.delete(tradeId);
+            if (db) {
+                db.collection('active_trades').doc(trade.tradeId).update({ slPrice: entry.orig, rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
+                if (trade.journalId) {
+                    db.collection('trade_journal').doc(trade.journalId).update({ slPrice: entry.orig, rolloverDRestored: true }).catch(() => {});
+                }
+            }
+            console.log(`[ROLLOVER-D] ✅ ${trade.ticker} #${tradeId}: SL restaurado ${entry.wide} → ${entry.orig} (rollover terminado)`);
+        } catch (e: any) {
+            console.error(`[ROLLOVER-D] ❌ Error restaurando ${trade.ticker} #${tradeId}:`, e.message);
+        }
+    }
+}
+
 export function startWatchdog() {
     if (watchdogStarted) return;
     watchdogStarted = true;
@@ -2884,11 +3341,35 @@ export function startWatchdog() {
         try {
             const fetch = (await import('node-fetch')).default;
             const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
-            if (!FINNHUB_API_KEY) { console.warn('[NEWS FILTER] FINNHUB_API_KEY no configurada. VIX check desactivado.'); return; }
-            const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
-            const data: any = await res.json();
-            if (data.c && data.c > 30) {
-                console.log(`[NEWS FILTER] VIX = ${data.c} (>30). KILLSWITCH VIX ACTIVADO.`);
+            let vix: number | null = null;
+            let source = '';
+            // 1) Finnhub (rápido, pero el plan free NO trae índices → devuelve c:0)
+            if (FINNHUB_API_KEY) {
+                try {
+                    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=VIX&token=${FINNHUB_API_KEY}`);
+                    const data: any = await res.json();
+                    if (data && Number(data.c) > 0) { vix = Number(data.c); source = 'finnhub'; }
+                } catch { /* cae al fallback */ }
+            }
+            // 2) FIX (07-sep-2026): fallback Yahoo Finance ^VIX — sin key, sin plan premium.
+            //    Finnhub free devuelve c:0 para VIX (índices fuera del plan) → el killswitch VIX
+            //    quedaba muerto. Yahoo entrega el precio en regularMarketPrice.
+            if (vix === null) {
+                try {
+                    const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d', {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (JARVIS-VIX-fallback)' },
+                    });
+                    const data: any = await res.json();
+                    const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+                    if (price && Number(price) > 0) { vix = Number(price); source = 'yahoo'; }
+                } catch { /* sin VIX hoy */ }
+            }
+            if (vix === null) {
+                console.warn('[NEWS FILTER] ⚠️ VIX no disponible (Finnhub c:0 + Yahoo falló). Killswitch VIX sin cambios.');
+                return; // 🛡️ no tocar el killswitch si no hay dato confiable
+            }
+            if (vix > 30) {
+                console.log(`[NEWS FILTER] VIX = ${vix.toFixed(2)} (>30, vía ${source}). KILLSWITCH VIX ACTIVADO.`);
                 globalState.vixKillswitchUntil = Date.now() + 20 * 60 * 1000;
             } else {
                 globalState.vixKillswitchUntil = 0;
@@ -2923,6 +3404,29 @@ export function startWatchdog() {
     setInterval(scheduleDailySummary, 5 * 60 * 1000);
     scheduleDailySummary();
 
+    // 🛡️ PROTECCIÓN ROLLOVER (sep-2026): 3 reglas en un solo tick de 30s.
+    // A: 20:20-20:28 UTC — ganadoras → SL a BE+buffer (barrió 4 SL por spread en 3 semanas, -$133).
+    // D: 20:25-20:28 UTC — perdedoras → SL ensanchado +20 pips (feed muere 20:29, spread ~15-20 pips).
+    // D: 21:15-21:25 UTC — restauración del SL original (feed vuelto, spread normalizado).
+    // Desactivar por activo: asset_configs → rolloverBeEnabled: false (controla A y D).
+    setInterval(() => {
+        const now = Date.now();
+        applyRolloverProtection(now).catch((e: any) => console.error('[ROLLOVER] ❌', e.message));
+        applyRolloverWiden(now).catch((e: any) => console.error('[ROLLOVER-D] ❌', e.message));
+        applyRolloverRestore(now).catch((e: any) => console.error('[ROLLOVER-D] ❌ restore:', e.message));
+    }, 30 * 1000);
+    console.log('[ROLLOVER] 🛡️ Protección Rollover ACTIVA: Regla A (SL→BE 20:20-20:28 UTC) + Regla D (widen +20 pips 20:25-20:28 UTC, restore 21:15-21:25 UTC).');
+
+    // 🆕 v7.9: helper "mercado FX cerrado" (tz del VPS = Europe/Berlin)
+    const isFxMarketClosed = (d: Date): boolean => {
+        const day = d.getDay();
+        const h = d.getHours();
+        if (day === 6) return true;            // sábado
+        if (day === 0) return h < 23;          // domingo antes de la apertura
+        if (day === 5) return h >= 22;         // viernes tras el cierre (horario de verano)
+        return false;
+    };
+
     setInterval(() => {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
@@ -2949,17 +3453,17 @@ export function startWatchdog() {
             }
         }
 
+        // 🔔 Alerta proactiva de desconexión (v7.9: aviso REAL por Telegram, no solo log)
+        const disconnectedFeed: string[] = [];
         for (const [ticker, lastSeen] of globalState.tickerLastSeen) {
             const inactiveMin = Math.round((now - lastSeen) / 60000);
             if (now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
-                // 🔔 Alerta proactiva de desconexión
                 const state = globalState.localRadarStates.get(ticker);
                 const lastHb = state?.lastHeartbeat || 0;
                 // 🛡️ v5.5: Ignorar timestamps "viejos" que vienen de Firebase post-reinicio
                 // Si lastHeartbeat es 0 o menor que el timestamp de hace 2 horas, son datos inválidos
                 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
                 const hbAge = (lastHb > 0 && lastHb > (now - 86400000)) ? (now - lastHb) : 0;
-                const hbInactiveMin = Math.round(hbAge / 60000);
 
                 // 🛡️ v5.5: Solo enviar alerta de desconexión si realmente está desconectado
                 // (>2 horas sin heartbeat Y sin otros eventos en el mismo período)
@@ -2967,7 +3471,16 @@ export function startWatchdog() {
 
                 // 🛡️ v5.5.1: Solo alertar 1 vez por desconexión — no spamear
                 globalState.tickerLastSeen.delete(ticker); // Lo borramos para que no vuelva a alertar
-                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min. Alerta Silenciosa.`);
+                console.warn(`[WATCHDOG] 🔌 ${ticker}: DESCONECTADO hace ${inactiveMin} min.`);
+                disconnectedFeed.push(`${ticker} (${inactiveMin} min)`);
+            }
+        }
+        // 🆕 v7.9: aviso por Telegram agrupado, solo con mercado abierto
+        if (disconnectedFeed.length > 0) {
+            if (!isFxMarketClosed(new Date())) {
+                sendTelegramAlert(`⚠️ [WATCHDOG] Feed desconectado hace >2h: ${disconnectedFeed.join(', ')}.`);
+            } else {
+                console.warn(`[WATCHDOG] 🔌 Desconectados durante el finde (mercado cerrado), sin Telegram: ${disconnectedFeed.join(', ')}`);
             }
         }
     }, WATCHDOG_INTERVAL_MS);
@@ -2990,6 +3503,17 @@ export function updateTradePositionId(tradeId: string, positionId: string) {
             if (db) db.collection('active_trades').doc(tradeId).update({ ctraderPositionId: positionId }).catch(() => { });
         }).catch(() => { });
     }
+}
+
+// 🛡️ REGLA C (sep-2026): ventana de rollover del broker — entradas nuevas bloqueadas
+// 20:29-21:30 UTC (17:29-18:30 ARG), días hábiles (feed muerto 20:29-21:00 + pico de
+// spread ~19 pips + residuo). Backtest A/B 10 activos: ~neutro (+0.4R/8m) y evita el
+// incidente real 10-sep (GBPJPY entró en la reapertura, SL/TP rechazado, -30 pips).
+function isRolloverEntryWindow(nowMs: number): boolean {
+    const d = new Date(nowMs);
+    const dow = d.getUTCDay();
+    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return dow >= 1 && dow <= 5 && mins >= 20 * 60 + 29 && mins <= 21 * 60 + 30;
 }
 
 async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx: any) {
@@ -3028,6 +3552,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         if (!config.sessionEnabled) {
             console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
             state.lastGatillo.status = 'BLOCKED_SESSION';
+            logBlockedSignal('SESSION', oteData, nowMs);
             safeSet(state).catch(() => { });
             // Limpiar si se pre-creó en evaluateImpulse (para OTE)
             store.activeTrades.delete(oteData.tradeId);
@@ -3040,6 +3565,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         if ((currentSession === 'LONDON' || currentSession === 'NY') && minutesSinceSessionOpen(nowMs) < warmupMin) {
             console.log(`[RADAR] 🚫 Trading bloqueado por warmup de sesión (${currentSession}) para ${ticker}`);
             state.lastGatillo.status = 'BLOCKED_WARMUP';
+            logBlockedSignal('WARMUP', oteData, nowMs);
             safeSet(state).catch(() => { });
             store.activeTrades.delete(oteData.tradeId);
             if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
@@ -3050,6 +3576,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         if (isGlobalKilled) {
             console.log(`[GLOBAL KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por riesgo global consolidado de la cuenta.`);
             state.lastGatillo.status = 'BLOCKED_GLOBAL';
+            logBlockedSignal('GLOBAL_KILLSWITCH', oteData, nowMs);
             safeSet(state).catch(() => { });
             // Limpiar si se pre-creó en evaluateImpulse (para OTE)
             store.activeTrades.delete(oteData.tradeId);
@@ -3061,6 +3588,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         if (await evaluateAssetKillswitch(ticker, nowMs, store, isBacktest)) {
             console.log(`[ASSET KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por límite de riesgo del activo.`);
             state.lastGatillo.status = 'BLOCKED_ASSET';
+            logBlockedSignal('ASSET_KILLSWITCH', oteData, nowMs);
             safeSet(state).catch(() => { });
             store.activeTrades.delete(oteData.tradeId);
             if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
@@ -3071,6 +3599,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             const remainingMin = Math.round((store.streakKillswitchUntil - nowMs) / 60000);
             console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por racha perdedora (${store.consecutiveLosses} pérdidas). Restan ${remainingMin} min de bloqueo.`);
             state.lastGatillo.status = 'BLOCKED_RACHA';
+            logBlockedSignal('RACHA', oteData, nowMs);
             safeSet(state).catch(() => { });
             // Limpiar si se pre-creó en evaluateImpulse (para OTE)
             store.activeTrades.delete(oteData.tradeId);
@@ -3081,6 +3610,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             const remainingMin = Math.round((store.vixKillswitchUntil - nowMs) / 60000);
             console.log(`[KILLSWITCH] ⛔ Setup ${ticker} ${oteData.direction} IGNORADO por VIX>30. Restan ${remainingMin} min de bloqueo.`);
             state.lastGatillo.status = 'BLOCKED_VIX';
+            logBlockedSignal('VIX', oteData, nowMs);
             safeSet(state).catch(() => { });
             // Limpiar si se pre-creó en evaluateImpulse (para OTE)
             store.activeTrades.delete(oteData.tradeId);
@@ -3127,6 +3657,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             } else if (tfmDecision.action === 'REJECT') {
                 appendTimesfmAudit(tfmCfg.auditPath ?? 'logs/timesfm_audit.jsonl', tfmAudit);
                 state.lastGatillo.status = 'BLOCKED_TIMESFM';
+            logBlockedSignal('TIMESFM', oteData, nowMs);
                 safeSet(state).catch(() => { });
                 store.activeTrades.delete(oteData.tradeId);
                 if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
@@ -3167,6 +3698,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, store, isBacktest, activeSessionId);
                 if (currentConsecutiveLosses >= sessionConfig.maxSellLosses) {
                     console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+            logBlockedSignal('MCL_SELL', oteData, nowMs);
                     state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                     safeSet(state).catch(() => { });
                     store.activeTrades.delete(oteData.tradeId);
@@ -3187,6 +3719,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const dailySells = await countDailySellsForTicker(ticker, nowMs, isBacktest, activeSessionId);
                 if (dailySells >= sellConfig.maxSellsPerDay) {
                     console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
+            logBlockedSignal('SELL_LIMIT', oteData, nowMs);
                     state.lastGatillo!.status = 'BLOCKED_SELL_LIMIT';
                     safeSet(state).catch(() => { });
                     store.activeTrades.delete(oteData.tradeId);
@@ -3215,6 +3748,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, store, isBacktest, activeSessionId);
                 if (currentConsecutiveLosses >= sessionConfig.maxBuyLosses) {
                     console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
+                    logBlockedSignal('MCL_BUY', oteData, nowMs);
                     state.lastGatillo!.status = 'BLOCKED_MCL_LIMIT';
                     safeSet(state).catch(() => { });
                     store.activeTrades.delete(oteData.tradeId);
@@ -3235,6 +3769,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const dailyBuys = await countDailyBuysForTicker(ticker, nowMs, isBacktest, activeSessionId);
                 if (dailyBuys >= buyConfig.maxBuysPerDay) {
                     console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
+            logBlockedSignal('BUY_LIMIT', oteData, nowMs);
                     state.lastGatillo!.status = 'BLOCKED_BUY_LIMIT';
                     safeSet(state).catch(() => { });
                     store.activeTrades.delete(oteData.tradeId);
@@ -3281,7 +3816,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             tradeId: String(cTraderPos.positionId || cTraderPos.id || 'CTRADER_MOCK'),
                             ticker: ticker,
                             direction: (cTraderDir || 'SELL') as 'BUY' | 'SELL',
-                            entryPrice: cTraderPos.entryPrice || cTraderPos.price || 0,
+                            entryPrice: cTraderPos.openPrice ?? cTraderPos.entryPrice ?? cTraderPos.price ?? 0,
                             tp1Price: 0, tp2Price: 0, slPrice: 0,
                             tp1Hit: false, tp2Hit: false,
                             score: 0, // Score 0 significa que cualquier señal nueva le ganará en SAR
@@ -3308,6 +3843,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             if (existingTradeForTicker.direction === oteData.direction) {
                 // Mismo sentido -> Bloquear para evitar piramidación
                 console.log(`[ANTI-PYRAMID] ⛔ Señal ${oteData.direction} ignorada para ${ticker}: ya hay una operación activa en la misma dirección.`);
+            logBlockedSignal('ANTIPYRAMID', oteData, nowMs);
                 cleanupPrecreatedTrade();
                 if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_ANTIPYRAMID';
                 safeSet(state).catch(() => { });
@@ -3321,6 +3857,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 } else {
                     // Puntaje menor o igual -> Ignorar la nueva señal
                     console.log(`[SAR] ⛔ Reversión Denegada para ${ticker}: Nueva señal ${oteData.direction} (Score: ${oteData.points}) no supera a la activa (Score: ${existingTradeForTicker.score}).`);
+            logBlockedSignal('SAR_DENIED', oteData, nowMs);
                     cleanupPrecreatedTrade();
                     if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_SAR_DENIED';
                     safeSet(state).catch(() => { });
@@ -3353,6 +3890,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     } else {
                         console.log(`[CORRELATION] ⛔ ${ticker} ${oteData.direction} BLOQUEADO por correlación: ${detail}`);
                         state.lastGatillo.status = 'BLOCKED_CORRELATION';
+            logBlockedSignal('CORRELATION', oteData, nowMs);
                         safeSet(state).catch(() => { });
                         store.activeTrades.delete(oteData.tradeId);
                         if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
@@ -3370,6 +3908,48 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             }
         }
 
+        // 🧠 ML GATE EXTENDIDO (16-sep-2026): audita TODOS los gatillos — directas incluidas.
+        // - OTE: el veto real sigue en AlphaModel (paridad de motor intacta); acá solo se audita.
+        // - DIRECTAS (isChochEntry): acá se audita Y se bloquea si el gate del activo está ON
+        //   (mlGateEnabled=true, panel GATE ML) y el modelo rechaza. Default OFF → telemetría.
+        if (!isBacktest) {
+            try {
+                const { predict: mlPredictAll, isMLActive: mlActiveAll } = await import('../engine/MLFilter.js');
+                if (mlActiveAll()) {
+                    const tfKey = String(oteData.tf || '5m').toLowerCase().includes('15') ? '15'
+                        : String(oteData.tf || '5m').toLowerCase().includes('3') ? '3' : '5';
+                    const mlPredAll = mlPredictAll(
+                        state, oteData.direction as 'BUY' | 'SELL', nowMs,
+                        Number((oteData as any).chochPoints ?? 0), Number(oteData.points ?? 0), tfKey, ticker,
+                        { auditOnly: true },
+                    );
+                    if (mlPredAll) {
+                        const gateOn = (getConfigForTicker(ticker, nowMs) as any)?.mlGateEnabled === true;
+                        const entryKind = oteData.isChochEntry ? 'DIRECTA' : 'OTE';
+                        console.log(`[ML-AUDIT] ${ticker} ${oteData.direction} (${entryKind}, ${oteData.points}pts): prob=${mlPredAll.probability.toFixed(3)} umbral=${mlPredAll.threshold} gate=${gateOn ? 'ON' : 'OFF'} → ${mlPredAll.approved ? 'APROBADO' : 'RECHAZADO'}`);
+                        try {
+                            fs.appendFileSync('/opt/JARVIS/logs/ml_audit_all.jsonl', JSON.stringify({
+                                ts: nowMs, ticker, direction: oteData.direction, entryType: entryKind,
+                                points: oteData.points, prob: mlPredAll.probability,
+                                threshold: mlPredAll.threshold, approved: mlPredAll.approved, gateOn,
+                            }) + '\n');
+                        } catch { /* audit best-effort */ }
+                        if (oteData.isChochEntry && gateOn && !mlPredAll.approved) {
+                            console.log(`[ML] ⛔ ${ticker} ${oteData.direction} DIRECTA BLOQUEADA por ML (prob=${mlPredAll.probability.toFixed(3)} < ${mlPredAll.threshold})`);
+                            if (state.lastGatillo) state.lastGatillo.status = 'BLOCKED_ML_DIRECTA';
+            logBlockedSignal('ML_DIRECTA', oteData, nowMs);
+                            safeSet(state).catch(() => { });
+                            store.activeTrades.delete(oteData.tradeId);
+                            if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                            return;
+                        }
+                    }
+                }
+            } catch (e: any) {
+                console.warn(`[ML-AUDIT] ⚠️ error en gate extendido: ${e.message}`);
+            }
+        }
+
         const fingerprint = `OTE_${ticker}_${oteData.direction}_${oteData.tp1}`;
         console.log(`[SNIPER] 🔍 Verificando duplicado: ${fingerprint}`);
         if (!isDuplicate(fingerprint, nowMs)) {
@@ -3379,8 +3959,6 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
             let kronosAnnotation = '';
             let kronosVerdict: string = 'SKIP';
-            let swarmAnnotation = '';
-            let swarmConsensus: string = 'SKIP';
             let sessionId: string | undefined;
 
             if (isBacktest) {
@@ -3404,53 +3982,6 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         ? `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).details}`
                         : `\n\n🤖 <b>Kronos AI:</b> ${(kRes as any).isConfirmed ? '🟢 CONFIRMADO' : '🟠 DIVERGENCIA'}\n${(kRes as any).details}`;
                 } catch { kronosVerdict = 'ERROR'; }
-
-                // 🐝 Enjambre de IA (solo si Kronos CONFIRMA y puntaje ≥ 8)
-                if (kronosVerdict === 'CONFIRMED' && oteData.points >= 8) {
-                    try {
-                        const fetch = (await import('node-fetch')).default;
-                        const swarmRes = await fetch('http://127.0.0.1:8001/api/analyze-trade', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                ticker,
-                                direction: oteData.direction,
-                                entryPrice: oteData.entryPrice,
-                                stopLoss: parseFloat(oteData.stopLoss),
-                                tp1Price: parseFloat(oteData.tp1),
-                                tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
-                        : undefined,
-                                points: oteData.points,
-                                events: oteData.events || [],
-                                confluenceReport: oteData.confluenceReport || '',
-                                marketBias: oteData.marketBias || {},
-                                consecutiveLosses: store.consecutiveLosses,
-                                winRate: 0,
-                                kronosVerdict: kronosVerdict,
-                                kronosDetails: kronosRawDetails
-                            }),
-                            signal: AbortSignal.timeout(8000) // ⚡ Reducido de 15s a 8s para scalping
-                        });
-                        if (swarmRes.ok) {
-                            const swarm = await swarmRes.json() as any;
-                            swarmConsensus = swarm.decision === 'EJECUTAR' ? 'APPROVED' : 'REJECTED';
-                            const voteCount = swarm.votes?.filter((v: any) => v.decision === 'APROBADO').length || 0;
-                            const totalVotes = swarm.votes?.length || 0;
-                            swarmAnnotation = `\n\n🗳️ <b>Votación Multi-IA (DeepSeek):</b> ${swarmConsensus === 'APPROVED' ? '🟢 APROBADO' : '🔴 RECHAZADO'} (${voteCount}/${totalVotes})\n`;
-                            if (swarm.votes) {
-                                for (const v of swarm.votes) {
-                                    const icon = v.decision === 'APROBADO' ? '✅' : '❌';
-                                    swarmAnnotation += `${icon} <b>${v.agent}:</b> ${v.decision === 'APROBADO' ? 'APPROVE' : 'REJECT'} — ${v.reason.split('\n')[0].substring(0, 120)}\n`;
-                                }
-                            }
-                            swarmAnnotation += `⚖️ <b>Juez:</b> ${swarm.summary || 'Sin resumen'}`;
-                        }
-                    } catch (swarmErr: any) {
-                        swarmConsensus = 'ERROR';
-                        console.log(`[SWARM] AI Bridge no disponible: ${swarmErr.message}`);
-                    }
-                }
             }
 
             const isChoch = oteData.events?.some((e: string) => e.includes('CHoCH🚀'));
@@ -3489,7 +4020,6 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             msg += `🚀 Take Profit 2 (Externo): ${oteData.tp2}\n`;
 
             msg += kronosAnnotation;
-            msg += swarmAnnotation;
 
             console.log(`[SNIPER] 📨 Mensaje FRANCOTIRADOR construido para ${ticker} (${msg.length} chars). isBacktest=${isBacktest}`);
 
@@ -3508,7 +4038,6 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     grade: oteData.points >= 8 ? 'A+' : 'B', points: oteData.points, events: oteData.events,
                     macroContext: oteData.marketBias,
                     kronosVerdict: isBacktest ? 'SKIP_BT' : kronosVerdict,
-                    mixtureConsensus: swarmConsensus,
                     timestamp: nowMs,
                     mode: isBacktest ? 'backtesting' : 'live',
                     sessionId,
@@ -3583,6 +4112,13 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             if (nowLive < store.vixKillswitchUntil) return 'BLOCKED_VIX';
                             // 🌊 TickFlow: spread anómalo = probable noticia/iliquidez → no ejecutar
                             if (tickFlow.isSpreadAnomalous(ticker)) return 'BLOCKED_SPREAD';
+                            // 🛡️ REGLA C (sep-2026): bloquear entradas en la ventana de rollover
+                            // 20:29-21:30 UTC (17:29-18:30 ARG). Flag por activo (default ON).
+                            if ((cfg as any).rolloverEntryBlock !== false && isRolloverEntryWindow(nowLive)) {
+                                console.log(`[ROLLOVER-C] 🛡️ Entrada ${ticker} bloqueada: ventana de rollover (17:29-18:30 ARG).`);
+                                logBlockedSignal('ROLLOVER', oteData, nowMs);
+                                return 'BLOCKED_ROLLOVER';
+                            }
                             return null;
                         };
 
@@ -3592,7 +4128,19 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             if (state.lastGatillo) state.lastGatillo.status = blockedBy;
                             safeSet(state).catch(() => { });
                             store.activeTrades.delete(oteData.tradeId);
-                            if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                            if (db && !isBacktest) {
+                                db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+                                // 🛡️ FIX 24-sep-2026: marcar el journal como ABORTED/SKIP (igual que
+                                // el path de error de ejecución). Antes el doc quedaba SIN_STATUS
+                                // para siempre (medido: K4OKQO y L7BVX2, bloqueadas por rollover).
+                                if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
+                                    db.collection('trade_journal').doc(journalId).update({
+                                        result: 'SKIP',
+                                        ctraderStatus: 'ABORTED',
+                                        skipReason: `Ejecución bloqueada por killswitch (${blockedBy}) antes de llegar al broker.`,
+                                    }).catch(() => { });
+                                }
+                            }
                             return;
                         }
 
@@ -3621,10 +4169,23 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                         if (sarPendingClose.ctraderPositionId) {
                                             const ctrader = await import('../services/ctrader.js');
                                             await ctrader.closePosition(sarPendingClose.ctraderPositionId);
+                                            // 🛡️ 24-sep-2026: PnL REAL del cierre por reversión (antes solo
+                                            // 'REVERSAL' sin PnL → quedaba '—' para siempre en el Diario).
+                                            const jid = sarPendingClose.journalId;
+                                            const fin = await finalizeClosedPositionFromDeals(sarPendingClose.ctraderPositionId, sarPendingClose);
+                                            if (fin && jid && db && !isBacktest) {
+                                                db.collection('trade_journal').doc(jid).set(
+                                                    { result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reversalClosed: true, reconciled: true, closedAt: new Date().toISOString() },
+                                                    { merge: true }
+                                                ).catch(() => { });
+                                                console.log(`[SAR] ✅ #${jid} finalizado por reversión: ${fin.result} (pnl=$${fin.pnl.toFixed(2)}, ${fin.rMultiple}R)`);
+                                            } else if (jid) {
+                                                recordResult(jid, 'REVERSAL').catch(() => { });
+                                                console.warn(`[SAR] ⚠️ Sin deals tras cierre por reversión #${jid} — queda REVERSAL sin PnL.`);
+                                            }
                                         }
                                         store.activeTrades.delete(sarPendingClose.tradeId);
                                         if (db && !isBacktest) db.collection('active_trades').doc(sarPendingClose.tradeId).delete().catch(() => { });
-                                        if (sarPendingClose.journalId) recordResult(sarPendingClose.journalId, 'REVERSAL').catch(() => { });
                                     } catch (e) {
                                         console.error('[SAR] Error cierre diferido automático:', e);
                                     }
@@ -3685,7 +4246,6 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 events: oteData.events || [],
                                 confluenceReport: oteData.confluenceReport || '',
                                 kronosVerdict: kronosVerdict,
-                                swarmConsensus: swarmConsensus,
                                 alertMessage: msg,
                                 journalId: typeof journalId === 'string' ? journalId : undefined,
                                 isChochEntry: oteData.isChochEntry,
