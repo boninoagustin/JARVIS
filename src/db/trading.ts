@@ -307,6 +307,26 @@ export async function reconcileCTraderPositions(): Promise<void> {
         }
         const openIds = new Set(open.map((p: any) => String(p.positionId)));
         const GRACE_MS = 5 * 60 * 1000;
+
+        // 🛡️ FIX (30-sep-2026): barrido de huérfanos SIN ejecución — trades activos sin
+        // posID (bloqueados por killswitch pre-ejecución, confirmaciones nunca tocadas,
+        // etc.) que quedaron colgados en RAM/Firestore para siempre (caso real: EMR98C
+        // XAUUSD y R33DI4 GBPJPY del 28-sep). Antigüedad > 2h → eliminar y marcar SKIP.
+        const nowTs = Date.now();
+        for (const [ramId, ramTrade] of [...globalState.activeTrades.entries()]) {
+            if (ramTrade.isBacktest || ramTrade.ctraderPositionId) continue;
+            const ageMs = nowTs - Number(ramTrade.timestamp || 0);
+            if (ageMs > 2 * 60 * 60 * 1000) {
+                console.log(`[RECONCILE] 🧹 Huérfano sin ejecución #${ramId} (${ramTrade.ticker}, ${(ageMs / 3600000).toFixed(1)}h) eliminado de active_trades.`);
+                globalState.activeTrades.delete(ramId);
+                if (db) {
+                    db.collection('active_trades').doc(ramId).delete().catch(() => { });
+                    const jid = (ramTrade as any).journalId;
+                    if (jid) db.collection('trade_journal').doc(jid).update({ result: 'SKIP', ctraderStatus: 'ABORTED', skipReason: 'Huérfano sin ejecución (barrido del reconciler).' }).catch(() => { });
+                }
+            }
+        }
+
         for (const trade of [...globalState.activeTrades.values()]) {
             if (trade.isBacktest || !trade.ctraderPositionId) continue;
             if (Date.now() - trade.timestamp < GRACE_MS) continue; // recién abierto → gracia
@@ -1859,7 +1879,27 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                                 // Posición ya cerrada en cTrader → el ExecutionEvent registró el
                                 // resultado real (y el reconciler limpia cualquier residuo). Nada que hacer aquí.
-                                console.log(`[TP2] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — resultado lo registra el evento real.`);
+                                // 🛡️ FIX (30-sep-2026): si el evento de cierre NO llega (se pierde en
+                                // restarts/gaps de conexión), este loop spamea para siempre y el trade
+                                // queda fantasma (caso real: XTIUSD 30-sep, loop "[TP2] ✅" eterno).
+                                // Fallback: tras 8 detecciones seguidas, finalizar con los deals reales.
+                                (trade as any).closeMissedCount = ((trade as any).closeMissedCount || 0) + 1;
+                                if ((trade as any).closeMissedCount > 8) {
+                                    console.log(`[TP2] 🔧 ${ticker} #${tradeId}: evento de cierre no llegó tras ${(trade as any).closeMissedCount} detecciones — finalizando con deals reales.`);
+                                    try {
+                                        const fin = await finalizeClosedPositionFromDeals(String(trade.ctraderPositionId), trade);
+                                        const jid = (trade as any).journalId;
+                                        if (fin && jid && db && !trade.isBacktest) {
+                                            await db.collection('trade_journal').doc(jid).set({ result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reconciled: true, closedAt: new Date().toISOString() }, { merge: true }).catch(() => { });
+                                        }
+                                    } catch (e: any) {
+                                        console.warn(`[TP2] ⚠️ fallback finalize falló para ${tradeId}: ${e.message}`);
+                                    }
+                                    store.activeTrades.delete(tradeId);
+                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                                } else {
+                                    console.log(`[TP2] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — esperando evento real (detección ${(trade as any).closeMissedCount}/8).`);
+                                }
                                 continue;
                             }
 
@@ -1958,7 +1998,26 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                                 continue;
                             }
-                            console.log(`[SL] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — resultado lo registra el evento real.`);
+                            // 🛡️ FIX (30-sep-2026): mismo fallback que el path de TP2 — si el evento
+                            // de cierre no llega, finalizar con deals reales tras 8 detecciones
+                            // (caso real: XTIUSD 30-sep, loop "[SL] ✅" eterno).
+                            (trade as any).closeMissedCount = ((trade as any).closeMissedCount || 0) + 1;
+                            if ((trade as any).closeMissedCount > 8) {
+                                console.log(`[SL] 🔧 ${ticker} #${tradeId}: evento de cierre no llegó tras ${(trade as any).closeMissedCount} detecciones — finalizando con deals reales.`);
+                                try {
+                                    const fin = await finalizeClosedPositionFromDeals(String(trade.ctraderPositionId), trade);
+                                    const jid = (trade as any).journalId;
+                                    if (fin && jid && db && !trade.isBacktest) {
+                                        await db.collection('trade_journal').doc(jid).set({ result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reconciled: true, closedAt: new Date().toISOString() }, { merge: true }).catch(() => { });
+                                    }
+                                } catch (e: any) {
+                                    console.warn(`[SL] ⚠️ fallback finalize falló para ${tradeId}: ${e.message}`);
+                                }
+                                store.activeTrades.delete(tradeId);
+                                if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                            } else {
+                                console.log(`[SL] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — esperando evento real (detección ${(trade as any).closeMissedCount}/8).`);
+                            }
                             continue;
                         }
 

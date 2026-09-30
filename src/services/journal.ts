@@ -119,6 +119,12 @@ export async function logTrade(record: Omit<TradeRecord, 'id' | 'date'>): Promis
                 ...record,
                 id,
                 date,
+                // 🛡️ FIX (30-sep-2026): result:null EXPLÍCITO al crear. El reconciler de
+                // journals huérfanos filtra con where('result','==',null) y Firestore NO
+                // matchea campos ausentes → los docs abiertos quedaban invisibles para el
+                // reconciler y nunca se cerraban si el evento de cierre se perdía
+                // (caso real: XTIUSD 30-sep, doc DF3WS7 abierto con la posición cerrada).
+                result: record.result !== undefined ? record.result : null,
                 tp1Hit: record.tp1Hit || false,
                 tp2Hit: record.tp2Hit || false,
                 slHit: record.slHit || false,
