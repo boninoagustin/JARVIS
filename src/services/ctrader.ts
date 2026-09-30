@@ -736,6 +736,33 @@ export function getLotSizeCents(ticker: string): number {
     return 10000000; // forex por defecto
 }
 
+/**
+ * 🛡️ FIX (30-sep-2026): clasifica índices del broker para el lotaje.
+ * Antes solo US30/NAS/US100/SPX/GER/DE40/DAX/JP225/NIKKEI caían en la rama índices
+ * y el resto (US500, USTECH100, NL25, ITALY40, FRA40, UK100, SPAIN35, EUROPE50,
+ * AUSTRALIA200...) caía en la rama forex (pip=0.0001) → volumen ~0 → abort por
+ * mínimo del broker. Fuente del universo: scripts/asset_scout.ts UNIVERSE.
+ */
+function isIndexTicker(t: string): boolean {
+    return t.includes('US30') || t.includes('DOW') || t.includes('WALLSTREET')
+        || t.includes('NAS') || t.includes('US100') || t.includes('USTEC') || t.includes('USTECH') || t.includes('NDX')
+        || t.includes('SPX') || t.includes('US500') || t.includes('SP500')
+        || t.includes('GER') || t.includes('DE40') || t.includes('DAX')
+        || t.includes('JP225') || t.includes('NIKKEI') || t.includes('JAPAN')
+        || t.includes('NL25') || t.includes('NETHERLANDS')
+        || t.includes('ITALY') || t.includes('IT40') || t.includes('MIB')
+        || t.includes('FRA40') || t.includes('FRANCE') || t.includes('CAC')
+        || t.includes('UK100') || t.includes('FTSE')
+        || t.includes('SPAIN') || t.includes('IBEX') || t.includes('ES35')
+        || t.includes('EUROPE') || t.includes('EU50') || t.includes('ESTX') || t.includes('STOXX')
+        || t.includes('AUSTRALIA') || t.includes('AUS200') || t.includes('ASX')
+        || t.includes('NIFTY') || t.includes('INDIA') || t.includes('IN50')
+        || t.includes('HK50') || t.includes('HSI') || t.includes('HANGSENG')
+        || t.includes('CN50') || t.includes('CHINA')
+        || t.includes('KOSPI') || t.includes('SGX') || t.includes('SING')
+        || t.includes('US2000') || t.includes('RUSSELL');
+}
+
 export function calculateLotSize(
     equity: number,
     entryPrice: number,
@@ -768,22 +795,41 @@ export function calculateLotSize(
         const costPerPip = 10; // ~$10 per pip for 1 lot of gold
         const lotSize = riskAmount / (pips * costPerPip);
         return Math.max(0, parseFloat(lotSize.toFixed(4)));
-    } else if (t.includes('BTC')) {
-        // Bitcoin: no standard pip, use raw price distance
+    } else if (t.includes('XAG') || t.includes('SILVER')) {
+        // 🛡️ FIX (30-sep-2026): Plata. 1 lote = 5000 oz → $50 por centavo (0.01).
+        // Antes caía en la rama forex (pip 0.0001) y el volumen salía ~0 → abort por mínimo.
+        const pips = slDistance / 0.01;
+        const costPerPip = 50; // 5000 oz × $0.01
+        const lotSize = riskAmount / (pips * costPerPip);
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
+    } else if (t.includes('XPT') || t.includes('PLATINUM') || t.includes('XPD') || t.includes('PALLADIUM')) {
+        // 🛡️ FIX (30-sep-2026): Platino/Paladio. 1 lote = 100 oz → $1 por centavo (0.01).
+        const pips = slDistance / 0.01;
+        const costPerPip = 1; // 100 oz × $0.01
+        const lotSize = riskAmount / (pips * costPerPip);
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
+    } else if (t.includes('BTC') || t.includes('ETH')) {
+        // Bitcoin/Ethereum: no standard pip, use raw price distance
         const costPerUnit = 1; // $1 per unit per 1 lot (varies by broker)
         const lotSize = riskAmount / (slDistance * costPerUnit);
         return Math.max(0, parseFloat(lotSize.toFixed(4)));
-    } else if (t.includes('US30') || t.includes('NAS') || t.includes('US100') || t.includes('SPX') || t.includes('GER') || t.includes('DE40') || t.includes('DAX') || t.includes('JP225') || t.includes('NIKKEI') || t.includes('JAPAN')) {
-        // Indices: 1 pip = 1 point
+    } else if (isIndexTicker(t)) {
+        // Indices: 1 punto = 1 unidad de precio, ~$1 (o moneda local) por punto por lote.
         const costPerPoint = 1; // $1 per point per 1 lot (varies)
         const lotSize = riskAmount / (slDistance * costPerPoint);
         return Math.max(0, parseFloat(lotSize.toFixed(4)));
-    } else if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) {
-        // 🛡️ FIX: Oil (USOIL/XTIUSD): 1 pip = 0.01 (1 cent), lot = 100 barriles.
+    } else if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT') || t.includes('XBR') || t.includes('UKOIL')) {
+        // 🛡️ FIX: Oil (USOIL/XTIUSD, Brent/XBRUSD): 1 pip = 0.01 (1 cent), lot = 100 barriles.
         // Con SL distance en dólares y costPerPip=1 (100 barriles × $0.01 = $1 por pip por lote),
         // el lote sale correcto y NO cae por debajo del mínimo del broker (minVolume=0.1 lotes).
         const pips = slDistance / 0.01;
         const costPerPip = 1; // $1 por pip por lote (100 barriles × 1 centavo)
+        const lotSize = riskAmount / (pips * costPerPip);
+        return Math.max(0, parseFloat(lotSize.toFixed(4)));
+    } else if (t.includes('NATGAS') || t.includes('NGAS')) {
+        // 🛡️ FIX (30-sep-2026): Gas natural. 1 lote = 10000 MMBtu → $10 por 0.001.
+        const pips = slDistance / 0.001;
+        const costPerPip = 10; // 10000 MMBtu × $0.001
         const lotSize = riskAmount / (pips * costPerPip);
         return Math.max(0, parseFloat(lotSize.toFixed(4)));
     } else {
@@ -831,6 +877,29 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         }
     } catch (err: any) {
         console.warn('[CTRADER] ⚠️ No se pudo verificar posiciones abiertas:', err.message);
+    }
+
+    // 🛡️ FIX (30-sep-2026): guardrail de sanidad de niveles ANTES de tocar el broker.
+    // Caso real NZDUSD 30-sep: SELL con SL POR DEBAJO del entry → TRADING_BAD_STOPS.
+    // Abortar acá evita la ronda de ida/vuelta con el broker y deja el SKIP limpio.
+    const entryNum = Number(params.entryPrice);
+    const slNum = Number(slPrice);
+    if (Number.isFinite(entryNum) && Number.isFinite(slNum)) {
+        const slSideOk = direction === 'BUY' ? slNum < entryNum : slNum > entryNum;
+        if (!slSideOk) {
+            const msg = `Niveles inválidos para ${direction}: SL (${slNum}) del lado equivocado del entry (${entryNum}). Trade abortado por seguridad.`;
+            console.warn(`[CTRADER] 🛡️ ${msg}`);
+            return { success: false, error: msg };
+        }
+    }
+    if (tp2Price !== undefined && tp2Price !== null && Number.isFinite(Number(tp2Price)) && Number.isFinite(entryNum)) {
+        const tpNum = Number(tp2Price);
+        const tpSideOk = direction === 'BUY' ? tpNum > entryNum : tpNum < entryNum;
+        if (!tpSideOk) {
+            const msg = `Niveles inválidos para ${direction}: TP2 (${tpNum}) del lado equivocado del entry (${entryNum}). Trade abortado por seguridad.`;
+            console.warn(`[CTRADER] 🛡️ ${msg}`);
+            return { success: false, error: msg };
+        }
     }
 
     try {

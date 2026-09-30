@@ -8,6 +8,10 @@ import { telemetry } from '../services/telemetry.js';
 // donde `process` no existe → crasheaba al importar (pantalla negra).
 const DEBUG = typeof process !== 'undefined' && process?.env?.JARVIS_DEBUG_FIBO === '1';
 const dbg = (...args: unknown[]) => { if (DEBUG) console.log(...args); };
+// 🆕 sep-2026 anti-spam: última prob logueada por leg (ticker|dir|createdAt) — el [ML] ⛔
+// se loguea solo en el primer rechazo y cuando la prob cambia ≥0.1 (antes: una línea por
+// touch/tick, 30-90 repetidas por leg, que además saturaban el canal RPC del worker).
+const _mlLogCache = new Map<string, number>();
 
 
 export const SETUP_MEMORY_WINDOW_MS = 172800000; // 48 Horas (Swing Core) — LEGACY: sustituido por EVENT_TTL_MS por timeframe
@@ -157,6 +161,9 @@ export interface AlphaContext {
     config: any;
     currentSession: string;
     sessionConfig: any;
+    // 🛡️ sep-2026 fix OTE: high/low de la última vela CERRADA (undefined en backtest)
+    prevHigh?: number;
+    prevLow?: number;
 }
 
 export interface AlphaInsight {
@@ -195,7 +202,9 @@ export function evaluateImpulseCore(
     const MAX_LEG_AGE_MS = 8 * 60 * 60 * 1000;
     if (leg.createdAt && (nowMs - leg.createdAt) > MAX_LEG_AGE_MS) {
         dbg(`[FIBO] 🧹 Leg ${leg.dir} en ${ticker} EXPIRADO por antigüedad (${Math.round((nowMs - leg.createdAt) / 60000)} min > 480 min).`);
-        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'otra');
+        // 🆕 sep-2026: separar expiración "pura" (la zona nunca se retrazó) de la que tuvo
+        // al menos un rechazo ML en touch de zona (el leg siguió vivo esperando tras el veto).
+        telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, leg.mlRejectedOnce ? 'otraMl' : 'otra');
         return { updatedLeg: null };
     }
 
@@ -234,11 +243,17 @@ export function evaluateImpulseCore(
         return { updatedLeg: null };
     }
 
-    if (leg.dir === 'BUY' && highPrice > leg.extreme) leg.extreme = highPrice;
-    else if (leg.dir === 'SELL' && lowPrice < leg.extreme) leg.extreme = lowPrice;
+    // 🛡️ sep-2026 fix OTE: estirar el extreme SOLO con vela CERRADA (prevHigh/prevLow).
+    // Antes usaba high/low de la vela en formación (pings de tick) → la OTE "huía" del precio.
+    const stretchHigh = ctx.prevHigh ?? highPrice;
+    const stretchLow = ctx.prevLow ?? lowPrice;
 
-    if (leg.dir === 'BUY' && lowPrice < leg.origin) impulseInvalidated = true;
-    else if (leg.dir === 'SELL' && highPrice > leg.origin) impulseInvalidated = true;
+    if (leg.dir === 'BUY' && stretchHigh > leg.extreme) leg.extreme = stretchHigh;
+    else if (leg.dir === 'SELL' && stretchLow < leg.extreme) leg.extreme = stretchLow;
+
+    // 🛡️ sep-2026 fix OTE: invalidación por origin también con vela CERRADA (paridad backtest)
+    if (leg.dir === 'BUY' && stretchLow < leg.origin) impulseInvalidated = true;
+    else if (leg.dir === 'SELL' && stretchHigh > leg.origin) impulseInvalidated = true;
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
@@ -349,7 +364,21 @@ export function evaluateImpulseCore(
 
             if (isMLActive() && mlPred) {
                 if (!mlPred.approved) {
-                    console.log(`[ML] ⛔ ${ticker} ${leg.dir}: RECHAZADO por ML (prob=${mlPred.probability.toFixed(3)} < ${mlPred.threshold})`);
+                    // 🆕 sep-2026 anti-spam: logear solo el primer rechazo del leg y los
+                    // cambios grandes de prob (≥0.1). Antes logueaba en cada touch/tick —
+                    // el mismo leg podía meter 30-90 líneas idénticas en vivo y saturar
+                    // el canal RPC del worker en backtest.
+                    const _mlk = `${ticker}|${leg.dir}|${leg.createdAt}`;
+                    const _lastP = _mlLogCache.get(_mlk);
+                    if (_lastP === undefined || Math.abs(mlPred.probability - _lastP) >= 0.1) {
+                        console.log(`[ML] ⛔ ${ticker} ${leg.dir}: RECHAZADO por ML (prob=${mlPred.probability.toFixed(3)} < ${mlPred.threshold})`);
+                        if (_mlLogCache.size > 2000) _mlLogCache.clear();
+                        _mlLogCache.set(_mlk, mlPred.probability);
+                    }
+                    // 🆕 sep-2026: marcar el leg para clasificar su expiración como 'otraMl' y
+                    // contar el veto (el backtest no modela este filtro → paridad).
+                    leg.mlRejectedOnce = true;
+                    telemetry.oteMlReject(ticker, ctx.currentSession, _oteKey);
                     return { updatedLeg: leg };
                 }
                 console.log(`[ML] ✅ ${ticker} ${leg.dir}: APROBADO por ML (prob=${mlPred.probability.toFixed(3)} >= ${mlPred.threshold}) [override heurística]`);
@@ -405,9 +434,9 @@ export function evaluateImpulseCore(
             const eventTfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';
             
             if (addScoreEvent(activeScore, { id: eventName, pts: 4, tf: eventTfKey, ts: nowMs })) {
-                leg.oteScored = true;
-                // 🆕 Plan B ago-2026: ejecución OTE registrada en la telemetría
-                telemetry.oteExec(ticker, ctx.currentSession, `ote${isChoch ? 'Choch' : 'Bos'}${triggerTf}`);
+            leg.oteScored = true;
+            // 🆕 Plan B ago-2026: ejecución OTE registrada en la telemetría
+            telemetry.oteExec(ticker, ctx.currentSession, `ote${isChoch ? 'Choch' : 'Bos'}${triggerTf}`);
                 
                 const stopLoss = adjustedSL.toFixed(decimals);
                 const riskDist = risk;
@@ -420,6 +449,20 @@ export function evaluateImpulseCore(
                 const chosenTP1 = structuralDist >= riskDist * structuralMinRR ? leg.extreme : fixedTP1;
                 const tp1 = chosenTP1.toFixed(decimals);
                 const tp2 = fixedTP2.toFixed(decimals);
+
+                // 🛡️ FIX (30-sep-2026): sanidad de niveles. Caso real NZDUSD 30-sep: SELL con
+                // SL POR DEBAJO del entry (geometría invertida) → el broker rechaza SL/TP
+                // (TRADING_BAD_STOPS). Abortar la señal OTE antes de emitirla evita journals
+                // SKIP/ABORTED por niveles imposibles. Es un guardrail de sanidad, no un
+                // cambio de estrategia: descarta señales que jamás llenarían en un broker real.
+                const slSideOk = leg.dir === 'BUY' ? adjustedSL < entryFill : adjustedSL > entryFill;
+                const tp1SideOk = leg.dir === 'BUY' ? chosenTP1 > entryFill : chosenTP1 < entryFill;
+                const tp2SideOk = leg.dir === 'BUY' ? fixedTP2 > entryFill : fixedTP2 < entryFill;
+                if (!slSideOk || !tp1SideOk || !tp2SideOk) {
+                    dbg(`[FIBO] 🛡️ OTE ${ticker} ${leg.dir} descartado: niveles invertidos (entry=${entryFill}, SL=${adjustedSL}, TP1=${chosenTP1}, TP2=${fixedTP2}). slOk=${slSideOk} tp1Ok=${tp1SideOk} tp2Ok=${tp2SideOk}`);
+                    telemetry.oteDeath(ticker, ctx.currentSession, _oteKey, 'badLevels');
+                    return { updatedLeg: leg };
+                }
 
                 const tradeId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -448,6 +491,9 @@ export function evaluateImpulseCore(
                     marketBias: { ...state.marketBias },
                     tf: tfFormatted,
                     isChochEntry: false,
+                    // 🆕 sep-2026: gatillo REAL que ejecutó esta OTE (para clasificación honesta
+                    // en el backtest: los eventos del Pine mezclan TFs y ensucian el triggerType).
+                    execTrigger: `ote${isChoch ? 'Choch' : 'Bos'}${triggerTf}`,
                     // 🆕 genes de gestión tuneados por el auto-tune para ESTE gatillo OTE
                     mgmtOverrides: extractMgmtOverrides(oteTriggerCfg)
                 };

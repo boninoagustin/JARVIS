@@ -15,7 +15,7 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { executeMarketOrder, isCTraderReady, type CTraderOrderParams, type CTraderOrderResult } from './ctrader.js';
 import { db } from '../db/memory.js';
-import { updateTradePositionId } from '../db/trading.js';
+import { updateTradePositionId, finalizeClosedPositionFromDeals } from '../db/trading.js';
 
 // ─── Pending Confirmations Store ───
 
@@ -32,7 +32,7 @@ interface PendingConfirmation {
     events: string[];
     confluenceReport: string;
     kronosVerdict: string;
-    swarmConsensus: string;
+    swarmConsensus?: string; // 🛡️ sep-2026: enjambre multi-IA eliminado (era solo anotación, nunca gate)
     messageId?: number;      // Telegram message ID (for editing after response)
     chatId?: number;         // Telegram chat ID
     timestamp: number;       // When the confirmation was sent
@@ -68,7 +68,7 @@ export async function sendTradeConfirmation(data: {
     events: string[];
     confluenceReport: string;
     kronosVerdict: string;
-    swarmConsensus: string;
+    swarmConsensus?: string; // 🛡️ sep-2026: enjambre multi-IA eliminado
     alertMessage: string;       // The full alert message already built
     journalId?: string;
     isChochEntry?: boolean;
@@ -250,15 +250,25 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
                 if (pending.sarPendingClose.ctraderPositionId) {
                     const ctrader = await import('./ctrader.js');
                     await ctrader.closePosition(pending.sarPendingClose.ctraderPositionId);
+                    // 🛡️ 24-sep-2026: PnL REAL del cierre por reversión (antes solo
+                    // 'REVERSAL' sin PnL → quedaba '—' para siempre en el Diario).
+                    const jid = pending.sarPendingClose.journalId;
+                    const fin = await finalizeClosedPositionFromDeals(pending.sarPendingClose.ctraderPositionId, pending.sarPendingClose);
+                    if (fin && jid && db) {
+                        db.collection('trade_journal').doc(jid).set(
+                            { result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reversalClosed: true, reconciled: true, closedAt: new Date().toISOString() },
+                            { merge: true }
+                        ).catch(() => {});
+                        console.log(`[SAR] ✅ #${jid} finalizado por reversión: ${fin.result} (pnl=$${fin.pnl.toFixed(2)}, ${fin.rMultiple}R)`);
+                    } else if (jid) {
+                        const { recordResult } = await import('./journal.js');
+                        recordResult(jid, 'REVERSAL').catch(() => {});
+                        console.warn(`[SAR] ⚠️ Sin deals tras cierre por reversión #${jid} — queda REVERSAL sin PnL.`);
+                    }
                 }
                 const { globalState } = await import('../db/trading.js');
                 globalState.activeTrades.delete(pending.sarPendingClose.tradeId);
                 if (db) db.collection('active_trades').doc(pending.sarPendingClose.tradeId).delete().catch(() => {});
-                
-                if (pending.sarPendingClose.journalId) {
-                    const { recordResult } = await import('./journal.js');
-                    recordResult(pending.sarPendingClose.journalId, 'REVERSAL').catch(() => {});
-                }
             } catch (e) {
                 console.error('[SAR] Error cierre diferido en confirmación manual:', e);
             }
@@ -293,11 +303,20 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
             }
 
             // Also update active_trades
-            db.collection('active_trades').doc(tradeId).update({
+            // 🛡️ FIX (30-sep-2026): normalizar niveles al OTE ejecutado (misma divergencia
+            // radar/OTE que en modo AUTO: el pre-trade del radar puede traer entry/SL/TP
+            // distintos de los que confirmó el usuario y ejecutó el broker).
+            const normPayload: Record<string, unknown> = {
                 ctraderPositionId: result.positionId,
                 ctraderLots: result.lots,
                 ctraderExecutedPrice: result.executedPrice,
-            }).catch(() => {});
+                entryPrice: Number(result.executedPrice) || pending.entryPrice,
+                slPrice: pending.slPrice,
+                initialSlPrice: pending.slPrice,
+                tp1Price: pending.tp1Price,
+            };
+            if (pending.tp2Price !== undefined && pending.tp2Price !== null) normPayload.tp2Price = pending.tp2Price;
+            db.collection('active_trades').doc(tradeId).update(normPayload).catch(() => {});
         }
 
         if (result.positionId) {

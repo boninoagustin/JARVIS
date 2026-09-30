@@ -19,6 +19,9 @@ export interface OteDeadCounts {
     minScore: number;
     opuesta: number;
     otra: number;
+    otraMl: number;      // 🆕 sep-2026: expiró a las 8h habiendo sido rechazado por ML al menos una vez
+    reemplazado: number; // 🆕 sep-2026: un impulso nuevo pisó el leg (moría sin registro)
+    badLevels: number;   // 🆕 30-sep-2026: niveles invertidos (SL/TP del lado equivocado del entry)
 }
 
 export interface TriggerTelemetryBucket {
@@ -27,10 +30,11 @@ export interface TriggerTelemetryBucket {
     oteWaits: number;
     oteExecutions: number;
     oteDead: OteDeadCounts;
+    oteMlRejects: number; // 🆕 sep-2026: vetos ML en touch de zona (evento, no muerte)
 }
 
-const zeroDead = (): OteDeadCounts => ({ chochContrario: 0, inalcanzable: 0, rr075: 0, minScore: 0, opuesta: 0, otra: 0 });
-const zeroBucket = (): TriggerTelemetryBucket => ({ signals: 0, directEntries: 0, oteWaits: 0, oteExecutions: 0, oteDead: zeroDead() });
+const zeroDead = (): OteDeadCounts => ({ chochContrario: 0, inalcanzable: 0, rr075: 0, minScore: 0, opuesta: 0, otra: 0, otraMl: 0, reemplazado: 0, badLevels: 0 });
+const zeroBucket = (): TriggerTelemetryBucket => ({ signals: 0, directEntries: 0, oteWaits: 0, oteExecutions: 0, oteDead: zeroDead(), oteMlRejects: 0 });
 
 // RAM = delta desde el último flush; el total del día vive en Firestore.
 const counters = new Map<string, TriggerTelemetryBucket>();
@@ -54,6 +58,7 @@ export const telemetry = {
         const d = bucket(key(ticker, session, trigger)).oteDead;
         if (d[reason] !== undefined) d[reason]++; else d.otra++;
     },
+    oteMlReject: (ticker: string, session: string, trigger: string) => { bucket(key(ticker, session, trigger)).oteMlRejects++; },
 };
 
 export async function flushTelemetry(): Promise<void> {
@@ -75,6 +80,7 @@ export async function flushTelemetry(): Promise<void> {
                 directEntries: (e.directEntries || 0) + c.directEntries,
                 oteWaits: (e.oteWaits || 0) + c.oteWaits,
                 oteExecutions: (e.oteExecutions || 0) + c.oteExecutions,
+                oteMlRejects: (e.oteMlRejects || 0) + c.oteMlRejects,
                 oteDead: {
                     chochContrario: (e.oteDead?.chochContrario || 0) + c.oteDead.chochContrario,
                     inalcanzable: (e.oteDead?.inalcanzable || 0) + c.oteDead.inalcanzable,
@@ -82,6 +88,9 @@ export async function flushTelemetry(): Promise<void> {
                     minScore: (e.oteDead?.minScore || 0) + c.oteDead.minScore,
                     opuesta: (e.oteDead?.opuesta || 0) + c.oteDead.opuesta,
                     otra: (e.oteDead?.otra || 0) + c.oteDead.otra,
+                    otraMl: (e.oteDead?.otraMl || 0) + c.oteDead.otraMl,
+                    reemplazado: (e.oteDead?.reemplazado || 0) + c.oteDead.reemplazado,
+                    badLevels: (e.oteDead?.badLevels || 0) + c.oteDead.badLevels,
                 },
             };
         }

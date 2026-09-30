@@ -4201,6 +4201,24 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 }
 
                                 updateTradePositionId(oteData.tradeId, result.positionId);
+                                // 🛡️ FIX (30-sep-2026): normalizar niveles del activeTrade con los del
+                                // OTE EJECUTADO. El trade pudo haber sido pre-creado por el radar con
+                                // otros niveles (caso real USOIL 30-sep: activeTrade entry 94.3346 vs
+                                // fill real 93.3, TP2 99.53 vs 98.23 del broker) → el gestor interno
+                                // operaba contra niveles que el broker no tenía.
+                                const exTrade = store.activeTrades.get(oteData.tradeId);
+                                if (exTrade && !exTrade.isBacktest) {
+                                    exTrade.entryPrice = Number(result.executedPrice) || Number(exTrade.entryPrice);
+                                    exTrade.slPrice = parseFloat(oteData.stopLoss);
+                                    exTrade.initialSlPrice = parseFloat(oteData.stopLoss);
+                                    exTrade.tp1Price = parseFloat(oteData.tp1);
+                                    exTrade.tp2Price = oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
+                                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                                        : exTrade.tp2Price;
+                                    store.activeTrades.set(oteData.tradeId, exTrade);
+                                    if (db) db.collection('active_trades').doc(oteData.tradeId).set(exTrade).catch(() => { });
+                                    console.log(`[SNIPER] 🔄 Niveles del trade ${oteData.tradeId} normalizados al OTE ejecutado (entry ${result.executedPrice}, SL ${exTrade.slPrice}, TP1 ${exTrade.tp1Price}, TP2 ${exTrade.tp2Price}).`);
+                                }
                                 if (db && journalId) {
                                     if (!isBacktest) db.collection('trade_journal').doc(journalId).update({
                                         ctraderPositionId: result.positionId,
