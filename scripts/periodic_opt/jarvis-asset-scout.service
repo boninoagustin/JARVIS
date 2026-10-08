@@ -1,0 +1,17 @@
+[Unit]
+Description=JARVIS Asset Scout — 🔭 screening de activos candidatos (sábado, mercado cerrado). Solo mide y propone, nunca opera ni activa.
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JARVIS
+# Fase 1 del scout: descarga velas + export SMC + backtest sonda por candidato (~35 activos, ~1-1.5h).
+ExecStart=/root/.nvm/versions/node/v24.19.0/bin/npx tsx /opt/JARVIS/scripts/asset_scout.ts
+Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/usr/bin:/bin
+Nice=5
+MemoryHigh=4G
+MemoryMax=5G
+TimeoutStartSec=8h
+
+[Install]
+WantedBy=multi-user.target

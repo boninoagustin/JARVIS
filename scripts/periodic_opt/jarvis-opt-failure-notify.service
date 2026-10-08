@@ -1,0 +1,6 @@
+[Unit]
+Description=Notifica por Telegram la falla del ciclo de Optimización Periódica
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/JARVIS/scripts/periodic_opt/opt_failure_notify.sh

@@ -1,172 +1,36 @@
-# Skill: Equipo Alejabot (Multi-Agente)
+# JARVIS — Bot de trading SMC/ICT (TypeScript)
 
-Esta habilidad permite a Antigravity coordinar un equipo de agentes inteligentes trabajando en paralelo sobre el mismo proyecto, replicando la funcionalidad de "Agent Teams" de Claude Code.
+Bot algorítmico que opera en vivo contra cTrader (OpenAPI), gestionado por Telegram (grammy), con estado y configuración en Firestore. Dashboard React/Vite (`jarvis-os`), API Kronos (FastAPI) y optimizador periódico separados.
 
-## Configuración del Entorno
+> ⚠️ Este archivo reemplaza al antiguo "Equipo Alejabot" (remanente del proyecto pre-trading, borrado en la auditoría oct-2026). Para recuperación ante desastre: **`SETUP.md`**.
 
-El equipo utiliza una carpeta oculta en la raíz del proyecto para comunicarse:
+## Arquitectura
 
-- `.antigravity/team/tasks.json` -> Lista maestra de tareas, estados y dependencias.
-- `.antigravity/team/mailbox/` -> Mensajes individuales (.msg).
-- `.antigravity/team/broadcast.msg` -> Mensajes globales para todo el equipo.
-- `.antigravity/team/locks/` -> Semáforos para evitar edición simultánea de archivos.
+| Proceso | Qué es | Puerto |
+|---|---|---|
+| `JARVIS` (PM2) | Bot vivo: decisión + ejecución + Telegram | — |
+| `JARVIS_OS` (PM2) | Dashboard Vite (`npm run dev`) | 5173 |
+| `KRONOS_API` (PM2) | API FastAPI de backtest | 8000 |
+| WebSocket | Estados de radar al dashboard | 8081 |
+| `jarvis-timesfm-bridge` (systemd) | Filtro direccional TimesFM | 8788 |
+| `jarvis-asset-scout.timer` | Screening de activos | sáb 03:00 CEST |
+| `jarvis-periodic-opt.timer` | Optimizador semanal (~14 pasos) | sáb 06:00 CEST |
 
-## Roles del Equipo
+## Operación (reglas que el bot aplica)
 
-1. **Director (Alejabot)**: El líder. Divide el problema, asigna roles y aprueba planes.
-2. **Arquitecto**: Define la estructura y patrones antes de codificar.
-3. **Especialista (Frontend/Backend/DB)**: Ejecuta tareas técnicas específicas.
-4. **Marketer**: Creación de marca, logos, copywriting y diseño de landing pages.
-5. **Investigador**: Búsqueda de información, documentación y análisis de mercado.
-6. **Revisor (Devil's Advocate)**: Busca fallos, bugs y problemas de seguridad.
+- **Roster dinámico**: un ticker opera si `enabled && !disabledReason` en `asset_configs/{ticker}` (Firestore). Sin la key `enabled`, NO opera (opt-in explícito).
+- **Entrada SMART**: decide entre directa u OTE (riesgo >1.5×ATR → OTE; vela clímax → OTE; R:R≥1.5 o momentum extremo → directa; resto → OTE).
+- **Killswitch global**: `evaluateGlobalKillswitch` cierra el día si el PnL acumulado toca `maxDailyLossR` (día FX cambia 17:00 NY).
+- **Rollover diario 21:00 UTC**: el feed muere ~20:29→21:00, spread de reapertura ~19 pips. Reglas A/D detrás de `rolloverBeEnabled` (SL→BE pre-rollover) y `rolloverEntryBlock` (bloquear entradas en el gap).
+- **Bono macro escalonado**: 3/3 = +5, 2/3 = +2, ≤1 = 0.
 
-## Protocolo de Orquestación Avanzada
+## Emergencia
 
-### 1. Modo de Planificación (Gatekeeping)
+- **Restart del bot**: `pm2 restart JARVIS --update-env`. Reconstruye estado SMC desde histórico (reinicio controlado). Verificar `Conectado exitosamente` + `N configs cargadas` en `~/.pm2/logs/JARVIS-out.log`.
+- **Rollback de config**: snapshots en `scripts/periodic_opt/opt_out/prev_<TICKER>_<fecha>.json` y `backups/`. Restaurar el doc en Firestore.
+- **Doc de config inválido**: el bot lo BLOQUEA (fail-closed), log `[CONFIG] INVÁLIDO` en `JARVIS-error.log`.
+- **Optimizador congelado**: `AUTO_APPLY_ENABLED=False` en `run_weekly.py` → solo propone, no aplica. Ver `SETUP.md`.
 
-Antes de realizar cambios significativos, cada agente debe enviar un **Plan de Acción** al buzón de Alejabot.
+## Auditorías
 
-- El agente se mantiene en modo `READ_ONLY` o `PLANNING` hasta que Alejabot responda con un mensaje de `APPROVED`.
-
-### 2. Mensajería y Difusión (Broadcast)
-
-- **Mensaje Directo**: Coordinación 1 a 1 entre especialistas.
-- **Broadcast**: Alejabot puede escribir en `broadcast.msg` para dar nuevas directrices a todo el equipo simultáneamente.
-
-### 3. Sincronización de Tareas y Dependencias
-
-- Las tareas en `tasks.json` pueden tener una lista de `dependencies`. Una IA no debe reclamar una tarea si sus dependencias no están en estado `COMPLETED`.
-
-## Reglas Críticas
-
-- NUNCA editar un archivo si existe un .lock activo en `.antigravity/team/locks/`.
-- Al completar una tarea, el agente debe liberar sus "locks" y notificar a Alejabot.
-
-```
-
-
----
-
-
-## 3. Script de Orquestación (team_manager.py)
-
-*Este script automatiza la gestión de las tareas y la comunicación. Guárdalo como `team_manager.py`.*
-
-
-```python
-
-import json
-
-import os
-
-import sys
-
-
-TEAM_DIR = ".antigravity/team"
-
-
-def init_team():
-
-    """Inicializa la infraestructura del equipo."""
-
-    os.makedirs(f"{TEAM_DIR}/mailbox", exist_ok=True)
-
-    os.makedirs(f"{TEAM_DIR}/locks", exist_ok=True)
-
-    tasks_path = f"{TEAM_DIR}/tasks.json"
-
-    if not os.path.exists(tasks_path):
-
-        with open(tasks_path, 'w') as f:
-
-            json.dump({"tasks": [], "members": []}, f, indent=2)
-
-    if not os.path.exists(f"{TEAM_DIR}/broadcast.msg"):
-
-        with open(f"{TEAM_DIR}/broadcast.msg", 'w') as f: f.write("")
-
-    print("✓ Infraestructura 'Equipo Alejabot' lista.")
-
-
-def assign_task(title, assigned_to, deps=[]):
-
-    """Asigna una nueva tarea con soporte para dependencias."""
-
-    path = f"{TEAM_DIR}/tasks.json"
-
-    with open(path, 'r+') as f:
-
-        data = json.load(f)
-
-        task = {
-
-            "id": len(data["tasks"]) + 1,
-
-            "title": title,
-
-            "status": "PENDING",
-
-            "plan_approved": False,
-
-            "assigned_to": assigned_to,
-
-            "dependencies": deps
-
-        }
-
-        data["tasks"].append(task)
-
-        f.seek(0)
-
-        json.dump(data, f, indent=2)
-
-    print(f"✓ Tarea {task['id']} ({title}) asignada a {assigned_to}.")
-
-
-def broadcast(sender, text):
-
-    """Envía un mensaje a todos los miembros del equipo."""
-
-    msg = {"de": sender, "tipo": "BROADCAST", "mensaje": text}
-
-    with open(f"{TEAM_DIR}/broadcast.msg", 'a') as f:
-
-        f.write(json.dumps(msg) + "\n")
-
-    print(f"✓ Mensaje global enviado por {sender}.")
-
-
-def send_message(sender, receiver, text):
-
-    """Envía un mensaje al buzón de un agente específico."""
-
-    msg = {"de": sender, "mensaje": text}
-
-    with open(f"{TEAM_DIR}/mailbox/{receiver}.msg", 'a') as f:
-
-        f.write(json.dumps(msg) + "\n")
-
-    print(f"✓ Mensaje enviado a {receiver}.")
-
-
-if __name__ == "__main__":
-
-    if len(sys.argv) > 1:
-
-        cmd = sys.argv[1]
-
-        if cmd == "init": init_team()
-
-```
-
----
-
-## 4. Cómo usarlo
-
-1. **Activa el Líder**: Pídele a Antigravity: *"Usa la habilidad Equipo Alejabot para inicializar este proyecto"*.
-2. **Reparte el trabajo**: **Alejabot** dividirá el trabajo. Abre terminales nuevas para cada agente (Frontend, Marketer, etc.).
-3. **Flujo de Planificación**: Los agentes envían sus planes a Alejabot antes de empezar. Un equipo bien coordinado es imparable.
-
----
-
-*Creado para la comunidad de Alejavi por academIArtificial.*
+Informes completos en `audit_reports/` (tanda1..5 + `audit_resultado_<fecha>.md`). Regla del operador: **todo cambio de estrategia se backtestea antes de aplicarse al vivo**.
