@@ -447,7 +447,9 @@ function setupCTraderEvents(client: any) {
                                     open: (lowRaw + (tb.deltaOpen || 0)) / divider,
                                     high: (lowRaw + (tb.deltaHigh || 0)) / divider,
                                     low: lowRaw / divider,
-                                    close: (lowRaw + (tb.deltaClose || 0)) / divider,
+                                    close: tb.deltaClose != null
+                                        ? (lowRaw + tb.deltaClose) / divider
+                                        : (msg.bid ? msg.bid / divider : (lowRaw + (tb.deltaOpen || 0)) / divider),
                                     volume: tb.volume || 0
                                 };
                             });
@@ -902,6 +904,22 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         }
     }
 
+    // 🛡️ FIX Paso 2 (05-oct-2026): validar SL contra el spread VIVO, no solo contra el entry.
+    // El broker exige BUY: SL <= bid actual; SELL: SL >= ask actual. Casos reales medidos:
+    // BAD_STOPS en rollover (spread ~19 pips) y spikes de noticias → posición abierta sin
+    // protección → cierre de emergencia pagando comisión+spread. Abortar ANTES del broker.
+    const liveBA = lastBidAsk.get(ticker);
+    if (liveBA && Date.now() - liveBA.ts < 30_000 && Number.isFinite(slNum)) {
+        const liveSpread = Math.abs(liveBA.ask - liveBA.bid);
+        const pad = 0.5 * liveSpread;
+        const slVsLive = direction === 'BUY' ? slNum < liveBA.bid - pad : slNum > liveBA.ask + pad;
+        if (!slVsLive) {
+            const msg = `SL (${slNum}) no despeja el spread vivo (bid=${liveBA.bid}, ask=${liveBA.ask}) para ${direction}. Trade abortado antes del broker.`;
+            console.warn(`[CTRADER] 🛡️ ${msg}`);
+            return { success: false, error: msg };
+        }
+    }
+
     try {
         // Get account info for lot calculation
         const accountInfo = await getAccountInfo();
@@ -1088,6 +1106,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 symbolId,
                 tradeSide: direction === 'BUY' ? 1 : 2,
                 volume: correctVolumeCents,
+                stopLoss: formattedSl,
+                ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
+                label: params.tradeId,
             });
             // 🛡️ FIX ago-2026: el fallback MARKET no leía el errorCode — un rechazo limpio del
             // servidor (errorCode presente) dejaba pasar una "posición fantasma".
@@ -1110,6 +1131,10 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             }
             positionId = String(rawPositionId);
             executedPrice = Number(ev?.deal?.executionPrice ?? ev?.position?.price ?? currentPrice) || currentPrice;
+            // 🛡️ Paso 2 (05-oct-2026): el fallback MARKET ahora manda SL/TP atómicos en la orden.
+            // Marcar attached para saltear el amend post-fill (que era la fuente de BAD_STOPS
+            // con posición desnuda y cierre de emergencia pagando comisión+spread).
+            sltpAttached = true;
         }
 
         // 🛡️ FIX ago-2026: confirmar el FILL antes de tocar SL/TP (ver confirmOrderFilled).
@@ -1117,7 +1142,12 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         // ni ghost alerts. Si llenó (o no se confirma a tiempo), se sigue el flujo normal.
         const fillConfirm = await confirmOrderFilled(Number(positionId));
         if (fillConfirm.rejected) {
-            throw new Error(`Orden rechazada por el broker (${fillConfirm.dealStatusName}): el deal no se llenó. No se abrió posición.`);
+            // 🛡️ Paso 2 (05-oct-2026): enriquecer el rechazo con el detalle interno del broker
+            // para poder diagnosticar INTERNALLY_REJECTED (horarios del símbolo, breaks, margen).
+            const rejDetail = fillConfirm.deal
+                ? (fillConfirm.deal.errorDescription ?? fillConfirm.deal.errorCode ?? fillConfirm.deal.rejectReason ?? `deal=${JSON.stringify(fillConfirm.deal).slice(0, 200)}`)
+                : 'sin detalle del deal';
+            throw new Error(`Orden rechazada por el broker (${fillConfirm.dealStatusName} | ${rejDetail}): el deal no se llenó. No se abrió posición.`);
         }
         // 🆕 ago-2026: corregir el precio de ejecución con el deal REAL del broker. El evento
         // inmediato de la orden puede reportar el precio del radar (ej. USOIL: bot creía 83.1312,

@@ -83,7 +83,7 @@ FETCH_ENABLED = True
 # 🆕 sep-2026 (paso 9, auto-aplicación por decisión de Bon): aplica automático lo que
 # pasa los gates estadísticos. El panel queda como auditor + revert (snapshots en
 # reports/prev_*.json). Apagar = desactivar con este flag.
-AUTO_APPLY_ENABLED = True
+AUTO_APPLY_ENABLED = False  # congelado 05-oct-2026 (plan Paso 1): optimizador corre pero NO auto-aplica; volver a True para restaurar
 
 # 🛡️ Sizing fraccional (sep-2026): propuesta del dominical (factores por sesión, n>=8, gate MC).
 # DESACTIVADO hasta OK de Bon — el módulo corre solo si este flag es True. PROPONE, NO aplica.
@@ -276,7 +276,10 @@ def run_ks_sweep(ticker: str) -> dict | None:
     maxTradesPerDay, trailingDrawdownR, score}. El script APLICA a Firestore
     (source='killswitch_tune', igual que la v1 — los killswitches son el único bloque
     auto-aplicado del dominical); acá se parsea para el reporte."""
-    r = subprocess.run(["npx", "tsx", str(KS_TUNE), ticker],
+    ks_cmd = ["npx", "tsx", str(KS_TUNE), ticker]
+    if not AUTO_APPLY_ENABLED:
+        ks_cmd.append("--dry-run")
+    r = subprocess.run(ks_cmd,
                        cwd=str(REPO), capture_output=True, text=True, timeout=40 * 60)
     best_line = None
     best2_line = None
@@ -305,7 +308,10 @@ def run_ks_sweep(ticker: str) -> dict | None:
 def run_directional_mcl_sweep(ticker: str) -> dict | None:
     """Sweep MCL direccional por sesión (sep-2026, opción 2 de Bon) — APLICA a Firestore
     con dot-paths (source='directional_mcl_tune') y devuelve el resumen para el reporte."""
-    r = subprocess.run(["npx", "tsx", str(REPO / "scripts" / "directional_mcl_tune.ts"), ticker],
+    mcl_cmd = ["npx", "tsx", str(REPO / "scripts" / "directional_mcl_tune.ts"), ticker]
+    if not AUTO_APPLY_ENABLED:
+        mcl_cmd.append("--dry-run")
+    r = subprocess.run(mcl_cmd,
                        cwd=str(REPO), capture_output=True, text=True, timeout=40 * 60)
     if r.returncode != 0:
         print(f"  ⚠️ directional_mcl_tune {ticker} exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
@@ -838,6 +844,23 @@ def main() -> int:
             print(f"    ⚠ Parity report exit={pr.returncode}", flush=True)
     except Exception as e:
         print(f"    ⚠ Parity report falló: {e}", flush=True)
+
+    # 5b. OTE vs DIRECTO (1-oct-2026, pedido Bon): cruza trade_journal (entryType) contra
+    # la telemetría del embudo — resultados reales por tipo de entrada + sanity check de
+    # ejecuciones. Read-only, escribe scripts/periodic_opt/reports/ote_vs_directo.json.
+    # Ventana semanal como el parity (la cobertura real la acota el journal solo).
+    try:
+        od = subprocess.run(
+            ["npx", "tsx", str(REPO / "scripts" / "ote_vs_directo.ts"), "--days=7", "--telegram"],
+            cwd=str(REPO), capture_output=True, text=True, timeout=10 * 60,
+        )
+        od_out = (od.stdout or "") + (od.stderr or "")
+        print("    OTE vs DIRECTO:")
+        print("\n".join(f"      {ln}" for ln in od_out.splitlines()[-30:]), flush=True)
+        if od.returncode != 0:
+            print(f"    ⚠ OTE vs DIRECTO exit={od.returncode}", flush=True)
+    except Exception as e:
+        print(f"    ⚠ OTE vs DIRECTO falló: {e}", flush=True)
 
     # 6. Re-entrenamiento ML semanal (ML F3, sep-2026) — AL FINAL del ciclo.
     # El modelo entrenado HOY (con datos hasta hoy) evalúa la semana QUE VIENE: walk-forward.

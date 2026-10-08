@@ -807,9 +807,6 @@ export default function BacktestingPanel() {
         structuralTrailEnabled: structuralTrailEnabled,
         tp1StructuralMinRR: tp1StructuralMinRR,
 
-        // 🆕 ROI Time-Decay & Rider (consumido por trading.ts)
-        minimal_roi: (sessionTriggers as any)?.LONDON?.choch15m?.minimal_roi || {"0":0.015,"30":0.005,"60":0},
-
         updatedAt: new Date().toISOString()
       };
 

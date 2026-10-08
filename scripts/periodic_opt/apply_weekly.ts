@@ -143,7 +143,10 @@ async function main() {
     // Gate ya pasado (RECOMMEND + MC survival≥0.80 + reporte fresco). Acá: si el activo está
     // apagado, se activa SOLO si no hay retiro explícito (disabledReason — lo escribe el panel
     // al desactivar a mano, y marca retiros como USOIL) y la producción OOS es ≥ 0.
-    const retired = typeof current.disabledReason === 'string' && current.disabledReason.trim().length > 0;
+    const dr = typeof current.disabledReason === 'string' ? current.disabledReason : '';
+    // T4: solo el retiro MANUAL bloquea la auto-activación. El disabledReason que escribe
+    // el propio optimizador (auto-disable) NO es un retiro a mano → se puede re-habilitar.
+    const retired = dr.trim().length > 0 && !dr.startsWith('auto-disable:');
     if (current.enabled === false) {
         if (retired) { skipped.push(`${ticker}: retirado por decisión previa (disabledReason) — activación manual`); continue; }
         const prodOos = Number(report.production_oos?.net_pnl_r);
@@ -154,6 +157,9 @@ async function main() {
     if (current.enabled !== true) {
         // deja enabled explícito en el doc (∅ → true también, evita ambigüedad)
         payload.enabled = true;
+        // T4: limpiar el disabledReason AUTO al activar. Si queda, el roster
+        // `enabled && !disabledReason` sigue bloqueando el ticker aunque enabled:true.
+        payload.disabledReason = '';
         if (current.enabled === false) {
             const prodOos = Number(report.production_oos?.net_pnl_r);
             console.log(`  🔓 ${ticker}: ACTIVADO automáticamente (RECOMMEND + MC ok + prod OOS ${Number.isFinite(prodOos) ? prodOos.toFixed(1) : 'n/a'}R)`);
@@ -229,7 +235,7 @@ async function main() {
       }
       const merged = JSON.parse(JSON.stringify(current.sessions || {}));
       merged[session] = merged[session] || {};
-      merged[session][trigger] = { ...(merged[session][trigger] || {}), enabled: true, minScore: 99 };
+      merged[session][trigger] = { ...(merged[session][trigger] || {}), enabled: false, minScore: 99 };
       await db.doc(`asset_configs/${ticker}`).update({ sessions: merged, source: 'apply_weekly_losers' });
       applied.push(`loser-disable: ${ticker} ${session}/${trigger} → minScore=99 (n=${d.n}, exp=${d.exp})`);
     }

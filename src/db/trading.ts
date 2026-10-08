@@ -712,6 +712,10 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     correlationFilter?: any;
     /** 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación parametrizado) */
     biasConfluence?: BiasConfluenceConfig;
+    /** 🆕 T6 (oct-2026): pesos de zona × sesión (hyperopt, 6 familias × 4 sesiones) */
+    zoneWeights?: Record<string, Record<string, number>>;
+    /** 🆕 T6 (oct-2026): peso VWAP por activo (hyperopt, rango 2-6) */
+    vwapPts?: number;
     sessions?: Record<string, {
         choch5m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
         choch15m?: { enabled: boolean; minScore?: number; minScoreBuy?: number; minScoreSell?: number };
@@ -752,7 +756,7 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             fixedRR: sessionConfig?.fixedRR ?? config.fixedRR ?? globalState.dynamicBotConfig.fixedRR,
             oteEntryPercent: config.oteEntryPercent ?? globalState.dynamicBotConfig.oteEntryPercent,
             entryTrigger: config.entryTrigger ?? globalState.dynamicBotConfig.entryTrigger,
-            sessionEnabled: config.enabled ?? true,
+            sessionEnabled: (config.enabled ?? true) && !(config as any).disabledReason,
             maxSellsPerDay: config.maxSellsPerDay ?? 0,
             sellScorePenalty: config.sellScorePenalty ?? 0,
             maxBuysPerDay: config.maxBuysPerDay ?? 0,
@@ -774,16 +778,20 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             timesfm: (config as any).timesfm, // 🆕 F1/F2: filtro direccional TimesFM (asset_configs/{ticker}.timesfm)
             correlationFilter: (config as any).correlationFilter, // 🧲 filtro de correlación cross-asset
             biasConfluence: (config as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo
+            zoneWeights: (config as any).zoneWeights, // 🆕 T6: pesos de zona × sesión (hyperopt) — zoneWeightMultLive los lee
+            vwapPts: (config as any).vwapPts, // 🆕 T6: peso VWAP por activo (hyperopt) — vwapPtsLive lo lee
             sessions: config.sessions as any
         };
     }
 
-    // Fallback
-    return { ...globalState.dynamicBotConfig, sessionEnabled: true, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
+    // Fallback — 🛡️ FAIL-CLOSED: un ticker sin config válida NO opera con defaults.
+    return { ...globalState.dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
 }
 
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
 const unsubscribers: (() => void)[] = [];
+// 🛡️ Auditoría T1: aviso único por doc de config inválido (fail-closed)
+const invalidConfigNotified = new Set<string>();
 
 if (db) {
     try {
@@ -858,7 +866,17 @@ if (db) {
                 }
                 const parsed = AssetSessionConfigSchema.safeParse(doc.data());
                 if (!parsed.success) {
-                    console.warn(`[CONFIG] Invalid data in asset_configs for ${doc.id}:`, parsed.error.format());
+                    // 🛡️ FAIL-CLOSED: doc inválido → bloquear el activo (antes caía al fallback y operaba con defaults).
+                    console.error(`[CONFIG] ❌ asset_configs/${doc.id} INVÁLIDO → activo BLOQUEADO:`, JSON.stringify(parsed.error.format()));
+                    globalState.assetSessionConfigs.set(doc.id, {
+                        ...((globalState.assetSessionConfigs.get(doc.id) as any) ?? {}),
+                        enabled: false,
+                        disabledReason: 'CONFIG_INVALID (schema Zod) — ver JARVIS-error.log',
+                    } as any);
+                    if (!invalidConfigNotified.has(doc.id)) {
+                        invalidConfigNotified.add(doc.id);
+                        sendTelegramAlert(`🚨 <b>[CONFIG INVÁLIDA] ${doc.id}</b>\nasset_configs/${doc.id} no pasa el schema → activo BLOQUEADO hasta corregirlo.`).catch(() => { });
+                    }
                     return;
                 }
                 const data = parsed.data;
@@ -869,7 +887,7 @@ if (db) {
                     fixedRR: data.fixedRR !== undefined ? data.fixedRR : globalState.dynamicBotConfig.fixedRR,
                     oteEntryPercent: data.oteEntryPercent !== undefined ? data.oteEntryPercent : globalState.dynamicBotConfig.oteEntryPercent,
                     entryTrigger: data.entryTrigger || globalState.dynamicBotConfig.entryTrigger,
-                    enabled: data.enabled !== false, // default enabled
+                    enabled: data.enabled === true, // 🛡️ opt-in explícito: docs sin 'enabled' NO operan
                     maxSellsPerDay: data.maxSellsPerDay || 0,
                     sellScorePenalty: data.sellScorePenalty || 0,
                     maxBuysPerDay: data.maxBuysPerDay || 0,
@@ -895,6 +913,8 @@ if (db) {
                     timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
                     correlationFilter: (data as any).correlationFilter, // 🧲 ago-2026: sin esto, asset_configs correlationFilter={shadow:false} NO activa el bloqueo real
                     biasConfluence: (data as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación)
+                    zoneWeights: (data as any).zoneWeights, // 🆕 T6: pesos de zona × sesión (hyperopt) — zoneWeightMultLive los lee
+                    vwapPts: (data as any).vwapPts, // 🆕 T6: peso VWAP por activo (hyperopt) — vwapPtsLive lo lee
                     rolloverBeEnabled: (data as any).rolloverBeEnabled !== false, // 🛡️ Regla A (sep-2026): SL→BE pre-rollover, default ON
                     rolloverEntryBlock: (data as any).rolloverEntryBlock !== false, // 🛡️ Regla C (sep-2026): bloquear entradas 20:29-21:30 UTC, default ON
                     disabledReason: (data as any).disabledReason, // 🆕 27-sep-2026: retiro explícito (panel/optimizador) — el roster dinámico lo respeta
@@ -1022,7 +1042,8 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
             (netTrade as any).isBacktest = isBacktest;
             store.activeTrades.set(netTrade.tradeId, netTrade);
-            if (db && !netTrade.isBacktest) db.collection('active_trades').doc(netTrade.tradeId).set(netTrade).catch(() => { });
+            // 🛡️ T1: NO persistir el pre-trade (carrera con los delete() de dispatchOteSignal → fantasmas en Firestore).
+            // El camino exitoso persiste en dispatchOteSignal antes de ejecutar.
         }
     }
 
@@ -1193,10 +1214,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             console.log(`[RADAR] 🤖 Master Killswitch activo, pero permitiendo BTCUSD de forma excepcional.`);
         } else {
             console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada debido a que el BOT GLOBAL está APAGADO.`);
+            releaseLock!(); // 🛡️ T1: sin esto el lock del ticker queda colgado (deadlock hasta restart)
             return;
         }
     } else if (store.globalKillswitches[ticker]) {
         console.log(`[RADAR] 🚫 Alerta para ${ticker} ignorada por killswitch individual activo.`);
+        releaseLock!(); // 🛡️ T1: sin esto el lock del ticker queda colgado (deadlock hasta restart)
         return;
     }
 
@@ -1411,6 +1434,16 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 : (trade.entryPrice - currentPrice) / trade.entryPrice * 100;
                             if (currentPnlPct >= effectiveROI * 100) {
                                 if (isDuplicate(`ROI_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                                // 🛡️ T1: en vivo cerrar en cTrader ANTES de marcar WIN (sin esto la posición
+                                // quedaba viva sin gestor y el journal registraba un WIN falso).
+                                if (!isBacktest && trade.ctraderPositionId) {
+                                    const { closePosition } = await import('../services/ctrader.js');
+                                    const ok = await closePosition(String(trade.ctraderPositionId));
+                                    if (!ok) {
+                                        console.warn(`[ROI] ⚠️ ${ticker} ${trade.direction} #${tradeId}: closePosition falló — se reintenta tras la ventana de dedupe.`);
+                                        continue;
+                                    }
+                                }
                                 store.activeTrades.delete(tradeId);
                                 if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
                                 trade.roiDecayApplied = roiLabel;
@@ -1469,7 +1502,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🔄 REINTENTO DE MODIFICACIÓN DE SL (Si quedó pendiente de un tick anterior)
-                    if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId) {
+                    if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId && !(trade as any).slAmendInFlight) {
                         trade.targetSlRetries = (trade.targetSlRetries || 0) + 1;
                         // 🛡️ ago-2026 Fix: tope de reintentos. Un SL rechazado de forma persistente
                         // (TRADING_BAD_STOPS, posición cerrada/inexistente) no se va a resolver solo;
@@ -1480,23 +1513,27 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             trade.targetSlRetries = 0;
                             if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ targetSlPending: false }).catch(() => { });
                         } else {
-                            console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${trade.targetSlPrice} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
+                            const sentSl = trade.targetSlPrice!;
+                            console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${sentSl} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
+                            (trade as any).slAmendInFlight = true;
                             import('../services/ctrader.js').then(async (ctrader) => {
-                                const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
+                                const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, sentSl);
                                 if (success) {
-                                    console.log(`[CTRADER] ✅ Éxito al modificar SL a ${trade.targetSlPrice} en reintento.`);
-                                    trade.slPrice = trade.targetSlPrice!;
-                                    trade.targetSlPending = false;
+                                    console.log(`[CTRADER] ✅ Éxito al modificar SL a ${sentSl} en reintento.`);
+                                    trade.slPrice = sentSl;
+                                    if (trade.targetSlPrice === sentSl) trade.targetSlPending = false; // si el trailing movió el target, sigue pendiente
                                     trade.targetSlRetries = 0;
                                     if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({
                                         slPrice: trade.slPrice,
                                         targetSlPending: false
                                     }).catch(() => { });
                                 } else {
-                                    console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice} en reintento, se seguirá intentando.`);
+                                    console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${sentSl} en reintento, se seguirá intentando.`);
                                 }
                             }).catch(err => {
                                 console.error(`[CTRADER] ❌ Error importando módulo para reintento de Breakeven: ${err.message}`);
+                            }).finally(() => {
+                                (trade as any).slAmendInFlight = false;
                             });
                         }
                     }
@@ -1678,6 +1715,16 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 const inverseDir = trade.direction === 'BUY' ? 'Bearish' : 'Bullish';
                                 if ((lastChoch as any).direction === inverseDir) {
                                     if (isDuplicate(`RIDER_${trade.tradeId}_${ticker}`, nowTrade)) continue;
+                                    // 🛡️ T1: en vivo cerrar en cTrader ANTES de marcar WIN (sin esto la posición
+                                    // quedaba viva sin gestor y el journal registraba un WIN falso).
+                                    if (!isBacktest && trade.ctraderPositionId) {
+                                        const { closePosition } = await import('../services/ctrader.js');
+                                        const ok = await closePosition(String(trade.ctraderPositionId));
+                                        if (!ok) {
+                                            console.warn(`[RIDER] ⚠️ ${ticker} ${trade.direction} #${tradeId}: closePosition falló — se reintenta tras la ventana de dedupe.`);
+                                            continue;
+                                        }
+                                    }
                                     store.activeTrades.delete(tradeId);
                                     if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
                                     

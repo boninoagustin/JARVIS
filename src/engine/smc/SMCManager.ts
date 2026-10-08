@@ -5,6 +5,12 @@ import { loadOptimizedPreset } from './smc_config.js';
 class SMCManager {
     private engines: Map<string, SMCEngine> = new Map();
 
+    constructor() {
+        // 🆕 Marca de versión (sep-2026): confirma en el log que el proceso vivo carga
+        // el código con la telemetría de gates anti-whipsaw (grep: [SMC-MANAGER]).
+        console.log('[SMC-MANAGER] 📡 Telemetría de gates anti-whipsaw ACTIVA (sep-2026)');
+    }
+
     // 🆕 Fase 1: listeners de eventos del motor (SMCBridge los usa para alimentar a JARVIS)
     private listeners: Array<(key: string, candle: OHLCV, events: any[], isHistorical: boolean) => void> = [];
     private forming = new Map<string, OHLCV>();
@@ -26,6 +32,7 @@ class SMCManager {
             }
             const preset = loadOptimizedPreset(ticker, period, basePresetName);
             const engine = new SMCEngine(preset, period);
+            engine.label = ticker; // 🆕 telemetría de gates: incluir ticker en los logs
             if (['M5', 'M15', 'M30', 'H1', 'H4'].includes(period)) {
                 const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
                 const targetHTF = period === 'H1' ? 'D1' : period === 'M15' || period === 'M30' ? 'H4' : 'W1';
@@ -109,7 +116,7 @@ class SMCManager {
             // cTrader reenvía el mismo batch → sin esta guarda, forming oscila
             // hacia atrás en cada batch repetido y los eventos nunca se generan.
             const curForming = this.forming.get(key);
-            if (!curForming || candle.timestamp > curForming.timestamp) {
+            if (!curForming || candle.timestamp >= curForming.timestamp) {
                 this.forming.set(key, candle);
             }
             if (!isHistorical) {
