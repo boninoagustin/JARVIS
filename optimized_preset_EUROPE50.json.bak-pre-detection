@@ -1,0 +1,23 @@
+{
+    "Risk": {
+        "slBufferPercent": 0.10470206806842472,
+        "fixedRR": 4.838252725215444,
+        "minRR": 2.0241757585888536,
+        "oteEntryPercent": 50
+    },
+    "Scoring": {
+        "minBuyPoints": 5,
+        "minSellPoints": 3
+    },
+    "Meta": {
+        "objective_value": 2018.8700305337668,
+        "trade_count": 30,
+        "profit_factor": 8649.857880865982,
+        "max_drawdown_r": 3.0000188853300642,
+        "win_rate": 0.5333333333333333,
+        "oos_profit_factor": 10.49977934476617,
+        "n_trials": 400,
+        "study_name": "jarvis_EUROPE50_weekly12",
+        "source": "hyperopt"
+    }
+}

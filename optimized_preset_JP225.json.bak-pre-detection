@@ -1,0 +1,23 @@
+{
+    "Risk": {
+        "slBufferPercent": 0.0406169349016557,
+        "fixedRR": 2.047718713317806,
+        "minRR": 2.473646099729318,
+        "oteEntryPercent": 79
+    },
+    "Scoring": {
+        "minBuyPoints": 5,
+        "minSellPoints": 4
+    },
+    "Meta": {
+        "objective_value": -1.6666666666666663,
+        "trade_count": 25,
+        "profit_factor": 2.687048555484248,
+        "max_drawdown_r": 2.0000012936271436,
+        "win_rate": 0.56,
+        "oos_profit_factor": 4.185340965477395,
+        "n_trials": 400,
+        "study_name": "jarvis_JP225_weekly12",
+        "source": "hyperopt"
+    }
+}

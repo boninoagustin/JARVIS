@@ -55,7 +55,9 @@ muerte del servidor sin hacer nada.
    cp scripts/periodic_opt/jarvis-asset-scout.service /etc/systemd/system/     # screening sáb 03:00
    cp scripts/periodic_opt/jarvis-asset-scout.timer /etc/systemd/system/
    cp scripts/periodic_opt/jarvis-opt-failure-notify.service /etc/systemd/system/  # notificación de fallo por Telegram
-   systemctl daemon-reload && systemctl enable --now jarvis-periodic-opt.timer jarvis-asset-scout.timer
+   cp scripts/periodic_opt/jarvis-detection-tune.service /etc/systemd/system/      # tune detección SMC (dom 02:00, ex-bruteforcer)
+   cp scripts/periodic_opt/jarvis-detection-tune.timer /etc/systemd/system/
+   systemctl daemon-reload && systemctl enable --now jarvis-periodic-opt.timer jarvis-asset-scout.timer jarvis-detection-tune.timer
    ```
 
 6. **Seguridad** (mismo esquema que el VPS actual)

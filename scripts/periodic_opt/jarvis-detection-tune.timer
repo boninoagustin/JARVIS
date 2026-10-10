@@ -1,0 +1,10 @@
+[Unit]
+Description=Tune semanal de detección SMC — domingo 02:00 (lejos del dominical del sábado, sin mercado)
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

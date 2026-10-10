@@ -1,0 +1,81 @@
+{
+  "Risk": {
+    "slBufferPercent": 0.0406169349016557,
+    "fixedRR": 2.047718713317806,
+    "minRR": 2.473646099729318,
+    "oteEntryPercent": 79
+  },
+  "Scoring": {
+    "minBuyPoints": 5,
+    "minSellPoints": 4
+  },
+  "Meta": {
+    "objective_value": -1.6666666666666663,
+    "trade_count": 25,
+    "profit_factor": 2.687048555484248,
+    "max_drawdown_r": 2.0000012936271436,
+    "win_rate": 0.56,
+    "oos_profit_factor": 4.185340965477395,
+    "n_trials": 400,
+    "study_name": "jarvis_JP225_weekly12",
+    "source": "hyperopt"
+  },
+  "M15": {
+    "pivot_len": 3,
+    "wick_pct": 0.5,
+    "div_len": 3,
+    "z_window": 100
+  },
+  "H1": {
+    "pivot_len": 3,
+    "wick_pct": 0.5,
+    "div_len": 3,
+    "z_window": 100
+  },
+  "H4": {
+    "pivot_len": 3,
+    "wick_pct": 0.5,
+    "div_len": 3,
+    "z_window": 100
+  },
+  "D1": {
+    "pivot_len": 3,
+    "wick_pct": 0.5,
+    "div_len": 3,
+    "z_window": 100
+  },
+  "Detection": {
+    "pivot_len": 3,
+    "min_sweep_wick_pct": 0.5,
+    "div_pivot_len": 3,
+    "z_score_window": 100,
+    "require_displacement": false,
+    "require_fvg_after_ob": true,
+    "strict_breaker": true,
+    "strict_sweep": false,
+    "confirm_close": true,
+    "min_ob_body_pct": 0.2,
+    "use_body_for_ob": true,
+    "fvg_min_atr": 0.5,
+    "wick_invalidates_ob": false
+  },
+  "DetectionMeta": {
+    "source": "detection_tune_manual",
+    "appliedAt": "2026-10-10T05:41:34Z",
+    "params": {
+      "pivot_len": 3,
+      "min_sweep_wick_pct": 0.5,
+      "div_pivot_len": 3,
+      "z_score_window": 100,
+      "require_displacement": false,
+      "require_fvg_after_ob": true,
+      "strict_breaker": true,
+      "strict_sweep": false,
+      "confirm_close": true,
+      "min_ob_body_pct": 0.2,
+      "use_body_for_ob": true,
+      "fvg_min_atr": 0.5,
+      "wick_invalidates_ob": false
+    }
+  }
+}

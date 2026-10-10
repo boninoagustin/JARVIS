@@ -1,0 +1,10 @@
+[Unit]
+Description=Tune semanal de detección SMC por activo (busca los mejores umbrales y aplica con regla conservadora)
+After=network.target
+
+[Service]
+Type=oneshot
+Environment=JARVIS_DETECTION_TUNE=1
+ExecStart=/bin/bash /opt/JARVIS/scripts/periodic_opt/run_detection_tune.sh
+WorkingDirectory=/opt/JARVIS
+TimeoutStartSec=21600

@@ -1,0 +1,23 @@
+{
+    "Risk": {
+        "slBufferPercent": 0.04400708087195873,
+        "fixedRR": 1.3202832081945175,
+        "minRR": 1.3842499059090598,
+        "oteEntryPercent": 50
+    },
+    "Scoring": {
+        "minBuyPoints": 8,
+        "minSellPoints": 3
+    },
+    "Meta": {
+        "objective_value": 2.456463385970019,
+        "trade_count": 31,
+        "profit_factor": 5.1399115012032555,
+        "max_drawdown_r": 1.0001472289175126,
+        "win_rate": 0.45161290322580644,
+        "oos_profit_factor": 30.616431930535427,
+        "n_trials": 800,
+        "study_name": "jarvis_NL25_weekly12",
+        "source": "hyperopt"
+    }
+}

@@ -1,0 +1,43 @@
+{
+  "M15": {
+    "pivot_len": 8,
+    "wick_pct": 0.3,
+    "div_len": 5,
+    "z_window": 14
+  },
+  "H1": {
+    "pivot_len": 8,
+    "wick_pct": 0.3,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "H4": {
+    "pivot_len": 8,
+    "wick_pct": 0.1,
+    "div_len": 5,
+    "z_window": 14
+  },
+  "D1": {
+    "pivot_len": 3,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "Risk": {
+    "slBufferPercent": 10,
+    "fixedRR": 5,
+    "minRR": 1
+  },
+  "Metrics": {
+    "PnL_R": "9.76",
+    "Trades": 215,
+    "WinRate": "63.72%"
+  },
+  "Meta": {
+    "tfSource": "tf_sweep_weekly",
+    "tfVerdict": "RECOMMEND",
+    "tfAppliedAt": "2026-09-27T02:02:20.871Z",
+    "tfBaselineExp": 0.46205648553412165,
+    "tfProposalExp": 0.6505868369154739
+  }
+}
