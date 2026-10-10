@@ -81,6 +81,10 @@ por-activo es el enfoque correcto.
   regla conservadora (aplicar solo si OOS +1R con train ≥ -1R y muestra ≥8 trades, o train +5R
   con OOS ≥ -1R), backup `.bak-pre-detection` automático, `pm2 restart JARVIS` solo si se aplicó.
 - Protecciones: flock anti-duplicados, heap 2560, oom_score_adj=-1000 para JARVIS.
+- **Fase 2 aplicada (10-oct-2026)**: `smc_config.ts` lee la sección `Detection` (13 umbrales
+  globales por activo) con prioridad sobre los bloques TF — verificada en vivo
+  (`Applied Detection params for AUDCAD/JP225/NL25 (13/13)`). `load_best_params.py` preserva
+  Detection/DetectionMeta para que el dominical no la borre. Bot ↺1036, 0 errores.
 
 ## Incidente OOM (10-oct-2026)
 Dos búsquedas paralelas (re-lanzamiento por notify espurio) pican ~4GB → OOM killer mató al bot
