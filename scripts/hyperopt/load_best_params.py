@@ -47,31 +47,39 @@ def main() -> int:
 
     # 🔧 FIX: preservar los bloques TF existentes (bruteforcer), no pisarlos con params SMC
     existing_tf: dict = {}
+    # 🆕 oct-2026: preservar también Detection/DetectionMeta (tune semanal de detección,
+    # dueño ex-bruteforcer) — el hyperopt es dueño SOLO de Risk/Scoring/Meta.
+    existing_detection: dict = {}
     if out_path.exists():
         try:
             existing = json.loads(out_path.read_text())
             for k in ("M15", "H1", "H4", "D1"):
                 if k in existing:
                     existing_tf[k] = existing[k]
+            if "Detection" in existing:
+                existing_detection["Detection"] = existing["Detection"]
+            if "DetectionMeta" in existing:
+                existing_detection["DetectionMeta"] = existing["DetectionMeta"]
         except Exception:
             pass
 
+    # 🆕 21-sep-2026: tolerante a espacios nuevos — weekly11+ mueve la gestión de salida
+    # (partialClosePct/slAfterTp1/tp15BeEnabled/atrTrailEnabled) a per-gatillo (sessions).
+    # Solo se incluyen las claves presentes en best_params.
+    risk: dict = {}
+    for _k in ("slBufferPercent", "fixedRR", "minRR", "oteEntryPercent",
+               "partialClosePct", "slAfterTp1", "tp15BeEnabled", "atrTrailEnabled"):
+        if params.get(_k) is not None:
+            risk[_k] = params[_k]
+    scoring: dict = {}
+    for _k in ("minBuyPoints", "minSellPoints"):
+        if params.get(_k) is not None:
+            scoring[_k] = params[_k]
     preset = {
         **existing_tf,
-        "Risk": {
-            "slBufferPercent": params["slBufferPercent"],
-            "fixedRR": params["fixedRR"],
-            "minRR": params["minRR"],
-            "oteEntryPercent": params["oteEntryPercent"],
-            "partialClosePct": params["partialClosePct"],
-            "slAfterTp1": params["slAfterTp1"],
-            "tp15BeEnabled": params["tp15BeEnabled"],
-            "atrTrailEnabled": params["atrTrailEnabled"],
-        },
-        "Scoring": {
-            "minBuyPoints": params["minBuyPoints"],
-            "minSellPoints": params["minSellPoints"],
-        },
+        **existing_detection,
+        "Risk": risk,
+        "Scoring": scoring,
         "Meta": {
             "objective_value": data["best_value"],
             "trade_count": data["best_metrics"]["trade_count"] if data.get("best_metrics") else None,

@@ -74,6 +74,31 @@ export function loadOptimizedPreset(ticker: string, period: string, basePresetNa
                 if (opt.z_window !== undefined) basePreset.z_score_window = opt.z_window;
                 console.log(`[SMC_CONFIG] Loaded optimized preset for ${ticker} ${tfKey}`);
             }
+            // 🆕 detection-tune (oct-2026): umbrales de detección globales optimizados por activo
+            // (dueño: run_detection_tune semanal, ex-bruteforcer). Pisan los bloques TF anteriores.
+            if (data.Detection) {
+                const det = data.Detection;
+                const detMap: Record<string, string> = {
+                    pivot_len: 'pivot_len',
+                    min_sweep_wick_pct: 'min_sweep_wick_pct',
+                    div_pivot_len: 'div_pivot_len',
+                    z_score_window: 'z_score_window',
+                    require_displacement: 'require_displacement',
+                    require_fvg_after_ob: 'require_fvg_after_ob',
+                    strict_breaker: 'strict_breaker',
+                    strict_sweep: 'strict_sweep',
+                    confirm_close: 'confirm_close',
+                    min_ob_body_pct: 'min_ob_body_pct',
+                    use_body_for_ob: 'use_body_for_ob',
+                    fvg_min_atr: 'fvg_min_atr',
+                    wick_invalidates_ob: 'wick_invalidates_ob',
+                };
+                let applied = 0;
+                for (const [src, dst] of Object.entries(detMap)) {
+                    if (det[src] !== undefined) { (basePreset as any)[dst] = det[src]; applied++; }
+                }
+                if (applied > 0) console.log(`[SMC_CONFIG] Applied Detection params for ${ticker} (${applied}/13)`);
+            }
         }
     } catch (e) {
         console.error(`[SMC_CONFIG] Error loading optimized preset for ${ticker}:`, e);
