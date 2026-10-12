@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import shutil
+import time
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -389,7 +390,23 @@ async def detection_optimize(ticker: str):
     if not os.path.isdir(hist_dir):
         raise HTTPException(status_code=404, detail=f"Sin historia para {ticker}")
 
-    # Marcar "optimizando" en Firestore vía el propio health doc (lo escribe el script al final)
+    # Marcar "optimizando" en Firestore vía el propio health doc
+    try:
+        from firebase_admin import firestore as fa_firestore
+        import firebase_admin
+        sa_path = os.path.join(JARVIS_DIR, "service-account.json")
+        if os.path.exists(sa_path) and not firebase_admin._apps:
+            from firebase_admin import credentials
+            firebase_admin.initialize_app(credentials.Certificate(sa_path))
+        if firebase_admin._apps:
+            db_client = fa_firestore.client()
+            db_client.collection("detection_health").document(ticker).set({
+                "status": "OPTIMIZANDO",
+                "optimizingAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }, merge=True)
+    except Exception as fe:
+        print(f"[KRONOS] Warning marcando status OPTIMIZANDO: {fe}")
+
     cmd = (
         f'cd {JARVIS_DIR} && flock /tmp/detection_tune.lock '
         f'npx tsx scripts/periodic_opt/smc_detection_search.ts {ticker} tune 60 '

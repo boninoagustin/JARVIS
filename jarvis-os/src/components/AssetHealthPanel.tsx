@@ -28,6 +28,7 @@ interface AssetCfg {
 const STATUS_STYLE: Record<string, { label: string; color: string }> = {
   OK: { label: '✅ OPERAR', color: '#22c55e' },
   REVISAR: { label: '🔧 REVISAR', color: '#eab308' },
+  OPTIMIZANDO: { label: '⏳ OPTIMIZANDO...', color: '#38bdf8' },
   OPTIMIZABLE: { label: '🟢 OPTIMIZABLE', color: '#22c55e' },
   CANDIDATO_APAGAR: { label: '🚫 APAGAR', color: '#ef4444' },
 };
@@ -139,6 +140,9 @@ export default function AssetHealthPanel() {
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.bestR ?? '—'}</td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
                 <td style={{ padding: '8px', display: 'flex', gap: '8px' }}>
+                  {statusOf(h) === 'OPTIMIZANDO' && (
+                    <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>⏳ En proceso...</span>
+                  )}
                   {(statusOf(h) === 'REVISAR') && (
                     <button className="btn" disabled={!!optimizing[ticker]} onClick={() => launchOptimize(ticker)}>
                       {optimizing[ticker] ? '⚙️ Lanzando…' : '⚙️ Optimizar'}
