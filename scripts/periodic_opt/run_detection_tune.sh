@@ -5,12 +5,10 @@
 export PATH="/home/bon/.nvm/versions/node/v24.18.0/bin:$PATH"
 cd /opt/JARVIS
 
-# 🛡️ Anti-duplicados: si ya hay una corrida de detección, no arrancar otra.
+# 🛡️ Anti-duplicados: si ya hay una corrida de detección, ESPERAR a que termine (flock bloqueante).
 exec 9>"/tmp/detection_tune.lock"
-if ! flock -n 9; then
-  echo "$(date) Otra corrida de detección ya está activa — salgo." >&2
-  exit 0
-fi
+flock 9
+echo "$(date) Lock de detección adquirido." >&2
 
 # 🛡️ Proteger al bot del OOM killer antes de correr búsquedas pesadas (lección 10-oct-2026:
 # un OOM mató a JARVIS; los picos de la búsqueda no deben poder tumbar el bot en vivo).
@@ -20,7 +18,7 @@ if [ -n "$BOTPID" ]; then
     && echo "oom_score_adj de JARVIS ($BOTPID): -1000 (protegido del OOM killer)"
 fi
 
-ROSTER="${DETECTION_ROSTER:-AUDCAD AUDJPY EUROPE50 FRA40 JP225 NL25 USDJPY USOIL XAUUSD}"
+ROSTER="${DETECTION_ROSTER:-AUDCAD AUDJPY EUROPE50 FRA40 JP225 NL25 USDJPY USOIL XAUUSD EURUSD GBPUSD GBPJPY NZDUSD GBPAUD}"
 TRIALS="${DETECTION_TRIALS:-80}"
 APPLIED=0
 SUMMARY="/tmp/detection_tune_$(date +%Y%m%d).log"
