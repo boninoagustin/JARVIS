@@ -343,3 +343,70 @@ async def backtest_files(ticker: str):
             lines = 0
         file_info.append({"name": f, "lines": lines})
     return {"ticker": ticker, "files": file_info, "dir": ticker_dir}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Detección SMC por activo: salud del roster + optimizador a demanda (oct-2026)
+# El panel lee detection_health/{ticker} directo de Firestore; estos endpoints
+# solo LANZAN los procesos largos en background (con flock anti-duplicados).
+# ────────────────────────────────────────────────────────────────────────────
+
+def _detection_env() -> dict:
+    env = os.environ.copy()
+    env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+    env["NODE_OPTIONS"] = "--max-old-space-size=2560"
+    return env
+
+
+@app.post("/api/detection/health-all")
+async def detection_health_all():
+    """Evalúa el baseline actual de TODOS los tickers con history (sin búsqueda, ~30-60s/ticker)
+    y puebla Firestore detection_health/. Corre en background."""
+    script = os.path.join(JARVIS_DIR, "scripts", "periodic_opt", "run_detection_health.sh")
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="run_detection_health.sh no encontrado")
+    try:
+        subprocess.Popen(
+            ["/bin/bash", script],
+            cwd=JARVIS_DIR, env=_detection_env(),
+            stdout=open(os.path.join("/tmp", "detection_health_all.log"), "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return {"status": "started", "detail": "Evaluación de salud lanzada en background (ver /tmp/detection_health_all.log)"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo lanzar: {e}")
+
+
+@app.post("/api/detection/optimize")
+async def detection_optimize(ticker: str):
+    """Optimizador de detección A DEMANDA para un activo: búsqueda (60 trials) + validación OOS
+    + aplicación si supera la regla conservadora, y refresca su detection_health. Background."""
+    ticker = ticker.upper().strip()
+    if not ticker or not ticker.replace("_", "").isalnum():
+        raise HTTPException(status_code=400, detail="Ticker inválido")
+    hist_dir = os.path.join(JARVIS_DIR, "logs", ticker.lower(), "history")
+    if not os.path.isdir(hist_dir):
+        raise HTTPException(status_code=404, detail=f"Sin historia para {ticker}")
+
+    # Marcar "optimizando" en Firestore vía el propio health doc (lo escribe el script al final)
+    cmd = (
+        f'cd {JARVIS_DIR} && flock /tmp/detection_tune.lock '
+        f'npx tsx scripts/periodic_opt/smc_detection_search.ts {ticker} tune 60 '
+        f'2>/dev/null | grep -a "TUNE_RESULT"; '
+        f'NODE_OPTIONS="--max-old-space-size=2560" npx tsx '
+        f'scripts/periodic_opt/smc_detection_search.ts {ticker} health 0 '
+        f'2>/dev/null | grep -a "HEALTH_"'
+    )
+    try:
+        subprocess.Popen(
+            ["/bin/bash", "-c", cmd],
+            cwd=JARVIS_DIR, env=_detection_env(),
+            stdout=open(os.path.join("/tmp", f"detection_opt_{ticker}.log"), "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return {"status": "started", "ticker": ticker,
+                "detail": f"Optimización de {ticker} lanzada (~10-15 min). Ver /tmp/detection_opt_{ticker}.log"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo lanzar: {e}")

@@ -40,3 +40,7 @@ if [ "$APPLIED" -gt 0 ]; then
   NEWPID=$(pm2 pid JARVIS 2>/dev/null)
   [ -n "$NEWPID" ] && echo -1000 > "/proc/$NEWPID/oom_score_adj" 2>/dev/null
 fi
+
+# 🆕 oct-2026: refrescar la salud de TODO el pool (detection_health/) para el panel.
+echo "=== $(date +%H:%M:%S) HEALTH-ALL (pool completo) ===" | tee -a "$SUMMARY"
+bash /opt/JARVIS/scripts/periodic_opt/run_detection_health.sh >> "$SUMMARY" 2>&1

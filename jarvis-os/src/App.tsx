@@ -9,6 +9,7 @@ import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
 import BacktestingPanel from './components/BacktestingPanel';
 import PeriodicOptPanel from './components/PeriodicOptPanel';
+import AssetHealthPanel from './components/AssetHealthPanel';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
@@ -38,6 +39,9 @@ function Sidebar() {
         </NavLink>
         <NavLink to="/autotune" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <BrainCircuit size={18} /> Optimización Periódica
+        </NavLink>
+        <NavLink to="/assets" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <Activity size={18} /> Salud de Activos
         </NavLink>
       </nav>
       
@@ -242,6 +246,7 @@ function App() {
             <Route path="/backtesting" element={<BacktestingPanel />} />
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="/autotune" element={<PeriodicOptPanel />} />
+            <Route path="/assets" element={<AssetHealthPanel />} />
           </Routes>
         </main>
       </div>

@@ -281,6 +281,52 @@ async function main() {
   console.log(`Cargadas: M5=${candlesByTf['5'].length} M15=${candlesByTf['15'].length} H1=${candlesByTf['60'].length} H4=${candlesByTf['240'].length} D1=${candlesByTf['D1'].length}`);
   const config = buildConfig();
 
+  // ── Modo HEALTH: estado de salud de un ticker para el panel (roster de 30). ──
+  // Sin TRIALS (o 0): solo evalúa el baseline actual → status OK/REVISAR.
+  // Con TRIALS>0: corre la búsqueda y reclasifica con el mejor candidato OOS:
+  //   bestOos > +1R → OPTIMIZABLE (vale activar) | bestOos ≤ +1R → CANDIDATO_APAGAR.
+  // Escribe el resultado a Firestore detection_health/{ticker}.
+  if (process.argv[3] === 'health') {
+    const N = parseInt(process.argv[4] || '0', 10);
+    const allTs = candlesByTf['15'].map(c => c.timestamp);
+    const minTs = Math.min(...allTs), maxTs = Math.max(...allTs);
+    const splitTs = Math.round(minTs + 0.7 * (maxTs - minTs));
+    const base = await evaluate(null, candlesByTf, config, 0, 0); // período completo
+    const out: any = {
+      ticker: TICKER, baselineR: Number(base.totalR.toFixed(2)), trades: base.trades,
+      status: base.totalR > 1.0 ? 'OK' : 'REVISAR',
+      bestR: null, bestParams: null, evaluatedAt: new Date().toISOString(),
+    };
+    if (N > 0) {
+      const rng = mulberry32(42);
+      let best: { params: Record<string, any>; totalR: number } | null = null;
+      for (let i = 0; i < N; i++) {
+        const params = sampleRandom(rng);
+        const r = await evaluate(params, candlesByTf, config, 0, splitTs);
+        if (!best || r.totalR > best.totalR) best = { params, totalR: r.totalR };
+      }
+      const bestOos = await evaluate(best!.params, candlesByTf, config, splitTs, 0);
+      out.bestR = Number(bestOos.totalR.toFixed(2));
+      out.bestParams = best!.params;
+      out.status = bestOos.totalR > 1.0 ? 'OPTIMIZABLE' : 'CANDIDATO_APAGAR';
+      out.bestOosTrades = bestOos.trades;
+    }
+    console.log('HEALTH_RESULT ' + JSON.stringify(out));
+    // Escribir a Firestore (best-effort: si no hay credenciales, solo stdout)
+    try {
+      const adminModule = await import('firebase-admin');
+      const admin: any = (adminModule as any).default ?? adminModule;
+      const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
+      if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
+      const db = admin.firestore();
+      await db.collection('detection_health').doc(TICKER).set(out, { merge: true });
+      console.log('HEALTH_SAVED');
+    } catch (e) {
+      console.log('HEALTH_FIRESTORE_SKIP: ' + String((e as Error).message).slice(0, 100));
+    }
+    process.exit(0);
+  }
+
   // ── Modo EVAL: validar un preset (o baseline) sobre [SPLIT_TS, fin) con warmup del train ──
   if (process.argv[3] === 'eval') {
     const splitTs = Number(process.argv[4]);
