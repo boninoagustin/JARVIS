@@ -5,11 +5,11 @@
 // Guarda todos los trials en /tmp/smc_trials_<TICKER>.json para análisis de importancia.
 import fs from 'fs';
 import path from 'path';
-import { OHLCV, SMCPreset } from '../src/engine/smc/types.js';
-import { SMCEngine } from '../src/engine/smc/SMCEngine.js';
-import { runBacktest, prepareEntries } from '../jarvis-os/src/services/backtestEngine.js';
-import { BacktestConfig } from '../jarvis-os/src/services/backtestTypes.js';
-import { loadOptimizedPreset } from '../src/engine/smc/smc_config.js';
+import { OHLCV, SMCPreset } from '../../src/engine/smc/types.js';
+import { SMCEngine } from '../../src/engine/smc/SMCEngine.js';
+import { runBacktest, prepareEntries } from '../../jarvis-os/src/services/backtestEngine.js';
+import { BacktestConfig } from '../../jarvis-os/src/services/backtestTypes.js';
+import { loadOptimizedPreset } from '../../src/engine/smc/smc_config.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 
 const TICKER = (process.argv[2] || 'EURUSD').toUpperCase();
