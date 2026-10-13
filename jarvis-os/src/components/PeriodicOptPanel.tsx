@@ -574,7 +574,7 @@ export default function PeriodicOptPanel() {
                         <Rocket size={20} color="#ffaa00" /> Optimización Periódica
                     </h2>
                     <p style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px', marginBottom: 0 }}>
-                        Hyperopt semanal (OOS 70/30) vs. producción actual. El sistema <b>nunca aplica solo</b> — la decisión es tuya.
+                        Hyperopt semanal de Scoring y Gestión (sábados 06:00 CEST) vs. producción. Para calibrar umbrales de <b>detección SMC</b> (Capa 1), ver la pestaña <a href="/assets" style={{ color: '#38bdf8', textDecoration: 'underline' }}>Salud de Activos</a>.
                     </p>
                 </div>
                 <button onClick={fetchReports} style={{ padding: '8px 16px', background: '#111', color: '#e6e6e6', border: '1px solid #333', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
