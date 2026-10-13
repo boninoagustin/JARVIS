@@ -1,0 +1,23 @@
+{
+    "Risk": {
+        "slBufferPercent": 0.20289077975103006,
+        "fixedRR": 4.48105256244245,
+        "minRR": 2.213114208042537,
+        "oteEntryPercent": 79
+    },
+    "Scoring": {
+        "minBuyPoints": 12,
+        "minSellPoints": 8
+    },
+    "Meta": {
+        "objective_value": 2.6033380055315427,
+        "trade_count": 36,
+        "profit_factor": 5.772761682130528,
+        "max_drawdown_r": 1.087500000000066,
+        "win_rate": 0.8055555555555556,
+        "oos_profit_factor": 7.3806209258664035,
+        "n_trials": 400,
+        "study_name": "jarvis_GBPAUD_weekly12",
+        "source": "hyperopt"
+    }
+}

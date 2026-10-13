@@ -1,26 +1,26 @@
 {
   "M15": {
     "pivot_len": 21,
-    "wick_pct": 0.3,
+    "wick_pct": 0.7,
     "div_len": 5,
     "z_window": 14
   },
   "H1": {
     "pivot_len": 21,
-    "wick_pct": 0.3,
-    "div_len": 2,
+    "wick_pct": 0.7,
+    "div_len": 5,
     "z_window": 14
   },
   "H4": {
     "pivot_len": 21,
-    "wick_pct": 0.3,
-    "div_len": 2,
+    "wick_pct": 0.7,
+    "div_len": 5,
     "z_window": 14
   },
   "D1": {
     "pivot_len": 21,
-    "wick_pct": 0.1,
-    "div_len": 2,
+    "wick_pct": 0.7,
+    "div_len": 5,
     "z_window": 14
   },
   "Risk": {
@@ -39,5 +39,44 @@
     "tfAppliedAt": "2026-10-04T03:27:29.486Z",
     "tfBaselineExp": 0.359637456675708,
     "tfProposalExp": 0.44644888257897664
+  },
+  "Detection": {
+    "pivot_len": 21,
+    "min_sweep_wick_pct": 0.7,
+    "div_pivot_len": 5,
+    "z_score_window": 14,
+    "require_displacement": true,
+    "require_fvg_after_ob": true,
+    "strict_breaker": false,
+    "strict_sweep": false,
+    "confirm_close": false,
+    "min_ob_body_pct": 0.05,
+    "use_body_for_ob": false,
+    "fvg_min_atr": 0.5,
+    "wick_invalidates_ob": false
+  },
+  "DetectionMeta": {
+    "source": "detection_tune",
+    "appliedAt": "2026-10-13T04:29:46.133Z",
+    "trainR": 10.45,
+    "oosR": 0.45,
+    "prevTrainR": -9.66,
+    "prevOosR": -11.33,
+    "candidatesTested": 80,
+    "params": {
+      "pivot_len": 21,
+      "min_sweep_wick_pct": 0.7,
+      "div_pivot_len": 5,
+      "z_score_window": 14,
+      "require_displacement": true,
+      "require_fvg_after_ob": true,
+      "strict_breaker": false,
+      "strict_sweep": false,
+      "confirm_close": false,
+      "min_ob_body_pct": 0.05,
+      "use_body_for_ob": false,
+      "fvg_min_atr": 0.5,
+      "wick_invalidates_ob": false
+    }
   }
 }
