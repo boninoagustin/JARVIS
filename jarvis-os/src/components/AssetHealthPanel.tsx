@@ -93,6 +93,13 @@ export default function AssetHealthPanel() {
     if (!confirm(`¿Activar ${ticker} en vivo? El bot empezará a operarlo con su configuración actual (preset de detección tuneado + config Firestore).`)) return;
     try {
       await updateDoc(doc(db, 'asset_configs', ticker), { enabled: true, disabledReason: '' });
+      const hDoc = health[ticker];
+      if (hDoc && hDoc.bestR !== null) {
+        await updateDoc(doc(db, 'detection_health', ticker), {
+          status: 'OK',
+          baselineR: hDoc.bestR,
+        });
+      }
       toast(`✅ ${ticker} activado. El bot lo toma en caliente (listener de Firestore).`, 'success');
     } catch (e: any) {
       toast(`Error activando: ${e.message}`, 'error');
@@ -139,17 +146,20 @@ export default function AssetHealthPanel() {
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.baselineR ?? '—'}</td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.bestR ?? '—'}</td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
-                <td style={{ padding: '8px', display: 'flex', gap: '8px' }}>
+                <td style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                   {statusOf(h) === 'OPTIMIZANDO' && (
                     <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>⏳ En proceso...</span>
                   )}
-                  {(statusOf(h) === 'REVISAR' || statusOf(h) === 'OPTIMIZABLE') && (
+                  {!on && statusOf(h) === 'REVISAR' && (
                     <button className="btn" disabled={!!optimizing[ticker]} onClick={() => launchOptimize(ticker)}>
                       {optimizing[ticker] ? '⚙️ Lanzando…' : '⚙️ Optimizar'}
                     </button>
                   )}
                   {showActivate && (
                     <button className="btn btn-primary" onClick={() => activate(ticker)}>🟢 Activar</button>
+                  )}
+                  {on && (statusOf(h) === 'OK' || statusOf(h) === 'OPTIMIZABLE') && (
+                    <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>✓ Calibrado</span>
                   )}
                 </td>
               </tr>
