@@ -128,7 +128,7 @@ export default function AssetHealthPanel() {
             const st = STATUS_STYLE[statusOf(h)];
             const on = isOn(c);
             const reason = on ? '' : (c?.disabledReason || '—');
-            const showActivate = !on && h && (h.status === 'OPTIMIZABLE' || (h.status === 'OK' && (h.baselineR ?? 0) > 0));
+            const showActivate = !on && h && (h.status === 'OPTIMIZABLE' || (h.bestR !== null && (h.bestR ?? 0) > 0) || (h.status === 'OK' && (h.baselineR ?? 0) > 0));
             return (
               <tr key={ticker} style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <td style={{ padding: '8px', fontWeight: 600 }}>{ticker}</td>
@@ -143,7 +143,7 @@ export default function AssetHealthPanel() {
                   {statusOf(h) === 'OPTIMIZANDO' && (
                     <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>⏳ En proceso...</span>
                   )}
-                  {(statusOf(h) === 'REVISAR') && (
+                  {(statusOf(h) === 'REVISAR' || statusOf(h) === 'OPTIMIZABLE') && (
                     <button className="btn" disabled={!!optimizing[ticker]} onClick={() => launchOptimize(ticker)}>
                       {optimizing[ticker] ? '⚙️ Lanzando…' : '⚙️ Optimizar'}
                     </button>

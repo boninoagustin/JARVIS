@@ -409,6 +409,30 @@ async function main() {
     };
     fs.writeFileSync(presetPath, JSON.stringify(presetJson, null, 2));
     console.log(`DECISIÓN: APLICADO → ${presetPath} (backup: ${presetPath}.bak-pre-detection)`);
+
+    // Reflejar inmediatamente en Firestore detection_health/{TICKER} para el dashboard
+    try {
+      const adminModule = await import('firebase-admin');
+      const admin: any = (adminModule as any).default ?? adminModule;
+      const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
+      if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
+      const db = admin.firestore();
+      const st = candOos.totalR > 0 ? 'OPTIMIZABLE' : 'REVISAR';
+      await db.collection('detection_health').doc(TICKER).set({
+        ticker: TICKER,
+        baselineR: Number(actOos.totalR.toFixed(2)),
+        trades: candOos.trades,
+        status: st,
+        bestR: Number(candOos.totalR.toFixed(2)),
+        bestParams: p,
+        bestOosTrades: candOos.trades,
+        evaluatedAt: new Date().toISOString(),
+      }, { merge: true });
+      console.log('HEALTH_SAVED: ' + st);
+    } catch (fe) {
+      console.log('HEALTH_FIRESTORE_SKIP: ' + String((fe as Error).message).slice(0, 100));
+    }
+
     console.log('TUNE_RESULT: APPLIED');
     process.exit(0);
   }
