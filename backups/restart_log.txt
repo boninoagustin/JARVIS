@@ -1,1 +1,0 @@
-2026-08-15 18:37:35 JARVIS reiniciado tras barrido killswitch (exit=0)
