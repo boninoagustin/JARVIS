@@ -16,6 +16,24 @@ import type { LogEntry } from '../src/services/backtestTypes';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const LOGS_ROOT = path.join(__dirname, '..', '..', 'logs');
+const ML_MODELS_DIR = path.join(__dirname, '..', '..', 'scripts', 'hyperopt', 'models');
+
+/**
+ * 🛡️ ML-GATE en trials (sep-2026): construye la config del gate walk-forward para el ticker.
+ * trainedAt = mtime del modelo de producción → el gate solo rechaza trades posteriores
+ * al entrenamiento (look-ahead cero, mismo criterio que el motor y que el vivo).
+ * Sin modelo de producción para el ticker → undefined (gate OFF, comportamiento legacy).
+ */
+function buildMLGate(ticker: string): { enabled: boolean; modelPath: string; trainedAt: number } | undefined {
+    const modelPath = path.join(ML_MODELS_DIR, `ml_model_${ticker}.json`);
+    if (!fs.existsSync(modelPath)) {
+        console.warn(`[ML-GATE] ⚠️ sin modelo de producción para ${ticker} — gate OFF (legacy)`);
+        return undefined;
+    }
+    const trainedAt = fs.statSync(modelPath).mtimeMs;
+    console.warn(`[ML-GATE] ✅ gate ON para ${ticker}: ${path.basename(modelPath)} (trainedAt=${new Date(trainedAt).toISOString()})`);
+    return { enabled: true, modelPath, trainedAt };
+}
 
 function loadLogs(ticker: string, tfs: string[]): Map<string, string[]> {
     const tickerDir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
@@ -57,6 +75,11 @@ async function main() {
         maxTradesPerDay, maxTradesPerSession, trailingDrawdownR,
         spreadPips = 0, commissionPerLot = 0, tp1StructuralMinRR = 1.2,
     } = payload;
+
+    // 🛡️ ML-GATE (sep-2026): gate walk-forward en TODAS las trials del ticker.
+    // trainedAt = mtime del modelo de producción → solo filtra trades posteriores
+    // al entrenamiento (look-ahead cero). Sin modelo → undefined (gate OFF).
+    const mlGate = buildMLGate(ticker);
 
     const tfsFinal = (payload.tfs && Array.isArray(payload.tfs) && payload.tfs.length > 0)
         ? payload.tfs : tfs;
@@ -115,6 +138,7 @@ async function main() {
             atrTrailEnabled: genome.atrTrailEnabled,
             structuralTrailEnabled: genome.structuralTrailEnabled,
             tp1StructuralMinRR: tp1StructuralMinRR ?? 1.2,
+            mlGate,
         };
 
         const res = runBacktest(logs, configToRun, undefined, trainPrepared);
@@ -175,6 +199,7 @@ async function main() {
         partialClosePct: result.best.partialClosePct, slAfterTp1: result.best.slAfterTp1,
         tp15BeEnabled: result.best.tp15BeEnabled, atrTrailEnabled: result.best.atrTrailEnabled,
         structuralTrailEnabled: result.best.structuralTrailEnabled, tp1StructuralMinRR: tp1StructuralMinRR ?? 1.2,
+        mlGate,
     };
     const trainRes = runBacktest(logs, trainConfig, undefined, trainPrepared);
     for (const t of trainRes.trades) {

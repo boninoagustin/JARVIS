@@ -51,6 +51,9 @@ interface TradeLog {
   tf?: string;
   ctraderStatus?: string;
   ctrader_real_pnl?: number;
+  // 🆕 sep-2026: lots reales del deal y saldo post-cierre del broker
+  ctraderLots?: number;
+  balanceAfterUsd?: number;
   // 🆕 gatillo real de la entrada (escrito por el backend desde ago-2026)
   triggerKey?: string;
   triggerFam?: string;
@@ -60,53 +63,50 @@ interface TradeLog {
 const COLORS = ['#00ff00', '#ff3333', '#888888'];
 const MAX_LOADED = 500; // sin where() server-side → evitamos depender de índices compuestos
 
-const getTradeRR = (t: TradeLog): number => {
-  // 1. rMultiple del backend = PnL real en USD / riesgo real en USD (fuente de verdad).
+// 🛡️ 24-sep-2026: el diario cuenta desde el 20/09/2026 00:00 ARG (03:00 UTC) — punto de
+// partida pedido por Bon tras todas las modificaciones de estrategia. Lo anterior no se muestra.
+export const HISTORY_START = Date.parse('2026-09-20T03:00:00Z');
+
+// Valor por pip (USD) aproximado por clase de activo — espejo del backend (FrictionModel).
+const pipSizeFor = (ticker: string): number => {
+  const t = ticker.toUpperCase();
+  if (t.includes('XAU') || t.includes('GOLD')) return 0.1;
+  if (t.includes('JPY')) return 0.01;
+  if (/NAS|US500|SPX|GER|DE40|DAX|UK100|USTEC|US30|DJ30/.test(t)) return 1;
+  return 0.0001;
+};
+const pipValueFor = (ticker: string): number => {
+  const t = ticker.toUpperCase();
+  if (t.includes('XAU') || t.includes('GOLD')) return 10;
+  if (t.includes('JPY')) return 6.5; // ~1000 JPY / USDJPY≈154
+  if (/NAS|US500|SPX|GER|DE40|DAX|UK100|USTEC|US30|DJ30/.test(t)) return 1;
+  return 10;
+};
+
+/** R real del trade. Devuelve null si no hay datos para calcularlo (el panel muestra '—',
+ *  NO se inventa un R ficticio — sep-2026). */
+const getTradeRR = (t: TradeLog): number | null => {
+  // 1. rMultiple del backend = PnL neto real en USD / riesgo real en USD (fuente de verdad).
   if (t.rMultiple !== undefined && t.rMultiple !== null) {
     return t.rMultiple;
   }
-  // 2. Fallback: PnL real de cTrader en dólares → R (riesgo $50 legacy, solo si no hay rMultiple).
-  if (t.ctrader_real_pnl !== undefined && t.ctrader_real_pnl !== null) {
-    return Number((t.ctrader_real_pnl / 50).toFixed(2));
-  }
-
-  if (t.result === 'LOSS') {
-    return t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple < 0 ? t.rMultiple : -1;
-  }
-  if (t.result === 'BREAKEVEN') {
-    return t.rMultiple !== undefined && t.rMultiple !== null ? t.rMultiple : 0;
-  }
-  if (t.result === 'WIN') {
-    // 1. Usar rMultiple explícito si existe (manual o auto-calculado)
-    if (t.rMultiple !== undefined && t.rMultiple !== null && t.rMultiple > 0) {
-      return t.rMultiple;
-    }
-    // 2. Calcular R:R desde precios reales de la alerta
-    if (t.entryPrice && t.slPrice) {
-      const risk = Math.abs(t.entryPrice - t.slPrice);
-      if (risk > 0) {
-        // Determinar qué TP se alcanzó realmente
-        let targetPrice: number | undefined;
-        if (t.tp2Hit && t.tp2Price) {
-          targetPrice = t.tp2Price;
-        } else if (t.tp1Hit && t.tp1Price) {
-          targetPrice = t.tp1Price;
-        } else if (t.tp1Price) {
-          targetPrice = t.tp1Price; // Fallback a TP1 si no hay hit registrado
-        } else if (t.tp2Price) {
-          targetPrice = t.tp2Price;
-        }
-
-        if (targetPrice) {
-          const reward = Math.abs(targetPrice - t.entryPrice);
-          return Number((reward / risk).toFixed(2));
-        }
+  // 2. Sin rMultiple → calcular con PnL neto real de cTrader y riesgo real del doc.
+  //    (El viejo fallback pnl/$50 fue eliminado: el riesgo de $50 fijo era falso.)
+  const pnl = t.ctrader_real_pnl;
+  if (pnl !== undefined && pnl !== null && t.entryPrice && t.slPrice) {
+    const entry = Number(t.entryPrice);
+    const sl = Number(t.slPrice);
+    const lots = Number(t.ctraderLots ?? 0);
+    const slOk = t.direction === 'BUY' ? sl < entry : sl > entry; // SL del lado correcto
+    if (slOk && lots > 0 && entry !== sl) {
+      const riskUsd = (Math.abs(entry - sl) / pipSizeFor(t.ticker)) * pipValueFor(t.ticker) * lots;
+      if (Number.isFinite(riskUsd) && riskUsd > 0) {
+        return Number((pnl / riskUsd).toFixed(2));
       }
     }
-    // 3. Sin datos de precio → asumir 1R conservador (no inflar con ficticio)
-    return 1;
+    return null; // sin riesgo computable → no se inventa
   }
-  return 0;
+  return null;
 };
 
 /** Clasificación del gatillo REAL de la entrada.
@@ -151,9 +151,24 @@ const sessionKey = (ts: number) => {
 export default function AnalyticsJournal() {
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [tickerFilter, setTickerFilter] = useState<string>('ALL');
-  const [rangeDays, setRangeDays] = useState<number>(30);
+  const [rangeDays, setRangeDays] = useState<number>(0); // 🛡️ sep-2026: default = todo desde el 14/09
   const [showAllRows, setShowAllRows] = useState(false);
   const { toast } = useToast();
+
+  // 🆕 sep-2026: estado de cuenta vivo (balance/equity) → SALDO USD del panel.
+  // Lo escribe el bot cada 5 min en system/account_state.
+  const [accountState, setAccountState] = useState<{ balance?: number; equity?: number; updatedAt?: number; currency?: string } | null>(null);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'system', 'account_state'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setAccountState({ balance: d.balance, equity: d.equity, updatedAt: d.updatedAt, currency: d.currency });
+      }
+    }, () => { /* sin acceso → sin saldo, no romper el panel */ });
+    return () => unsub();
+  }, []);
+  // 🛡️ 24-sep-2026: moneda REAL detectada de cTrader (account_state.currency). Fallback USD.
+  const accountCur = accountState?.currency || 'USD';
 
   // 🆕 Registro manual de resultado (heredado de la vieja bitácora del radar).
   const [selectedTrade, setSelectedTrade] = useState<TradeLog | null>(null);
@@ -226,9 +241,11 @@ export default function AnalyticsJournal() {
       try {
         const data = snapshot.docs
           .map(d => ({ id: d.id, ...d.data() } as TradeLog))
-          // 🛡️ ago-2026: incluir ABORTED (entradas abortadas por seguridad, result=SKIP) para que
-          // aparezcan en TRADES DEL PERÍODO. Los ghost/duplicados (sin ctraderStatus) siguen fuera.
-          .filter(t => t.ctraderStatus === 'EXECUTED' || t.ctraderStatus === 'ABORTED');
+          // 🛡️ sep-2026: SOLO EXECUTED (posición real en cTrader). Los ABORTED/SKIP
+          // (ejecución fallida en el broker, sin posición real) quedan FUERA de la tabla —
+          // el diario debe coincidir 1:1 con el historial de cTrader. Ghosts/duplicados
+          // (sin ctraderStatus) tampoco entran.
+          .filter(t => t.ctraderStatus === 'EXECUTED');
         setTrades(data);
       } catch (err) {
         console.error('Error processing trade journal snapshot:', err);
@@ -242,11 +259,31 @@ export default function AnalyticsJournal() {
 
   // ─── Filtros (client-side: sin índices compuestos, sin costo de Firestore) ───
   const filtered = useMemo(() => {
-    const from = rangeDays > 0 ? Date.now() - rangeDays * 24 * 3600 * 1000 : 0;
+    // 🛡️ sep-2026: nada anterior al corte (14/09) — el diario empieza ahí.
+    const from = Math.max(HISTORY_START, rangeDays > 0 ? Date.now() - rangeDays * 24 * 3600 * 1000 : 0);
     return trades.filter(t =>
       (tickerFilter === 'ALL' || t.ticker === tickerFilter) && t.timestamp >= from
     );
   }, [trades, tickerFilter, rangeDays]);
+
+  // 🆕 oct-2026: opciones del filtro de activo = roster fijo ∪ tickers con trades reales.
+  // El bot opera un roster dinámico (p.ej. GBPAUD, USOIL, CADJPY) que no está en TICKERS:
+  // sin esto, sus filas faltan en el RESUMEN POR ACTIVO y no se pueden filtrar.
+  const tickerOptions = useMemo(() => {
+    const extras = Array.from(new Set(trades.map(t => t.ticker)))
+      .filter(tk => tk && !(TICKERS as readonly string[]).includes(tk))
+      .sort();
+    return [...TICKERS, ...extras];
+  }, [trades]);
+
+  // 🆕 sep-2026: P&L neto en USD del período (suma de ctrader_real_pnl) y saldo vivo de cuenta.
+  const netUsd = useMemo(() =>
+    filtered
+      .filter(t => t.result && t.result !== 'SKIP')
+      .reduce((s, t) => s + (t.ctrader_real_pnl ?? 0), 0),
+    [filtered]
+  );
+  const saldoUsd: number | null = accountState?.balance ?? null;
 
   const getStats = () => {
     let wins = 0, losses = 0, breakevens = 0;
@@ -306,7 +343,7 @@ export default function AnalyticsJournal() {
     const data = [{ index: 0, balance: 0, date: 'Inicio' }];
 
     sortedTrades.forEach((t, i) => {
-      currentR += getTradeRR(t);
+      currentR += getTradeRR(t) ?? 0;
       data.push({
         index: i + 1,
         balance: Number(currentR.toFixed(2)),
@@ -334,7 +371,7 @@ export default function AnalyticsJournal() {
     let grossLoss = 0;
 
     chronological.forEach(t => {
-      const rr = getTradeRR(t);
+      const rr = getTradeRR(t) ?? 0;
       if (t.result === 'WIN') {
         totalWins++;
         grossProfit += rr;
@@ -359,7 +396,7 @@ export default function AnalyticsJournal() {
 
     const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? '∞' : '0.00';
 
-    const totalNetR = chronological.reduce((sum, t) => sum + getTradeRR(t), 0);
+    const totalNetR = chronological.reduce((sum, t) => sum + (getTradeRR(t) ?? 0), 0);
     const mathExpectancy = closed.length > 0 ? (totalNetR / closed.length).toFixed(2) : '0.00';
 
     return {
@@ -436,7 +473,7 @@ export default function AnalyticsJournal() {
 
     closed.forEach(t => {
       const sKey = sessionKey(t.timestamp) === 'OFF' ? 'OFF' : sessionKey(t.timestamp);
-      const rr = getTradeRR(t);
+      const rr = getTradeRR(t) ?? 0;
       if (t.result === 'WIN') {
         sessions[sKey].gp += rr;
       } else if (t.result === 'LOSS') {
@@ -467,18 +504,18 @@ export default function AnalyticsJournal() {
 
   const totalR = filtered
     .filter(t => t.result && t.result !== 'SKIP')
-    .reduce((s, t) => s + getTradeRR(t), 0);
+    .reduce((s, t) => s + (getTradeRR(t) ?? 0), 0);
   const currentDrawdown = equityData.length > 0 ? Math.max(...equityData.map(d => d.balance)) - equityData[equityData.length - 1].balance : 0;
 
   // ─── Resumen por activo (tabla nueva) ────────────────────────────────────────
   const tickerSummary = useMemo(() => {
-    const list = tickerFilter === 'ALL' ? TICKERS : [tickerFilter as any];
+    const list = tickerFilter === 'ALL' ? tickerOptions : [tickerFilter as any];
     return list.map(tk => {
       const closed = filtered.filter(t => t.ticker === tk && t.result && t.result !== 'SKIP');
       const chrono = [...closed].sort((a, b) => a.timestamp - b.timestamp);
       let peak = 0, eq = 0, mdd = 0, gp = 0, gl = 0, wins = 0, losses = 0;
       chrono.forEach(t => {
-        const rr = getTradeRR(t);
+        const rr = getTradeRR(t) ?? 0;
         eq += rr; if (eq > peak) peak = eq; mdd = Math.max(mdd, peak - eq);
         if (t.result === 'WIN') { wins++; gp += rr; } else if (t.result === 'LOSS') { losses++; gl += Math.abs(rr); }
       });
@@ -486,11 +523,11 @@ export default function AnalyticsJournal() {
       // 🛡️ FIX: win rate excluye BREAKEVEN (wins / (wins+losses)), consistente con el panel principal.
       const decided = wins + losses;
       const wr = decided > 0 ? wins / decided : 0;
-      const netR = chrono.reduce((s, t) => s + getTradeRR(t), 0);
+      const netR = chrono.reduce((s, t) => s + (getTradeRR(t) ?? 0), 0);
       const exp = closed.length > 0 ? netR / closed.length : 0;
       return { ticker: tk, n: closed.length, wr, pf, netR, mdd, exp };
     }).sort((a, b) => b.exp - a.exp);
-  }, [filtered, tickerFilter]);
+  }, [filtered, tickerFilter, tickerOptions]);
 
   // ─── Matriz sesión × gatillo (nueva) ────────────────────────────────────────
   const matrix = useMemo(() => {
@@ -508,7 +545,7 @@ export default function AnalyticsJournal() {
       if (!cells[s][g]) cells[s][g] = { n: 0, decided: 0, wins: 0, netR: 0 };
       const c = cells[s][g];
       c.n++;
-      c.netR += getTradeRR(t);
+      c.netR += getTradeRR(t) ?? 0;
       if (t.result === 'WIN') { c.wins++; c.decided++; }
       else if (t.result === 'LOSS') c.decided++;
     });
@@ -538,13 +575,13 @@ export default function AnalyticsJournal() {
           </span>
           <select value={tickerFilter} onChange={e => setTickerFilter(e.target.value)} style={inputClass}>
             <option value="ALL">Todos los activos</option>
-            {TICKERS.map(t => <option key={t} value={t}>{t}</option>)}
+            {tickerOptions.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <select value={rangeDays} onChange={e => setRangeDays(Number(e.target.value))} style={inputClass}>
             <option value={7}>Últimos 7 días</option>
             <option value={30}>Últimos 30 días</option>
             <option value={90}>Últimos 90 días</option>
-            <option value={0}>Todo el historial</option>
+            <option value={0}>Todo (desde 14/09/2026)</option>
           </select>
           <button
             onClick={exportToCSV}
@@ -607,6 +644,40 @@ export default function AnalyticsJournal() {
           </div>
           <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
             Resultado neto exacto en múltiplos R
+          </span>
+        </div>
+
+        {/* 🆕 sep-2026: P&L NETO USD (devengado real del período, desde el 14/09) */}
+        <div className="panel" style={{ padding: '16px', marginBottom: 0, borderLeft: '3px solid #00e5ff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>P&L NETO {accountCur} (PERÍODO)</span>
+              <TrendingUp size={14} color="#00e5ff" />
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '8px 0 4px 0', color: netUsd >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+              {netUsd >= 0 ? `+${accountCur} ${netUsd.toFixed(2)}` : `-${accountCur} ${Math.abs(netUsd).toFixed(2)}`}
+            </div>
+          </div>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
+            PnL neto real de cTrader (gross − comisión − swap) desde el 14/09
+          </span>
+        </div>
+
+        {/* 🆕 sep-2026: SALDO USD vivo de la cuenta (bot lo actualiza cada 5 min) */}
+        <div className="panel" style={{ padding: '16px', marginBottom: 0, borderLeft: '3px solid #ffaa00', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>SALDO CUENTA {accountCur}</span>
+              <ShieldCheck size={14} color="#ffaa00" />
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 700, margin: '8px 0 4px 0', color: 'var(--text-primary)' }}>
+              {saldoUsd != null ? `${accountCur} ${saldoUsd.toFixed(2)}` : '—'}
+            </div>
+          </div>
+          <span style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
+            {accountState
+              ? `Equity $${(accountState.equity ?? 0).toFixed(2)} · actualizado ${accountState.updatedAt ? new Date(accountState.updatedAt).toLocaleTimeString('es-AR') : '—'} (c/5 min)`
+              : 'Esperando primer snapshot del bot (c/5 min)...'}
           </span>
         </div>
 
@@ -883,6 +954,9 @@ export default function AnalyticsJournal() {
         <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#e6e6e6', margin: 0, marginBottom: '12px', fontSize: '0.9rem' }}>
           📜 TRADES DEL PERÍODO <span style={{ fontSize: '0.7rem', color: '#888' }}>({filtered.length} en total)</span>
         </h3>
+        <p style={{ fontSize: '0.7rem', color: '#666', margin: '-6px 0 12px 0' }}>
+          Desde el 20/09/2026 (punto de partida tras las modificaciones). PNL {accountCur} = neto real del broker (gross − comisión − swap), idéntico al historial de cTrader.
+        </p>
         {filtered.length === 0 ? (
           <p style={{ color: '#666', fontSize: '0.85rem' }}>Sin trades en el período seleccionado.</p>
         ) : (
@@ -896,6 +970,7 @@ export default function AnalyticsJournal() {
                   <th style={{ padding: '6px 8px' }}>GATILLO</th>
                   <th style={{ padding: '6px 8px' }}>PTS</th>
                   <th style={{ padding: '6px 8px' }}>R</th>
+                  <th style={{ padding: '6px 8px' }}>PNL {accountCur}</th>
                   <th style={{ padding: '6px 8px' }}>PARCIAL</th>
                   <th style={{ padding: '6px 8px' }}>RESULTADO</th>
                   <th style={{ padding: '6px 8px' }}></th>
@@ -911,7 +986,13 @@ export default function AnalyticsJournal() {
                       <td style={{ padding: '7px 8px', color: t.direction === 'BUY' ? '#00e676' : '#ff3333', fontWeight: 700 }}>{t.direction === 'BUY' ? 'L' : 'S'}</td>
                       <td style={{ padding: '7px 8px', color: '#aaa' }}>{classifyTrigger(t)}</td>
                       <td style={{ padding: '7px 8px', color: '#aaa', fontFamily: 'monospace' }}>{t.points ?? '—'}</td>
-                      <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: rr >= 0 ? '#00e676' : '#ff3333' }}>{rr >= 0 ? '+' : ''}{rr.toFixed(2)}</td>
+                      <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: rr == null ? '#888' : rr >= 0 ? '#00e676' : '#ff3333' }}>
+                        {rr == null ? '—' : `${rr >= 0 ? '+' : ''}${rr.toFixed(2)}`}
+                      </td>
+                      {/* 🆕 sep-2026: PnL neto real en USD (gross − comisión − swap, idéntico a cTrader) */}
+                      <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: t.ctrader_real_pnl == null ? '#555' : t.ctrader_real_pnl >= 0 ? '#00e676' : '#ff3333' }}>
+                        {t.ctrader_real_pnl == null ? '—' : `${t.ctrader_real_pnl >= 0 ? '+' : ''}${accountCur} ${t.ctrader_real_pnl.toFixed(2)}`}
+                      </td>
                       <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontSize: '0.78rem', color: '#ffaa00' }}>
                         {t.tp1Hit
                           ? `${Math.round((t.tp1PartialPct ?? 0.8) * 100)}%${t.tp1PartialPrice != null ? ` @ ${t.tp1PartialPrice}` : ''}${t.tp1PartialPnlUsd != null ? ` (+${t.tp1PartialPnlUsd.toFixed(2)})` : ''}`

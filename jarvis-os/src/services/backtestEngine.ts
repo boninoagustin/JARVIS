@@ -5,6 +5,7 @@ import type {
 import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, calculateDynamicSlBuffer, getMinPipDistance } from '../engine/AlphaModel';
 import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
 import { capTp2Price } from '../../../src/engine/tp2Cap';
+import { DEFAULT_BIAS_CONFLUENCE } from '../../../src/engine/Types';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
@@ -13,10 +14,18 @@ import {
   evaluateTimesfmFilter, resolveTimesfmConfig, loadTimesfmCache, timesfmCandleKey,
   appendTimesfmAudit, resolveTp2FromForecast, type TimesfmForecast, type TimesfmDecision
 } from '../engine/TimesfmFilter';
-import { extractFeatures } from '../../../src/engine/MLFilter';
+import { extractFeatures, loadModelFromJSON, predict as mlPredict, setMLWindowStart } from '../../../src/engine/MLFilter';
+import * as fs from 'node:fs';
+
+// 🛡️ ML F3: modelos ya cargados en este proceso (evita re-parsear el JSON en cada trial del worker)
+const _mlLoadedPaths = new Set<string>();
 
 // 🆕 TimesFM F1: cache de forecasts precomputados, cargado una vez por corrida en runBacktest
 let timesfmForecastCache: Map<number, TimesfmForecast> | undefined;
+
+// 🛡️ ML F3: contexto del gate ML del run actual (variable de módulo: createTrade se llama
+// desde helpers fuera del scope de runBacktest). Ejecución sincrónica → seguro con un run a la vez.
+let _mlCtx: { cfg: any; rejected: number } = { cfg: undefined, rejected: 0 };
 
 /**
  * 🛡️ ago-2026 — Buffer de fricción en el SL de breakeven (espejo del vivo trading.ts).
@@ -44,6 +53,15 @@ export interface DailyStats {
   sellLossCount: number;
   buyLossCount: number;
   sessionTradeCount: number;
+  // 🆕 PARIDAD (sep-2026): gates direccionales del vivo portados al backtest.
+  // dailyBuys/dailySells = entradas de hoy por dirección (maxBuys/maxSellsPerDay);
+  // sessionBuy/SellLossStreak = racha de pérdidas POR dirección de la sesión actual
+  // (maxBuyLosses/maxSellLosses por sesión, semántica de countConsecutiveLossesForAsset:
+  // r<0 → +1, r>0 → 0, r=0 → sin cambio).
+  dailyBuys: number;
+  dailySells: number;
+  sessionBuyLossStreak: number;
+  sessionSellLossStreak: number;
   sessionExp?: Record<string, { n: number; sumR: number }>;
 }
 
@@ -77,6 +95,19 @@ function updateDailyStatsFromClose(trade: BacktestTrade, dailyStats: DailyStats,
   const key = `${dailyStats.currentSessionStr.split('-').pop()}-${trade.direction}`;
   const e = (dailyStats.sessionExp[key] ??= { n: 0, sumR: 0 });
   e.n++; e.sumR += trade.rMultiple;
+
+  // 🆕 PARIDAD (sep-2026): racha direccional de la sesión — MISMA semántica que
+  // countConsecutiveLossesForAsset del vivo (r<0 → +1, r>0 → 0, r=0 → sin cambio).
+  const btSession = (trade as any).btSession ?? dailyStats.currentSessionStr;
+  if (btSession === dailyStats.currentSessionStr) {
+    if (trade.rMultiple < 0) {
+      if (trade.direction === 'BUY') dailyStats.sessionBuyLossStreak++;
+      else dailyStats.sessionSellLossStreak++;
+    } else if (trade.rMultiple > 0) {
+      if (trade.direction === 'BUY') dailyStats.sessionBuyLossStreak = 0;
+      else dailyStats.sessionSellLossStreak = 0;
+    }
+  }
 
   if (config.maxDailyLossR && dailyStats.pnlR <= -config.maxDailyLossR) dailyStats.isKilled = true;
   if (config.dailyProfitTargetR && dailyStats.pnlR >= config.dailyProfitTargetR) dailyStats.isKilled = true;
@@ -205,6 +236,26 @@ export function runBacktest(
   if ((config as any).spreadPips === 0) (config as any).spreadPips = undefined;
   if ((config as any).commissionPerLot === 0) (config as any).commissionPerLot = undefined;
 
+  // 🛡️ ML F3 (sep-2026): gate ML idéntico al vivo (AlphaModel.ts:357-359) dentro del backtest.
+  // Walk-forward honesto: solo rechaza trades con ts > mlGate.trainedAt (mtime del modelo —
+  // el modelo de la semana pasada evalúa la semana nueva, jamás su propio período de train).
+  const mlGateCfg = (config as any).mlGate as { enabled?: boolean; modelPath?: string; trainedAt?: number } | undefined;
+  _mlCtx = { cfg: mlGateCfg, rejected: 0 };
+  // 🛡️ ML F3: ventana walk-forward para el gate del AlphaModel compartido (vivo: ventana 0).
+  setMLWindowStart(mlGateCfg?.enabled ? (mlGateCfg.trainedAt ?? 0) : 0);
+  if (mlGateCfg?.enabled && mlGateCfg.modelPath && !_mlLoadedPaths.has(mlGateCfg.modelPath)) {
+    try {
+      if (fs.existsSync(mlGateCfg.modelPath)) {
+        loadModelFromJSON(fs.readFileSync(mlGateCfg.modelPath, 'utf8'), config.ticker);
+      } else {
+        console.warn(`[ML-GATE] ⚠️ modelo no encontrado: ${mlGateCfg.modelPath} — gate OFF`);
+      }
+    } catch (e: any) {
+      console.warn(`[ML-GATE] ⚠️ no se pudo cargar el modelo ${mlGateCfg.modelPath}: ${e.message}`);
+    }
+    _mlLoadedPaths.add(mlGateCfg.modelPath); // no reintentar en corridas siguientes del mismo proceso
+  }
+
   const state = emptyState();
   const trades: BacktestTrade[] = [];
 
@@ -225,7 +276,11 @@ export function runBacktest(
     isKilled: false,
     sellLossCount: 0,
     buyLossCount: 0,
-    sessionTradeCount: 0
+    sessionTradeCount: 0,
+    dailyBuys: 0,
+    dailySells: 0,
+    sessionBuyLossStreak: 0,
+    sessionSellLossStreak: 0
   };
 
   // 1. Parse all entries with timestamps (or use pre-prepared)
@@ -289,6 +344,9 @@ export function runBacktest(
     processedEvents: total,
     startDate: new Date(validEntries[0].ts).toISOString().split('T')[0],
     endDate: new Date(validEntries[validEntries.length - 1].ts).toISOString().split('T')[0],
+    // 🛡️ ML F3: rechazos del gate ML (walk-forward) — visible en el reporte del optimizador
+    mlRejected: _mlCtx.rejected,
+    mlGateEnabled: !!mlGateCfg?.enabled,
   };
 }
 
@@ -365,6 +423,18 @@ function getArgentinaDayStr(nowMs: number): string {
   return d.toISOString().split('T')[0];
 }
 
+// 🆕 sep-2026 (Capa 1 del optimizador del motor): multiplicadores por familia de zona
+// × sesión, tuneados por el hyperopt (config.zoneWeights). 0 = desactivar la familia
+// en esa sesión; default 1 = comportamiento actual. Paridad exacta con trading.ts.
+function zoneWeightMult(config: BacktestConfig, family: string, session: string): number {
+  const zw = (config as any).zoneWeights;
+  if (!zw || typeof zw !== 'object') return 1;
+  const perFam = zw[family];
+  if (!perFam || typeof perFam !== 'object') return 1;
+  const v = perFam[session];
+  return typeof v === 'number' ? v : 1;
+}
+
 function processAlert(
   entry: LogEntry, nowMs: number, state: RadarState,
   config: BacktestConfig, trades: BacktestTrade[],
@@ -406,6 +476,8 @@ function processAlert(
     dailyStats.consecutiveLosses = 0;
     dailyStats.streakKillswitchUntil = 0;
     dailyStats.tradeCount = 0;
+    dailyStats.dailyBuys = 0;
+    dailyStats.dailySells = 0;
     dailyStats.isKilled = false;
   }
 
@@ -414,6 +486,8 @@ function processAlert(
     dailyStats.sellLossCount = 0;
     dailyStats.buyLossCount = 0;
     dailyStats.sessionTradeCount = 0;
+    dailyStats.sessionBuyLossStreak = 0;
+    dailyStats.sessionSellLossStreak = 0;
   }
 
 
@@ -432,6 +506,23 @@ function processAlert(
       if (!state.biasTs) state.biasTs = {};
       state.marketBias[sourceTf] = p.trendMatch;
       state.biasTs[sourceTf] = nowMs;
+    }
+
+    // 🆕 sep-2026 reconstrucción bias HTF: en el live el bias de 4H/1H/D viene del engine SMC
+    // con tendencia real; en el backtest el SYNC sale NEUTRAL casi siempre (engine offline sin
+    // estructura) → las penalizaciones/bonos macro nunca se ejercían. Derivamos el bias del
+    // SMA de las velas del TF para restaurar la paridad.
+    const htBuf = state.htfCloses?.[sourceTf];
+    if (htBuf && htBuf.length >= 8 && (p.trendMatch === 'NEUTRAL' || !p.trendMatch)) {
+      const sma = htBuf.reduce((a: number, b: number) => a + b, 0) / htBuf.length;
+      const derived = htBuf[htBuf.length - 1] > sma ? 'BUY' : 'SELL';
+      if (!state.biasTs) state.biasTs = {};
+      state.marketBias[sourceTf] = derived;
+      state.biasTs[sourceTf] = nowMs;
+      const dl = (state as any).htfDeriveLog = (state as any).htfDeriveLog || {};
+      if ((dl[sourceTf] = (dl[sourceTf] || 0) + 1) <= 2) {
+        console.log(`[BIAS-DERIVE] ${sourceTf}: SYNC NEUTRAL → bias derivado ${derived} (SMA=${sma.toFixed(5)}, close=${htBuf[htBuf.length-1]})`);
+      }
     }
 
     try {
@@ -456,6 +547,20 @@ function processAlert(
     const currentPrice = p.currentPrice;
     const highPrice = p.highPrice !== undefined ? p.highPrice : currentPrice;
     const lowPrice = p.lowPrice !== undefined ? p.lowPrice : currentPrice;
+
+    // 🆕 sep-2026 reconstrucción bias HTF: buffer de closes por TF (para derivar bias
+    // cuando el SYNC es NEUTRAL). Solo TFs macro: 60/240/D/W.
+    if (eventTf === '60' || eventTf === '240' || eventTf === 'D' || eventTf === '1D' || eventTf === 'W' || eventTf === '1W') {
+      if (!state.htfCloses) state.htfCloses = {};
+      const buf = (state.htfCloses[eventTf] = state.htfCloses[eventTf] || []);
+      buf.push(currentPrice);
+      if (buf.length > 60) buf.shift();
+    }
+
+    // 🆕 sep-2026 climax por rango: guardar high/low de la última vela por TF (detección
+    // de vela de climax con 2×ATR en el SMART — medible en backtest, paridad con live).
+    if (!state.htfHighLow) state.htfHighLow = {};
+    state.htfHighLow[eventTf] = [highPrice, lowPrice];
 
     const prevClose = state.lastPrice ?? currentPrice;
     const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
@@ -562,7 +667,10 @@ function processAlert(
       const sessionName = getSessionForTimestamp(trade.timestamp);
       const localMgmt = config.sessions?.[sessionName]?.[finalTriggerType as keyof typeof config.sessions[typeof sessionName]] as any;
 
-      const partialPct = localMgmt?.partialClosePct ?? 0; // fracción cerrada en TP1
+      // 🛡️ Normalizar partialClosePct a fracción [0,1] (22-sep): AUDJPY traía 50 (escala %) en
+      // Firestore → remainder = 1-50 = -49 → R inflado (trades de 172R). >1 se interpreta como %.
+      const rawPct = localMgmt?.partialClosePct ?? 0;
+      const partialPct = rawPct > 1 ? rawPct / 100 : rawPct;
       const remainderPct = 1 - partialPct;
       const slAfterTp1Mode = localMgmt?.slAfterTp1 ?? 'none';
       const tp15BeEnabled = localMgmt?.tp15BeEnabled ?? false;
@@ -819,7 +927,12 @@ function processAlert(
                           zone.medal?.includes('CHoCH') ? `🎯_Silver_Bullet_${zTf}` :
                           zone.medal?.includes('Breaker') ? `♻️_Breaker_${zTf}` :
                           `OB_${zone.medal}_${zTf}`;
-        const pts = Math.floor(basePts * tfMult * confluenceMultiplier);
+        // 🆕 sep-2026 (Capa 1): multiplicador por familia × sesión (config.zoneWeights)
+        const zoneFamily = zone.medal?.includes('God') ? 'GOD' :
+                           zone.medal?.includes('CHoCH') ? 'SB' :
+                           zone.medal?.includes('Breaker') ? 'BREAKER' : 'OB';
+        const zwMult = zoneWeightMult(config, zoneFamily, currentSession);
+        const pts = Math.floor(basePts * tfMult * confluenceMultiplier * zwMult);
         if (addScoreEvent(activeScore, { id: eventName, pts, tf: zone.tf || eventTf, ts: nowMs })) {
           touchedThisPing.push({ zone, eventName, pts });
         }
@@ -1019,18 +1132,24 @@ function processAlert(
     return;
   }
   else if (prefix === 'EVENTO_SMC_DIV') {
-    if (!activeScore.events.some(e => e.id === `DIV_${readableTf}`)) { addedPoints = 2; addedEventId = `DIV_${readableTf}`; }
+    if (!activeScore.events.some(e => e.id === `DIV_${readableTf}`)) {
+      // 🆕 sep-2026 (Capa 1): multiplicador DIV × sesión
+      addedPoints = Math.round(2 * zoneWeightMult(config, 'DIV', currentSession));
+      addedEventId = `DIV_${readableTf}`;
+    }
   }
   else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
     if (!activeScore.events.some(e => e.id === `Sweep_${readableTf}`)) {
+      // 🆕 sep-2026 (Capa 1): multiplicador SWEEP × sesión
+      const sweepMult = zoneWeightMult(config, 'SWEEP', currentSession);
       if (upperText.includes('ABSORCION') && density >= state.densityMedian) { 
-        addedPoints = 6; 
+        addedPoints = Math.round(6 * sweepMult); 
         addedEventId = `🩸_V-Shape_Absorb_${readableTf}`; 
       } else if (upperText.includes('ABSORCION')) { 
-        addedPoints = 3; 
+        addedPoints = Math.round(3 * sweepMult); 
         addedEventId = `Sweep_${readableTf}`; // sin confirmación de actividad       
       } else { 
-        addedPoints = 3; 
+        addedPoints = Math.round(3 * sweepMult); 
         addedEventId = `Sweep_${readableTf}`; 
       }
     }
@@ -1059,6 +1178,69 @@ function processAlert(
       if (hasZoneNow) {
         pendingLeg.isValidated = true;
         pendingLeg.chochEvents = [...activeScore.events.map(e => e.id), `CHoCH_${readableTf}`];
+
+        // 🆕 sep-2026 PORT fireNow del live (src/db/trading.ts ~2300-2390): el live, al validar
+        // tardíamente con zona nueva, puede disparar la ENTRADA INMEDIATA (no espera OTE).
+        const canFireChoch = config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART';
+        const lateMinPts = currentDirection === 'BUY' ? ((config as any).minPointsForBuy ?? 4) : ((config as any).minPointsForSell ?? 4);
+        const lateTotalPts = pendingLeg.chochPoints!;
+        const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= ((config as any).sniperCooldownMs ?? 180000);
+
+        const lateLegEvs = pendingLeg.chochEvents || [];
+        const lateEntryEv = lateLegEvs.find((e: string) => e.includes('🚀') || e.includes('🔨'));
+        const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(CHoCH|BOS)_/.test(e));
+        const lateLegFam = lateStructEv?.includes('BOS') ? 'BOS' : 'CHoCH';
+        const lateLegTf = (lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/)?.[1] ?? '5m').toLowerCase();
+        const lateSessionCfg = (config.sessions as any)?.[currentSession] ?? (config.sessions as any)?.['ALL'];
+        const lateTriggerKey = `${lateLegFam === 'BOS' ? 'bos' : 'choch'}${lateLegTf}`;
+        const lateTriggerCfg = (lateSessionCfg as any)?.[lateTriggerKey];
+        let lateTriggerEnabled = true;
+        let lateMinPtsG = lateMinPts;
+        if (lateTriggerCfg) {
+            lateTriggerEnabled = lateTriggerCfg.enabled ?? true;
+            lateMinPtsG = currentDirection === 'BUY'
+                ? (lateTriggerCfg.minScoreBuy ?? lateTriggerCfg.minScore ?? lateMinPts)
+                : (lateTriggerCfg.minScoreSell ?? lateTriggerCfg.minScore ?? lateMinPts);
+        }
+        const lateSessionEnabled = (config as any).sessionEnabled !== false;
+
+        if (canFireChoch && lateSessionEnabled && lateTriggerEnabled && cooldownOk && lateTotalPts >= lateMinPtsG) {
+            const dec = getDecimals(ticker);
+            const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
+            const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
+            const curPrice = state.lastPrice ?? pendingLeg.extreme;
+            const rDist = Math.abs(curPrice - adjSL);
+
+            // SMART: verificar distancia excesiva al origen (igual que live)
+            let fireNow = true;
+            if (config.entryTrigger === 'SMART') {
+                const maxRisk = (config as any).maxSmartRiskPercent !== undefined ? (config as any).maxSmartRiskPercent : 0.15;
+                const pctLimit = curPrice * (maxRisk / 100);
+                let atr = 0;
+                for (let i = state.zones.length - 1; i >= 0; i--) { if (state.zones[i].atr) { atr = state.zones[i].atr!; break; } }
+                if (rDist > (atr > 0 ? atr * 1.5 : pctLimit)) fireNow = false;
+            }
+
+            if (fireNow) {
+                const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const fixedRR = (config as any).fixedRR ?? 1.5;
+                const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
+                const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * fixedRR) : curPrice - (rDist * fixedRR);
+                createTrade({
+                    tradeId: tId, direction: currentDirection,
+                    entryPrice: curPrice,
+                    stopLoss: adjSL.toFixed(dec), tp1: fTP1.toFixed(dec), tp2: fTP2.toFixed(dec),
+                    points: lateTotalPts, events: pendingLeg.chochEvents || [],
+                    tf: lateLegTf.replace('m', 'm') || readableTf,
+                }, nowMs, trades, activeTrades, dailyStats, config, state);
+                // Cooldown y reset idéntico al path directo (y al live)
+                state.lastSniperAlert = nowMs;
+                activeScore.events = []; refreshScoreCache(activeScore, nowMs);
+                const oppScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
+                oppScore.events = []; refreshScoreCache(oppScore, nowMs);
+                pendingLeg.oteScored = true;
+            }
+        }
       }
     }
   }
@@ -1067,19 +1249,32 @@ function processAlert(
   if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) {
     if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
 
-    const BIAS_TTL: Record<string, number> = { '60': 8*3600e3, '240': 48*3600e3, '1D': 120*3600e3, 'D': 120*3600e3, '4H': 48*3600e3, '1H': 8*3600e3 };
+    const BIAS_TTL: Record<string, number> = { '5': 2*3600e3, '15': 4*3600e3, '60': 8*3600e3, '240': 48*3600e3, '1D': 120*3600e3, 'D': 120*3600e3, '4H': 48*3600e3, '1H': 8*3600e3 };
     const freshBias = (tf: string) => (nowMs - (state.biasTs?.[tf] ?? 0) < (BIAS_TTL[tf] ?? 24*3600e3)) ? state.marketBias?.[tf] : undefined;
     const mb240 = freshBias('240'); const mb60 = freshBias('60'); const mbD = freshBias('D') || freshBias('1D');
     
-    const isMacroAligned = (mb240 === currentDirection) || (mb60 === currentDirection);
+    // 🛡️ sep-2026: bono de alineación parametrizado por activo (biasConfluence, Paso 1).
+    // Default = escalonado macro: 3/3 (D+4H+1H) = +5, 2/3 = +2, ≤1/3 = 0 (paridad con el vivo).
+    // El set puede incluir TFs rápidos ('5','15'): el TF del gatillo cuenta como alineado
+    // con la dirección por definición. El optimizador puede sortear esta config por activo.
+    const bc = (config as any).biasConfluence ?? DEFAULT_BIAS_CONFLUENCE;
+    const biasAlignedFor = (tf: string): boolean => {
+        if (tf === eventTf) return true; // el gatillo es el bias más fresco de su TF
+        const fb = tf === 'D' ? (freshBias('D') || freshBias('1D')) : freshBias(tf);
+        return fb === currentDirection;
+    };
+    const macroAlignedCount = bc.tfs.reduce((acc, tf) => acc + (biasAlignedFor(tf) ? 1 : 0), 0);
+    const baseBiasPoints = macroAlignedCount >= bc.minForFull ? bc.fullPts
+        : macroAlignedCount >= bc.minForHalf ? bc.halfPts : 0;
     const isDAgainst = mbD !== undefined && mbD !== currentDirection && mbD !== 'NEUTRAL';
     const is4HAgainst = mb240 !== undefined && mb240 !== currentDirection && mb240 !== 'NEUTRAL';
     const is1HAgainst = mb60 !== undefined && mb60 !== currentDirection && mb60 !== 'NEUTRAL';
-    const baseBiasPoints = isMacroAligned ? 5 : 0;
 
     // Los bonus VWAP / Macro OTE entran como eventos (pts incluidos en computePoints), igual que en live
-    if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: 2, tf: eventTf, ts: nowMs });
-    else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: 2, tf: eventTf, ts: nowMs });
+    // 🆕 sep-2026: peso VWAP por activo (hyperopt → Firestore vwapPts). Env VWAP_PTS pisa para A/B.
+    const VWAP_PTS = Number(process.env.VWAP_PTS ?? (config as any).vwapPts ?? 2);
+    if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
+    else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
 
     // Penalización VWAP multi-TF: NO existe en live → se mantiene inline (no es evento)
     let vwapPenalty = 0;
@@ -1208,6 +1403,11 @@ function processAlert(
     }
     if (isDAgainst) totalPoints -= 2;
     if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+    // 🆕 sep-2026 biasGateStrict (A/B live-vs-backtest): bloquea entradas con 4H y 1H en contra.
+    // Espejo del flag en src/db/trading.ts (off por defecto).
+    const biasGateStrict = (config as any).biasGateStrict === true;
+    const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
+    if (biasGateStrict) console.log(`[BIASGATE-DBG] eval ${ticker} ${currentDirection} 4Hagainst=${is4HAgainst} 1Hagainst=${is1HAgainst}`);
 
     // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
     let scoreMultiplier = 1.0;
@@ -1264,7 +1464,7 @@ function processAlert(
       activeLeg.chochEvents = [...activeScore.events.map(e => e.id), `${prefix}_${parseTF(eventTf)}`];
       activeLeg.bestZone = state.zones.filter(z => z.dir === currentDirection).sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null;
 
-      if (efectiveValidation && triggerEnabled && totalPoints >= minPtsRequired) {
+      if (efectiveValidation && triggerEnabled && !biasBlocked && totalPoints >= minPtsRequired) {
         const decimals = getDecimals(ticker);
         let tfSuffix = '15m';
         if (eventTf === '5') tfSuffix = '5m';
@@ -1361,8 +1561,51 @@ function processAlert(
         
             const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5;
             const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
-            const minRR = config.minRR ?? 1.5;
-            if (rrChoch >= minRR || hasExtremeMomentum) {
+
+            // 🆕 sep-2026 SMART REAL portado del live (src/db/trading.ts ~2780): decide caso
+            // por caso. Orden de ramas IGUAL al live:
+            //  1) riesgo excesivo (riskDist > 1.5×ATR o maxSmartRisk%) → OTE forzado
+            //  2) vela de quiebre CLIMAX (tag 'Vol: CLIMAX' en la alerta) → OTE forzado
+            //     (hoy 0 ocurrencias en los CSVs; el código queda listo por si el export lo trae)
+            //  3) rrChoch >= 1.5 (fijo, igual que live) o momentum extremo → entrada directa
+            //  4) resto → esperar retroceso OTE
+            // smartOteOnly=true (SOLO experimentos A/B) fuerza el camino OTE puro.
+            const smartMaxRisk = (config as any).maxSmartRiskPercent !== undefined ? (config as any).maxSmartRiskPercent : 0.15;
+            const smartLimitByPct = currentPrice * (smartMaxRisk / 100);
+            let smartAtr = 0;
+            for (let i = state.zones.length - 1; i >= 0; i--) { if (state.zones[i].atr) { smartAtr = state.zones[i].atr!; break; } }
+            const smartMaxRiskDist = smartAtr > 0 ? smartAtr * 1.5 : smartLimitByPct;
+            // 🆕 sep-2026 climax por rango: tag del live (si llega) O rango de la última vela
+            // del TF > 2×ATR (medible en backtest — el tag no viaja en los CSVs).
+            const smartHhl = state.htfHighLow?.[eventTf];
+            const smartRange = smartHhl ? smartHhl[0] - smartHhl[1] : 0;
+            const smartAtrForClimax = state.atr14 ?? smartAtr;
+            const smartIsClimax = entry.line.includes('Vol: CLIMAX')
+                || (smartAtrForClimax > 0 && smartRange > smartAtrForClimax * 2);
+
+            // 🆕 sep-2026 flags de experimento (off por defecto, medibles en A/B):
+            // smartAsiaStrict: en ASIA exigir R:R >= 2.0 en vez de 1.5 para la entrada directa.
+            // smartBiasFreshGuard: si el bias 4H/1H cambió hace < N ms → forzar OTE.
+            const rrThreshold = ((config as any).smartAsiaStrict === true && currentSession === 'ASIA') ? 2.0 : 1.5;
+            const biasFreshWindow = (config as any).smartBiasFreshWindowMs ?? 4 * 3600e3;
+            const biasFreshGuard = (config as any).smartBiasFreshGuard === true
+                && ((state.biasTs?.['240'] && nowMs - state.biasTs['240'] < biasFreshWindow)
+                    || (state.biasTs?.['60'] && nowMs - state.biasTs['60'] < biasFreshWindow));
+
+            if ((config as any).smartOteOnly === true) {
+                takeChoch = false;
+                disableOte = false;
+            } else if (riskDist > smartMaxRiskDist) {
+                takeChoch = false;
+                disableOte = false;
+            } else if (smartIsClimax) {
+                takeChoch = false;
+                disableOte = false;
+            } else if (biasFreshGuard && !hasExtremeMomentum) {
+                // bias HTF recién cambiado → riesgo de trampa → OTE (el momentum extremo lo vence)
+                takeChoch = false;
+                disableOte = false;
+            } else if (rrChoch >= rrThreshold || hasExtremeMomentum) {
                 takeChoch = true;
                 disableOte = true;
             } else {
@@ -1420,6 +1663,43 @@ function minutesSinceSessionOpen(ts: number): number {
 }
 
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
+  // 🆕 PARIDAD (sep-2026): gates direccionales del vivo, portados con su semántica exacta.
+  // El vivo los chequea ANTES de ejecutar (trading.ts: BLOCKED_SELL_LIMIT / BUY_LIMIT /
+  // MCL_LIMIT). maxSells/maxBuysPerDay cuentan ENTRADAS de hoy por dirección;
+  // maxBuyLosses/maxSellLosses por sesión cuentan la racha de pérdidas direccional.
+  const dir = oteData.direction === 'BUY' ? 'BUY' : 'SELL';
+  if (dir === 'BUY' && (config as any).maxBuysPerDay > 0 && dailyStats.dailyBuys >= (config as any).maxBuysPerDay) {
+    return; // BUY bloqueado por tope diario de BUYs (paridad con vivo)
+  }
+  if (dir === 'SELL' && (config as any).maxSellsPerDay > 0 && dailyStats.dailySells >= (config as any).maxSellsPerDay) {
+    return; // SELL bloqueado por tope diario de SELLs (paridad con vivo)
+  }
+  const sessKey = dailyStats.currentSessionStr.split('-').pop();
+  // 🛡️ Paridad exacta con el vivo: el check MCL de trading.ts usa SOLO
+  // sessions[currentSession] (SIN fallback a ALL — ALL.maxBuyLosses es config muerta
+  // en el vivo, no debe cobrar vida en el backtest).
+  const sessCfg = ((config as any).sessions ?? {})[sessKey];
+  if (sessCfg) {
+    const mcl = dir === 'BUY' ? sessCfg.maxBuyLosses : sessCfg.maxSellLosses;
+    const streak = dir === 'BUY' ? dailyStats.sessionBuyLossStreak : dailyStats.sessionSellLossStreak;
+    if (typeof mcl === 'number' && mcl > 0 && streak >= mcl) {
+      return; // MCL direccional de sesión alcanzado (paridad con vivo)
+    }
+  }
+
+  // 🛡️ REGLA C (sep-2026, A/B): bloqueo de entradas nuevas en la ventana de rollover del
+  // broker 20:29-21:30 UTC (17:29-18:30 ARG), días hábiles — feed muerto 20:29-21:00 +
+  // pico de spread ~19 pips 21:00-21:15 + residuo. Incidente real 10-sep: GBPJPY SELL
+  // entró 21:29 UTC, SL/TP rechazado (ask +30 pips en segundos) → cierre de emergencia.
+  // Flag de config (off por defecto; lo enciende el A/B y, si Bon lo aprueba, el vivo).
+  if ((config as any).rolloverEntryBlock) {
+    const d = new Date(nowMs);
+    const dow = d.getUTCDay();
+    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (dow >= 1 && dow <= 5 && mins >= 20 * 60 + 29 && mins <= 21 * 60 + 30) {
+      return; // entrada bloqueada en ventana de rollover — mismo efecto que en vivo (no abre)
+    }
+  }
   // ═══ TIMESFM FILTER (F1) — espejo del gate en dispatchOteSignal (src/db/trading.ts) ═══
   // Ubicado al inicio para que el modo collect registre TODOS los candles con trigger.
   const tfmRaw = (config as any).timesfm;
@@ -1579,6 +1859,8 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     events: oteData.events || [],
     grade: oteData.points >= 8 ? 'A+' : 'B',
     oteEntryUsed: oteData.oteEntryUsed,
+    // 🆕 sep-2026: gatillo real que ejecutó el trade (etiquetado honesto por gatillo)
+    execTrigger: (oteData as any).execTrigger,
     tf: oteData.tf,
     riskMult: oteData.riskMult,
     timesfmAction: oteData.timesfmAction,
@@ -1629,6 +1911,26 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
       scorePts,          // scorePoints
       tfKey,             // tf
     ) as any;
+
+    // 🛡️ ML F3 (sep-2026): gate ML idéntico al vivo (AlphaModel.ts:357-359) — walk-forward.
+    // Solo aplica a trades posteriores al entrenamiento del modelo (trainedAt = mtime):
+    // el modelo de la semana pasada evalúa la semana nueva, nunca su propio período de train.
+    // Sin modelo o sin mlGate → comportamiento legacy (todo aprobado).
+    // 🆕 PARIDAD 16-sep-2026: el gate del VIVO se extendió a TODOS los gatillos (directas
+    // incluidas, ML GATE EXTENDIDO en trading.ts — OTE las veta AlphaModel, las directas el
+    // dispatch). El motor gatea ahora TODAS las entradas (antes solo OTE_Retracement) para
+    // que el sweep/hyperopt midan lo mismo que el vivo.
+    if (_mlCtx?.cfg?.enabled && nowMs > (_mlCtx.cfg.trainedAt ?? 0)) {
+      try {
+        const mlPred = mlPredict(state as any, trade.direction, nowMs, trade.points, scorePts, tfKey, config.ticker);
+        if (mlPred && !mlPred.approved) {
+          _mlCtx.rejected++;
+          return; // el filtro ML lo rechaza — mismo comportamiento que el vivo (solo OTE)
+        }
+      } catch (gateErr: any) {
+        console.warn(`[ML-GATE] ⚠️ gate error: ${gateErr.message}`);
+      }
+    }
   } catch (e: any) {
     // No dejar que la captura de features rompa el backtest.
     console.warn(`[ML] ⚠️ No se pudieron congelar features del trade ${trade.id}: ${e.message}`);
@@ -1656,7 +1958,12 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
      }
   }
 
-  if (hasOte && isBos) trade.triggerType = `oteBos${tfSuffix}`;
+  // 🛡️ FIX sep-2026 (etiquetado honesto): si el trade trae execTrigger (el gatillo que
+  // REALMENTE lo ejecutó en evaluateImpulseCore), usar eso. Los eventos del Pine mezclan
+  // TFs (CHoCH_15M + BOS_5M en la misma alerta) y clasificaban mal los gatillos.
+  if ((trade as any).execTrigger) {
+    trade.triggerType = (trade as any).execTrigger;
+  } else if (hasOte && isBos) trade.triggerType = `oteBos${tfSuffix}`;
   else if (hasOte && isChoch) trade.triggerType = `oteChoch${tfSuffix}`;
   else if (isBos && !hasOte) trade.triggerType = `bos${tfSuffix}`;
   else if (isChoch && !hasOte) trade.triggerType = `choch${tfSuffix}`;
@@ -1666,7 +1973,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const customFriction = {
     baseSpreadPips: config.spreadPips !== undefined ? config.spreadPips : defaultFrictionConfig[clsFriction].baseSpreadPips,
     commissionPerLot: config.commissionPerLot !== undefined ? config.commissionPerLot : defaultFrictionConfig[clsFriction].commissionPerLot,
-    latencyMs: 50
+    latencyMs: 50,
+    // 🛡️ sep-2026: pico rollover 20:29-21:00 UTC. undefined → default 19 en FrictionModel; 0 = off (A/B).
+    rolloverPeakPips: config.rolloverPeakPips,
   };
   const activeLike = {
     tradeId: trade.id,
@@ -1693,6 +2002,11 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   trade.tp1Price = frictionResult.netTrade.tp1Price;
   trade.tp2Price = frictionResult.netTrade.tp2Price;
   trade.slPrice = frictionResult.netTrade.slPrice;
+
+  // 🆕 PARIDAD (sep-2026): sesión de ENTRADA del trade (para la racha direccional) + conteo diario.
+  (trade as any).btSession = dailyStats.currentSessionStr;
+  if (dir === 'BUY') dailyStats.dailyBuys++;
+  else dailyStats.dailySells++;
 
   trades.push(trade);
   activeTrades.set(trade.id, trade);

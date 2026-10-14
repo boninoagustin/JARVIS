@@ -24,6 +24,10 @@ export interface BacktestTrade {
   /** 🆕 ML F2: features del estado al momento de la entrada (mismas 12 dims que MLFilter.extractFeatures).
    *  Se congelan en el trade para que train_ml_model.py entrene con datos REALES (no sintéticos). */
   mlFeatures?: Record<string, number>;
+  /** 🆕 sep-2026: gatillo REAL que ejecutó el trade (oteChoch5m/oteBos15m/...), seteado por
+   *  AlphaModel.evaluateImpulseCore. La clasificación triggerType usa este campo cuando existe
+   *  (los eventos del Pine mezclan TFs y ensuciaban la etiqueta). */
+  execTrigger?: string;
 }
 
 export interface BaseTriggerConfig {
@@ -88,12 +92,21 @@ export interface BacktestConfig {
   tp1StructuralMinRR?: number;
 
   /** 🆕 TimesFM F1: config del filtro (ver src/engine/TimesfmFilter.ts). Ausente = filtro off. */
+
+  /** 🛡️ ML F3 (sep-2026): gate ML del vivo dentro del backtest (walk-forward).
+   *  trainedAt = mtime del modelo → solo rechaza trades posteriores al entrenamiento. */
+  mlGate?: { enabled?: boolean; modelPath?: string; trainedAt?: number };
+  /** 🛡️ sep-2026: pico de spread en 20:29-21:00 UTC (undefined → default 19; 0 = off) */
+  rolloverPeakPips?: number;
   timesfm?: Partial<import('../../../src/engine/TimesfmFilter').TimesfmFilterConfig>;
 }
 
 export interface BacktestResult {
   trades: BacktestTrade[]; totalEvents: number; processedEvents: number;
   startDate: string; endDate: string;
+  /** 🛡️ ML F3 (sep-2026): rechazos del gate ML walk-forward (0 si mlGate off) */
+  mlRejected?: number;
+  mlGateEnabled?: boolean;
 }
 
 export interface ParsedAlert {
