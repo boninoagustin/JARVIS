@@ -153,8 +153,12 @@ def objective_function(
 
     # Region válida: optimización normal.
     trade_dev = abs(metrics.trade_count - target_trades) / target_trades
+    # 🛡️ Métricas honestas (sep-2026, opción 5 de Bon): cap PF en 5 Y degradarlo si la
+    # pérdida bruta es chica (gross_loss < 5R → el PF está inflado por pocas pérdidas,
+    # caso XAUUSD 16.73). El piso se alcanza gradualmente para no aplanar el paisaje.
+    pf_honest = min(metrics.profit_factor, 5.0) * min(1.0, metrics.gross_loss_r / 5.0)
     return (
-        metrics.profit_factor
+        pf_honest
         - dd_penalty * metrics.max_drawdown_r
         - sample_penalty * trade_dev
         + 0.1 * metrics.expectancy  # bonus pequeño por expectancy

@@ -264,7 +264,10 @@ async function runOptimization() {
     console.log(`Using Coordinate Descent (Greedy Search) for extreme performance & memory optimization...`);
 
     const defaultGeneIdx = 0; 
-    const activeTriggers = ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
+    // 🆕 sep-2026: política gatillo-por-gatillo — el tune evalúa sobre los gatillos 5m
+    // (los 15m fueron derogados; antes el bruteforcer optimizaba presets para gatillos
+    // que producción ya no usa).
+    const activeTriggers = ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m'];
     const defaultRisk: RiskGene = { slBufferPercent: 0, fixedRR: 2, minRR: 1.5 };
 
     let bestM15Idx = defaultGeneIdx;
@@ -397,9 +400,13 @@ async function runOptimization() {
     
     console.log(JSON.stringify(finalPreset, null, 2));
 
-    const outPath = path.join(process.cwd(), `optimized_preset_${ticker}.json`);
+    // 🆕 sep-2026 (gobernanza): el bruteforcer PROPONE, no aplica. Escribe un archivo
+    // _proposal que NO pisa el preset vivo (optimized_preset_{ticker}.json lo lee el
+    // motor en producción). La migración es manual (load_best_params.py) cuando Bon
+    // aprueba — y recién el dominical siguiente re-exporta los CSVs con el preset nuevo.
+    const outPath = path.join(process.cwd(), `optimized_preset_${ticker}_proposal.json`);
     fs.writeFileSync(outPath, JSON.stringify(finalPreset, null, 4));
-    console.log(`\nSaved optimized preset to ${outPath}`);
+    console.log(`\nSaved proposal to ${outPath} (NO toca el preset vivo)`);
 }
 
 runOptimization().catch(console.error);

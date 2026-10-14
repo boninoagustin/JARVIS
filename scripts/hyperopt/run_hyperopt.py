@@ -57,6 +57,10 @@ def main() -> int:
     p.add_argument("--output", default=None, help="Default: optimized_preset_<ticker>_hyperopt.json")
     p.add_argument("--smoke-test", action="store_true",
                    help="5 trials para validar pipeline end-to-end sin gastar compute")
+    p.add_argument("--timesfm-cache", default=None,
+                   help="JSONL de forecasts TimesFM precomputados → trials CON filtro (F4)")
+    p.add_argument("--current-sessions", default=None,
+                   help="JSON overlay de sesiones vigentes del vivo (dueño-único, sep-2026)")
     args = p.parse_args()
 
     if not VENV_PYTHON.exists():
@@ -91,6 +95,10 @@ def main() -> int:
     ]
     if args.smoke_test:
         cmd.append("--smoke-test")
+    if args.timesfm_cache:
+        cmd += ["--timesfm-cache", args.timesfm_cache]
+    if args.current_sessions:
+        cmd += ["--current-sessions", args.current_sessions]
 
     print(f"→ log_dir: {log_dir}", file=sys.stderr)
     print(f"→ study_name: {study_name}", file=sys.stderr)

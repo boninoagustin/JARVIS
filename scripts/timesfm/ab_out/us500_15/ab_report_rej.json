@@ -1,0 +1,89 @@
+{
+  "ticker": "us500",
+  "tf": 15,
+  "horizon": 12,
+  "config_source": "optimized_preset_US500_hyperopt.json",
+  "baseline": {
+    "metrics": {
+      "trade_count": 221,
+      "wins": 215,
+      "losses": 6,
+      "win_rate": 0.9728506787330317,
+      "gross_profit_r": 25.280379452187947,
+      "gross_loss_r": 5.025286882347605,
+      "net_pnl_r": 20.255092569840343,
+      "profit_factor": 5.030634080014553,
+      "expectancy": 0.0916520025784631,
+      "max_drawdown_r": 1.0035215954799739,
+      "sharpe_simple": 4.041557446968498,
+      "avg_trade_r": 0.0916520025784631,
+      "max_consec_losses": 1,
+      "max_consec_wins": 85
+    },
+    "metrics_oos": {
+      "trade_count": 87,
+      "wins": 85,
+      "losses": 2,
+      "win_rate": 0.9770114942528736,
+      "gross_profit_r": 6.99142053350717,
+      "gross_loss_r": 2.0051435761294307,
+      "net_pnl_r": 4.986276957377739,
+      "profit_factor": 3.4867431024579547,
+      "expectancy": 0.05731352824572114,
+      "max_drawdown_r": 1.0030554671167686,
+      "sharpe_simple": 1.898651958914398,
+      "avg_trade_r": 0.05731352824572114,
+      "max_consec_losses": 1,
+      "max_consec_wins": 41
+    },
+    "objective": 2.063641204838476,
+    "trade_count": 221,
+    "start_date": "2026-01-01",
+    "end_date": "2026-06-09"
+  },
+  "timesfm": {
+    "metrics": {
+      "trade_count": 205,
+      "wins": 200,
+      "losses": 5,
+      "win_rate": 0.975609756097561,
+      "gross_profit_r": 24.527536546400185,
+      "gross_loss_r": 4.343422417887065,
+      "net_pnl_r": 20.18411412851312,
+      "profit_factor": 5.647052988765491,
+      "expectancy": 0.0984590933098201,
+      "max_drawdown_r": 1.0035215954799739,
+      "sharpe_simple": 4.141337792659828,
+      "avg_trade_r": 0.0984590933098201,
+      "max_consec_losses": 1,
+      "max_consec_wins": 94
+    },
+    "metrics_oos": {
+      "trade_count": 78,
+      "wins": 77,
+      "losses": 1,
+      "win_rate": 0.9871794871794872,
+      "gross_profit_r": 6.781662770968399,
+      "gross_loss_r": 1.0030554671167686,
+      "net_pnl_r": 5.778607303851631,
+      "profit_factor": 6.761004743298932,
+      "expectancy": 0.07408470902373886,
+      "max_drawdown_r": 1.003055467116769,
+      "sharpe_simple": 2.410998205796329,
+      "avg_trade_r": 0.07408470902373886,
+      "max_consec_losses": 1,
+      "max_consec_wins": 56
+    },
+    "objective": 2.090448295569833,
+    "trade_count": 205,
+    "start_date": "2026-01-01",
+    "end_date": "2026-06-09"
+  },
+  "filter_actions": {
+    "APPROVE": 152,
+    "REDUCE": 220,
+    "REJECT": 30
+  },
+  "degraded": 56,
+  "generated_at": 1788225776
+}

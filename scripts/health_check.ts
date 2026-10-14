@@ -149,7 +149,10 @@ async function checkWinRate() {
   }
 }
 
-// ── 5. Configs coherentes (solo-5M, US500 off / JP225 on) ────────────────────
+// ── 5. Configs coherentes (regla gatillo-por-gatillo del paso 8, sep-2026) ────
+// Política vieja (solo-5M hardcodeado, US500 off) reemplazada el 10-sep: el paso 8 del
+// dominical decide apagar/activar por DATOS (minScore=99 apaga, minScore=4 reactiva).
+// El check valida que Firestore refleje la última propuesta del trigger-state.
 async function checkConfigs() {
   if (!db) return;
   try {
@@ -158,26 +161,37 @@ async function checkConfigs() {
     snap.docs.forEach(d => { cfgs[d.id] = d.data(); });
 
     const problems: string[] = [];
-    // US500 desactivado, JP225 activado
-    if (cfgs['US500'] && cfgs['US500'].enabled !== false) problems.push('US500 debería estar enabled=false');
+    // JP225 sigue on (decisión vigente)
     if (cfgs['JP225'] && cfgs['JP225'].enabled !== true) problems.push('JP225 debería estar enabled=true');
 
-    // Solo-5M: ningún gatillo 15m habilitado en los activos vivos
-    const OFF = ['USOIL', 'USDCAD', 'BTCUSD', 'US500'];
-    for (const [ticker, cfg] of Object.entries(cfgs)) {
-      if (cfg.enabled === false || OFF.includes(ticker)) continue;
-      const sessions = cfg.sessions || {};
-      for (const [sess, trigs] of Object.entries(sessions as Record<string, any>)) {
-        for (const [trig, t] of Object.entries(trigs || {})) {
-          if (trig.includes('15m') && (t as any)?.enabled === true) {
-            problems.push(`${ticker}/${sess}/${trig} 15m habilitado (rompe solo-5M)`);
-          }
+    // Coherencia con el trigger-state aplicado (reports/loser_triggers_proposal.json)
+    const stPath = '/opt/JARVIS/scripts/periodic_opt/reports/loser_triggers_proposal.json';
+    if (fs.existsSync(stPath)) {
+      const st = JSON.parse(fs.readFileSync(stPath, 'utf8'));
+      const SESS = ['ASIA', 'LONDON', 'NY', 'OFF'];
+      for (const p of (st.disables || [])) {
+        const cfg = cfgs[p.ticker]; if (!cfg) continue;
+        const s = (cfg.sessions || {}) as Record<string, any>;
+        for (const sess of SESS) {
+          const blk = s[sess]?.[p.trigger];
+          if (blk && blk.minScore < 99) problems.push(`${p.ticker}/${sess}/${p.trigger} debería estar apagado (minScore>=99), tiene ${blk.minScore}`);
+          else if (blk && blk.enabled !== false) problems.push(`${p.ticker}/${sess}/${p.trigger} apagado con enabled!=false (panel incoherente)`);
         }
+      }
+      // Misma exclusión que apply_trigger_state.ts: señales conflictivas no aplicadas
+      const EXCLUDE = new Set(['GBPJPY:oteBos5m']);
+      for (const p of (st.enables || [])) {
+        if (EXCLUDE.has(`${p.ticker}:${p.trigger}`)) continue;
+        const cfg = cfgs[p.ticker]; if (!cfg) continue;
+        const s = (cfg.sessions || {}) as Record<string, any>;
+        const states = SESS.map(sess => s[sess]?.[p.trigger]);
+        const allOff = states.every(b => !b || b.minScore >= 99);
+        if (allOff) problems.push(`${p.ticker}.${p.trigger} debería estar activado (propuesta del paso 8)`);
       }
     }
 
     if (problems.length === 0) {
-      log('configs', 'PASS', 'Configs coherentes: solo-5M respetado, US500 off, JP225 on');
+      log('configs', 'PASS', 'Configs coherentes con el trigger-state (apagados minScore=99, activados encendidos)');
     } else {
       log('configs', 'FAIL', problems.slice(0, 6).join('; '));
     }
@@ -206,6 +220,106 @@ async function checkGhostPositions() {
   }
 }
 
+// ── 7. Optimización saludable por activo (sep-2026, idea de Bon) ─────────────
+// Detecta cuando un activo NO logra ser optimizado: status ERROR en su report más
+// reciente, o report demasiado viejo (el dominical no corrió / el activo quedó afuera).
+// El exit code 0 de run_weekly NO alcanza: la re-corrida 10-sep terminó exit=0 con
+// AUDCAD y NZDUSD en ERROR (timeout) — este check es el que lo ve.
+const OPT_TICKERS_LEGACY = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
+const OPT_MAX_AGE_DAYS = 8;
+// 🆕 22-sep-2026: la lista oficial vive en Firestore optimization_config/active_tickers
+// (decisión Bon: TODOS los activos que opera el bot, hoy 23). Fallback: lista legacy.
+async function getOptTickers(): Promise<string[]> {
+  try {
+    if (db) {
+      const snap = await db.collection('optimization_config').doc('active_tickers').get();
+      const list: string[] = (snap.data() || {}).tickers || [];
+      if (list.length > 0) return list;
+    }
+  } catch {}
+  return OPT_TICKERS_LEGACY;
+}
+async function checkOptStatus() {
+  try {
+    const repDir = '/opt/JARVIS/scripts/periodic_opt/reports';
+    const errors: string[] = [];
+    const stale: string[] = [];
+    const now = Date.now();
+    const tickers = await getOptTickers();
+    for (const t of tickers) {
+      const p = `${repDir}/${t}.json`;
+      if (!fs.existsSync(p)) { stale.push(`${t} (sin report)`); continue; }
+      let d: any = null;
+      try { d = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { stale.push(`${t} (json roto)`); continue; }
+      const ageDays = (now - (d.timestamp || 0)) / 86400000;
+      if (d.status === 'ERROR') errors.push(`${t} (${(d.reason || '').slice(0, 60)})`);
+      else if (ageDays > OPT_MAX_AGE_DAYS || !Number.isFinite(ageDays)) stale.push(`${t} (${Math.round(ageDays)}d)`);
+    }
+    if (errors.length) log('opt_status', 'FAIL', `Activos con optimización fallida: ${errors.join(' · ')}`);
+    else if (stale.length) log('opt_status', 'WARN', `Activos sin optimización reciente: ${stale.join(' · ')}`);
+    else log('opt_status', 'PASS', `${tickers.length} activos con reporte de optimización fresco y sin ERROR`);
+  } catch (e: any) {
+    log('opt_status', 'WARN', `No se pudo escanear reports/: ${e.message}`);
+  }
+}
+
+// ── 6b. TOP candidatos para cuenta REAL (22-sep-2026, pedido de Bon) ────────
+// Criterios conservadores (mismo espíritu que los gates del auto-apply):
+//  1. reporte fresco (≤8d) con status RECOMMEND
+//  2. MC evaluado y survival ≥ 0.80 (fail-closed: sin MC no es candidato)
+//  3. activo enabled en asset_configs
+//  4. vivo con ≥8 trades cerrados en 21d y WR ≥ 40%
+// Rank: MC survival desc, desempate WR desc. Máx 3.
+async function checkRealCandidates() {
+  if (!db) return;
+  try {
+    const repDir = '/opt/JARVIS/scripts/periodic_opt/reports';
+    const now = Date.now();
+    const cfgsSnap = await db.collection('asset_configs').get();
+    const enabled = new Set<string>();
+    cfgsSnap.docs.forEach(d => { if (d.id !== 'GLOBAL' && d.data().enabled !== false) enabled.add(d.id); });
+
+    const cut21 = now - 21 * 86400e3;
+    const jSnap = await db.collection('trade_journal').get();
+    const live = new Map<string, { n: number; wins: number }>();
+    for (const d of jSnap.docs) {
+      const x = d.data();
+      const ts = Number(x.timestamp || x.entryTs || 0);
+      if (ts < cut21 || !x.ticker) continue;
+      const s = live.get(x.ticker) || { n: 0, wins: 0 };
+      s.n++;
+      if (x.result === 'WIN') s.wins++;
+      live.set(x.ticker, s);
+    }
+
+    const cands: { t: string; surv: number; wr: number; n: number }[] = [];
+    for (const f of fs.readdirSync(repDir)) {
+      if (!/^[A-Z][A-Z0-9]*\.json$/.test(f)) continue;
+      const t = f.replace('.json', '');
+      if (!enabled.has(t)) continue;
+      let r: any = null;
+      try { r = JSON.parse(fs.readFileSync(`${repDir}/${f}`, 'utf8')); } catch { continue; }
+      if (r.status !== 'RECOMMEND') continue;
+      const age = (now - (r.timestamp || 0)) / 86400e3;
+      if (age > 8 || !Number.isFinite(age)) continue;
+      const surv = r.montecarlo?.survival;
+      if (typeof surv !== 'number' || surv < 0.8) continue;
+      const lv = live.get(t);
+      if (!lv || lv.n < 8 || lv.wins / lv.n < 0.4) continue;
+      cands.push({ t, surv, wr: lv.wins / lv.n, n: lv.n });
+    }
+    cands.sort((a, b) => b.surv - a.surv || b.wr - a.wr);
+    if (cands.length === 0) {
+      log('real_candidates', 'WARN', 'Ningún activo pasa los criterios de cuenta real (RECOMMEND fresco + MC≥80% + enabled + vivo n≥8 y WR≥40%)');
+    } else {
+      const top = cands.slice(0, 3).map((c, i) => `${i + 1}) ${c.t} (MC ${(c.surv * 100).toFixed(0)}% · vivo ${(c.wr * 100).toFixed(0)}% · n=${c.n})`).join('  ·  ');
+      log('real_candidates', 'PASS', top);
+    }
+  } catch (e: any) {
+    log('real_candidates', 'WARN', `No se pudo calcular: ${e.message}`);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   checkGates();
@@ -214,6 +328,8 @@ async function main() {
   await checkWinRate();
   await checkConfigs();
   await checkGhostPositions();
+  await checkOptStatus();
+  await checkRealCandidates();
 
   const hasFail = items.some(i => i.status === 'FAIL');
   const report: Report = { timestamp: Date.now(), status: hasFail ? 'FAIL' : 'OK', items };

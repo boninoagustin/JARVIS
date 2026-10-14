@@ -88,6 +88,11 @@ AUTO_APPLY_ENABLED = False  # congelado 05-oct-2026 (plan Paso 1): optimizador c
 # 🛡️ Sizing fraccional (sep-2026): propuesta del dominical (factores por sesión, n>=8, gate MC).
 # DESACTIVADO hasta OK de Bon — el módulo corre solo si este flag es True. PROPONE, NO aplica.
 SIZING_PROPOSAL_ENABLED = True
+# 🆕 10-oct-2026: DSR gate (Bailey/López de Prado) — barra de selección sobre los r OOS
+# de producción. Shadow: solo reporta. DSR_ENFORCE=False hasta OK de Bon; con True,
+# un RECOMMEND que no supera la barra degrada a HOLD_DSR (apply_weekly lo rechaza solo).
+DSR_ENFORCE = False
+
 # 🔴 Gatillos perdedores (09-sep-2026, idea de Bon): el dominical mide exp por gatillo con el
 # motor real + config de producción y PROPONE apagar (minScore=99) los perdedores persistentes
 # (n>=10, exp<=-0.15). Escribe reports/loser_triggers_proposal.json. NO aplica (regla de oro).
@@ -349,6 +354,20 @@ def run_montecarlo_gate(ticker: str, oos_r: list) -> dict | None:
             tmp.unlink()
         except OSError:
             pass
+
+
+def run_dsr_gate(ticker: str, oos_r: list, n_trials: int) -> dict:
+    """DSR gate (10-oct-2026): deflated Sharpe de Bailey/López de Prado sobre los r OOS
+    de producción. La barra E[max SR_N] descuenta el sesgo de selección de la búsqueda
+    (N = trials del estudio). Solo REPORTA — el gate se activa con DSR_ENFORCE."""
+    sys.path.insert(0, str(HERE))
+    try:
+        from dsr import deflated_sharpe
+    except ImportError:
+        return {"skip": True, "note": "dsr.py no disponible"}
+    if not oos_r or not n_trials:
+        return {"skip": True, "note": "sin serie OOS o sin n_trials"}
+    return deflated_sharpe([float(r) for r in oos_r], int(n_trials))
 
 
 def run_sizing_proposal() -> dict:
@@ -730,6 +749,23 @@ def main() -> int:
                 except Exception as e:
                     report["montecarlo_error"] = str(e)[:200]
                     print(f"    ⚠ MC gate falló: {e}", flush=True)
+                # 🔬 DSR gate (10-oct-2026, shadow): barra de selección Bailey/López de Prado
+                # sobre los r OOS de producción. Solo reporta; degradar RECOMMEND→HOLD_DSR
+                # requiere DSR_ENFORCE=True (pendiente OK de Bon).
+                try:
+                    dsr_res = run_dsr_gate(ticker, prod.get("oos_r") or [], prop.get("n_trials") or 0)
+                    report["dsr"] = dsr_res
+                    if dsr_res.get("skip"):
+                        print(f"    DSR shadow: skip — {dsr_res.get('note')}", flush=True)
+                    else:
+                        print(f"    DSR shadow: sr={dsr_res['sr']} | barra={dsr_res['selection_bar']} | "
+                              f"dsr={dsr_res['dsr']} → {dsr_res['verdict']}", flush=True)
+                        if DSR_ENFORCE and cmp["status"] == "RECOMMEND" and dsr_res["verdict"] == "BELOW":
+                            report["status"] = "HOLD_DSR"
+                            print(f"    🛡️ DSR gate: RECOMMEND degradado a HOLD_DSR (no supera la barra de selección)", flush=True)
+                except Exception as e:
+                    report["dsr_error"] = str(e)[:200]
+                    print(f"    ⚠ DSR shadow falló: {e}", flush=True)
                 # F4: propuesta del umbral TimesFM (solo propone — la aplicación sigue
                 # siendo manual, igual que el resto de session_apply).
                 bp = prop.get("best_params") or {}

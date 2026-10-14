@@ -1,0 +1,11 @@
+import adminModule from 'firebase-admin';
+const admin = adminModule.default ?? adminModule;
+import fs from 'node:fs';
+const sa = JSON.parse(fs.readFileSync('/opt/JARVIS/firebase-key.json', 'utf8'));
+if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
+const db = admin.firestore();
+db.settings({ ignoreUndefinedProperties: true });
+const d = await db.collection('trade_journal').doc('DF3WS7').get();
+const x = d.data() || {};
+console.log(JSON.stringify(x, null, 1));
+process.exit(0);

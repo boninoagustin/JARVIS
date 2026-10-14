@@ -112,6 +112,11 @@ async function main() {
   console.error(`[tune] ${tasks.length} gatillos a optimizar (budget=${budget}, concurrency=${concurrency})`);
 
   // Función de evaluación (misma que backtest_optimize_server.ts)
+  // 🛡️ sep-2026: guard de muestra mínima — si un gatillo tiene < MIN_TRADES trades en
+  // aislamiento, el GA no tiene señal (fitness plano) y su genoma es ruido: se descarta
+  // en el ensamblado (se conserva la config vigente del gatillo).
+  const MIN_TRADES = 5;
+  const tradeCounts = new Map<string, number>();
   const evaluate = (sessionKey: string, triggerKey: string) => (genome: TriggerGenome): number => {
     const sessions: Record<string, any> = {};
     for (const s of ALL_SESSIONS) {
@@ -149,7 +154,8 @@ async function main() {
         }
       }
     }
-    if (totalTrades < 5) return -1000 + totalTrades;
+    tradeCounts.set(`${sessionKey}/${triggerKey}`, totalTrades);
+    if (totalTrades < MIN_TRADES) return -1000 + totalTrades;
     return pnlR + (totalTrades > 0 ? wins / totalTrades : 0) * 0.001;
   };
 
@@ -176,6 +182,14 @@ async function main() {
   for (const s of ALL_SESSIONS) if (!newSessions[s]) newSessions[s] = {};
   for (const [key, r] of Object.entries(results)) {
     const [sessionKey, triggerKey] = key.split('/');
+    // 🛡️ guard de muestra mínima: si el gatillo aislado no junta MIN_TRADES trades,
+    // el GA trabajó sobre fitness plano → se descarta el genoma (ruido) y se conserva
+    // la config vigente del gatillo.
+    const nTrades = tradeCounts.get(key) ?? 0;
+    if (nTrades < MIN_TRADES) {
+      console.error(`[tune] ⏭️ ${sessionKey}/${triggerKey}: solo ${nTrades} trades en aislamiento (< ${MIN_TRADES}) → se conserva la config vigente`);
+      continue;
+    }
     if (!newSessions[sessionKey][triggerKey]) newSessions[sessionKey][triggerKey] = { enabled: true };
     const g = r.genome;
     const tgt = newSessions[sessionKey][triggerKey];

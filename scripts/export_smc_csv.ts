@@ -290,6 +290,10 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
     }
     const { loadOptimizedPreset } = await import('../src/engine/smc/smc_config.js');
     const configPreset = loadOptimizedPreset(ticker, period, basePreset);
+    // 🆕 sep-2026 (opción 4 de Bon): override de volumen institucional vía env para
+    // validar el gate (JARVIS_DISPL_VOL_MULT=1.5 → re-export con el filtro activo).
+    const volMult = Number(process.env.JARVIS_DISPL_VOL_MULT ?? 0);
+    if (volMult > 0) (configPreset as any).displ_vol_mult = volMult;
     const engine = new SMCEngine(configPreset, period);
     
     const records: OHLCV[] = [];

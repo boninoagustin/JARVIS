@@ -35,7 +35,9 @@ FIREBASE_PROJECT = "jarvis-67f66"
 TICKERS_ALL = ["EURUSD", "GBPUSD", "AUDCAD", "US500", "XAUUSD",
                "USDJPY", "USDCAD", "NZDUSD", "USOIL", "BTCUSD"]
 
-MIN_NEW_TRADES = 30
+MIN_NEW_TRADES = 15  # 🛡️ relajado 09-sep-2026: era 30, pero la cadencia real post-reset es ~5-10
+# trades cerrados/semana TOTALES — con 30 el trainer hacía SKIP hace semanas y los modelos
+# de producción quedaron congelados en 11-ago. 15 es el punto medio: frescura sin overfit.
 WEEK_MS = 7 * 24 * 3600 * 1000
 
 

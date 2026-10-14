@@ -62,6 +62,10 @@ ROI_PRESETS: Dict[str, Dict[str, float]] = {
 # muestrean POR SESIÓN (el backtest los lee por gatillo dentro de config.sessions).
 # El resto queda global por activo (se leen a nivel raíz del config).
 SESSIONS = ["LONDON", "NY", "ASIA", "OFF"]
+# 🆕 sep-2026 (Capa 1): familias de zona con peso por sesión (config.zoneWeights).
+# OB = zones base; GOD/SB/BREAKER = medallas; SWEEP/DIV = eventos de liquidez/divergencia.
+ZONE_FAMILIES = ["OB", "GOD", "SB", "BREAKER", "SWEEP", "DIV"]
+ZONE_WEIGHT_CHOICES = [0.0, 0.5, 1.0, 1.5, 2.0]
 SESSION_MGMT_CATEGORICALS: Dict[str, list] = {
     "partialClosePct":      [0.0, 0.5, 0.8],
     "slAfterTp1":           ["none", "midpoint", "breakeven"],
@@ -84,6 +88,9 @@ def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
         # Scoring — umbrales del AlphaModel
         "minBuyPoints": trial.suggest_int("minBuyPoints", 3, 12),
         "minSellPoints": trial.suggest_int("minSellPoints", 3, 12),
+        # 🆕 sep-2026 (A/B VWAP de Bon): peso del evento VWAP en el scoring, por activo.
+        # Evidencia A/B: global 6 ayuda XAUUSD (+16R OOS) pero daña leve a 5 activos → por activo.
+        "vwapPts": trial.suggest_int("vwapPts", 2, 6),
 
         # F3-etapa1: los 3 que antes estaban fijos
         # TP1 estructural: el extremo del impulso se usa como TP1 solo si queda
@@ -92,51 +99,126 @@ def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
         "tp1StructuralMinRR": trial.suggest_float("tp1StructuralMinRR", 1.0, 2.0),
         # ROI time-decay: elegir entre presets (backtestEngine.ts:485 lo lee a nivel config)
         "minimal_roi": trial.suggest_categorical("minimal_roi", list(ROI_PRESETS.keys())),
+
+        # F4 (07-sep-2026): umbral de override del filtro TimesFM — ahora parte del
+        # espacio. Solo tiene efecto si el backtest corre CON filtro (timesfm.enabled
+        # + cache de forecasts precomputados; ver build_backtest_config).
+        # Rango cubre desde permisivo (6, scores reales vistos 4.25-13.5) hasta
+        # más estricto que el default actual (20/25).
+        "minScoreToOverrideReject": trial.suggest_categorical(
+            "minScoreToOverrideReject", [6, 8, 10, 12, 15, 20, 25]),
     }
 
-    # F3-etapa2: gestión de salida POR SESIÓN (5 params × 4 sesiones = 20 dims).
-    # El backtest los lee por gatillo vía config.sessions[sesión][trigger].
-    for sess in SESSIONS:
-        for name, choices in SESSION_MGMT_CATEGORICALS.items():
-            params[f"{name}_{sess}"] = trial.suggest_categorical(f"{name}_{sess}", choices)
-
+    # 🛡️ sep-2026 (reorganización dueño-único): la gestión de salida POR SESIÓN salió
+    # del hyperopt — su dueño es per_trigger_tune.ts (minScore/slBuff/tp2/partialClose/
+    # slAfterTp1/trails POR GATILLO, cableado al dominical como paso 2b). El hyperopt
+    # conserva los fallbacks globales (raíz) que el vivo lee cuando el gatillo no tiene
+    # valor propio. Antes estas 20 dims eran trabajo muerto (per_trigger_tune las pisaba).
+    # 🆕 sep-2026 (Capa 1 del optimizador del motor): pesos de zona × sesión (6 familias ×
+    # 4 sesiones). 0 = desactivar la familia en esa sesión. El backtest y el vivo los
+    # aplican vía config.zoneWeights (paridad exacta).
+    for fam in ZONE_FAMILIES:
+        for sess in SESSIONS:
+            params[f"zw_{fam}_{sess}"] = trial.suggest_categorical(
+                f"zw_{fam}_{sess}", ZONE_WEIGHT_CHOICES)
     return params
 
 
-def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _ml_gate_block(ticker: str) -> Optional[Dict[str, Any]]:
+    """ML F3 (sep-2026): bloque mlGate para el backtest — walk-forward por mtime del modelo."""
+    models_dir = Path(__file__).resolve().parent / "models"
+    ml_model_p = models_dir / f"ml_model_{ticker}.json"
+    if not ml_model_p.exists():
+        return None
+    try:
+        return {
+            "enabled": True,
+            "modelPath": str(ml_model_p),
+            "trainedAt": int(ml_model_p.stat().st_mtime * 1000),
+        }
+    except OSError:
+        return None
+
+
+def build_backtest_config(ticker: str, params: Dict[str, Any],
+                          timesfm_cache: Optional[Path] = None,
+                          current_sessions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Convierte los hiperparámetros en un BacktestConfig completo.
     Los triggers activos se mantienen en un subset conservador (los 4 que
     smc_bruteforcer.ts considera activos por default).
-    """
-    active_triggers = ["choch15m", "bos15m", "oteChoch15m", "oteBos15m"]
-    sessions: Dict[str, Any] = {}
-    for sess in SESSIONS:
-        sess_cfg: Dict[str, Any] = {}
-        # desactivar todos los triggers por default
-        for t in [
-            "choch5m", "choch15m", "bos5m", "bos15m",
-            "oteChoch5m", "oteChoch15m", "oteBos5m", "oteBos15m",
-        ]:
-            sess_cfg[t] = {"enabled": False}
-        # F3-etapa2: gestión de salida por sesión (sorteada en suggest_params)
-        mgmt = {name: params[f"{name}_{sess}"] for name in SESSION_MGMT_CATEGORICALS}
-        for t in active_triggers:
-            sess_cfg[t] = {
-                "enabled": True,
-                # 🔧 FIX: NO hardcodear minScore — el engine usa minBuyPoints/minSellPoints (por dirección) como umbral
-                # 🔧 FIX: fixedRR → tp2 (única clave que lee el engine para el TP2)
-                "tp2": params["fixedRR"],
-                "slBuff": params["slBufferPercent"],
-                "entryPercent": params["oteEntryPercent"] if t.startswith("ote") else 50,
-                # 🔧 FIX: gestión de salida dentro de cada trigger (antes iba en directManagement, que el engine ignora)
-                **mgmt,
-                # tp1StructuralMinRR va igual por trigger, pero el engine lo lee a nivel raíz (ver abajo)
-                "tp1StructuralMinRR": params["tp1StructuralMinRR"],
-            }
-        sessions[sess] = sess_cfg
 
-    return {
+    F4 (07-sep-2026): si `timesfm_cache` apunta a un JSONL de forecasts
+    precomputados existente, el backtest corre CON el filtro TimesFM activo y
+    minScoreToOverrideReject (sorteado) tiene efecto real en las métricas.
+    Sin cache → filtro OFF (comportamiento histórico, con warning): un cache
+    ausente haría que TODAS las decisiones fueran DEGRADADO→APPROVE y el umbral
+    se optimizaría sobre ruido.
+    """
+    # 🛡️ solo-5M (sep-2026): el hyperopt DEBE evaluar sobre gatillos 5m.
+    # Antes usaba 15m → las propuestas semanales prendían 15m en producción
+    # (evidencia A/B 8 meses: solo-5M +490R vs solo-15M −193R).
+    active_triggers = ["choch5m", "bos5m", "oteChoch5m", "oteBos5m"]
+    sessions: Dict[str, Any] = {}
+    if current_sessions:
+        # 🛡️ sep-2026 (paridad de umbrales): partir de las sesiones VIGENTES del vivo
+        # (per-gatillo minScore/slBuff/tp2/mgmt/entryPercent que escribe per_trigger_tune)
+        # y solo forzar enabled en los 4 gatillos 5m. Los fallbacks globales del hyperopt
+        # actúan encima (raíz). Así las trials miden SOBRE lo que el vivo aplica.
+        for sess in SESSIONS:
+            src = current_sessions.get(sess) or {}
+            sess_cfg: Dict[str, Any] = {}
+            for t, cfg in src.items():
+                if isinstance(cfg, dict):
+                    sess_cfg[t] = dict(cfg)
+            for t in active_triggers:
+                base = sess_cfg.get(t) if isinstance(sess_cfg.get(t), dict) else {}
+                sess_cfg[t] = {**base, "enabled": True}
+            sessions[sess] = sess_cfg
+    else:
+        for sess in SESSIONS:
+            sess_cfg: Dict[str, Any] = {}
+            # desactivar todos los triggers por default
+            for t in [
+                "choch5m", "choch15m", "bos5m", "bos15m",
+                "oteChoch5m", "oteChoch15m", "oteBos5m", "oteBos15m",
+            ]:
+                sess_cfg[t] = {"enabled": False}
+            for t in active_triggers:
+                sess_cfg[t] = {
+                    "enabled": True,
+                    "tp2": params["fixedRR"],
+                    "slBuff": params["slBufferPercent"],
+                    "entryPercent": params["oteEntryPercent"] if t.startswith("ote") else 50,
+                    "tp1StructuralMinRR": params["tp1StructuralMinRR"],
+                }
+            sessions[sess] = sess_cfg
+
+    # F4 (07-sep-2026): bloque TimesFM en el config del backtest.
+    # Réplica del bloque de producción (asset_configs.timesfm: counterMult=1,
+    # lowConvictionMult=1 → filtro en modo "rechazo puro") + el umbral sorteado.
+    # maxForecastAgeMs/bridgeUrl no aplican en backtest (usa cachePath).
+    timesfm_block: Optional[Dict[str, Any]] = None
+    if timesfm_cache and Path(timesfm_cache).exists():
+        timesfm_block = {
+            "enabled": True,
+            "horizon": 12,
+            "alignedMult": 1.0,
+            "counterMult": 1.0,
+            "lowConvictionMult": 1.0,
+            "flatMult": 0.6,
+            "spreadAtrHighConv": 5.3,
+            "dirEpsAtr": 0.05,
+            "rejectEnabled": True,
+            "minScoreToOverrideReject": params["minScoreToOverrideReject"],
+            "cachePath": str(timesfm_cache),
+        }
+    else:
+        print(f"[hyperopt] ⚠ {ticker}: sin cache de forecasts TimesFM en {timesfm_cache} → "
+              f"filtro OFF en las trials (minScoreToOverrideReject sorteado pero sin efecto).",
+              file=sys.stderr, flush=True)
+
+    config: Dict[str, Any] = {
         "ticker": ticker,
         "minBuyPoints": params["minBuyPoints"],
         "minSellPoints": params["minSellPoints"],
@@ -145,6 +227,15 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
         "fixedRR": params["fixedRR"],
         "oteEntryPercent": params["oteEntryPercent"],
         "entryTrigger": "SMART",
+        # 🆕 sep-2026 (A/B VWAP): peso VWAP por activo (backtestEngine lo lee a nivel raíz)
+        # 🛡️ 22-sep: .get() — estudios reanudados con trials viejos (pre-VWAP) no traen la clave.
+        "vwapPts": params.get("vwapPts", 3),
+        # 🆕 sep-2026 (Capa 1): pesos de zona × sesión (familias → sesión → multiplicador)
+        # 🛡️ 22-sep: default 1.0 (neutro) para trials viejos sin zw_*.
+        "zoneWeights": {
+            fam: {sess: float(params.get(f"zw_{fam}_{sess}", 1.0)) for sess in SESSIONS}
+            for fam in ZONE_FAMILIES
+        },
         # F3-etapa1: tp1StructuralMinRR a nivel raíz — es la clave que lee el AlphaModel
         # compartido en el path OTE del backtest (AlphaModel.ts:393 `config.tp1StructuralMinRR ?? 1.2`).
         # Antes no estaba a nivel raíz → el backtest siempre usaba el default 1.2 sin importar el trigger.
@@ -154,7 +245,14 @@ def build_backtest_config(ticker: str, params: Dict[str, Any]) -> Dict[str, Any]
         # 🔧 FIX: smc_overrides eliminado — el backtest no lo leía (params SMC los tunnea el bruteforcer)
         # F3-etapa1: minimal_roi ahora viene del espacio (preset elegido), antes fijo
         "minimal_roi": ROI_PRESETS[params["minimal_roi"]],
+        # 🛡️ ML F3 (sep-2026): gate ML idéntico al vivo dentro de las trials (walk-forward).
+        # trainedAt = mtime del modelo → el modelo de la semana pasada evalúa la semana nueva.
+        # Sin modelo para el ticker → None (gate OFF, comportamiento legacy).
+        "mlGate": _ml_gate_block(ticker),
     }
+    if timesfm_block:
+        config["timesfm"] = timesfm_block
+    return config
 
 
 # -----------------------------------------------------------------------------
@@ -289,7 +387,8 @@ def run_optimization(args: argparse.Namespace) -> int:
 
     def objective(trial: optuna.Trial) -> float:
         params = suggest_params(trial)
-        config = build_backtest_config(args.ticker, params)
+        config = build_backtest_config(args.ticker, params, timesfm_cache=args.timesfm_cache,
+                                       current_sessions=args.current_sessions)
         t0 = time.time()
         try:
             res = worker.evaluate(config)
@@ -359,7 +458,9 @@ def run_optimization(args: argparse.Namespace) -> int:
         "best_params": study.best_params,
         "best_metrics": study.best_trial.user_attrs.get("metrics") if study.best_trial else None,
         "best_metrics_oos": study.best_trial.user_attrs.get("metrics_oos") if study.best_trial else None,
-        "best_config": build_backtest_config(args.ticker, study.best_params) if study.best_trial else None,
+        "best_config": build_backtest_config(args.ticker, study.best_params,
+                                             timesfm_cache=args.timesfm_cache,
+                                             current_sessions=args.current_sessions) if study.best_trial else None,
     }
     out_path = Path(args.output)
     out_path.write_text(json.dumps(output, indent=2))
@@ -378,7 +479,25 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", default="optimized_preset_hyperopt.json")
     p.add_argument("--smoke-test", action="store_true", help="Solo 5 trials para validar end-to-end")
+    p.add_argument("--timesfm-cache", default=None,
+                   help="JSONL de forecasts TimesFM precomputados (activa el filtro en las trials). "
+                        "Default: logs/<ticker>/forecasts/forecasts_m5.jsonl si existe.")
+    p.add_argument("--current-sessions", default=None,
+                   help="JSON con {ticker, sessions} vigentes del vivo (paridad de umbrales per-gatillo)")
     args = p.parse_args()
+
+    if args.current_sessions:
+        try:
+            args.current_sessions = json.loads(Path(args.current_sessions).read_text()).get("sessions")
+        except Exception as e:
+            print(f"[hyperopt] ⚠ no se pudo cargar current-sessions ({e}) — se corre sin overlay", file=sys.stderr)
+            args.current_sessions = None
+
+    if not args.timesfm_cache:
+        default_cache = REPO_ROOT / "logs" / args.ticker.lower() / "forecasts" / "forecasts_m5.jsonl"
+        args.timesfm_cache = default_cache if default_cache.exists() else None
+    if args.timesfm_cache:
+        args.timesfm_cache = Path(args.timesfm_cache)
 
     if not WORKER_TS.exists():
         print(f"FATAL: no se encontró el worker {WORKER_TS}", file=sys.stderr)

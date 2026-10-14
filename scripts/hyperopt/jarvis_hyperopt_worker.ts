@@ -22,6 +22,29 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // -----------------------------------------------------------------------------
+// 🛡️ ML-GATE en trials (F7, 10-sep-2026): el hyperopt dominical corría SIN el filtro
+// ML (solo el Auto-Tune del panel lo tenía) → el optimizador proponía en un mundo sin
+// ML mientras eval_production medía la producción CON gate (prop↔prod no 1:1).
+// Acá se inyecta el gate walk-forward idéntico al runner (trainedAt = mtime del modelo:
+// el modelo de la semana pasada evalúa la semana nueva, jamás su propio train).
+// Per-ticker con fallback al genérico (igual que el vivo: DEFAULT_KEY). Si el config ya
+// trae mlGate (override de experimentos), se respeta.
+// -----------------------------------------------------------------------------
+const MODELS_DIR = '/opt/JARVIS/scripts/hyperopt/models';
+
+function buildMLGate(ticker: string): { enabled: boolean; modelPath: string; trainedAt: number } | undefined {
+    const perTicker = path.join(MODELS_DIR, `ml_model_${ticker.toUpperCase()}.json`);
+    const generic = path.join(MODELS_DIR, 'ml_model.json');
+    const modelPath = fs.existsSync(perTicker) ? perTicker : (fs.existsSync(generic) ? generic : null);
+    if (!modelPath) return undefined;
+    try {
+        return { enabled: true, modelPath, trainedAt: Math.floor(fs.statSync(modelPath).mtimeMs) };
+    } catch (_e) {
+        return undefined;
+    }
+}
+
+// -----------------------------------------------------------------------------
 // JSON-RPC helpers
 // -----------------------------------------------------------------------------
 interface RpcRequest { id: number; method: string; params?: any; }
@@ -115,7 +138,9 @@ function loadLogsFromDir(ticker: string, baseDir: string): Map<string, string[]>
 interface Metrics {
   trade_count: number; wins: number; losses: number;
   win_rate: number; gross_profit_r: number; gross_loss_r: number;
-  net_pnl_r: number; profit_factor: number; expectancy: number;
+  net_pnl_r: number; profit_factor: number;
+  profit_factor_capped?: number; // 🛡️ sep-2026 opción 5: PF honesto (cap 5 + piso gross_loss 5R)
+  expectancy: number;
   max_drawdown_r: number; sharpe_simple: number; avg_trade_r: number;
   max_consec_losses: number; max_consec_wins: number;
 }
@@ -166,6 +191,9 @@ function computeMetrics(trades: BacktestTrade[]): Metrics {
   }
   return { trade_count: n, wins, losses, win_rate: wr, gross_profit_r: grossProfit,
            gross_loss_r: grossLoss, net_pnl_r: net, profit_factor: pf,
+           // 🛡️ sep-2026 (opción 5): PF honesto para el reporte (cap 5 + piso de pérdida
+           // bruta 5R) — el crudo se conserva para transparencia.
+           profit_factor_capped: Math.min(pf, 5.0) * Math.min(1.0, grossLoss / 5.0),
            expectancy: exp, max_drawdown_r: maxDD, sharpe_simple: sharpe,
            avg_trade_r: net / n, max_consec_losses: mcLosses, max_consec_wins: mcWins };
 }
@@ -176,7 +204,9 @@ function objectiveFunction(m: Metrics, minTrades=30, ddPenalty=0.5, samplePenalt
     return -10.0 * (1.0 - m.trade_count / minTrades);
   }
   // 🔧 FIX: cap PF para no premiar configs degeneradas (gross_loss≈0 → PF→∞)
-  const pfCapped = Math.min(m.profit_factor, 5.0);
+  // 🛡️ sep-2026 (opción 5): piso de pérdida bruta — si gross_loss < 5R el PF está
+  // inflado por pocas pérdidas; se degrada gradualmente (mismo criterio que metrics.py).
+  const pfCapped = Math.min(m.profit_factor, 5.0) * Math.min(1.0, m.gross_loss_r / 5.0);
   const tradeDev = Math.abs(m.trade_count - targetTrades) / targetTrades;
   // 🔧 FIX: pesos rebalanceados — antes -2·DD dominaba y de facto minimizaba drawdown
   return 0.5 * pfCapped - ddPenalty * m.max_drawdown_r - samplePenalty * tradeDev + 1.0 * m.expectancy;
@@ -203,6 +233,7 @@ async function handleInit(params: any): Promise<any> {
   (global as any).__prepared = prepared;
   (global as any).__train = train;
   (global as any).__test = test;
+  (global as any).__ticker = ticker;
   log(`split OOS: train=${train.length} test=${test.length} (cutTs=${cutTs})`);
   return {
     ticker,
@@ -243,6 +274,14 @@ async function handleEvaluate(params: any): Promise<any> {
   const test = (global as any).__test;
   if (!logs || !train) throw new Error('Worker no inicializado. Llamar method=init primero.');
 
+  // 🛡️ F7 (10-sep-2026): inyectar el gate ML walk-forward si el llamador no lo mandó
+  // (run_hyperopt.py no lo manda → las trials del dominical quedaban SIN filtro).
+  if (!(config as any).mlGate) {
+    const g = buildMLGate((global as any).__ticker as string);
+    if (g) { (config as any).mlGate = g; log(`mlGate ON (${path.basename(g.modelPath)}, trainedAt=${g.trainedAt})`); }
+    else log('mlGate OFF (sin modelo)');
+  }
+
   // runBacktest espera Map<string, (string|LogEntry)[]>
   // Pasamos strings crudos → prepareEntries → preParseAlert correcto
   const result = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, train);
@@ -251,19 +290,28 @@ async function handleEvaluate(params: any): Promise<any> {
 
   // 🔧 FIX: validación out-of-sample sobre el 30% final (solo reportada, no entra en la objetivo)
   let metricsOos: any = null;
+  let oosResult: any = null;
   if (test && test.length > 0) {
-    const oosResult = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, test);
+    oosResult = runBacktest(logs as Map<string, (string|any)[]>, config, undefined, test);
     metricsOos = computeMetrics(oosResult.trades);
   }
 
   return { metrics, metrics_oos: metricsOos, objective: obj, trade_count: metrics.trade_count,
-           start_date: result.startDate, end_date: result.endDate };
+           start_date: result.startDate, end_date: result.endDate,
+           // 🛡️ MC gate (sep-2026): r-multiples del OOS para el Monte Carlo de robustez del RECOMMEND
+           oos_r: (oosResult && oosResult.trades ? oosResult.trades.map((t: any) => t.rMultiple ?? 0) : []) };
 }
 
 // -----------------------------------------------------------------------------
 // Main loop
 // -----------------------------------------------------------------------------
 async function main() {
+  // 🛡️ F7 (10-sep-2026): el engine y el AlphaModel compartido spammean console.log
+  // ([ML] por cada touch de zona, BIAS-DERIVE, etc.) → contaminaba stdout, que ES el
+  // canal RPC NDJSON. Configs con muchos legs OTE generaban decenas de miles de líneas
+  // y podían saturar el lector del servidor (timeout de 180s por trial). El worker
+  // loguea por stderr vía log(); el RPC sale por process.stdout.write directo.
+  console.log = () => {};
   log('worker started, waiting for RPC...');
   let buf = '';
   let queue: Promise<void> = Promise.resolve();

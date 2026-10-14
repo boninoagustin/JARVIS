@@ -2,7 +2,7 @@
 // Usa el MISMO worker NDJSON y split 70/30 que el hyperopt → comparación 1:1.
 // Uso: npx tsx scripts/periodic_opt/eval_production.ts EURUSD
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import adminModule from 'firebase-admin';
 const admin = adminModule.default ?? adminModule;
 
@@ -61,6 +61,10 @@ async function main() {
         entryTrigger: current.entryTrigger || 'SMART',
         minBuyPoints: current.minPointsForBuy ?? 4,
         minSellPoints: current.minPointsForSell ?? 4,
+        // 🆕 sep-2026 (A/B VWAP): peso VWAP aplicado por activo (default 2 = pre-A/B)
+        vwapPts: current.vwapPts ?? 2,
+        // 🆕 sep-2026 (Capa 1): pesos de zona × sesión aplicados por activo
+        zoneWeights: current.zoneWeights || undefined,
         slBufferPercent: current.slBufferPercent ?? 0.1,
         fixedRR: current.fixedRR ?? 2.0,
         oteEntryPercent: current.oteEntryPercent ?? 50,
@@ -75,13 +79,41 @@ async function main() {
         // F3-etapa1: reflejar la gestión real de producción (antes hardcodeado en 1.2 y sin ROI)
         tp1StructuralMinRR: current.tp1StructuralMinRR ?? 1.2,
         minimal_roi: current.minimal_roi,
-    };
+    } as any;
+
+    // F4 (07-sep-2026): activar el filtro TimesFM con el cache precomputado para que
+    // la comparación prop↔prod sea 1:1 (el hyperopt corre CON filtro). El bloque de
+    // producción (asset_configs.timesfm: counterMult=1, lowConvictionMult=1, dryRun…)
+    // se respeta tal cual; solo se inyecta el cachePath. Si no hay cache → filtro
+    // queda como estaba (sin efecto) — el umbral propuesto no se compara en ese caso.
+    const tfmCache = `${REPO}/logs/${ticker.toLowerCase()}/forecasts/forecasts_m5.jsonl`;
+    if (existsSync(tfmCache) && current.timesfm) {
+        config.timesfm = { ...(current.timesfm as any), enabled: true, cachePath: tfmCache };
+    }
+
+    // 🛡️ ML F3 (sep-2026): gate ML idéntico en prop y prod (walk-forward por mtime).
+    // El hyperopt corre CON el gate → eval_production debe correr CON el MISMO gate
+    // para que prop↔prod sea 1:1. Sin modelo → gate OFF (legacy), igual que las trials.
+    // 🆕 10-sep-2026: fallback al modelo genérico (igual que el vivo: DEFAULT_KEY) —
+    // sin esto JP225 quedaba ungated en prod pero gated en las trials (worker).
+    const mlPerTicker = `${REPO}/scripts/hyperopt/models/ml_model_${ticker}.json`;
+    const mlGeneric = `${REPO}/scripts/hyperopt/models/ml_model.json`;
+    const mlModelP = existsSync(mlPerTicker) ? mlPerTicker : mlGeneric;
+    if (existsSync(mlModelP)) {
+        try {
+            config.mlGate = {
+                enabled: true,
+                modelPath: mlModelP,
+                trainedAt: Math.floor(statSync(mlModelP).mtimeMs),
+            };
+        } catch (_e) { /* gate OFF */ }
+    }
 
     const w = new RpcWorker();
     try {
         const initRes: any = await w.call('init', { ticker: ticker.toLowerCase(), log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
         const result: any = await w.call('evaluate', { config });
-        console.log(JSON.stringify({ ticker, config, metrics: result.metrics, metrics_oos: result.metrics_oos, oos_split: initRes?.oos_split }));
+        console.log(JSON.stringify({ ticker, config, metrics: result.metrics, metrics_oos: result.metrics_oos, oos_split: initRes?.oos_split, oos_r: result.oos_r ?? [] }));
     } finally {
         w.close();
         process.exit(0);
