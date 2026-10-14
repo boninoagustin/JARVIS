@@ -32,6 +32,15 @@ export class SMCEngine {
     private rsiPivotEngine: PivotEngine;
     private preset: SMCPreset;
     public period: string;
+    /** 🆕 Telemetría (sep-2026): ticker que aloja este engine, seteado por SMCManager. */
+    public label: string = '';
+    
+    // 🆕 Telemetría de gates anti-whipsaw (sep-2026): resumen compacto con rate-limit
+    // de 60s por engine (lección del anti-spam ML: nunca una línea por evento/tick).
+    private gateTelemetryTs = 0;
+    private gateTelemetrySuppressed = 0;
+    private gatePrev = { sweep: 0, momentum: 0, bosPrior: 0, displacement: 0 };
+    private gateAccepted = 0;
     
     // Sub-modules
     public orderBlocks: OrderBlockEngine;
@@ -345,6 +354,13 @@ export class SMCEngine {
         );
         events.push(...structEvents);
 
+        // 🆕 Telemetría de gates (sep-2026): contar aceptados y loguear rechazos (rate-limit 60s).
+        // Solo instrumentación — no altera ningún camino de decisión.
+        for (const ev of structEvents) {
+            if (ev.type === 'EVENT_CHOCH' || ev.type === 'EVENT_BOS') this.gateAccepted++;
+        }
+        this.logGateTelemetry();
+
         // Reset VWAP y Z-Score en BOS o CHoCH (Disc 3: anclaje real del Z-Score)
         if (structEvents.length > 0) {
             this.vwap.reset();
@@ -438,5 +454,37 @@ export class SMCEngine {
 
         this.previousCandle = candle;
         return events;
+    }
+
+    /**
+     * 🆕 Telemetría de gates anti-whipsaw (sep-2026): imprime un resumen compacto de
+     * rechazos por motor (label:period). Rate-limit de 60s por engine; los rechazos que
+     * caen en la ventana suprimida se acumulan y se reportan en la línea siguiente.
+     * Sirve para medir la tasa de filtrado en vivo (chochAtt/displAtt = intentos).
+     */
+    private logGateTelemetry(): void {
+        const rej = this.structure.gateRejects;
+        const delta = {
+            sweep: rej.sweep - this.gatePrev.sweep,
+            momentum: rej.momentum - this.gatePrev.momentum,
+            bosPrior: rej.bosPrior - this.gatePrev.bosPrior,
+            displacement: rej.displacement - this.gatePrev.displacement,
+        };
+        this.gatePrev = { ...rej };
+        const totalDelta = delta.sweep + delta.momentum + delta.bosPrior + delta.displacement;
+        if (totalDelta === 0) return;
+
+        const now = Date.now();
+        if (now - this.gateTelemetryTs < 60_000) {
+            this.gateTelemetrySuppressed += totalDelta;
+            return;
+        }
+        const sup = this.gateTelemetrySuppressed > 0 ? ` (+${this.gateTelemetrySuppressed} suprimidos)` : '';
+        this.gateTelemetrySuppressed = 0;
+        this.gateTelemetryTs = now;
+        const att = this.structure.gateAttempts;
+        console.log(
+            `[SMC-GATES] ${this.label || '?'}:${this.period} | rechazos: sweep=${delta.sweep} mom=${delta.momentum} bosPrior=${delta.bosPrior} displ=${delta.displacement}${sup} | aceptados=${this.gateAccepted} | intentos: choch=${att.choch} displ=${att.displacement}`
+        );
     }
 }

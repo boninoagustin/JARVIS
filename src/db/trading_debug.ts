@@ -393,6 +393,7 @@ if (db) {
                     atrTrailEnabled: data.atrTrailEnabled,
                     structuralTrailEnabled: data.structuralTrailEnabled,
                     tp1StructuralMinRR: data.tp1StructuralMinRR,
+                    rolloverBeEnabled: data.rolloverBeEnabled !== false, // 🛡️ Regla A: SL→BE pre-rollover (default ON)
                     sessions: data.sessions as any
                 });
             });
@@ -2913,6 +2914,14 @@ export function startWatchdog() {
     setInterval(scheduleDailySummary, 5 * 60 * 1000);
     scheduleDailySummary();
 
+    // 🛡️ PROTECCIÓN ROLLOVER (Regla A, sep-2026): SL→BE a las 17:20-17:28 ARG (20:20-20:28 UTC)
+    // El broker cierra la vela diaria a las 21:00 UTC (18:00 ARG): feed muere 20:29→21:00 UTC y el
+    // spread se abre a ~15-20 pips (medido: barrió 4 SL por spread en 3 semanas, -$133).
+    // Solo mueve SL a BE+buffer en posiciones con ganancia flotante. No cierra nada.
+    // Desactivar por activo: asset_configs → rolloverBeEnabled: false.
+    setInterval(() => { applyRolloverProtection(Date.now()).catch((e: any) => console.error('[ROLLOVER] ❌', e.message)); }, 30 * 1000);
+    console.log('[ROLLOVER] 🛡️ Protección Rollover (Regla A) ACTIVA: ventana 20:20-20:28 UTC, SL→BE+buffer en posiciones con ganancia flotante.');
+
     setInterval(() => {
         const now = Date.now();
         const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
@@ -2961,6 +2970,119 @@ export function startWatchdog() {
             }
         }
     }, WATCHDOG_INTERVAL_MS);
+}
+
+/**
+ * 🛡️ PROTECCIÓN ROLLOVER (Regla A, sep-2026)
+ * El broker cierra la vela diaria a las 21:00 UTC (18:00 ARG): el feed muere 20:29→21:00 UTC
+ * y el spread se abre a ~15-20 pips (medido sobre M1: barrió 4 SL por spread en 3 semanas, -$133).
+ * Regla: en la ventana 20:20-20:28 UTC, toda posición con ganancia flotante suficiente
+ * mueve su SL a breakeven + buffer. No cierra nada; solo protege lo que ya está en verde.
+ */
+const ROLLOVER_BE_START_MIN_UTC = 20 * 60 + 20; // 20:20 UTC (17:20 ARG)
+const ROLLOVER_BE_END_MIN_UTC = 20 * 60 + 28;   // 20:28 UTC — el feed muere 20:29
+const rolloverBeAppliedToday = new Set<string>();
+let rolloverBeDayKey = '';
+
+function rolloverPipSize(ticker: string): number {
+    const t = (ticker || '').toUpperCase();
+    if (t.includes('JPY')) return 0.01;
+    if (t.includes('XAU') || t.includes('GOLD')) return 0.1;
+    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return 1.0;
+    if (t.includes('BTC') || t.includes('ETH')) return 0; // crypto: se compara por % de precio
+    return 0.0001; // forex (incluye oil en unidades de 0.01 — se maneja igual que JPY)
+}
+
+function rolloverMinFloat(ticker: string, price: number): number {
+    // Ganancia flotante mínima (unidades de precio) para aplicar la protección.
+    const t = (ticker || '').toUpperCase();
+    const pip = rolloverPipSize(t);
+    if (pip === 0) return price * 0.005;             // crypto: 0.5%
+    if (pip >= 1) return 5 * pip;                    // índices: 5 puntos
+    if (pip === 0.1) return 10 * pip;                // metales: 10 pips ($1 en oro)
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 5 * pip; // oil: 5 centavos
+    return 2 * pip;                                  // forex: 2 pips
+}
+
+function rolloverBeBuffer(ticker: string): number {
+    const t = (ticker || '').toUpperCase();
+    const pip = rolloverPipSize(t);
+    if (pip === 0) return 0;
+    if (pip >= 0.1) return 5 * pip;                  // índices/metales: buffer de 5 unidades
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 3 * pip;
+    return 1 * pip;                                  // forex/JPY: 1 pip sobre el entry
+}
+
+function roundRolloverPrice(v: number, ticker: string): number {
+    const pip = rolloverPipSize(ticker);
+    if (pip === 0) return Number(v.toFixed(1));
+    if (pip >= 0.1) return Number(v.toFixed(2));
+    if (pip === 0.01) return Number(v.toFixed(3));
+    return Number(v.toFixed(5));
+}
+
+async function applyRolloverProtection(nowMs: number): Promise<void> {
+    if (activeTrades.size === 0) return;
+    const d = new Date(nowMs);
+    const day = d.getUTCDay();
+    if (day === 0 || day === 6) return; // solo días hábiles
+    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
+    if (minOfDay < ROLLOVER_BE_START_MIN_UTC || minOfDay >= ROLLOVER_BE_END_MIN_UTC) return;
+
+    const dayKey = d.toISOString().slice(0, 10);
+    if (rolloverBeDayKey !== dayKey) {
+        rolloverBeDayKey = dayKey;
+        rolloverBeAppliedToday.clear();
+    }
+
+    for (const [tradeId, trade] of activeTrades) {
+        if (rolloverBeAppliedToday.has(tradeId)) continue;
+        if (!trade.ctraderPositionId) continue; // sin posición real en cTrader → nada que proteger
+
+        const rawCfg: any = assetSessionConfigs.get(trade.ticker);
+        if (rawCfg && rawCfg.rolloverBeEnabled === false) continue; // desactivado por activo
+
+        const state = localRadarStates.get(trade.ticker);
+        const px = state?.lastPrice;
+        if (!px || !Number.isFinite(px)) continue; // sin precio aún → próximo tick reintenta
+
+        const pip = rolloverPipSize(trade.ticker);
+        const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
+        if (floatDist < rolloverMinFloat(trade.ticker, px)) continue; // sin margen todavía
+
+        const buffer = rolloverBeBuffer(trade.ticker);
+        const bePrice = trade.direction === 'BUY' ? trade.entryPrice + buffer : trade.entryPrice - buffer;
+        const improves = trade.direction === 'BUY' ? bePrice > trade.slPrice : bePrice < trade.slPrice;
+        if (!improves) continue;
+
+        try {
+            const { modifyStopLoss } = await import('../services/ctrader.js');
+            const newSl = roundRolloverPrice(bePrice, trade.ticker);
+            const ok = await modifyStopLoss(trade.ctraderPositionId, newSl);
+            if (!ok) {
+                console.warn(`[ROLLOVER] ⚠️ modifyStopLoss falló para ${trade.ticker} #${tradeId} — reintento en el próximo tick`);
+                continue;
+            }
+            trade.slPrice = newSl;
+            rolloverBeAppliedToday.add(tradeId);
+            if (db) {
+                db.collection('active_trades').doc(trade.tradeId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
+                if (trade.journalId) {
+                    db.collection('trade_journal').doc(trade.journalId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
+                }
+            }
+            const floatPips = pip === 0 ? (floatDist / trade.entryPrice) * 100 : floatDist / pip;
+            const msg = `🛡️ <b>PROTECCIÓN ROLLOVER | ${trade.ticker} | ${trade.direction}</b>\n\n` +
+                `📈 Posición en verde (+${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'}) antes del cierre diario del broker (18:00 ARG).\n` +
+                `🛑 SL movido a Breakeven${buffer > 0 ? ' + buffer' : ''}: <b>${newSl}</b>\n` +
+                `ℹ️ El feed del broker muere 17:29-18:00 ARG y el spread se abre ~15-20 pips.\n\n` +
+                `⏰ ${new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })} ARG`;
+            sendTelegramAlert(msg).catch(() => {});
+            console.log(`[ROLLOVER] 🛡️ ${trade.ticker} #${tradeId} ${trade.direction}: SL→BE ${newSl} (flotante +${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'})`);
+        } catch (e: any) {
+            console.error(`[ROLLOVER] ❌ Error protegiendo ${trade.ticker} #${tradeId}:`, e.message);
+        }
+    }
 }
 
 /**

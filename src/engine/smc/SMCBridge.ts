@@ -198,7 +198,7 @@ function heartbeatTick(processAlert: AlertFn) {
 
 // ─── PING_PRICE desde ticks spot ────────────────────────────────────────────
 
-function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV) {
+function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV, prevCandle?: OHLCV) {
     const now = Date.now();
     if (now - (lastPingSent.get(baseTicker) ?? 0) < PING_THROTTLE_MS) return;
     lastPingSent.set(baseTicker, now);
@@ -206,8 +206,11 @@ function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV
     const engine = smcManager.getEngines().get(`${baseTicker}:M15`);
     const vwapStatus = engine?.getState().vwapStatus;
     const vwapTag = vwapStatus ? ` | VWAP: ${vwapStatus}` : '';
+    // 🛡️ sep-2026 fix OTE: incluir high/low de la última vela CERRADA para que el bot
+    // estire el extreme del leg solo con velas cerradas (paridad live↔backtest).
+    const prevTag = prevCandle ? ` | PrevHigh: ${fmt(prevCandle.high)} | PrevLow: ${fmt(prevCandle.low)}` : '';
 
-    dispatch(processAlert, `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${vwapTag} | TS: ${now}`);
+    dispatch(processAlert, `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${prevTag}${vwapTag} | TS: ${now}`);
 }
 
 // ─── Inicialización ─────────────────────────────────────────────────────────
@@ -238,7 +241,7 @@ export async function initSMCBridge() {
     setInterval(() => heartbeatTick(processTradingAlert), HEARTBEAT_INTERVAL_MS);
 
     // 3. PING de precio desde ticks spot (reemplaza al PING de cierre de vela de TradingView)
-    setSpotTickListener((baseTicker, candle) => handleSpotTick(processTradingAlert, baseTicker, candle));
+    setSpotTickListener((baseTicker, candle, prevCandle) => handleSpotTick(processTradingAlert, baseTicker, candle, prevCandle));
 
     console.log('[SMC-BRIDGE] 🌉 Bridge SMC → JARVIS activo (eventos + SYNC + HEARTBEAT + PING por ticks)');
 }

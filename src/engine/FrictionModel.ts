@@ -5,6 +5,7 @@ export interface FrictionConfig {
     commissionPerLot: number; // Comisión por lado (ej. $3)
     baseSpreadPips: number;   // Spread raw promedio (ej. 0.1)
     latencyMs: number;        // Latencia estimada al broker
+    rolloverPeakPips?: number; // 🛡️ sep-2026: pico de spread en 20:29-21:00 UTC (default 19; 0 = off)
 }
 
 export const defaultFrictionConfig: Record<string, FrictionConfig> = {
@@ -24,11 +25,15 @@ export function getAssetClass(ticker: string): string {
     return 'FOREX';
 }
 
-export function pipValuePerLotUsd(ticker: string, currentPrice?: number): number {
+export function pipValuePerLotUsd(ticker: string, currentPrice?: number, usdjpyRate?: number): number {
     const cls = getAssetClass(ticker);
     if (cls === 'INDICES') return 1.0;
-    if (cls === 'CRYPTO') return (currentPrice || 50000) * 0.0001; 
-    return 10.0; // FOREX and METALS
+    if (cls === 'CRYPTO') return (currentPrice || 50000) * 0.0001;
+    // 🛡️ FIX sep-2026: pares xxxJPY → 1 pip = 0.01 × 100.000 = 1.000 JPY ÷ USDJPY.
+    // Antes devolvía $10 fijo (válido solo para quote=USD) → riesgo inflado ~35% en JPY
+    // → rMultiple falso en el diario. usdjpyRate medido (lastBidAsk) cuando está disponible.
+    if (ticker.includes('JPY')) return 1000 / (usdjpyRate && usdjpyRate > 0 ? usdjpyRate : 154);
+    return 10.0; // FOREX (quote USD) and METALS (XAU 1 lote = 100 oz → $10/pip)
 }
 
 export function getPipValue(ticker: string, currentPrice: number): number {
@@ -54,7 +59,8 @@ export function computeRMultipleFromPnlUsd(
     entry: number,
     sl: number,
     lots: number,
-    pnlUsd: number
+    pnlUsd: number,
+    usdjpyRate?: number
 ): number {
     const t = (ticker || '').toUpperCase();
     const e = Number(entry);
@@ -64,7 +70,7 @@ export function computeRMultipleFromPnlUsd(
         return pnlUsd > 0.5 ? 1.5 : pnlUsd < -0.5 ? -1 : 0;
     }
     const pipSize = getPipValue(t, e);
-    const pipValuePerLot = pipValuePerLotUsd(t, e);
+    const pipValuePerLot = pipValuePerLotUsd(t, e, usdjpyRate);
     const riskDistancePips = Math.abs(e - s) / pipSize;
     const riskUsd = riskDistancePips * pipValuePerLot * l;
     if (!Number.isFinite(riskUsd) || riskUsd <= 0) {
@@ -84,12 +90,19 @@ export function evaluateNetTrade(
     const pipValue = getPipValue(trade.ticker, trade.entryPrice);
     const decimals = getDecimals(trade.ticker);
 
-    // 1. Spread Dinámico (Aumentado por horario o por defecto)
+    // 1. Spread Dinámico — 🛡️ FIX rollover (sep-2026): ventana real 20:29→21:15 UTC,
+    // pico ~19 pips. Medido en vivo: feed muerto 20:29-21:00 y reapertura con cortes
+    // 21:00-21:15 con spread 15-19 pips (barridos de SL por spread puro en 21:00-21:20).
+    // Antes: hourUTC===21 con ×5 → ventana corrida (21:00-22:00, arranque de ASIA)
+    // y magnitud 38× corta (0.5 pips forex).
     let activeSpreadPips = config.baseSpreadPips;
-    const hourUTC = new Date(nowMs).getUTCHours();
-    // Horario Rollover: 21:00 a 22:00 UTC (Spread se abre masivamente)
-    if (hourUTC === 21) {
-        activeSpreadPips *= 5; // Simulación del "Death Spread" del Rollover
+    const rolloverPeak = config.rolloverPeakPips ?? 19;
+    if (rolloverPeak > 0) {
+        const _d = new Date(nowMs);
+        const minutesUTC = _d.getUTCHours() * 60 + _d.getUTCMinutes();
+        if (minutesUTC >= 20 * 60 + 29 && minutesUTC < 21 * 60 + 15) {
+            activeSpreadPips = Math.max(activeSpreadPips, rolloverPeak);
+        }
     }
     const spreadCost = activeSpreadPips * pipValue;
     

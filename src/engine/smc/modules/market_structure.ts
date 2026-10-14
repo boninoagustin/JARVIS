@@ -28,6 +28,12 @@ export class MarketStructureEngine {
     private chochReqMom: boolean = false;
     private chochReqBosPrior: boolean = false;  // 🆕 E6: exige BOS previo para CHoCH
     private displAtrMult: number = 0.5;         // 🆕 paridad Pine: tamaño mínimo de vela de desplazamiento (x ATR)
+    private displVolMult: number = 0;           // 🆕 sep-2026: volumen institucional (x SMA20). 0 = off.
+
+    // 🆕 Telemetría de gates (sep-2026): contadores de rechazo para medir en vivo la
+    // tasa de filtrado anti-whipsaw. NO tocan la lógica — solo instrumentación.
+    public gateRejects = { sweep: 0, momentum: 0, bosPrior: 0, displacement: 0 };
+    public gateAttempts = { choch: 0, displacement: 0 };
 
     constructor() {
         // Gates are now read from preset in processCandle
@@ -98,6 +104,7 @@ export class MarketStructureEngine {
         this.chochReqMom = preset.choch_require_momentum ?? false;
         this.chochReqBosPrior = preset.choch_require_bos_prior ?? false;  // 🆕 E6
         this.displAtrMult = preset.displ_atr_mult ?? 0.5;  // 🆕 paridad Pine
+        this.displVolMult = preset.displ_vol_mult ?? 0;    // 🆕 sep-2026 volumen institucional (0 = off)
         
         // 🆕 Alimentar el buffer de historia para origin/extreme
         this.history.push(candle);
@@ -250,14 +257,15 @@ export class MarketStructureEngine {
      * - Momentum: Z-Score con signo a favor ≥ 1.5.
      */
     private passesChochGates(origin: number, isBullishReversal: boolean, zScore: number | null, sweepEscapeDir: Direction | null): boolean {
+        this.gateAttempts.choch++;
         // 🆕 Disc 4 Fix: compuerta secuencial — exige BOS previo en la tendencia que se revierte.
         // Un CHoCH alcista (revierte Bearish → Bullish) requiere un BOS bajista previo.
         // Un CHoCH bajista (revierte Bullish → Bearish) requiere un BOS alcista previo.
         if (this.chochReqBosPrior) {
-            if (this.lastBOS === null) return false;
+            if (this.lastBOS === null) { this.gateRejects.bosPrior++; return false; }
             const bosDir: Direction = this.lastBOS.type === 'High' ? 'Bullish' : 'Bearish';
             const expectedBosDir: Direction = isBullishReversal ? 'Bearish' : 'Bullish';
-            if (bosDir !== expectedBosDir) return false;
+            if (bosDir !== expectedBosDir) { this.gateRejects.bosPrior++; return false; }
         }
 
         if (this.chochReqSweep && this.trendExtreme !== null) {
@@ -265,11 +273,11 @@ export class MarketStructureEngine {
             const sweepActive = sweepEscapeDir === (isBullishReversal ? 'Bullish' : 'Bearish');
             const sweptLiq = sweptExtreme || sweepActive;
             
-            if (!sweptLiq) return false;
+            if (!sweptLiq) { this.gateRejects.sweep++; return false; }
         }
         if (this.chochReqMom) {
             const hasMomentum = zScore !== null && Math.abs(zScore) >= 1.5;
-            if (!hasMomentum) return false;
+            if (!hasMomentum) { this.gateRejects.momentum++; return false; }
         }
         return true;
     }
@@ -346,18 +354,50 @@ export class MarketStructureEngine {
     }
 
     private isDisplacement(candle: OHLCV, atr: number, zScore: number | null, direction: 'Bullish' | 'Bearish'): boolean {
+        this.gateAttempts.displacement++;
+        let ok = false;
         // Si hay Z-Score, es el filtro primario (teoría)
         if (zScore !== null) {
             const absZ = Math.abs(zScore);
             const correctDirection = direction === 'Bullish' ? zScore > 0 : zScore < 0;
-            return absZ >= 2.0 && correctDirection;
+            ok = absZ >= 2.0 && correctDirection;
+        } else {
+            // 🆕 Paridad Pine: valid_bos_break = (high - low) > atr * displ_atr_mult (rango, no cuerpo)
+            const range = candle.high - candle.low;
+            if (range < atr * this.displAtrMult) {
+                ok = false;
+            } else if (direction === 'Bullish') {
+                ok = candle.close > candle.open;
+            } else if (direction === 'Bearish') {
+                ok = candle.close < candle.open;
+            }
         }
-        // 🆕 Paridad Pine: valid_bos_break = (high - low) > atr * displ_atr_mult (rango, no cuerpo)
-        const range = candle.high - candle.low;
-        if (range < atr * this.displAtrMult) return false;
-        if (direction === 'Bullish') return candle.close > candle.open;
-        if (direction === 'Bearish') return candle.close < candle.open;
-        return false;
+        // 🆕 sep-2026 (opción 4 de Bon): la vela de desplazamiento debe venir con volumen
+        // institucional (≥ displ_vol_mult × SMA20 de volumen). La "mano fuerte" mueve
+        // precio CON volumen; sin volumen el movimiento es más fácil de revertir.
+        if (ok && this.displVolMult > 0) {
+            ok = this.hasInstitutionalVolume(candle);
+        }
+        if (!ok) this.gateRejects.displacement++;
+        return ok;
+    }
+
+    /**
+     * 🆕 sep-2026: volumen institucional del desplazamiento.
+     * SMA20 del volumen de las velas ANTERIORES (la actual ya está en history al
+     * momento del check — se excluye). Warm-up sin velas con volumen → no filtrar.
+     */
+    private hasInstitutionalVolume(candle: OHLCV): boolean {
+        const endExclusive = this.history.length - 1; // excluye la vela actual
+        const start = Math.max(0, endExclusive - 20);
+        let sum = 0, n = 0;
+        for (let i = start; i < endExclusive; i++) {
+            const v = this.history[i].volume;
+            if (typeof v === 'number' && v > 0) { sum += v; n++; }
+        }
+        if (n === 0) return true; // sin base → no filtrar (warm-up)
+        const avg = sum / n;
+        return typeof candle.volume === 'number' && candle.volume > 0 && candle.volume >= avg * this.displVolMult;
     }
 
     private checkBreak(candle: OHLCV, priceLevel: number, isUp: boolean, _confirmClose: boolean): boolean {

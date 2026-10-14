@@ -42,18 +42,30 @@ interface LoadedModel { trees: XGBoostTree[]; meta: MLModelExport['meta']; }
 const _models = new Map<string, LoadedModel>();
 const DEFAULT_KEY = '__default__';
 
+// 🛡️ ML F3 (sep-2026): ventana de activación para walk-forward en el BACKTEST.
+// El motor setea setMLWindowStart(trainedAt): predict() aprueba automáticamente los
+// trades anteriores a la ventana (el modelo no debe juzgar su propio período de train).
+// En el VIVO la ventana es 0 → el gate aplica siempre (comportamiento intacto).
+let _mlWindowStartMs = 0;
+export function setMLWindowStart(ms: number): void { _mlWindowStartMs = ms > 0 ? ms : 0; }
+
 // ── Tree walker ──
 function walkTree(features: number[], tree: XGBoostTree): number {
   if (tree.split_indices && tree.split_conditions && tree.left_children && tree.right_children) {
+    // 🛡️ FIX (sep-2026): detección de HOJAS por left_children[nodeIdx] < 0 (formato XGBoost 2.x).
+    // Antes el -1 de hoja se trataba como índice de nodo → si[-1]=undefined → bajaba por
+    // left_children[-1]=undefined → walkTree devolvía 0 en TODOS los árboles → prob=0.5
+    // constante → el filtro rechazaba TODO (0.5 < 0.65) sin señal real.
     let nodeIdx = 0;
     const n = tree.split_indices.length;
-    while (nodeIdx < n) {
+    while (nodeIdx >= 0 && nodeIdx < n) {
+      const lc = tree.left_children[nodeIdx];
+      const rc = tree.right_children[nodeIdx];
+      if (lc === undefined || lc < 0 || rc < 0) return tree.base_weights?.[nodeIdx] ?? 0; // hoja
       const fi = tree.split_indices[nodeIdx];
-      if (fi < 0 || fi >= features.length) break;
+      if (fi < 0 || fi >= features.length) return tree.base_weights?.[nodeIdx] ?? 0;
       const val = features[fi];
-      nodeIdx = (!Number.isNaN(val) && val >= tree.split_conditions[nodeIdx])
-        ? tree.right_children[nodeIdx]
-        : tree.left_children[nodeIdx];
+      nodeIdx = (!Number.isNaN(val) && val >= tree.split_conditions[nodeIdx]) ? rc : lc;
     }
     return tree.base_weights?.[nodeIdx] ?? 0;
   }
@@ -128,17 +140,35 @@ export function extractFeatures(
 export function predict(
   state: RadarState, direction: 'BUY' | 'SELL', nowMs: number,
   chochPoints: number, scorePoints: number, tf: string, ticker?: string,
+  opts?: { auditOnly?: boolean },
 ): MLPrediction | null {
   // 🛡️ FIX: tickers excluidos (ej. USOIL con modelo ~azar) no pasan por el filtro ML.
   // Devolvemos null para que AlphaModel caiga al fallback heurístico legacy (reglas de puntaje).
-  if (ticker && ML_EXCLUDED_TICKERS.has(ticker.toUpperCase())) {
-    return null;
+  const t = (ticker || '').toUpperCase();
+  // 🛡️ 16-sep-2026: override runtime del bot (asset_configs.mlGateEnabled) manda sobre la
+  // lista estática. Sin override → lista estática (solo USOIL).
+  // auditOnly=true (16-sep): evaluar IGUAL aunque el gate esté apagado/excluido — solo para
+  // telemetría del gate extendido (directas). El llamador decide si bloquea (nunca acá).
+  if (!opts?.auditOnly) {
+    if (t && ML_GATE_OVERRIDES.has(t)) {
+      if (!ML_GATE_OVERRIDES.get(t)) return null;
+    } else if (t && ML_EXCLUDED_TICKERS.has(t)) {
+      return null;
+    }
   }
 
   const f = extractFeatures(state, direction, nowMs, chochPoints, scorePoints, tf);
   const vec = [f.z_score, f.vwap_status, f.atr_value, f.sweep_direction, f.simple_trend,
                f.hour_of_day, f.session, f.day_of_week, f.score_points, f.active_zones,
                f.choch_points, f.bias_aligned];
+
+  // 🛡️ ML F3 (sep-2026): walk-forward del backtest — antes de la ventana de entrenamiento
+  // devolvemos null = fallback a la heurística legacy, IDÉNTICO a "sin modelo cargado"
+  // (paridad exacta del tramo pre-window; approved:true saltaría los checks legacy del AlphaModel).
+  // En el VIVO la ventana es 0 → el gate aplica siempre (comportamiento intacto).
+  if (_mlWindowStartMs > 0 && nowMs < _mlWindowStartMs) {
+    return null;
+  }
 
   const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
   const model = _models.get(key) ?? _models.get(DEFAULT_KEY);
@@ -151,11 +181,21 @@ export function predict(
 
 export function isMLActive(): boolean { return _models.size > 0; }
 
-// 🛡️ FIX: activos cuyo modelo ML no aporta señal (accuracy ≈ azar ~0.50) se excluyen del filtro.
-// El modelo USOIL tiene acc=0.536 → rechaza TODO con prob≈0.500 < 0.65, matando todas las
-// señales del radar (el activo "nunca gatilla" a pesar de tener muchos puntos). Excluirlo hace
-// que USOIL caiga al fallback heurístico (reglas normales de puntaje) en AlphaModel.
+// 🛡️ FIX: activos cuyo modelo ML no aporta señal se excluyen del filtro SIEMPRE.
+// - USOIL: acc=0.536 ≈ azar → rechazaba TODO con prob≈0.500 < 0.65.
+// 🛡️ 16-sep-2026: la decisión de gate por activo dejó de ser estática — vive en
+// `asset_configs/{TICKER}.mlGateEnabled` (Firestore) y el bot la aplica en caliente vía
+// setMLGateOverride(). Default en vivo = APAGADO (sweep: los modelos de 11-ago restan PnL
+// en todos los umbrales). El motor de backtest NO usa overrides → el sweep puede evaluar
+// el gate libremente (paridad intacta).
 const ML_EXCLUDED_TICKERS = new Set(['USOIL']);
+const ML_GATE_OVERRIDES = new Map<string, boolean>();
+
+/** Override runtime del gate ML por ticker (true = gate ON, false = OFF → fallback heurístico).
+ *  Lo usa SOLO el bot en vivo al cargar asset_configs. Sin override → lista estática. */
+export function setMLGateOverride(ticker: string, enabled: boolean): void {
+    ML_GATE_OVERRIDES.set(ticker.toUpperCase(), !!enabled);
+}
 
 /**
  * Carga un modelo desde un objeto JSON (útil para browser y Node.js).

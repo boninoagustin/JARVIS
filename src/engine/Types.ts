@@ -79,11 +79,16 @@ export interface ImpulseLeg {
     chochEvents?: string[];
     chochReport?: string;
     bestZone?: RadarZone | null;
+    mlRejectedOnce?: boolean;  // 🆕 sep-2026: el ML rechazó el entry OTE al menos una vez (para clasificar la expiración)
 }
 
 export interface RadarState {
   vwapTs?: Record<string, number>;
   biasTs?: Record<string, number>;
+  // 🆕 sep-2026 reconstrucción bias HTF (backtest): closes por TF para derivar bias con SMA
+  htfCloses?: Record<string, number[]>;
+  // 🆕 sep-2026 climax por rango: [high, low] de la última vela por TF
+  htfHighLow?: Record<string, [number, number]>;
   tickTimes?: number[];
   densityMedian?: number;
   atr14?: number;
@@ -250,3 +255,30 @@ export const AssetSessionConfigSchema = z.object({
 }).passthrough();
 
 export type AssetSessionConfig = z.infer<typeof AssetSessionConfigSchema>;
+
+// 🛡️ sep-2026 — Confluencia de bias por activo (Paso 1, aprobado por Bon).
+// El bono de alineación deja de ser hardcodeado: cada activo puede exigir cuántos TFs
+// del set deben estar alineados para recibir el bono pleno/parcial, y qué TFs cuentan.
+// Hipótesis a medir: EURUSD 2/3, US500 3/3, o set extendido con momentum rápido (5M/15M).
+// El optimizador dominical puede sortear esta config por activo (el optimizador propone, nunca aplica).
+export interface BiasConfluenceConfig {
+    /** TFs que participan del conteo. Macro: ['D','240','60']. Extendido: ['5','15','60','240','D'].
+     *  El TF del gatillo (eventTf) cuenta como alineado con la dirección del trade por definición. */
+    tfs: string[];
+    /** Nº de TFs alineados para bono pleno (fullPts) */
+    minForFull: number;
+    /** Nº de TFs alineados para bono parcial (halfPts) */
+    minForHalf: number;
+    /** Puntos del bono pleno */
+    fullPts: number;
+    /** Puntos del bono parcial */
+    halfPts: number;
+}
+
+export const DEFAULT_BIAS_CONFLUENCE: BiasConfluenceConfig = {
+    tfs: ['D', '240', '60'],
+    minForFull: 3,   // 3/3 alineados → +5
+    minForHalf: 2,   // 2/3 alineados → +2
+    fullPts: 5,
+    halfPts: 2,
+};

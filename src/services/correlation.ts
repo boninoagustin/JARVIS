@@ -22,6 +22,25 @@ import { getCandles } from '../db/market_data.js';
 
 export const CORR_TICKERS = ['EURUSD', 'GBPUSD', 'AUDCAD', 'US500', 'XAUUSD', 'USDJPY', 'NZDUSD', 'GBPJPY', 'AUDJPY', 'GER40'];
 
+// 🆕 16-sep-2026: set DINÁMICO — el core fijo + los activos habilitados en vivo
+// (asset_configs enabled ∪ optimization_config/active_tickers, sincronizado desde
+// trading.ts vía syncCorrTickers). Sin esto, un activo promovido por el Asset Scout
+// quedaba fuera de la matriz: ρ vs no-core = undefined → gate degradado (fail-open).
+const corrTickers = new Set<string>(CORR_TICKERS);
+
+/** Agrega tickers al set de correlación (idempotente; el core fijo nunca se quita). */
+export function syncCorrTickers(tickers: string[]): void {
+    for (const t of tickers) {
+        const up = String(t || '').toUpperCase();
+        if (up) corrTickers.add(up);
+    }
+}
+
+/** Iterable del set dinámico (para loops de covarianza y logs). */
+export function getCorrTickers(): string[] {
+    return [...corrTickers];
+}
+
 export interface CorrelationFilterConfig {
     enabled: boolean;    // false = filtro apagado por completo (sin auditar)
     shadow: boolean;     // true = auditar sin bloquear (dryRun)
@@ -88,7 +107,7 @@ function onClosedBar(ticker: string, ts: number, close: number): void {
         // Si el otro activo cerró antes, su handler ya habrá encontrado este retorno
         // cuando le toque; si cerró después, lo encuentra ahora. Nunca se mezclan
         // retornos de barras distintas (eso diluía ρ a la mitad).
-        for (const other of CORR_TICKERS) {
+        for (const other of getCorrTickers()) {
             if (other === t) continue;
             const ro = retMap.get(other)?.get(ts);
             if (ro !== undefined) updatePair(t, other, r, ro);

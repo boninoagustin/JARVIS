@@ -208,6 +208,11 @@ async function main() {
         setTimeout(runReconcile, 60 * 1000);       // 1 min tras arrancar
         console.log('[RECONCILE] Scheduler activo: run a los 60s + cada 10 min.');
 
+        // 💵 Estado de cuenta (saldo/equity) → Firestore system/account_state cada 5 min.
+        // Lo consume el Diario Analítico (SALDO USD) y la bitácora del panel.
+        const { startAccountStatePusher } = await import('./db/accountState.js');
+        startAccountStatePusher();
+
         // 🆕 POSICIONES REALES → dashboard (reemplaza la bitácora de journal).
         // Snapshot de activeTrades (verificado por RECONCILE contra cTrader) cada 5s por WS.
         const runPositionsBroadcast = async () => {
@@ -226,7 +231,10 @@ async function main() {
                         const ba = getLastBidAsk(t.ticker);
                         const baFresh = ba != null && Date.now() - ba.ts < 30_000;
                         const last = baFresh ? (t.direction === 'BUY' ? ba!.bid : ba!.ask) : null;
-                        const pnlR = risk > 0 && last != null
+                        // 🛡️ 16-sep-2026: si el riesgo es degenerado (SL movido a BE/0.10 de la entrada,
+                        // doc fantasma con entrada corrupta) → no inventar R gigantes → null.
+                        const eps = Math.max(0.1, Math.abs(t.entryPrice ?? 0) * 0.0005);
+                        const pnlR = risk > eps && last != null
                             ? (t.direction === 'BUY' ? (last - t.entryPrice) / risk : (t.entryPrice - last) / risk)
                             : null;
                         return {

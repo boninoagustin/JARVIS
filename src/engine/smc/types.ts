@@ -29,6 +29,8 @@ export interface SMCPreset {
     choch_require_momentum?: boolean;
     choch_require_bos_prior?: boolean;  // 🆕 E6: exige al menos un BOS antes de validar un CHoCH
     displ_atr_mult?: number;            // 🆕 paridad Pine: tamaño mínimo de vela de desplazamiento (x ATR)
+    displ_vol_mult?: number;            // 🆕 sep-2026 (opción 4 de Bon): la vela de desplazamiento debe
+                                        // tener volumen ≥ displ_vol_mult × promedio (SMA 20). 0 = off.
     
     // Engine Optimization Parameters
     max_ob_age?: number;
