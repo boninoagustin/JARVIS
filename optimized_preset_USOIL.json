@@ -24,13 +24,24 @@
         "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 0,
-        "fixedRR": 2,
-        "minRR": 2.5
+        "slBufferPercent": 0.031332779908950434,
+        "fixedRR": 2.170488212673407,
+        "minRR": 1.7791461628811773,
+        "oteEntryPercent": 62
     },
-    "Metrics": {
-        "PnL_R": "60.29",
-        "Trades": 92,
-        "WinRate": "73.91%"
+    "Scoring": {
+        "minBuyPoints": 5,
+        "minSellPoints": 5
+    },
+    "Meta": {
+        "objective_value": 3.73932204021699,
+        "trade_count": 30,
+        "profit_factor": 15.698920696208681,
+        "max_drawdown_r": 2.004799316460648,
+        "win_rate": 0.8333333333333334,
+        "oos_profit_factor": 8.865172610524436,
+        "n_trials": 800,
+        "study_name": "jarvis_USOIL_weekly12",
+        "source": "hyperopt"
     }
 }

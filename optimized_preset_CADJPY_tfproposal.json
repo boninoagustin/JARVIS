@@ -1,0 +1,57 @@
+{
+  "ticker": "CADJPY",
+  "generatedAt": "2026-10-11T06:54:16.676Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 81,
+      "wins": 37,
+      "wr": 0.4567901234567901,
+      "pf": 0.9592996706719783,
+      "exp": -0.02481793020877339,
+      "maxDD": 14.303560848718446,
+      "maxAbsR": 1.4334579439252544
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 68,
+      "wins": 28,
+      "wr": 0.4117647058823529,
+      "pf": 0.841649778496669,
+      "exp": -0.10268819671189461,
+      "maxDD": 10.157223469898765,
+      "maxAbsR": 1.4392660550458176
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1015
+}

@@ -24,13 +24,24 @@
         "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 25,
-        "fixedRR": 3,
-        "minRR": 1
+        "slBufferPercent": 0.19740298173589327,
+        "fixedRR": 3.2290861641095105,
+        "minRR": 1.4005648149537318,
+        "oteEntryPercent": 50
     },
-    "Metrics": {
-        "PnL_R": "2.43",
-        "Trades": 111,
-        "WinRate": "69.37%"
+    "Scoring": {
+        "minBuyPoints": 9,
+        "minSellPoints": 7
+    },
+    "Meta": {
+        "objective_value": 2.6879210451989595,
+        "trade_count": 40,
+        "profit_factor": 7.843611819874292,
+        "max_drawdown_r": 1.1707317073172234,
+        "win_rate": 0.725,
+        "oos_profit_factor": 5.136971834838373,
+        "n_trials": 800,
+        "study_name": "jarvis_GBPUSD_weekly11",
+        "source": "hyperopt"
     }
 }

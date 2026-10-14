@@ -1,0 +1,82 @@
+{
+  "ticker": "EURUSD",
+  "generatedAt": "2026-10-04T03:27:14.074Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 91,
+      "wins": 59,
+      "wr": 0.6483516483516484,
+      "pf": 1.985824806664548,
+      "exp": 0.359637456675708,
+      "maxDD": 5.421838123434027,
+      "maxAbsR": 2.507146958387652
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 75,
+      "wins": 52,
+      "wr": 0.6933333333333334,
+      "pf": 2.344855455545585,
+      "exp": 0.44644888257897664,
+      "maxDD": 4.443076167693847,
+      "maxAbsR": 2.507146958387652
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 1508
+}

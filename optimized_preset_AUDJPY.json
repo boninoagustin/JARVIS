@@ -1,0 +1,47 @@
+{
+    "M15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+    },
+    "H1": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+    },
+    "H4": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+    },
+    "D1": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+    },
+    "Risk": {
+        "slBufferPercent": 0.24596390186902733,
+        "fixedRR": 3.7224006497616253,
+        "minRR": 2.640814359983378,
+        "oteEntryPercent": 79
+    },
+    "Scoring": {
+        "minBuyPoints": 5,
+        "minSellPoints": 10
+    },
+    "Meta": {
+        "objective_value": 2.4614879243790977,
+        "trade_count": 46,
+        "profit_factor": 6.075856835387531,
+        "max_drawdown_r": 1.1575384615385396,
+        "win_rate": 0.8695652173913043,
+        "oos_profit_factor": 1.589518042992078,
+        "n_trials": 400,
+        "study_name": "jarvis_AUDJPY_weekly12",
+        "source": "hyperopt"
+    }
+}

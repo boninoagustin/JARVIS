@@ -1,0 +1,57 @@
+{
+  "ticker": "FRA40",
+  "generatedAt": "2026-10-04T03:36:18.029Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 31,
+      "wins": 23,
+      "wr": 0.7419354838709677,
+      "pf": 3.4217281187748063,
+      "exp": 0.6249640959561835,
+      "maxDD": 2.000008186411031,
+      "maxAbsR": 1.834372463224501
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 26,
+      "wins": 20,
+      "wr": 0.7692307692307693,
+      "pf": 3.996724514932596,
+      "exp": 0.6915541101314863,
+      "maxDD": 2.0000077026025007,
+      "maxAbsR": 1.834372463224501
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 518
+}

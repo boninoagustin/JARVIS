@@ -1,20 +1,20 @@
 {
     "M15": {
-        "pivot_len": 13,
-        "wick_pct": 0.1,
+        "pivot_len": 3,
+        "wick_pct": 0.3,
         "div_len": 2,
         "z_window": 14
     },
     "H1": {
-        "pivot_len": 13,
+        "pivot_len": 8,
         "wick_pct": 0.1,
-        "div_len": 5,
+        "div_len": 2,
         "z_window": 14
     },
     "H4": {
-        "pivot_len": 3,
+        "pivot_len": 8,
         "wick_pct": 0.1,
-        "div_len": 3,
+        "div_len": 2,
         "z_window": 14
     },
     "D1": {
@@ -24,13 +24,24 @@
         "z_window": 14
     },
     "Risk": {
-        "slBufferPercent": 20,
-        "fixedRR": 1.5,
-        "minRR": 2.5
+        "slBufferPercent": 0.01186342911739453,
+        "fixedRR": 4.467223099934127,
+        "minRR": 1.9407780292683745,
+        "oteEntryPercent": 50
     },
-    "Metrics": {
-        "PnL_R": "55.82",
-        "Trades": 95,
-        "WinRate": "71.58%"
+    "Scoring": {
+        "minBuyPoints": 6,
+        "minSellPoints": 4
+    },
+    "Meta": {
+        "objective_value": 3.6924490422501264,
+        "trade_count": 38,
+        "profit_factor": 15.451045692033436,
+        "max_drawdown_r": 1.6228394424368275,
+        "win_rate": 0.8157894736842105,
+        "oos_profit_factor": 5.348163355816014,
+        "n_trials": 400,
+        "study_name": "jarvis_XAUUSD_weekly12",
+        "source": "hyperopt"
     }
 }

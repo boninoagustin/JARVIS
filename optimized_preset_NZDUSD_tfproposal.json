@@ -1,0 +1,80 @@
+{
+  "ticker": "NZDUSD",
+  "generatedAt": "2026-09-22T04:42:41.950Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 13,
+        "wick_pct": 0.7,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 21,
+        "wick_pct": 0.1,
+        "div_len": 3,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 13,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 84,
+      "wins": 36,
+      "wr": 0.42857142857142855,
+      "pf": 0.8829560138955999,
+      "exp": -0.0726579947523599,
+      "maxDD": 11.965346585897569
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 106,
+      "wins": 47,
+      "wr": 0.44339622641509435,
+      "pf": 0.87342692202343,
+      "exp": -0.07665281967633811,
+      "maxDD": 17.409373193519407
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1511
+}

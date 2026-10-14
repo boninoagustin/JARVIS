@@ -1,0 +1,55 @@
+{
+  "ticker": "GBPJPY",
+  "generatedAt": "2026-09-22T05:28:49.225Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 120,
+      "wins": 58,
+      "wr": 0.48333333333333334,
+      "pf": 1.1161068570762391,
+      "exp": 0.06170297309183774,
+      "maxDD": 7.879819512974361
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 121,
+      "wins": 63,
+      "wr": 0.5206611570247934,
+      "pf": 1.3074273113263737,
+      "exp": 0.1541520490208757,
+      "maxDD": 10.954012601755528
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1239
+}

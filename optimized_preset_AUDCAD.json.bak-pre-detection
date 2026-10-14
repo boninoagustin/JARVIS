@@ -1,27 +1,27 @@
 {
   "M15": {
-    "pivot_len": 8,
-    "wick_pct": 0.3,
-    "div_len": 5,
-    "z_window": 14
+    "pivot_len": 5,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 20
   },
   "H1": {
-    "pivot_len": 8,
-    "wick_pct": 0.3,
+    "pivot_len": 5,
+    "wick_pct": 0.2,
     "div_len": 2,
-    "z_window": 14
+    "z_window": 20
   },
   "H4": {
-    "pivot_len": 8,
-    "wick_pct": 0.1,
-    "div_len": 5,
-    "z_window": 14
+    "pivot_len": 5,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 20
   },
   "D1": {
-    "pivot_len": 3,
-    "wick_pct": 0.1,
+    "pivot_len": 5,
+    "wick_pct": 0.2,
     "div_len": 2,
-    "z_window": 14
+    "z_window": 20
   },
   "Risk": {
     "slBufferPercent": 10,
@@ -39,5 +39,39 @@
     "tfAppliedAt": "2026-09-27T02:02:20.871Z",
     "tfBaselineExp": 0.46205648553412165,
     "tfProposalExp": 0.6505868369154739
+  },
+  "Detection": {
+    "pivot_len": 5,
+    "min_sweep_wick_pct": 0.2,
+    "div_pivot_len": 2,
+    "z_score_window": 20,
+    "require_displacement": false,
+    "require_fvg_after_ob": true,
+    "strict_breaker": true,
+    "strict_sweep": false,
+    "confirm_close": true,
+    "min_ob_body_pct": 0.05,
+    "use_body_for_ob": true,
+    "fvg_min_atr": 0.1,
+    "wick_invalidates_ob": false
+  },
+  "DetectionMeta": {
+    "source": "detection_tune_manual",
+    "appliedAt": "2026-10-10T05:41:34Z",
+    "params": {
+      "pivot_len": 5,
+      "min_sweep_wick_pct": 0.2,
+      "div_pivot_len": 2,
+      "z_score_window": 20,
+      "require_displacement": false,
+      "require_fvg_after_ob": true,
+      "strict_breaker": true,
+      "strict_sweep": false,
+      "confirm_close": true,
+      "min_ob_body_pct": 0.05,
+      "use_body_for_ob": true,
+      "fvg_min_atr": 0.1,
+      "wick_invalidates_ob": false
+    }
   }
 }

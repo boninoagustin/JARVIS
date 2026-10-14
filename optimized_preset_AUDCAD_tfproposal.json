@@ -1,0 +1,82 @@
+{
+  "ticker": "AUDCAD",
+  "generatedAt": "2026-10-11T06:36:42.775Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 5,
+        "wick_pct": 0.2,
+        "div_len": 2,
+        "z_window": 20
+      },
+      "60": {
+        "pivot_len": 5,
+        "wick_pct": 0.2,
+        "div_len": 2,
+        "z_window": 20
+      },
+      "240": {
+        "pivot_len": 5,
+        "wick_pct": 0.2,
+        "div_len": 2,
+        "z_window": 20
+      },
+      "D": {
+        "pivot_len": 5,
+        "wick_pct": 0.2,
+        "div_len": 2,
+        "z_window": 20
+      }
+    },
+    "metrics": {
+      "trades": 68,
+      "wins": 51,
+      "wr": 0.75,
+      "pf": 3.040828528113299,
+      "exp": 0.5542078449512355,
+      "maxDD": 3.3222267864476116,
+      "maxAbsR": 1.4810126582276606
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 68,
+      "wins": 51,
+      "wr": 0.75,
+      "pf": 3.040828528113299,
+      "exp": 0.5542078449512355,
+      "maxDD": 3.3222267864476116,
+      "maxAbsR": 1.4810126582276606
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1641
+}

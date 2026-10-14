@@ -1,0 +1,82 @@
+{
+  "ticker": "AUDJPY",
+  "generatedAt": "2026-10-11T06:08:34.616Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 110,
+      "wins": 79,
+      "wr": 0.7181818181818181,
+      "pf": 2.929009565990025,
+      "exp": 0.5614206556293014,
+      "maxDD": 3.6080131317374295,
+      "maxAbsR": 2.588794505426619
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 110,
+      "wins": 84,
+      "wr": 0.7636363636363637,
+      "pf": 3.4761730415985874,
+      "exp": 0.6214235615544869,
+      "maxDD": 3.2587074030553396,
+      "maxAbsR": 2.588794505426619
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 1559
+}

@@ -1,0 +1,52 @@
+{
+  "Risk": {
+    "slBufferPercent": 0.11760624592082618,
+    "fixedRR": 1.528413963938727,
+    "minRR": 1.614397957768386,
+    "oteEntryPercent": 62
+  },
+  "Scoring": {
+    "minBuyPoints": 4,
+    "minSellPoints": 4
+  },
+  "Meta": {
+    "objective_value": 4.973846492309275,
+    "trade_count": 32,
+    "profit_factor": 21.376518370277925,
+    "max_drawdown_r": 1.0000149473957833,
+    "win_rate": 0.8125,
+    "oos_profit_factor": 4.401827854996688,
+    "n_trials": 800,
+    "study_name": "jarvis_FRA40_weekly12",
+    "source": "hyperopt",
+    "tfSource": "tf_sweep_weekly",
+    "tfVerdict": "RECOMMEND",
+    "tfAppliedAt": "2026-10-04T03:36:24.051Z",
+    "tfBaselineExp": 0.6249640959561835,
+    "tfProposalExp": 0.6915541101314863
+  },
+  "M15": {
+    "pivot_len": 8,
+    "wick_pct": 0.3,
+    "div_len": 5,
+    "z_window": 14
+  },
+  "H1": {
+    "pivot_len": 3,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "H4": {
+    "pivot_len": 8,
+    "wick_pct": 0.3,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "D1": {
+    "pivot_len": 8,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  }
+}

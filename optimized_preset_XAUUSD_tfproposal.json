@@ -1,0 +1,82 @@
+{
+  "ticker": "XAUUSD",
+  "generatedAt": "2026-10-04T03:01:19.800Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 80,
+      "wins": 51,
+      "wr": 0.6375,
+      "pf": 2.3426486950424055,
+      "exp": 0.4897553414896302,
+      "maxDD": 3.2117678689454436,
+      "maxAbsR": 2.6142114589487377
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 81,
+      "wins": 51,
+      "wr": 0.6296296296296297,
+      "pf": 2.317523321392336,
+      "exp": 0.4908591189019117,
+      "maxDD": 3.4591220211082714,
+      "maxAbsR": 2.6142114589487377
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1483
+}
