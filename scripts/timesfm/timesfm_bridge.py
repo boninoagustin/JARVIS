@@ -23,6 +23,7 @@ Systemd: jarvis-timesfm-bridge.service
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -39,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LOGS_DIR = REPO_ROOT / "logs"
 MODEL_ID = "google/timesfm-2.5-200m-pytorch"
 MODEL_VERSION = "timesfm-2.5-200m-pytorch@f1"
+SCHEMA_VERSION = 2
+TIMESTAMP_CONVENTION = 'context_close_ms_v2'
 
 PORT = int(os.environ.get("TIMESFM_BRIDGE_PORT", "8788"))
 CONTEXT_N = int(os.environ.get("TIMESFM_CONTEXT", "512"))
@@ -57,14 +60,22 @@ _infer_lock = threading.Lock()          # serializa TODA inferencia
 _recompute_q: queue.Queue = queue.Queue()
 _pending_keys: set = set()              # dedup de recompute pendientes
 _series: dict = {}                      # (ticker, tf_min) -> deque[(ts_ms, close)]
+_series_conventions: dict = {}          # legacy timestamps must never be relabelled
+_state_lock = threading.RLock()
 _latest: dict = {}                      # (ticker, tf_min) -> forecast dict
 _started_at = time.time()
 
 
 def norm_tf(tf) -> int:
-    """'M15' | '15' | 15 → 15"""
-    digits = re.sub(r"\D", "", str(tf))
-    return int(digits) if digits else 15
+    """Explicit protocol map. Unknown periods never acquire guessed identities."""
+    mapping = {'M1': 1, 'M5': 5, 'M15': 15, 'M30': 30, 'H1': 60,
+               'H4': 240, 'D1': 1440, 'D': 1440, 'W1': 10080, 'W': 10080}
+    token = str(tf).upper()
+    if token in mapping:
+        return mapping[token]
+    if re.fullmatch(r'[1-9]\d*', token) and int(token) in mapping.values():
+        return int(token)
+    raise ValueError('TF desconocido')
 
 
 def norm_ts(ts: float) -> int:
@@ -126,23 +137,90 @@ def persist_latest(ticker: str, tf_min: int, fc: dict) -> None:
         print(f"[BRIDGE] WARN persist {ticker} M{tf_min}: {e}", flush=True)
 
 
+def valid_forecast_arrays(res: dict, horizon: int) -> bool:
+    if not isinstance(res, dict) or not isinstance(horizon, int) or not 1 <= horizon <= 256:
+        return False
+    for name in ('point', 'q10', 'q50', 'q90'):
+        a = res.get(name)
+        if not isinstance(a, list) or len(a) != horizon or any(type(x) not in (int, float) or not math.isfinite(x) for x in a):
+            return False
+    return all(lo <= mid <= hi for lo, mid, hi in zip(res['q10'], res['q50'], res['q90']))
+
+
+def ingest_candle(body: dict) -> tuple:
+    """v2 is explicit close time; old ts remains legacy, never converted to v2.
+
+    Bootstrap CSV PING TS is already a close boundary (export_smc_csv).
+    Disk latest/cache artifacts are deliberately NOT loaded or relabelled.
+    """
+    if not isinstance(body, dict):
+        return 400, {'error': 'JSON object requerido'}
+    try:
+        ticker = body.get('ticker', '')
+        if not isinstance(ticker, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,40}', ticker):
+            raise ValueError('ticker inválido')
+        ticker = ticker.lower()
+        tf_min = norm_tf(body.get('tf', 15))
+        if tf_min not in TRACKED_TFS:
+            raise ValueError('TF no configurado')
+        close = body.get('close')
+        raw_ts = body.get('ts')
+        if type(close) not in (int, float) or not math.isfinite(close) or close <= 0 or type(raw_ts) not in (int, float) or not math.isfinite(raw_ts) or raw_ts <= 0 or raw_ts != int(raw_ts):
+            raise ValueError('close/ts inválidos')
+        explicit = any(k in body for k in ('schema_version', 'timestamp_convention', 'contextCloseTimeMs'))
+        convention = TIMESTAMP_CONVENTION if explicit else 'legacy_unspecified'
+        ts = int(raw_ts) if explicit else norm_ts(raw_ts)
+        if explicit and (body.get('schema_version') != SCHEMA_VERSION or body.get('timestamp_convention') != TIMESTAMP_CONVENTION or type(body.get('contextCloseTimeMs')) is not int or body.get('contextCloseTimeMs') != ts or ts % (tf_min * 60000)):
+            raise ValueError('convenio close v2 inválido')
+        if ts > int(time.time() * 1000):
+            raise ValueError('vela futura')
+    except (ValueError, TypeError, OverflowError) as e:
+        return 400, {'error': str(e)}
+    key = (ticker, tf_min)
+    with _state_lock:
+        if key in _series and _series_conventions.get(key, 'legacy_unspecified') != convention:
+            return 409, {'error': 'convenciones incompatibles; no relabel de series previas'}
+        ser = _series.setdefault(key, deque(maxlen=MAXLEN))
+        _series_conventions[key] = convention
+        if ser and ts <= ser[-1][0]:
+            return 202, {'queued': False, 'reason': 'vela vieja/duplicada'}
+        ser.append((ts, float(close)))
+        queued = enqueue_recompute(ticker, tf_min) if len(ser) >= CONTEXT_N else False
+        return 202, {'queued': queued, 'series_len': len(ser)}
+
+
 def recompute(ticker: str, tf_min: int) -> None:
-    ser = _series.get((ticker, tf_min))
-    if not ser or len(ser) < CONTEXT_N:
+    key = (ticker, tf_min)
+    with _state_lock:
+        snapshot = list(_series.get(key, ()))
+        convention = _series_conventions.get(key, 'legacy_unspecified')
+    if len(snapshot) < CONTEXT_N:
         return
-    closes = np.array([c for _, c in list(ser)[-CONTEXT_N:]], dtype=np.float64)
-    origin_ts = ser[-1][0]
+    closes = np.array([c for _, c in snapshot[-CONTEXT_N:]], dtype=np.float64)
+    origin_ts = snapshot[-1][0]
     try:
         res = forecast_batch([closes], HORIZON)[0]
+        if not valid_forecast_arrays(res, HORIZON):
+            raise ValueError('forecast arrays inválidos')
     except Exception as e:
         print(f"[BRIDGE] ERROR forecast {ticker} M{tf_min}: {e}", flush=True)
         return
+    computed_at = int(time.time() * 1000)
+    if origin_ts > computed_at:
+        return
     fc = {
-        "ticker": ticker, "tf": tf_min, "ts": origin_ts, "horizon": HORIZON,
-        **res, "model_version": MODEL_VERSION,
-        "computed_at": int(time.time() * 1000), "context_n": CONTEXT_N,
+        'ticker': ticker, 'tf': tf_min, 'ts': origin_ts, 'horizon': HORIZON,
+        **res, 'model_version': MODEL_VERSION,
+        'computed_at': computed_at, 'context_n': CONTEXT_N,
     }
-    _latest[(ticker, tf_min)] = fc
+    if convention == TIMESTAMP_CONVENTION:
+        fc.update(schema_version=SCHEMA_VERSION, timestamp_convention=TIMESTAMP_CONVENTION,
+                  contextCloseTimeMs=origin_ts, computedAt=computed_at, availableAt=computed_at)
+    with _state_lock:
+        previous = _latest.get(key)
+        if previous and previous['ts'] > origin_ts:
+            return
+        _latest[key] = fc
     persist_latest(ticker, tf_min, fc)
     print(f"[BRIDGE] ✓ forecast {ticker} M{tf_min} @ ts={origin_ts} (q50[-1]={res['q50'][-1]:.5f})", flush=True)
 
@@ -184,13 +262,26 @@ def bootstrap_from_csv() -> None:
                 fname = matches[0]
             n = 0
             try:
-                ser = _series.setdefault((ticker, tf_min), deque(maxlen=MAXLEN))
+                # Fresh CSV bootstrap only. PING TS is already close, not open.
+                # Never load latest_M*.json or reinterpret an old cache artifact.
+                ser = deque(maxlen=MAXLEN)
                 with open(fname, "r", errors="replace") as f:
                     for line in f:
                         m = PING_RE.search(line)
-                        if m and norm_tf(m.group("tf")) == tf_min:
-                            ser.append((norm_ts(m.group("ts")), float(m.group("price"))))
-                            n += 1
+                        if not m:
+                            continue
+                        try:
+                            ts = norm_ts(m.group('ts'))
+                            close = float(m.group('price'))
+                            if norm_tf(m.group('tf')) != tf_min or ts <= 0 or ts % (tf_min * 60000) or ts > int(time.time()*1000) or not math.isfinite(close) or close <= 0 or (ser and ts <= ser[-1][0]):
+                                continue
+                        except (ValueError, TypeError, OverflowError):
+                            continue
+                        ser.append((ts, close))
+                        n += 1
+                with _state_lock:
+                    _series[(ticker, tf_min)] = ser
+                    _series_conventions[(ticker, tf_min)] = TIMESTAMP_CONVENTION
                 print(f"[BRIDGE] bootstrap {ticker} M{tf_min}: {n} cierres", flush=True)
                 if len(ser) >= CONTEXT_N:
                     enqueue_recompute(ticker, tf_min)
@@ -255,21 +346,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/ingest":
-            ticker = str(body.get("ticker", "")).lower()
-            tf_min = norm_tf(body.get("tf", 15))
-            close = body.get("close")
-            ts = body.get("ts")
-            if not ticker or close is None or ts is None:
-                self._json(400, {"error": "faltan ticker/close/ts"})
-                return
-            ts = norm_ts(float(ts))
-            ser = _series.setdefault((ticker, tf_min), deque(maxlen=MAXLEN))
-            if ser and ts <= ser[-1][0]:
-                self._json(202, {"queued": False, "reason": "vela vieja/duplicada"})
-                return
-            ser.append((ts, float(close)))
-            queued = enqueue_recompute(ticker, tf_min) if len(ser) >= CONTEXT_N else False
-            self._json(202, {"queued": queued, "series_len": len(ser)})
+            code, response = ingest_candle(body)
+            self._json(code, response)
             return
 
         if u.path == "/forecast":

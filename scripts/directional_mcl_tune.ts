@@ -12,11 +12,11 @@ import fs from 'fs';
 import path from 'path';
 import { runBacktest, prepareEntries } from '/opt/JARVIS/jarvis-os/src/services/backtestEngine.js';
 import admin from 'firebase-admin';
+import {parseSelectionArgs, readAssetSnapshot, selectionEntries, selectionReplayOptions, selectionManifest, readSelectionConfig, completedSelectionTrades, loadSelectionLogs, saveSelection} from './periodic_opt/selection_context.js';
 
-const sa = JSON.parse(fs.readFileSync('/opt/JARVIS/service-account.json', 'utf8'));
-if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
-const db = admin.firestore();
-db.settings({ ignoreUndefinedProperties: true });
+const selection = parseSelectionArgs();
+const manifest = selectionManifest(selection);
+if (selection.configFile && !selection.dryRun) throw new Error('config-file requires --dry-run');
 
 const LOGS_ROOT = '/opt/JARVIS/logs';
 const tfNum = { 'M5': '5', 'M15': '15', 'H1': '60', 'H4': '240', 'D1': 'D' };
@@ -25,18 +25,8 @@ const MCL_VALUES = [0, 1, 2];  // 0 = apagado
 const SESSIONS = ['ASIA', 'LONDON', 'NY', 'OFF'];
 
 function loadLogs(ticker: string, tfs: string[]) {
-  const dir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
-  const logs = new Map<string, string[]>();
-  for (const tf of tfs) {
-    const cands = [path.join(dir, `pine-logs-SMC Master_${tf}.csv`), path.join(dir, `pine-logs-SMC Master_${tf.toUpperCase()}.csv`)];
-    const alt = tfNum[tf];
-    const all = alt ? cands.concat([path.join(dir, `pine-logs-SMC Master_${alt}.csv`)]) : cands;
-    const f = all.find(c => fs.existsSync(c));
-    if (f) logs.set(tf, fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim().length > 0));
-  }
-  return logs;
+  return loadSelectionLogs(selection);
 }
-
 function tradingDay(ts: number): string {
   return new Date(ts - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
 }
@@ -69,24 +59,16 @@ const ASSETS = arg === 'all'
   : arg.split(',').map(s => s.trim().toUpperCase());
 
 for (const ticker of ASSETS) {
-  const current = (await db.doc(`asset_configs/${ticker}`).get()).data() || {};
+  const current = await readAssetSnapshot(selection);
   const logs = loadLogs(ticker, ['M5', 'M15', 'H1', 'H4', 'D1']);
   if (logs.size === 0) { console.log(`=== ${ticker} === SIN LOGS → skip`); continue; }
-  const prepared = await prepareEntries(logs);
+  const prepared = selectionEntries(await prepareEntries(logs), manifest, selection);
+  const replayOptions = selectionReplayOptions(selection, manifest);
 
-  const base = {
-    ticker, entryTrigger: 'SMART', minBuyPoints: 4, minSellPoints: 4,
-    slBufferPercent: current.slBufferPercent ?? 0.1, fixedRR: current.fixedRR ?? 2.0, oteEntryPercent: current.oteEntryPercent ?? 50,
-    sessions: JSON.parse(JSON.stringify(current.sessions || {})),
-    spreadPips: 0.1, commissionPerLot: 3.0, tp1StructuralMinRR: 1.2,
-    maxDailyLossR: current.maxDailyLossR || undefined,
-    maxConsecutiveLosses: current.maxConsecutiveLosses || undefined,
-    maxTradesPerDay: current.maxTradesPerDay || undefined,
-    trailingDrawdownR: current.trailingDrawdownR || undefined,
-  } as any;
+  const base: any = readSelectionConfig(selection, current);
 
   // Sesiones CON actividad: las que tienen trades en la corrida base (btSession del port)
-  const baseTrades = runBacktest(logs, { ...base, sessions: JSON.parse(JSON.stringify(base.sessions)) }, undefined, prepared).trades;
+  const baseTrades = completedSelectionTrades(runBacktest(logs, { ...base, sessions: JSON.parse(JSON.stringify(base.sessions)) }, undefined, prepared, replayOptions).trades, manifest, prepared);
   const activeSessions = new Set<string>();
   for (const t of baseTrades) {
     const s = String((t as any).btSession ?? '').split('-').pop();
@@ -114,7 +96,7 @@ for (const ticker of ASSETS) {
         cfg.sessions[sess] = cfg.sessions[sess] || {};
         if (v === 0) delete cfg.sessions[sess][field]; // apagado = campo ausente (semántica del motor)
         else cfg.sessions[sess][field] = v;
-        const mm = metrics(runBacktest(logs, cfg, undefined, prepared).trades);
+        const mm = metrics(completedSelectionTrades(runBacktest(logs, cfg, undefined, prepared, replayOptions).trades, manifest, prepared));
         if (mm.worstDay < -PROP_MAX_DAY_LOSS_R) continue; // 🛡️ viola límite prop
         const better = mm.score > bestScore + EPS;
         const equivalent = Math.abs(mm.score - bestScore) <= EPS;
@@ -131,12 +113,15 @@ for (const ticker of ASSETS) {
     }
   }
 
-  // Escribir con dot-paths (update) para NO clobberear el resto de la sesión.
+  const proposal = {ticker, updates, selection_partition:'train', evaluation_manifest:manifest};
+  saveSelection(selection, proposal);
+  console.log(JSON.stringify(proposal));
+  // Escribir con dot-paths (update) para NO clobberearear el resto de la sesión.
   if (Object.keys(updates).length > 0) {
     if (process.argv.includes('--dry-run')) {
       console.log(`[DRY-RUN] directional_mcl_tune ${ticker}: NO escribe a Firestore (congelado). ${Object.keys(updates).join(', ')}`);
     } else {
-      await db.doc(`asset_configs/${ticker}`).update({
+      await admin.firestore().doc(`asset_configs/${ticker}`).update({
         ...updates,
         updatedAt: new Date().toISOString(),
         source: 'directional_mcl_tune',

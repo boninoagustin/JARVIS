@@ -5,6 +5,12 @@ import { ATRCalculator } from './math/atr.js';
 import { RSICalculator } from './math/rsi.js';
 import { VWAPCalculator } from './math/vwap.js';
 import { ZScoreCalculator } from './math/zscore.js';
+import { resolveSignalPolicy } from './signal_profiles.js';
+import type { SignalPolicy } from './signal_profiles.js';
+import { DirectionalImpulseCalculator, isValidImpulseCandle } from './math/directional_impulse.js';
+import type { DirectionalImpulseSnapshot } from './math/directional_impulse.js';
+import { shouldFreezeRolloverObservation } from '../RolloverTriagePolicy.js';
+import type { RolloverFreezeContext } from '../RolloverTriagePolicy.js';
 
 import { PivotEngine } from './modules/pivots.js';
 import { MarketStructureEngine } from './modules/market_structure.js';
@@ -16,6 +22,12 @@ import { DivergenceEngine } from './modules/divergence.js';
 export class SMCEngine {
     private state: SMCState;
     private previousCandle?: OHLCV;
+    // Raw observations are deliberately outside all structural/calculator buffers.
+    private rolloverRawObservation?: { candle: OHLCV; excluded: boolean };
+
+    public getLastRolloverObservation(): { candle: OHLCV; excluded: boolean } | undefined {
+        return this.rolloverRawObservation ? structuredClone(this.rolloverRawObservation) : undefined;
+    }
 
     /** Timestamp de la última vela PROCESADA (no dedupeada). Útil para SMCManager. */
     public get lastProcessedTs(): number | undefined {
@@ -27,6 +39,9 @@ export class SMCEngine {
     private rsi: RSICalculator;
     private vwap: VWAPCalculator;
     private zscore: ZScoreCalculator;
+    private signalPolicy: SignalPolicy;
+    private impulse: DirectionalImpulseCalculator | null;
+    private directionalImpulse: DirectionalImpulseSnapshot | null = null;
 
     private pivots: PivotEngine;
     private rsiPivotEngine: PivotEngine;
@@ -74,8 +89,10 @@ export class SMCEngine {
         if (typeof preset === 'string') {
             this.preset = { ...getPreset(preset) };
         } else {
-            this.preset = { ...preset };
+            this.preset = structuredClone(preset);
         }
+        this.signalPolicy = resolveSignalPolicy(this.preset);
+        this.impulse = this.signalPolicy.experimental ? new DirectionalImpulseCalculator(this.signalPolicy.impulse) : null;
         this.period = period;
         this.periodMs = SMCEngine.parsePeriodMinutes(period) * 60000;
         this.deriveGates();
@@ -97,27 +114,48 @@ export class SMCEngine {
 
         this.updateStrBars(period, this.preset);
 
-        this.pivots = new PivotEngine(this.strBars, this.strBars);
+        const pivotOptions = this.signalPolicy.plateauPivots ? { allowRightTies: true } : {};
+        this.pivots = new PivotEngine(this.strBars, this.strBars, pivotOptions);
         const divLen = this.preset.div_pivot_len || 5;
-        this.rsiPivotEngine = new PivotEngine(divLen, divLen);
-        this.pivotEngine33 = new PivotEngine(3, 3);
+        this.rsiPivotEngine = new PivotEngine(divLen, divLen, pivotOptions);
+        this.pivotEngine33 = new PivotEngine(3, 3, pivotOptions);
         this.structure = new MarketStructureEngine();
         this.orderBlocks = new OrderBlockEngine();
         this.imbalances = new ImbalanceEngine();
-        this.liquidity = new LiquidityEngine(this.zscore);
+        this.liquidity = new LiquidityEngine(this.zscore, 5, pivotOptions);
         this.divergence = new DivergenceEngine(this.periodMs);
     }
 
     /**
      * Reconfigura el motor para usar otro preset dinámicamente (Útil para backtesting).
      */
-    public setHTFContext(htfTrend: string, weeklyBias: string) {
+    public setHTFContext(htfTrend: string, weeklyBias: string, rolloverFreeze?: RolloverFreezeContext,
+        observationInterval?: { startMs: number; endMs: number }) {
+        // Context must cover BOTH source HTF bars; do not feed excluded HTF bias
+        // back into an otherwise clean lower-timeframe model after thaw.
+        if (shouldFreezeRolloverObservation(observationInterval?.startMs ?? NaN, observationInterval?.endMs ?? NaN, rolloverFreeze)) return;
         this.htfTrend = htfTrend as 'Bullish' | 'Bearish' | 'Neutral';
         this.weeklyBias = weeklyBias;
     }
 
-    public setPreset(presetName: string) {
-        this.preset = getPreset(presetName);
+    /** Effective, derived configuration for isolated export provenance. */
+    public getEffectivePreset(): SMCPreset {
+        return structuredClone(this.preset);
+    }
+
+    public setPreset(preset: SMCPreset | string) {
+        const nextPreset = typeof preset === 'string' ? getPreset(preset) : structuredClone(preset);
+        const nextPolicy = resolveSignalPolicy(nextPreset);
+        if (this.signalPolicy.experimental || nextPolicy.experimental) {
+            // Transactional rebuild: no old ATR/history, causal frame or calculator pointer.
+            const replacement = new SMCEngine(nextPreset, this.period);
+            replacement.label = this.label;
+            replacement.setHTFContext(this.htfTrend, this.weeklyBias);
+            Object.assign(this, replacement);
+            return;
+        }
+        this.preset = nextPreset;
+        this.signalPolicy = nextPolicy;
         this.deriveGates();
         this.updateStrBars(this.period, this.preset);
         // C8: reconstruir todo lo que depende de parámetros del preset.
@@ -125,6 +163,7 @@ export class SMCEngine {
         this.pivots = new PivotEngine(this.strBars, this.strBars);
         this.rsi = new RSICalculator(this.preset.rsi_len ?? 14);
         this.zscore = new ZScoreCalculator();
+        this.liquidity.rebindLegacyZScore(this.zscore);
         const divLen = this.preset.div_pivot_len || 5;
         this.rsiPivotEngine = new PivotEngine(divLen, divLen);
     }
@@ -235,6 +274,13 @@ export class SMCEngine {
         this.state.asianHigh = Number.isNaN(this.liquidity.asiaHigh) ? undefined : this.liquidity.asiaHigh;
         this.state.asianLow = Number.isNaN(this.liquidity.asiaLow) ? undefined : this.liquidity.asiaLow;
         this.state.vwapStatus = this.lastVwapStatus;
+        if (this.signalPolicy.experimental) {
+            // Diagnostics only. Deliberately NOT the native/bridge ML Z channels.
+            Object.assign(this.state, {
+                directionalImpulse: this.directionalImpulse ? { ...this.directionalImpulse } : null,
+                signalPolicy: structuredClone(this.signalPolicy)
+            });
+        }
         return this.state;
     }
 
@@ -242,8 +288,22 @@ export class SMCEngine {
      * Punto de entrada principal. Se llama con cada nueva vela (histórica o en vivo).
      * Devuelve una lista de todos los eventos SMC disparados en esta vela.
      */
-    public nextCandle(candle: OHLCV): SMCEvent[] {
+    public nextCandle(candle: OHLCV, rolloverFreeze?: RolloverFreezeContext): SMCEvent[] {
         const events: SMCEvent[] = [];
+
+        if (rolloverFreeze?.profile === 'rollover_freeze_v1') {
+            // Whole-bar exclusion, including HTF bars that merely overlap. Never
+            // split a candle or replay its frozen extrema after thaw. Accepted
+            // bars resume with the last clean previousCandle (gap TR is retained).
+            if (this.rolloverRawObservation && candle.timestamp <= this.rolloverRawObservation.candle.timestamp) return events;
+            const excluded = shouldFreezeRolloverObservation(candle.timestamp, candle.timestamp + this.periodMs, rolloverFreeze);
+            this.rolloverRawObservation = { candle: { ...candle }, excluded };
+            if (excluded) return events;
+        }
+
+        // Experimental inputs are closed-input bars, not broker-certified finals.
+        // Reject before ATR/RSI, buffers, cooldowns, pivots or timestamps advance.
+        if (this.signalPolicy.experimental && !isValidImpulseCandle(candle)) return events;
 
         // 🆕 Dedupe: el stream en vivo reenvía la vela en formación con el mismo
         // timestamp varias veces. Reprocesarla corrompe RSI/ATR (Wilder) y puede
@@ -260,6 +320,9 @@ export class SMCEngine {
         // 1. Math Update
         const atrVal = this.atr.nextValue(candle, this.previousCandle);
         if (atrVal !== null) this.currentAtrValue = atrVal;
+        // No fallback ATR, and no directional reset/replay on structural anchors.
+        if (this.impulse) this.directionalImpulse = atrVal !== null && atrVal > 0
+            ? this.impulse.nextValue(candle, atrVal) : null;
         
         const rsiVal = this.rsi.nextValue(candle.close, this.previousCandle?.close);
         if (rsiVal !== null) {
@@ -306,6 +369,7 @@ export class SMCEngine {
         // 2. Pivots Update
         const newPivot = this.pivots.nextCandle(candle);
         if (newPivot) {
+            if (this.signalPolicy.experimental) newPivot.availableAt = candle.timestamp + this.periodMs;
             if (newPivot.type === 'High') {
                 this.state.pivotsHigh.push(newPivot);
             } else {
@@ -344,13 +408,24 @@ export class SMCEngine {
         else if (!Number.isNaN(this.lastPivotLow33) && candle.close < this.lastPivotLow33) this.simpleTrend = 'Bearish';
 
         // 3. Market Structure Update
+        const previousCrt = this.liquidity.hasActiveCRTPattern();
+        // Age/detect once BEFORE experimental gates, so newly available sweeps are
+        // usable and an age-8 sweep cannot survive merely because order changed.
+        const earlyLiquidityEvents = this.signalPolicy.experimental
+            ? this.liquidity.processCandle(candle, this.currentAtrValue, this.preset, this.directionalImpulse,
+                { availableAt: candle.timestamp + this.periodMs, legacyZScore: zScoreVal })
+            : null;
         const zScoreForGates = this.lastZScore !== null ? this.lastZScore : null;
         const sweepEscapeDir = this.liquidity.sweepBullActive ? 'Bullish' as const
             : this.liquidity.sweepBearActive ? 'Bearish' as const
             : null;
         const structEvents = this.structure.processCandle(
             candle, this.state.pivotsHigh, this.state.pivotsLow, this.preset, this.currentAtrValue,
-            { zScore: zScoreForGates, sweepEscapeDir, crtValid: this.liquidity.hasActiveCRTPattern() }
+            this.signalPolicy.experimental
+                ? { zScore: zScoreForGates, impulse: this.directionalImpulse, availableAt: candle.timestamp + this.periodMs,
+                    sweepDirections: this.liquidity.getSweepDirections(this.signalPolicy.sameBarSweeps),
+                    crtValid: this.signalPolicy.sameBarSweeps ? this.liquidity.hasActiveCRTPattern() : previousCrt }
+                : { zScore: zScoreForGates, sweepEscapeDir, crtValid: this.liquidity.hasActiveCRTPattern() }
         );
         events.push(...structEvents);
 
@@ -437,14 +512,15 @@ export class SMCEngine {
 
 
         // 5. Liquidity Sweeps Update
-        const liqEvents = this.liquidity.processCandle(candle, this.currentAtrValue, this.preset, zScoreVal);
+        const liqEvents = earlyLiquidityEvents ?? this.liquidity.processCandle(candle, this.currentAtrValue, this.preset, zScoreVal);
         events.push(...liqEvents);
         
         for (const ev of liqEvents) {
             this.state.lastSweep = {
                 direction: ev.direction,
                 type: ev.sweepType ?? 'CRT',
-                timestamp: ev.timestamp
+                timestamp: ev.timestamp,
+                ...(this.signalPolicy.experimental ? { availableAt: ev.availableAt, originTimestamp: ev.originTimestamp, signalProfile: ev.signalProfile } : {})
             };
         }
 
@@ -452,7 +528,7 @@ export class SMCEngine {
         if (this.state.pivotsHigh.length > 500) this.state.pivotsHigh.shift();
         if (this.state.pivotsLow.length > 500) this.state.pivotsLow.shift();
 
-        this.previousCandle = candle;
+        this.previousCandle = this.signalPolicy.experimental ? { ...candle } : candle;
         return events;
     }
 

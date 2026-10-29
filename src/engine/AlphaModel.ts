@@ -2,6 +2,12 @@ import type { RadarZone, RadarState, ImpulseLeg, ActiveTrade, ScoreState, ScoreE
 import { extractMgmtOverrides } from './Types.js';
 import { predict as mlPredict, isMLActive } from './MLFilter.js';
 import { telemetry } from '../services/telemetry.js';
+import { resolveExecutionPolicy, computeExecutionTargets } from './ExecutionMicrostructure.js';
+import { getExecutionSnapshot, buildExecutionObservation } from './ExecutionContext.js';
+import { validateExecutionInstrument } from './ExecutionCosts.js';
+import { getAdrPrice } from './tp2Cap.js';
+import { shouldFreezeRolloverObservation } from './RolloverTriagePolicy.js';
+import type { RolloverFreezeContext } from './RolloverTriagePolicy.js';
 
 // 🆕 Plan B ago-2026: dbg controlado por env para spot-checks sin recompilar.
 // Guard `typeof process` porque este módulo se re-exporta al NAVEGADOR (jarvis-os backtest),
@@ -158,6 +164,9 @@ export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bu
 
 
 export interface AlphaContext {
+    rolloverFreeze?: RolloverFreezeContext;
+    /** Covers ALL high/low/prevHigh/prevLow source bars; missing = hold when opt-in. */
+    observationInterval?: { startMs: number; endMs: number };
     config: any;
     currentSession: string;
     sessionConfig: any;
@@ -184,9 +193,40 @@ export function evaluateImpulseCore(
     ctx: AlphaContext
 ): AlphaInsight {
     if (!leg) return { updatedLeg: null };
+    // Signal/setup model only: never place this guard around position management.
+    // Hold before expiry, opposite-score invalidation, extreme stretch or OTE scoring.
+    if (ctx.rolloverFreeze?.profile === 'rollover_freeze_v1' && (ctx.rolloverFreeze.ticker !== ticker
+        || shouldFreezeRolloverObservation(ctx.observationInterval?.startMs ?? NaN, ctx.observationInterval?.endMs ?? NaN, ctx.rolloverFreeze))) return { updatedLeg: leg };
     let impulseInvalidated = false;
 
     const { config, sessionConfig } = ctx;
+    const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
+    const experimental = executionPolicy.profile === 'microstructure_v1';
+    const executionTf = leg.executionSnapshot?.tf ?? (leg.chochEvents?.find(e => /_(5|15)M$/.test(e))?.match(/_(5|15)M$/)?.[1]);
+    const snapshot = experimental && executionTf ? getExecutionSnapshot(state, executionTf, nowMs) : undefined;
+    if (experimental) {
+        const q = snapshot?.quote;
+        const b = snapshot?.bar;
+        if (!b || !snapshot?.closedBar || !(snapshot.atr14! > 0) || !q || q.timestampMs > nowMs || nowMs - q.timestampMs > 10_000
+            || !(q.bid > 0 && q.ask >= q.bid) || ![b.open,b.high,b.low,b.close].every(Number.isFinite)) return { updatedLeg: leg };
+        try {
+            // Historical snapshots expose the last closed bar as both bar and
+            // closedBar. It is valid OHLC, not its own previous candle. Keep the
+            // distinct predecessor check for forming (and genuinely overlapping) bars.
+            const sameClosedBar = b.closed && b.openTimeMs === snapshot.closedBar.openTimeMs
+                && b.closeTimeMs === snapshot.closedBar.closeTimeMs;
+            buildExecutionObservation({ ticker, tf: snapshot.tf, observedAtMs: nowMs, bar: b,
+                ...(!sameClosedBar ? { previousClosedBar: snapshot.closedBar } : {}), quote: q });
+        } catch { return { updatedLeg: leg }; }
+        currentPrice = leg.dir === 'BUY' ? q.ask : q.bid;
+        highPrice = b.high;
+        lowPrice = b.low;
+        ctx = { ...ctx, prevHigh: snapshot.closedBar.high, prevLow: snapshot.closedBar.low };
+        if (executionPolicy.smart && (!leg.executionDecision || leg.executionDecision.mode === 'WAIT_DATA')) return { updatedLeg: leg };
+        if (executionPolicy.smart && leg.executionDecision?.requiresCloseConfirmation
+            && !(snapshot.closedBar.availableAtMs > (leg.executionDecisionAtMs ?? nowMs)
+                && snapshot.closedBar.closeTimeMs > (leg.executionDecisionAtMs ?? nowMs))) return { updatedLeg: leg };
+    }
 
     // 🆕 Plan B ago-2026: familia/tf del leg para la telemetría de gatillos
     let _legFam = 'Choch'; let _legTf = '5m';
@@ -233,7 +273,7 @@ export function evaluateImpulseCore(
 
     // 🔧 FIX 3: Si el precio superó el extreme por >1 ATR y pasaron >30 min, OTE inalcanzable
     const range = Math.abs(leg.extreme - leg.origin);
-    const atrEstimate = state.atr14 ?? (range * 0.3);
+    const atrEstimate = experimental ? snapshot!.atr14! : (state.atr14 ?? (range * 0.3));
     const priceBeyondExtreme = leg.dir === 'BUY' 
         ? (currentPrice > leg.extreme + atrEstimate) 
         : (currentPrice < leg.extreme - atrEstimate);
@@ -248,8 +288,10 @@ export function evaluateImpulseCore(
     const stretchHigh = ctx.prevHigh ?? highPrice;
     const stretchLow = ctx.prevLow ?? lowPrice;
 
-    if (leg.dir === 'BUY' && stretchHigh > leg.extreme) leg.extreme = stretchHigh;
-    else if (leg.dir === 'SELL' && stretchLow < leg.extreme) leg.extreme = stretchLow;
+    if (!(experimental && executionPolicy.smart && leg.executionDecision)) {
+        if (leg.dir === 'BUY' && stretchHigh > leg.extreme) leg.extreme = stretchHigh;
+        else if (leg.dir === 'SELL' && stretchLow < leg.extreme) leg.extreme = stretchLow;
+    }
 
     // 🛡️ sep-2026 fix OTE: invalidación por origin también con vela CERRADA (paridad backtest)
     if (leg.dir === 'BUY' && stretchLow < leg.origin) impulseInvalidated = true;
@@ -292,20 +334,24 @@ export function evaluateImpulseCore(
         }
 
         const fibRatio = activeOteEntryPercent / 100;
-        const entryLevel = leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio);
+        const entryLevel = experimental && executionPolicy.smart ? leg.executionDecision?.recommendedOtePrice!
+            : (leg.dir === 'BUY' ? leg.extreme - (range * fibRatio) : leg.extreme + (range * fibRatio));
         
-        const isEntryHit = leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel;
+        const isEntryHit = Number.isFinite(entryLevel) && (experimental
+            ? (leg.dir === 'BUY' ? currentPrice <= entryLevel : currentPrice >= entryLevel)
+            : (leg.dir === 'BUY' ? lowPrice <= entryLevel : highPrice >= entryLevel));
         
         if (isEntryHit && !leg.oteScored) {
 
             // 🆕 FILTRO DE CALIDAD DE VELA DE GATILLO (Clímax y Rechazo)
-            const atr = state.atr14 ?? 0;
+            const atr = experimental ? snapshot!.atr14! : (state.atr14 ?? 0);
             const barRange = highPrice - lowPrice;
             if (atr > 0 && barRange > 2.0 * atr) return { updatedLeg: leg }; // vela clímax
-            const openApprox = state.previousPrice ?? currentPrice;
+            const openApprox = experimental ? snapshot!.bar!.open : (state.previousPrice ?? currentPrice);
             if (barRange > 0) {
-                const upperWick = (highPrice - Math.max(openApprox, currentPrice)) / barRange;
-                const lowerWick = (Math.min(openApprox, currentPrice) - lowPrice) / barRange;
+                const qualityClose = experimental ? snapshot!.bar!.close : currentPrice;
+                const upperWick = (highPrice - Math.max(openApprox, qualityClose)) / barRange;
+                const lowerWick = (Math.min(openApprox, qualityClose) - lowPrice) / barRange;
                 if (leg.dir === 'BUY' && upperWick > 0.6) return { updatedLeg: leg };
                 if (leg.dir === 'SELL' && lowerWick > 0.6) return { updatedLeg: leg };
             }
@@ -406,17 +452,17 @@ export function evaluateImpulseCore(
             }
             } // end ML fallback
 
-            const entryFill = entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
+            const entryFill = experimental ? currentPrice : entryLevel; // fill limit en el 50% (supuesto estándar de backtest)
             const decimals = getDecimals(ticker);
             // 🆕 slBuff tuneado por gatillo (auto-tune) tiene prioridad sobre el de sesión/raíz
             const fixedBuffer = calculateDynamicSlBuffer(ticker, leg.origin, oteTriggerCfg?.slBuff ?? sessionConfig?.slBufferPercent ?? config.slBufferPercent);
-            const slBuffer = Math.max(fixedBuffer, (state.atr14 ?? 0) * 0.5); // piso: 0.5×ATR real
+            const slBuffer = Math.max(fixedBuffer, (experimental ? snapshot!.atr14! : (state.atr14 ?? 0)) * 0.5); // piso: 0.5×ATR real
             const adjustedSL = leg.dir === 'BUY' ? leg.origin - slBuffer : leg.origin + slBuffer;
 
             const risk = Math.abs(entryFill - adjustedSL);
             // TP2 del OTE: respeta el tp2 tuneado del gatillo (o config.fixedRR como fallback) sin truncar a la extensión -0.27
             const oteRR = oteTriggerCfg?.tp2 ?? config.fixedRR;
-            const fixedTP2 = leg.dir === 'BUY'
+            let fixedTP2 = leg.dir === 'BUY'
                 ? entryFill + (risk * oteRR)
                 : entryFill - (risk * oteRR);
             const reward = Math.abs(fixedTP2 - entryFill); // Se evalúa el R:R contra el TP2 real de la orden
@@ -433,6 +479,17 @@ export function evaluateImpulseCore(
             const eventName = `🎯_OTE_Retracement_${tfFormatted}`;
             const eventTfKey = triggerTf === '15m' ? '15' : triggerTf === '3m' ? '3' : '5';
             
+            // Validate all experimental target inputs before consuming the setup or adding OTE score.
+            let executionTargets: ReturnType<typeof computeExecutionTargets> | undefined;
+            if (experimental && executionPolicy.targets) {
+                const instrument = config.executionInstrument;
+                if (!validateExecutionInstrument(instrument) || instrument.ticker !== ticker) return { updatedLeg: leg };
+                const minStructuralRR = oteTriggerCfg?.tp1StructuralMinRR ?? config.tp1StructuralMinRR ?? 1.2;
+                const structuralTp1Price = Math.abs(leg.extreme-entryFill) >= risk*minStructuralRR ? leg.extreme : entryFill+(leg.dir==='BUY'?risk:-risk);
+                executionTargets = computeExecutionTargets({ direction:leg.dir, entryPrice:entryFill, initialSlPrice:adjustedSL,
+                    adr:getAdrPrice(ticker), regime:instrument.regime, structuralTp1Price, requestedTp2Price:fixedTP2 });
+                if (!executionTargets.valid) return { updatedLeg: leg };
+            }
             if (addScoreEvent(activeScore, { id: eventName, pts: 4, tf: eventTfKey, ts: nowMs })) {
             leg.oteScored = true;
             // 🆕 Plan B ago-2026: ejecución OTE registrada en la telemetría
@@ -446,7 +503,11 @@ export function evaluateImpulseCore(
                 // F3-etapa3: leer por gatillo primero (oteTriggerCfg), fallback a nivel activo.
                 const structuralMinRR = oteTriggerCfg?.tp1StructuralMinRR ?? config.tp1StructuralMinRR ?? 1.2;
                 const structuralDist = Math.abs(leg.extreme - entryFill);
-                const chosenTP1 = structuralDist >= riskDist * structuralMinRR ? leg.extreme : fixedTP1;
+                let chosenTP1 = structuralDist >= riskDist * structuralMinRR ? leg.extreme : fixedTP1;
+                if (executionTargets) {
+                    chosenTP1 = executionTargets.tp1Price;
+                    fixedTP2 = executionTargets.tp2Price;
+                }
                 const tp1 = chosenTP1.toFixed(decimals);
                 const tp2 = fixedTP2.toFixed(decimals);
 
@@ -484,6 +545,7 @@ export function evaluateImpulseCore(
                     dirText: leg.dir === 'BUY' ? 'COMPRA' : 'VENTA',
                     stopLoss, tp1, tp2,
                     entryPrice: entryFill,
+                    ...(experimental ? { executionTouchPrice: currentPrice, executionTf: snapshot!.tf, executionDecision: leg.executionDecision ?? null, executionTargetsChecked: executionPolicy.targets } : {}),
                     points: (leg.chochPoints || 0) + 4, 
                     events: [...(leg.chochEvents || []), eventName],
                     confluenceReport: leg.chochReport || fallbackReport,
@@ -522,8 +584,10 @@ export function evaluateImpulseCore(
 }
 
 
-export function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number): ImpulseLeg | null {
+export function evaluateMacroStretching(leg: ImpulseLeg | null | undefined, highPrice: number, lowPrice: number, nowMs: number,
+    rolloverFreeze?: RolloverFreezeContext, observationInterval?: { startMs: number; endMs: number }): ImpulseLeg | null {
     if (!leg) return null;
+    if (shouldFreezeRolloverObservation(observationInterval?.startMs ?? NaN, observationInterval?.endMs ?? NaN, rolloverFreeze)) return leg;
 
     // 🧹 Expiración: legs macro duran hasta 24 horas en RAM
     const MAX_MACRO_LEG_AGE_MS = 24 * 60 * 60 * 1000;

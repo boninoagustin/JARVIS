@@ -1,5 +1,31 @@
 // src/engine/smc/modules/market_structure.ts
 import { OHLCV, Pivot, Direction, SMCPreset, SMCEvents } from '../types.js';
+import { resolveSignalPolicy, DIRECTIONAL_SIGNAL_THRESHOLDS, type SignalPolicy } from '../signal_profiles.js';
+import { isInstitutionalDisplacement, isValidImpulseCandle } from '../math/directional_impulse.js';
+import type { DirectionalImpulseSnapshot } from '../math/directional_impulse.js';
+
+export interface StructureOptions {
+    zScore?: number | null;
+    sweepEscapeDir?: Direction | null;
+    sweepDirections?: readonly Direction[];
+    crtValid?: boolean;
+    impulse?: DirectionalImpulseSnapshot | null;
+    availableAt?: number;
+}
+interface StructureFrame {
+    candle: OHLCV;
+    atr: number;
+    zScore: number | null;
+    impulse: DirectionalImpulseSnapshot | null;
+    priorVolumeMean: number | null;
+    sweepDirections: readonly Direction[];
+    crtValid: boolean;
+    trend: Direction | 'Neutral';
+    trendExtreme: number | null;
+    lastBOS: Pivot | null;
+    preset: SMCPreset;
+    policy: SignalPolicy;
+}
 
 const HISTORY_CAP = 150;
 export class MarketStructureEngine {
@@ -13,6 +39,7 @@ export class MarketStructureEngine {
 
     // 🆕 Buffer de velas para calcular origin/extreme del impulso en BOS/CHoCH
     private history: OHLCV[] = [];
+    private frames: StructureFrame[] = [];
 
     // 🆕 Filtro 3: extremo de la tendencia activa (trend_extreme del Pine).
     // En tendencia alcista es el mayor high alcanzado; en bajista, el menor low.
@@ -91,9 +118,11 @@ export class MarketStructureEngine {
         pivotsLow: Pivot[], 
         preset: SMCPreset,
         currentAtr: number = 0,
-        options: { zScore?: number | null; sweepEscapeDir?: Direction | null; crtValid?: boolean } = {}
+        options: StructureOptions = {}
     ): Array<(SMCEvents['EVENT_BOS'] & { type: 'EVENT_BOS' }) | (SMCEvents['EVENT_CHOCH'] & { type: 'EVENT_CHOCH' })> {
         
+        const policy = resolveSignalPolicy(preset);
+        if (policy.experimental) return this.processExperimental(candle, pivotsHigh, pivotsLow, preset, currentAtr, options, policy);
         const events: any[] = [];
         const zScore = options.zScore ?? null;
         const sweepEscapeDir = options.sweepEscapeDir ?? null;
@@ -250,6 +279,107 @@ export class MarketStructureEngine {
         return events;
     }
 
+    /** Opt-in causal path. Frames are immutable as-of observations, not reconstructed indicators. */
+    private processExperimental(candle: OHLCV, highs: Pivot[], lows: Pivot[], preset: SMCPreset, atr: number, options: StructureOptions, policy: SignalPolicy): any[] {
+        if (!isValidImpulseCandle(candle) ||
+            (this.history.length > 0 && candle.timestamp <= this.history[this.history.length - 1].timestamp) ||
+            (options.availableAt !== undefined && (!Number.isFinite(options.availableAt) || options.availableAt < candle.timestamp))) return [];
+        const volumes = this.history.slice(-20).map(c => c.volume).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+        const extreme = this.currentTrend === 'Bullish' ? Math.max(this.trendExtreme ?? candle.high, candle.high) :
+            this.currentTrend === 'Bearish' ? Math.min(this.trendExtreme ?? candle.low, candle.low) : null;
+        const frame: StructureFrame = {
+            candle: { ...candle }, atr, zScore: options.zScore ?? null,
+            impulse: options.impulse ? { ...options.impulse } : null,
+            priorVolumeMean: volumes.length ? volumes.reduce((a,b) => a+b, 0) / volumes.length : null,
+            sweepDirections: [...(options.sweepDirections ?? (options.sweepEscapeDir ? [options.sweepEscapeDir] : []))],
+            crtValid: options.crtValid ?? false, trend: this.currentTrend, trendExtreme: extreme,
+            lastBOS: this.lastBOS ? { ...this.lastBOS } : null, preset: { ...preset }, policy,
+        };
+        this.frames.push(frame);
+        this.history.push(frame.candle);
+        if (this.frames.length > HISTORY_CAP) this.frames.shift();
+        if (this.history.length > HISTORY_CAP) this.history.shift();
+        this.trendExtreme = extreme;
+        this.updateActiveSwings(highs, lows);
+        const high = this.activeSwingHigh;
+        const low = this.activeSwingLow;
+        let up = !!high && !high.isBroken && this.checkBreak(candle, high.price, true, preset.confirm_close);
+        let down = !!low && !low.isBroken && this.checkBreak(candle, low.price, false, preset.confirm_close);
+        // Preserve legacy same-bar tie resolution, without using future bar color for historical gates.
+        if (up && down) {
+            if (this.currentTrend === 'Bearish' ? candle.close < candle.open : candle.close <= candle.open) up = false;
+            else down = false;
+        }
+        const pivot = up ? high : down ? low : null;
+        if (!pivot) return [];
+        const direction: Direction = up ? 'Bullish' : 'Bearish';
+        // Full pivot-to-break coverage is mandatory. A truncated/unknown first break cannot be repaired with current data.
+        if (!this.frames.some(f => f.candle.timestamp === pivot.timestamp)) return [];
+        const source = this.frames.find(f => f.candle.timestamp > pivot.timestamp &&
+            this.checkBreak(f.candle, pivot.price, up, preset.confirm_close));
+        if (!source || source.trend !== this.currentTrend) return [];
+        if (source.preset.valid_bos_displacement && !this.passesFrameDisplacement(source, direction)) return [];
+        const { origin, extreme: legExtreme, originTs, extremeTs } = this.computeOriginExtreme(pivot.timestamp, up, source.candle);
+        const isBos = this.currentTrend === direction;
+        // Initial neutral discovery is not a reversal; requested reversal-only gates apply after initialization.
+        if (!isBos && this.currentTrend !== 'Neutral' && !this.passesFrameChoch(source, direction, origin)) return [];
+        const type = isBos ? 'EVENT_BOS' : 'EVENT_CHOCH';
+        const event = { type, direction, price: pivot.price, timestamp: candle.timestamp,
+            breakTimestamp: source.candle.timestamp, availableAt: options.availableAt ?? candle.timestamp,
+            signalProfile: policy.profile, origin, extreme: legExtreme, originTs, extremeTs,
+            crtOrigin: source.crtValid, isCoiled: this.detectCoiled(pivot.timestamp, source.candle.timestamp),
+        };
+        pivot.isBroken = true;
+        // The emitted leg stays source-anchored, but subsequent gates must retain everything
+        // observed between the original break and its discovery (never reset live context into the past).
+        const observedLeg = this.history.filter(c => c.timestamp >= source.candle.timestamp);
+        this.trendExtreme = up ? Math.max(...observedLeg.map(c => c.high)) : Math.min(...observedLeg.map(c => c.low));
+        if (isBos) this.lastBOS = pivot;
+        else {
+            if (this.currentTrend !== 'Neutral') this.lastCHoCH = pivot;
+            this.currentTrend = direction;
+            this.lastBOS = null;
+        }
+        return [event];
+    }
+
+    private passesFrameDisplacement(frame: StructureFrame, direction: Direction): boolean {
+        this.gateAttempts.displacement++;
+        if (!Number.isFinite(frame.atr) || frame.atr <= 0) { this.gateRejects.displacement++; return false; }
+        const c = frame.candle;
+        const mult = frame.preset.displ_atr_mult ?? .5;
+        let ok = frame.policy.directionalMomentum ? isInstitutionalDisplacement(c, frame.atr, direction, frame.impulse, mult) :
+            frame.zScore !== null ? Math.abs(frame.zScore) >= 2 && (direction === 'Bullish' ? frame.zScore > 0 : frame.zScore < 0) :
+            c.high - c.low >= frame.atr * mult && (direction === 'Bullish' ? c.close > c.open : c.close < c.open);
+        const volMult = frame.preset.displ_vol_mult ?? 0;
+        if (ok && volMult > 0 && frame.priorVolumeMean !== null) {
+            ok = typeof c.volume === 'number' && Number.isFinite(c.volume) && c.volume > 0 && c.volume >= frame.priorVolumeMean * volMult;
+        }
+        if (!ok) this.gateRejects.displacement++;
+        return ok;
+    }
+
+    private passesFrameChoch(frame: StructureFrame, direction: Direction, origin: number): boolean {
+        this.gateAttempts.choch++;
+        const bullish = direction === 'Bullish';
+        if (frame.preset.choch_require_bos_prior && (!frame.lastBOS || frame.lastBOS.type !== (bullish ? 'Low' : 'High'))) {
+            this.gateRejects.bosPrior++; return false;
+        }
+        if (frame.preset.choch_require_sweep) {
+            const swept = frame.trendExtreme !== null && (bullish ? origin <= frame.trendExtreme : origin >= frame.trendExtreme);
+            if (!swept && !frame.sweepDirections.includes(direction)) { this.gateRejects.sweep++; return false; }
+        }
+        if (frame.preset.choch_require_momentum) {
+            const s = frame.impulse;
+            const hasMomentum = frame.policy.directionalMomentum ? !!s && s.timestamp === frame.candle.timestamp &&
+                s.atr === frame.atr && s.ready && Number.isFinite(s.zUp) && Number.isFinite(s.zDn) &&
+                (bullish ? s.zUp : s.zDn) >= DIRECTIONAL_SIGNAL_THRESHOLDS.chochZ :
+                frame.zScore !== null && Math.abs(frame.zScore) >= 1.5;
+            if (!hasMomentum) { this.gateRejects.momentum++; return false; }
+        }
+        return true;
+    }
+
     /**
      * 🆕 Filtro 3: valida un CHoCH contra los requisitos del Pine.
      * - Sweep: el origin del impulso supera el extremo de la tendencia que revierte,
@@ -329,8 +459,8 @@ export class MarketStructureEngine {
      * @param pivotTs timestamp del pivote roto (para delimitar la ventana)
      * @returns true si el rango previo a la ruptura está comprimido
      */
-    private detectCoiled(pivotTs: number): boolean {
-        const window = this.history.filter(c => c.timestamp >= pivotTs);
+    private detectCoiled(pivotTs: number, throughTs: number = Infinity): boolean {
+        const window = this.history.filter(c => c.timestamp >= pivotTs && c.timestamp <= throughTs);
         if (window.length < 4) return false; // mínimo 1 madre + 3 contenidas
 
         // La vela madre es la primera del rango (la que contiene a las demás)

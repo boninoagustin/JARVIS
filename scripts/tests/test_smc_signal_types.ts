@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import type { SMCEvents, SMCState, Pivot, Imbalance, DirectionalImpulseSnapshot } from '../../src/engine/smc/types.js';
+const metadata = { availableAt: 2, signalProfile: 'directional_atr_v1' as const };
+const bos: SMCEvents['EVENT_BOS'] = { direction: 'Bullish', price: 1, timestamp: 2, breakTimestamp: 1, ...metadata };
+const sweep: SMCEvents['EVENT_SWEEP'] = { direction: 'Bullish', price: 1, timestamp: 2, sweepType: 'CRT', originTimestamp: 1, ...metadata };
+const pivot: Pivot = { index: 0, timestamp: 1, price: 1, type: 'Low', isBroken: false, availableAt: 2 };
+const imbalance: Imbalance = { id: 'x', timestamp: 1, direction: 'Bullish', top: 2, bottom: 1, mitigated: false, is_ifvg: false, availableAt: 2 };
+const snapshot: DirectionalImpulseSnapshot = { timestamp: 2, sampleCount: 1, ready: false, zUp: 0, zDn: 0, upSmooth: 0, dnSmooth: 0, atr: 1, atrNormalizedRange: 1, volumeRatio: 1, priorVolumeMean: null };
+const state: SMCState = { currentTrend: 'Neutral', pivotsHigh: [], pivotsLow: [], activeOBs: [], activeBreakers: [], activeFVGs: [], directionalImpulse: snapshot };
+assert.equal(bos.availableAt, 2); assert.equal(sweep.originTimestamp, 1); assert.equal(pivot.availableAt, 2); assert.equal(imbalance.availableAt, 2); assert.equal(state.directionalImpulse, snapshot);
+const legacy: SMCEvents['EVENT_BOS'] = { direction: 'Bullish', price: 1, timestamp: 1 };
+assert.equal(JSON.stringify(legacy), '{"direction":"Bullish","price":1,"timestamp":1}');
+console.log('PASS additive typed metadata preserves absent legacy properties');

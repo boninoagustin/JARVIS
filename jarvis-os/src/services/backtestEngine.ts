@@ -1,12 +1,14 @@
+import { validateReplayWindow, contextObservationTf, type ReplayWindowOptions, type ReplayDiagnostics } from './replayWindow';
 import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
 import { evaluateImpulseCore, evaluateMacroStretching, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, calculateDynamicSlBuffer, getMinPipDistance } from '../engine/AlphaModel';
 import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
-import { capTp2Price } from '../../../src/engine/tp2Cap';
+import { capTp2Price, getAdrPrice } from '../../../src/engine/tp2Cap';
 import { DEFAULT_BIAS_CONFLUENCE } from '../../../src/engine/Types';
 import { evaluateNetTrade } from '../engine/FrictionModel';
+import { getRolloverCalendar } from '../../../src/engine/RolloverSpreadGate';
 import {
   emptyState, normalizeZone, parseTF, getBuffer, getDecimals
 } from './backtestTypes';
@@ -16,12 +18,247 @@ import {
 } from '../engine/TimesfmFilter';
 import { extractFeatures, loadModelFromJSON, predict as mlPredict, setMLWindowStart } from '../../../src/engine/MLFilter';
 import * as fs from 'node:fs';
+import * as nodeCrypto from 'node:crypto';
+
+function safeSha256(data: string): string {
+  try {
+    if (typeof (nodeCrypto as any)?.createHash === 'function') {
+      return (nodeCrypto as any).createHash('sha256').update(data).digest('hex');
+    }
+  } catch {}
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57, h3 = 0x6a09e667, h4 = 0xbb67ae85;
+  for (let i = 0; i < data.length; i++) {
+    const ch = data.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822507);
+    h4 = Math.imul(h4 ^ ch, 3266489909);
+  }
+  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
+  const part = toHex(h1) + toHex(h2) + toHex(h3) + toHex(h4);
+  return (part + part).slice(0, 64);
+}
+import {buildRolloverFreezeContext} from '../../../src/engine/RolloverRuntimeContext';
+import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../src/engine/RolloverTriagePolicy';
+import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
+import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
+import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
+import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';
+import type { ExecutionQuote, ExecutionMarketSnapshot, ExecutionPositionState, ExecutionObservation, SmartRoutingDecision } from '../../../src/engine/ExecutionTypes';
+
+interface ModeledExecutionLedger {
+  fillSource: 'MODELED';
+  fillQuote: ExecutionQuote;
+  managementOverrides: Record<string, any>;
+  partialClosePct: number;
+  remainingFraction: number;
+  realizedPriceDist: number;
+  paidCommissionPrice: number;
+  exitCommissionPerLotUsd: number;
+  maxHoldMin?: number;
+  minimalRoi?: Record<string, number>;
+  pendingAmend?: { price: number; stage: ExecutionPositionState['stage']; observedAtMs: number };
+  lastProcessedMs: number;
+  closeReason?: string;
+  latestStructuralOrigin?: { price: number; direction: 'BUY'|'SELL'; tf: string; eventAtMs: number; availableAtMs: number };
+}
+type ModeledTrade = BacktestTrade & { executionBacktest?: ModeledExecutionLedger };
+// Raw lastPrice remains available for risk/exits. Signal ATR/open approximations
+// must bridge from the previous accepted observation, not a frozen raw shock.
+const rolloverCleanCloses = new WeakMap<RadarState,number>();
+
+function freezeResearchConfig<T>(value:T):T {
+  if(value && typeof value === 'object') {for(const item of Object.values(value))freezeResearchConfig(item);Object.freeze(value);}
+  return value;
+}
+function canonicalResearchJson(value:any):string {
+  if(Array.isArray(value))return '['+value.map(canonicalResearchJson).join(',')+']';
+  if(value && typeof value==='object')return '{'+Object.keys(value).filter(k=>value[k]!==undefined).sort().map(k=>JSON.stringify(k)+':'+canonicalResearchJson(value[k])).join(',')+'}';
+  return JSON.stringify(value) ?? 'null';
+}
+
+function routeModeledSmart(leg: ImpulseLeg, state: RadarState, config: BacktestConfig, tf: string,
+  nowMs: number, riskDist: number, requestedTp2Price: number, observation?: ExecutionObservation): SmartRoutingDecision {
+  if (leg.executionDecision) return leg.executionDecision;
+  const snapshot = getExecutionSnapshot(state, tf, nowMs);
+  const wait = (reason: string): SmartRoutingDecision => ({ mode: 'WAIT_DATA', takeDirectNow: false, requiresCloseConfirmation: false, reason });
+  let decision: SmartRoutingDecision;
+  // Latest Wilder ATR is NOT the vintage of an older delayed break.
+  if (!snapshot?.breakBar || !snapshot.closedBar || !observation?.breakBar
+      || observation.tf !== tf || snapshot.breakBar.openTimeMs !== snapshot.closedBar.openTimeMs
+      || observation.breakBar.openTimeMs !== snapshot.breakBar.openTimeMs
+      || observation.observedAtMs > nowMs || !snapshot.quote
+      || !validateExecutionInstrument(config.executionInstrument)) {
+    decision = wait('MISSING_SAME_TF_CURRENT_BREAK_ATR_OR_INSTRUMENT');
+  } else {
+    const currentPrice = leg.dir === 'BUY' ? snapshot.quote.ask : snapshot.quote.bid;
+    const policy = resolveExecutionPolicy(config.executionPolicy);
+    let plannedTp2Price = requestedTp2Price;
+    // The legacy cap uses abs(distance); do not let it turn an invalid request favorable.
+    if (policy.profile === 'microstructure_v1' && requestedTp2Price !== undefined
+        && (!Number.isFinite(requestedTp2Price) || (leg.dir === 'BUY' ? requestedTp2Price-currentPrice : currentPrice-requestedTp2Price) <= 0)) {
+      decision = wait('WAIT_DATA_UNFAVORABLE_PLANNED_TP2');
+    } else {
+    if (policy.targets) {
+      const targets = computeExecutionTargets({ direction: leg.dir, entryPrice: currentPrice,
+        initialSlPrice: currentPrice + (leg.dir === 'BUY' ? -riskDist : riskDist),
+        adr: getAdrPrice(config.ticker), regime: config.executionInstrument.regime,
+        requestedTp2Price: requestedTp2Price > 0 ? requestedTp2Price : undefined });
+      plannedTp2Price = targets.valid ? targets.tp2Price : NaN;
+    } else plannedTp2Price = capTp2Price(config.ticker, leg.dir, currentPrice, currentPrice + (leg.dir === 'BUY' ? -riskDist : riskDist), requestedTp2Price);
+    const sign = leg.dir === 'BUY' ? 1 : -1;
+    const rooms = state.zones.filter(z => z.dir !== leg.dir).map(z => sign * ((leg.dir === 'BUY' ? z.btm : z.top) - currentPrice)).filter(x => Number.isFinite(x) && x > 0);
+    const htfAligned = ['60','240','D'].filter(k => state.marketBias[k] === leg.dir && nowMs - (state.biasTs?.[k] ?? 0) < ({ '60': 8, '240': 48, D: 120 }[k]! * 3600e3)).length;
+    decision = evaluateSmartEntryRouting({ ticker: config.ticker, direction: leg.dir, nowMs, currentPrice,
+      originPrice: leg.origin, extremePrice: leg.extreme, riskDist, atr14: snapshot.atr14, adr: getAdrPrice(config.ticker),
+      plannedTp2Price, rewardToOppositeZone: rooms.length ? Math.min(...rooms) : undefined,
+      breakBar: snapshot.breakBar, impulseCreatedAtMs: observation.impulse?.createdAtMs ?? snapshot.breakBar.openTimeMs,
+      fvgs: observation.impulse ? snapshot.fvgs : undefined, tickActivity: snapshot.tickActivity, htfAligned });
+    }
+  }
+  leg.executionDecision = structuredClone(decision);
+  leg.executionSnapshot = snapshot ? structuredClone(snapshot) : undefined;
+  leg.executionDecisionAtMs = nowMs;
+  return decision;
+}
+
+/** All experimental exits (including censor/SAR) settle the same remaining-leg ledger. */
+function closeModeledTrade(trade: ModeledTrade, executablePrice: number, nowMs: number, reason: string): void {
+  const ledger = trade.executionBacktest!, instrument = trade.executionInstrument!;
+  const sign = trade.direction === 'BUY' ? 1 : -1;
+  const fill = executablePrice - sign * instrument.exitSlippagePips * instrument.pipSize;
+  const grossDist = ledger.realizedPriceDist + ledger.remainingFraction * sign * (fill - trade.entryPrice);
+  ledger.paidCommissionPrice += ledger.remainingFraction * ledger.exitCommissionPerLotUsd / instrument.pipValuePerLotUsd * instrument.pipSize;
+  ledger.remainingFraction = 0;
+  ledger.closeReason = reason;
+  delete ledger.pendingAmend;
+  const netDist = grossDist - ledger.paidCommissionPrice;
+  trade.pnl = netDist / trade.entryPrice * 100;
+  trade.rMultiple = netDist / trade.executionState!.initialRiskDist * (trade.riskMult ?? 1);
+  trade.result = trade.rMultiple > 0 ? 'WIN' : trade.rMultiple < 0 ? 'LOSS' : 'BE';
+  trade.resultTp2 = reason === 'REVERSAL' ? 'REVERSAL' : trade.result;
+  trade.pnlTp2 = trade.pnl;
+  trade.rMultipleTp2 = trade.rMultiple - (trade.rMultipleTp1 ?? 0);
+  trade.closeTimestamp = nowMs;
+  trade.durationMin = Math.round((nowMs - trade.timestamp) / 60000);
+}
+
+/** Quote-driven execution; whole closed post-observation OHLC is stop-first worst case. */
+function manageModeledTrade(trade: ModeledTrade, quote: ExecutionQuote, snapshot: ExecutionMarketSnapshot | undefined, nowMs: number, ticker: string): boolean {
+  const ledger = trade.executionBacktest!, instrument = trade.executionInstrument!, policy = trade.executionPolicy!;
+  if (!quote || quote.source !== 'modeled' || quote.timestampMs > nowMs || nowMs - quote.timestampMs > 10000 || quote.timestampMs <= ledger.lastProcessedMs) return false;
+  const sign = trade.direction === 'BUY' ? 1 : -1;
+  const exitQuote = trade.direction === 'BUY' ? quote.bid : quote.ask;
+  const bar = snapshot?.bar?.closed ? snapshot.bar : snapshot?.closedBar;
+  // Never retest a newly amended stop against an already observed range.
+  const wholeNewBar = !!bar && bar.closed && bar.openTimeMs >= ledger.lastProcessedMs && bar.availableAtMs <= nowMs;
+  const halfSpread = (quote.ask - quote.bid) / 2;
+  const low = wholeNewBar ? bar!.low - sign * halfSpread : exitQuote;
+  const high = wholeNewBar ? bar!.high - sign * halfSpread : exitQuote;
+  trade.executionState = advanceExecutionPositionState(trade.executionState!, { direction: trade.direction,
+    entryPrice: trade.entryPrice, quote, nowMs });
+  ledger.lastProcessedMs = quote.timestampMs;
+  const stopped = trade.direction === 'BUY' ? low <= trade.slPrice : high >= trade.slPrice;
+  if (stopped) {
+    closeModeledTrade(trade, trade.direction === 'BUY' ? Math.min(exitQuote, trade.slPrice) : Math.max(exitQuote, trade.slPrice), nowMs, 'SL');
+    return true;
+  }
+  const calendar = getRolloverCalendar(ticker, nowMs);
+  const rolloverBlocked = calendar.protectionWindow || calendar.widenWindow || calendar.entryWindow;
+  // The old stop governed the elapsed interval. Confirm a pending amend only
+  // now, with this observation's market geometry, never against its past range.
+  if (ledger.pendingAmend && quote.timestampMs > ledger.pendingAmend.observedAtMs) {
+    const amend = ledger.pendingAmend;
+    const checked = validateExecutionStop({ direction: trade.direction, candidateSl: amend.price,
+      currentSl: trade.slPrice, quote, instrument, nowMs });
+    if (!rolloverBlocked && checked.valid) {
+      trade.slPrice = checked.price;
+      trade.executionState = { ...trade.executionState!, lastConfirmedSlPrice: trade.slPrice, stage: amend.stage };
+      trade.events.push('SL_AMEND_MODELED_CONFIRMED_NEXT_OBSERVATION');
+    }
+    delete ledger.pendingAmend;
+  }
+  const ageMin = (nowMs - trade.timestamp) / 60000;
+  if (ledger.maxHoldMin && ageMin >= ledger.maxHoldMin) {
+    closeModeledTrade(trade, exitQuote, nowMs, 'MAX_HOLD'); return true;
+  }
+  const roiAge = Object.keys(ledger.minimalRoi ?? {}).map(Number).filter(t => Number.isFinite(t) && ageMin >= t).sort((a,b) => b-a)[0];
+  const roi = roiAge === undefined ? undefined : ledger.minimalRoi![String(roiAge)];
+  if (roi !== undefined && roi > 0 && sign * (exitQuote - trade.entryPrice) / trade.entryPrice >= roi) {
+    trade.roiDecayApplied = `${roiAge}m_${roi}`;
+    closeModeledTrade(trade, exitQuote, nowMs, 'ROI'); return true;
+  }
+  const tp1Touched = trade.direction === 'BUY' ? high >= trade.tp1Price : low <= trade.tp1Price;
+  if (!trade.tp1Hit && tp1Touched) {
+    trade.tp1Hit = true;
+    trade.resultTp1 = 'WIN';
+    const partial = ledger.partialClosePct;
+    if (partial > 0) {
+      const fill = trade.tp1Price - sign * instrument.exitSlippagePips * instrument.pipSize;
+      ledger.realizedPriceDist = partial * sign * (fill - trade.entryPrice);
+      ledger.remainingFraction = 1 - partial;
+      const exitCommission = ledger.exitCommissionPerLotUsd / instrument.pipValuePerLotUsd * instrument.pipSize;
+      ledger.paidCommissionPrice += partial * exitCommission;
+      trade.pnlTp1 = sign * (fill - trade.entryPrice) / trade.entryPrice * 100;
+      trade.rMultipleTp1 = partial * (sign * (fill - trade.entryPrice) - 2 * exitCommission) / trade.executionState!.initialRiskDist * (trade.riskMult ?? 1);
+      trade.executionState = { ...trade.executionState!, tp1Touched: true, partialConfirmed: true };
+      trade.events.push(`PARTIAL_MODELED_FILLED_${partial}`);
+    } else {
+      trade.executionState = { ...trade.executionState!, tp1Touched: true };
+    }
+  }
+  const tp2Touched = trade.tp2Price > 0 && (trade.direction === 'BUY' ? high >= trade.tp2Price : low <= trade.tp2Price);
+  if (tp2Touched) { closeModeledTrade(trade, trade.tp2Price, nowMs, 'TP2'); return true; }
+
+  const pendingCosts = estimatePendingExecutionCosts({ instrument, lots: 1, remainingLots: ledger.remainingFraction,
+    paidCostsUsd: ledger.paidCommissionPrice / instrument.pipSize * instrument.pipValuePerLotUsd,
+    estimatedExitCommissionPerLotUsd: ledger.exitCommissionPerLotUsd });
+  let candidate = trade.slPrice, stage = trade.executionState!.stage;
+  if (policy.management && pendingCosts.valid) {
+    const be = evaluateDynamicBreakeven({ ticker, direction: trade.direction, entryPrice: trade.entryPrice,
+      currentSlPrice: trade.slPrice, currentQuote: quote, instrument, state: trade.executionState!, atr14: snapshot?.atr14,
+      adr: getAdrPrice(ticker), nowMs, pendingCostPrice: pendingCosts.pendingCostPrice, rolloverBlocked });
+    if (be.shouldUpdateSl) { candidate = be.newSlPrice; stage = be.stage; }
+  } else if (!policy.management && trade.executionState!.partialConfirmed) {
+    const mode = ledger.managementOverrides.slAfterTp1;
+    if (mode === 'midpoint') candidate = trade.entryPrice - sign * trade.executionState!.initialRiskDist * .5;
+    if (mode === 'breakeven') candidate = trade.entryPrice + sign * (instrument.baseSpreadPips * instrument.pipSize);
+  }
+  if (policy.trailing) {
+    // Trailing reads persisted, confirmed stage, never this observation's proposal.
+    const trail = computeMultiAssetTrailingSl({ ticker, direction: trade.direction, entryPrice: trade.entryPrice,
+      currentSlPrice: trade.slPrice, tp2Price: trade.tp2Price, currentQuote: quote, instrument, state: trade.executionState!,
+      atr14: snapshot?.atr14, nowMs, rolloverBlocked, latestStructuralOrigin: ledger.latestStructuralOrigin });
+    if (sign * (trail - candidate) > 0) candidate = trail;
+  }
+  if (!rolloverBlocked && candidate !== trade.slPrice) {
+    const checked = validateExecutionStop({ direction: trade.direction, candidateSl: candidate,
+      currentSl: trade.slPrice, quote, instrument, nowMs });
+    if (checked.valid) {
+      ledger.pendingAmend = { price: checked.price, stage, observedAtMs: quote.timestampMs };
+      trade.events.push('SL_AMEND_MODELED_PENDING_NEXT_OBSERVATION');
+    }
+  }
+  return false;
+}
+
+/** Historical prices are mid observations, NOT broker fills or tick flow. */
+function modeledExecutionQuote(config: BacktestConfig, price: number | undefined, nowMs: number, instrument = config.executionInstrument): ExecutionQuote | undefined {
+  if (!validateExecutionInstrument(instrument) || instrument.source !== 'explicit_model' || instrument.ticker !== config.ticker || !Number.isFinite(price) || !(price! > 0)) return;
+  const spread = config.spreadPips ?? instrument.baseSpreadPips;
+  if (!Number.isFinite(spread) || spread < 0) return;
+  const halfSpread = spread * instrument.pipSize / 2;
+  if (price! <= halfSpread) return;
+  return { bid: price! - halfSpread, ask: price! + halfSpread, timestampMs: nowMs, source: 'modeled' };
+}
 
 // 🛡️ ML F3: modelos ya cargados en este proceso (evita re-parsear el JSON en cada trial del worker)
 const _mlLoadedPaths = new Set<string>();
 
 // 🆕 TimesFM F1: cache de forecasts precomputados, cargado una vez por corrida en runBacktest
 let timesfmForecastCache: Map<number, TimesfmForecast> | undefined;
+// Offline-only dependency, never serialized into strategy config. Reset every run.
+let timesfmForecastAt: ((nowMs: number, tfMinutes: number) => TimesfmForecast | undefined) | undefined;
 
 // 🛡️ ML F3: contexto del gate ML del run actual (variable de módulo: createTrade se llama
 // desde helpers fuera del scope de runBacktest). Ejecución sincrónica → seguro con un run a la vez.
@@ -145,7 +382,7 @@ export function* parseCSVLines(content: string): Generator<LogEntry> {
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
     yield {
-      line,
+      line: parseExecutionEnvelope(line, ts).text,
       ts,
       tf,
       parsed: preParseAlert(line)
@@ -211,7 +448,7 @@ export async function prepareEntries(logs: Map<string, (string | LogEntry)[]>): 
         }
         seen.add(dedupKey);
 
-        allEntries.push({ ts, line, tf: entryTf, parsed: preParseAlert(line) });
+        allEntries.push({ ts, line: parseExecutionEnvelope(line, ts).text, tf: entryTf, parsed: preParseAlert(line) });
       } else {
         allEntries.push(item as LogEntry);
       }
@@ -229,12 +466,40 @@ export function runBacktest(
   _logs: Map<string, (string | LogEntry)[]>,
   config: BacktestConfig,
   onProgress?: (pct: number, trades: BacktestTrade[]) => void,
-  prepared?: LogEntry[]
+  prepared?: LogEntry[],
+  replayWindow?: ReplayWindowOptions,
+  offlineOptions?: { timesfmForecastAt?: (nowMs: number, tfMinutes: number) => TimesfmForecast | undefined }
 ): BacktestResult {
+  timesfmForecastAt = undefined;
+  if (replayWindow) validateReplayWindow(replayWindow);
+  if (offlineOptions?.timesfmForecastAt !== undefined) {
+    if (!replayWindow || typeof offlineOptions.timesfmForecastAt !== 'function') throw new Error('TimesFM resolver requires explicit context-only replay window');
+    timesfmForecastAt = offlineOptions.timesfmForecastAt;
+  }
+  const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
+  const experimental = executionPolicy.profile === 'microstructure_v1';
+  // A research run owns its config; callbacks cannot retune open positions.
+  if (experimental || config.mlRegimeShadow === true || config.rolloverPolicy?.profile === 'rollover_triage_v1') config = structuredClone({ ...config, ...(experimental ? { executionPolicy } : {}) });
+  const executionReport = experimental ? {
+    schema: 1, profile: executionPolicy.profile, fillSource: 'MODELED',
+    instrumentSource: config.executionInstrument?.source ?? 'missing',
+    adrSource: 'STATIC_FROZEN_REFERENCE_NOT_ASOF_FORECAST',
+    priceAssumption: 'CSV_MID_PLUS_HALF_EXPLICIT_SPREAD', profitabilityEvidence: false,
+    blockedReason: !validateExecutionInstrument(config.executionInstrument) || config.executionInstrument.source !== 'explicit_model'
+      || config.executionInstrument.ticker !== config.ticker ? 'MISSING_OR_INVALID_EXPLICIT_INSTRUMENT' : undefined,
+  } : undefined;
   // 🔧 FIX: fricción 0 = "auto" → undefined para caer en defaultFrictionConfig por activo.
   // El panel manda 0 por defecto y pisaba los defaults reales (FOREX: spread 0.1 + $3/lote).
-  if ((config as any).spreadPips === 0) (config as any).spreadPips = undefined;
-  if ((config as any).commissionPerLot === 0) (config as any).commissionPerLot = undefined;
+  if (!experimental && (config as any).spreadPips === 0) (config as any).spreadPips = undefined;
+  if (!experimental && (config as any).commissionPerLot === 0) (config as any).commissionPerLot = undefined;
+  const researchRun = config.mlRegimeShadow === true || config.rolloverPolicy?.profile === 'rollover_triage_v1';
+  const researchReport = researchRun ? {
+    schema:1 as const,applyEligible:false as const,profitabilityEvidence:false as const,
+    rolloverProfile:config.rolloverPolicy?.profile ?? 'legacy',mlRegimeShadow:config.mlRegimeShadow===true,
+    triageExecution:'PROPOSAL_ONLY_NO_BILATERAL_EXECUTION_MODEL' as const,
+    configSha256:safeSha256(canonicalResearchJson(config)),
+  } : undefined;
+  if(researchRun)freezeResearchConfig(config);
 
   // 🛡️ ML F3 (sep-2026): gate ML idéntico al vivo (AlphaModel.ts:357-359) dentro del backtest.
   // Walk-forward honesto: solo rechaza trades con ts > mlGate.trainedAt (mtime del modelo —
@@ -243,7 +508,20 @@ export function runBacktest(
   _mlCtx = { cfg: mlGateCfg, rejected: 0 };
   // 🛡️ ML F3: ventana walk-forward para el gate del AlphaModel compartido (vivo: ventana 0).
   setMLWindowStart(mlGateCfg?.enabled ? (mlGateCfg.trainedAt ?? 0) : 0);
-  if (mlGateCfg?.enabled && mlGateCfg.modelPath && !_mlLoadedPaths.has(mlGateCfg.modelPath)) {
+  // Replay trials can alternate models for the same ticker. A path having been
+  // seen does not mean that it is still the model installed in MLFilter.
+  // Preserve the approved legacy caching path when no replay is requested.
+  if (replayWindow && mlGateCfg?.enabled) {
+    // Fail closed: a missing/invalid fold model must not reuse a prior trial's
+    // model or silently change the candidate to gate-OFF.
+    try {
+      if (!mlGateCfg.modelPath || !loadModelFromJSON(fs.readFileSync(mlGateCfg.modelPath, 'utf8'), config.ticker)) {
+        throw new Error('model path missing or model rejected');
+      }
+    } catch (e: any) {
+      throw new Error(`Replay ML model unavailable: ${e.message}`);
+    }
+  } else if (mlGateCfg?.enabled && mlGateCfg.modelPath && !_mlLoadedPaths.has(mlGateCfg.modelPath)) {
     try {
       if (fs.existsSync(mlGateCfg.modelPath)) {
         loadModelFromJSON(fs.readFileSync(mlGateCfg.modelPath, 'utf8'), config.ticker);
@@ -261,7 +539,7 @@ export function runBacktest(
 
   // 🆕 TimesFM F1: cargar cache de forecasts precomputados (una sola vez por corrida)
   const tfmInit = (config as any).timesfm;
-  timesfmForecastCache = (tfmInit?.enabled && tfmInit?.cachePath && !tfmInit?.collectOnly)
+  timesfmForecastCache = (!timesfmForecastAt && tfmInit?.enabled && tfmInit?.cachePath && !tfmInit?.collectOnly)
     ? loadTimesfmCache(tfmInit.cachePath)
     : undefined;
   const activeTrades = new Map<string, BacktestTrade>();
@@ -284,20 +562,60 @@ export function runBacktest(
   };
 
   // 1. Parse all entries with timestamps (or use pre-prepared)
-  const validEntries = prepared!;
+  const validEntries = replayWindow
+    ? (prepared ?? []).filter(e => Number.isSafeInteger(e.ts) && e.ts >= replayWindow.warmupStartMs && e.ts < replayWindow.evaluationEndMs).sort((a, b) => a.ts - b.ts)
+    : prepared!;
+  const observations = new Map<string, Set<number>>();
+  const replayDiagnostics: ReplayDiagnostics | undefined = replayWindow ? {
+    ...replayWindow, minContextObservations: { ...replayWindow.minContextObservations },
+    version: 1, warmupEvents: 0, evaluationEvents: 0,
+    portfolioPolicy: 'reset-per-fold', readiness: { ready: false, observations: {}, missing: [] },
+  } : undefined;
+  const sealBoundary = () => {
+    if (!replayDiagnostics || replayDiagnostics.boundarySnapshot) return;
+    const counts: Record<string, number> = {};
+    for (const tf of new Set([...Object.keys(replayDiagnostics.minContextObservations), ...observations.keys()])) {
+      counts[tf] = observations.get(tf)?.size ?? 0;
+    }
+    const missing = Object.keys(replayDiagnostics.minContextObservations)
+      .filter(tf => counts[tf] < replayDiagnostics.minContextObservations[tf]);
+    replayDiagnostics.readiness = { ready: missing.length === 0, observations: counts, missing };
+    replayDiagnostics.boundarySnapshot = {
+      state: structuredClone(state), dailyStats: { ...dailyStats }, orders: trades.length, activeTrades: activeTrades.size,
+    };
+  };
 
   if (!validEntries || validEntries.length === 0) {
-    return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '' };
+    sealBoundary();
+    return { trades, totalEvents: 0, processedEvents: 0, startDate: '', endDate: '', ...(researchReport ? {researchReport}:{}), ...(executionReport ? { executionReport } : {}), ...(replayDiagnostics ? { replayDiagnostics } : {}) };
   }
 
   // 3. Procesar cronológicamente (sin hoistar SYNC_ZONES para evitar lookahead bias)
-  const initialPrice = validEntries.find(e => e.parsed?.currentPrice !== undefined)?.parsed?.currentPrice ?? 1;
+  const initialPrice = validEntries.find(e => (!replayWindow || e.ts < replayWindow.evaluationStartMs) && e.parsed?.currentPrice !== undefined)?.parsed?.currentPrice ?? 1;
   const pipSize = getPipValue(config.ticker, initialPrice);
 
   const total = validEntries.length;
   let lastProgressPct = 0;
   for (let i = 0; i < total; i++) {
-    processAlert(validEntries[i], validEntries[i].ts, state, config, trades, activeTrades, dailyStats, pipSize);
+    const entry = validEntries[i];
+    let contextOnly = false;
+    let hydrate = true;
+    if (replayWindow && replayDiagnostics) {
+      const warmup = entry.ts < replayWindow.evaluationStartMs;
+      if (warmup) replayDiagnostics.warmupEvents++;
+      else { sealBoundary(); replayDiagnostics.evaluationEvents++; }
+      contextOnly = warmup || !replayDiagnostics.readiness.ready;
+      if (entry.parsed?.prefix === 'PING_PRICE') {
+        const tf = contextObservationTf(entry);
+        hydrate = tf !== undefined;
+        if (warmup && tf) {
+          const seen = observations.get(tf) ?? new Set<number>();
+          hydrate = !seen.has(entry.ts);
+          if (hydrate) { seen.add(entry.ts); observations.set(tf, seen); }
+        }
+      }
+    }
+    if (hydrate) processAlert(entry, entry.ts, state, config, trades, activeTrades, dailyStats, pipSize, contextOnly);
     const pct = Math.floor((i / total) * 100);
     if (onProgress && pct > lastProgressPct && pct % 5 === 0) {
       lastProgressPct = pct;
@@ -305,12 +623,21 @@ export function runBacktest(
     }
   }
 
+  sealBoundary();
+
   // Close remaining active trades at closing price
   const lastEntry = validEntries[validEntries.length - 1];
   const closingPrice = state.lastPrice ?? lastEntry.parsed?.currentPrice;
   if (closingPrice !== undefined) {
     for (const [, trade] of activeTrades) {
       const slDistance = Math.abs(trade.originalSlPrice! - trade.entryPrice);
+      if (trade.executionPolicy?.profile === 'microstructure_v1') {
+        const ledger = (trade as ModeledTrade).executionBacktest!;
+        const quote = modeledExecutionQuote({ ...config, spreadPips: (ledger.fillQuote.ask - ledger.fillQuote.bid) / trade.executionInstrument!.pipSize }, closingPrice, lastEntry.ts, trade.executionInstrument);
+        if (quote) closeModeledTrade(trade, trade.direction === 'BUY' ? quote.bid : quote.ask, lastEntry.ts, 'FINAL_CENSOR');
+        updateDailyStatsFromClose(trade, dailyStats, config);
+        continue;
+      }
       const pnlDistance = trade.direction === 'BUY'
         ? closingPrice - trade.entryPrice
         : trade.entryPrice - closingPrice;
@@ -347,12 +674,18 @@ export function runBacktest(
     // 🛡️ ML F3: rechazos del gate ML (walk-forward) — visible en el reporte del optimizador
     mlRejected: _mlCtx.rejected,
     mlGateEnabled: !!mlGateCfg?.enabled,
+    ...(researchReport ? {researchReport}:{}),
+    ...(executionReport ? { executionReport } : {}),
+    ...(replayDiagnostics ? { replayDiagnostics } : {}),
   };
 }
 
 // --- PROCESS SINGLE ALERT (ported from backend processTradingAlert) ---
 
 function preParseAlert(alertText: string): ParsedAlert | undefined {
+  const eventTime = Number(alertText.match(/TS:\s*(\d+)/i)?.[1] ?? 0);
+  const envelope = parseExecutionEnvelope(alertText, eventTime);
+  alertText = envelope.text;
   const textUpToPayload = alertText.includes('Payload:') ? alertText.split('Payload:')[0] : alertText;
   const parts = textUpToPayload.split(/[,|]/).map(p => p.trim());
   if (parts.length < 2) return undefined;
@@ -414,6 +747,8 @@ function preParseAlert(alertText: string): ParsedAlert | undefined {
   if (upperText.includes('VWAP UNDER')) parsed.vwapUnder = true;
   if (upperText.includes('VWAP OVER')) parsed.vwapOver = true;
 
+  if (envelope.observation) parsed.executionObservation = envelope.observation;
+  if (envelope.reason) parsed.executionContextReason = envelope.reason;
   return parsed;
 }
 
@@ -440,25 +775,59 @@ function processAlert(
   config: BacktestConfig, trades: BacktestTrade[],
   activeTrades: Map<string, BacktestTrade>,
   dailyStats: DailyStats,
-  pipSize: number
+  pipSize: number,
+  contextOnly = false
 ) {
-  const p = entry.parsed;
+  const envelope = parseExecutionEnvelope(entry.line, nowMs);
+  const p = entry.line.includes('EX1:') ? preParseAlert(entry.line) : entry.parsed;
   if (!p) return;
+  const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
+  const experimental = executionPolicy.profile === 'microstructure_v1';
+  const contextReason = (p as ParsedAlert & { executionContextReason?: string }).executionContextReason ?? envelope.reason;
+  if (experimental && contextReason) {
+    console.warn(`[EXECUTION_BT] WAIT_DATA ${contextReason} at ${nowMs}`);
+    return;
+  }
+  const modeledQuote = experimental ? modeledExecutionQuote(config, p.currentPrice, nowMs) : undefined;
+  if (experimental) {
+    const incoming = p.executionObservation ?? envelope.observation;
+    if (incoming) {
+      const result = incoming.ticker === config.ticker ? ingestExecutionContext(state, incoming, nowMs) : { accepted: false, reason: 'ticker_mismatch' };
+      if (!result.accepted) {
+        console.warn(`[EXECUTION_BT] WAIT_DATA ${result.reason} at ${nowMs}`);
+        return;
+      }
+    }
+    // A quote-only observation never supplies OHLC/ATR/tick activity.
+    if (modeledQuote) ingestExecutionContext(state, { schema: 1, ticker: config.ticker,
+      tf: incoming?.tf ?? p.eventTf, observedAtMs: nowMs, quote: modeledQuote }, nowMs);
+  }
   const { prefix, eventTf, readableTf, currentDirection } = p;
-  const alertText = entry.line;
+  const duration = ({'5':300000,'15':900000,'30':1800000,'60':3600000,'240':14400000,D:86400000,'1D':86400000,W:604800000,'1W':604800000} as Record<string,number>)[eventTf] ?? NaN;
+  const snapshot = experimental ? getExecutionSnapshot(state, eventTf, nowMs) : undefined;
+  const observationInterval = {startMs:Math.min(nowMs-duration, snapshot?.bar?.openTimeMs ?? nowMs, snapshot?.closedBar?.openTimeMs ?? nowMs),endMs:nowMs};
+  const rolloverFreeze = buildRolloverFreezeContext(config.ticker, observationInterval.startMs, observationInterval.endMs,
+    config.rolloverPolicy?.profile === 'rollover_triage_v1' ? config.rolloverPolicy : undefined);
+  const signalsFrozen = rolloverFreeze?.metadataAvailable ? shouldFreezeRolloverObservation(observationInterval.startMs, observationInterval.endMs, rolloverFreeze) : false;
+  if (signalsFrozen && prefix !== 'PING_PRICE') return; // this branch has no position/risk processing
+
+  const alertText = envelope.text;
   const upperText = alertText.toUpperCase();
 
   // --- TICK DENSITY (ACTIVITY PROXY) ---
+  if (!contextOnly && !experimental && !signalsFrozen) {
   state.tickTimes = (state.tickTimes ?? []).filter(t => nowMs - t < 3600000);
   state.tickTimes.push(nowMs);
   const density = state.tickTimes.length;
   const a = 1 / 50;
   state.densityMedian = state.densityMedian === undefined ? density 
     : state.densityMedian + a * (density - state.densityMedian);
+  }
+  const density = state.tickTimes?.length ?? 0;
 
   // Extract VWAP status globally for the event timeframe
   const vwapMatch = upperText.match(/VWAP:\s*(UNDER|OVER)/);
-  if (vwapMatch && eventTf) {
+  if (!signalsFrozen && vwapMatch && eventTf) {
     if (!state.vwapStatus) state.vwapStatus = {};
     if (!state.vwapTs) state.vwapTs = {};
     state.vwapStatus[eventTf] = vwapMatch[1];
@@ -469,6 +838,7 @@ function processAlert(
   const currentSession = getSessionForTimestamp(nowMs);
   const sessionId = `${todayStr}-${currentSession}`;
 
+  if (!contextOnly) {
   if (dailyStats.currentDayStr !== todayStr) {
     dailyStats.currentDayStr = todayStr;
     dailyStats.pnlR = 0;
@@ -494,8 +864,11 @@ function processAlert(
   if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
   if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
   // 🧹 GC por TTL por timeframe (sustituye al reset de 48h; nowMs es tiempo simulado de vela)
-  gcScore(state.scoreBuy, nowMs);
-  gcScore(state.scoreSell, nowMs);
+  if (!signalsFrozen) {
+    gcScore(state.scoreBuy, nowMs);
+    gcScore(state.scoreSell, nowMs);
+  }
+  }
 
   // --- SYNC_ZONES ---
   if (prefix === 'SYNC_ZONES') {
@@ -550,7 +923,7 @@ function processAlert(
 
     // 🆕 sep-2026 reconstrucción bias HTF: buffer de closes por TF (para derivar bias
     // cuando el SYNC es NEUTRAL). Solo TFs macro: 60/240/D/W.
-    if (eventTf === '60' || eventTf === '240' || eventTf === 'D' || eventTf === '1D' || eventTf === 'W' || eventTf === '1W') {
+    if (!signalsFrozen && (eventTf === '60' || eventTf === '240' || eventTf === 'D' || eventTf === '1D' || eventTf === 'W' || eventTf === '1W')) {
       if (!state.htfCloses) state.htfCloses = {};
       const buf = (state.htfCloses[eventTf] = state.htfCloses[eventTf] || []);
       buf.push(currentPrice);
@@ -559,10 +932,12 @@ function processAlert(
 
     // 🆕 sep-2026 climax por rango: guardar high/low de la última vela por TF (detección
     // de vela de climax con 2×ATR en el SMART — medible en backtest, paridad con live).
+    if (!signalsFrozen) {
     if (!state.htfHighLow) state.htfHighLow = {};
     state.htfHighLow[eventTf] = [highPrice, lowPrice];
 
-    const prevClose = state.lastPrice ?? currentPrice;
+    if (!experimental) {
+    const prevClose = rolloverFreeze ? (rolloverCleanCloses.get(state) ?? currentPrice) : (state.lastPrice ?? currentPrice);
     const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
     if (state.atr14 === undefined) {
         state.atrSeed = (state.atrSeed ?? 0) + tr;
@@ -571,16 +946,24 @@ function processAlert(
     } else {
         state.atr14 = (state.atr14 * 13 + tr) / 14;
     }
+    } else {
+      state.atr14 = getExecutionSnapshot(state, p.executionObservation?.tf ?? eventTf, nowMs)?.atr14;
+    }
 
+    } // signal-only hydration; raw prices/exits continue below
     const previousPrice = state.lastPrice;
     state.lastPrice = currentPrice;
-    state.previousPrice = previousPrice;
+    state.previousPrice = rolloverFreeze ? (rolloverCleanCloses.get(state) ?? null) : previousPrice;
+    if(rolloverFreeze && !signalsFrozen)rolloverCleanCloses.set(state,currentPrice);
+
+    // Same causal price/ATR/HTF hydration, before any scoring, leg or order.
+    if (contextOnly) return;
 
     // Evaluate impulse legs
 
     const currentSession = getSessionForTimestamp(nowMs);
     const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
-    const ctx = { config, currentSession, sessionConfig };
+    const ctx = { config, currentSession, sessionConfig, rolloverFreeze, observationInterval };
 
     const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, ctx);
     state.activeImpulseBuy = buyRes.updatedLeg;
@@ -592,11 +975,34 @@ function processAlert(
 
 
     // Evaluate macro impulse legs (1H/4H stretching)
-    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs);
-    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
+    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs, rolloverFreeze, observationInterval);
+    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs, rolloverFreeze, observationInterval);
 
     // Evaluate active trades TP/SL
     for (const [tradeId, trade] of activeTrades) {
+      if (config.rolloverPolicy?.profile === 'rollover_triage_v1') {
+        const input = config.rolloverTriageContexts?.[`${ticker}:${trade.id}:${nowMs}`];
+        const matches = input && input.profile === 'rollover_triage_v1' && input.ticker === ticker && input.tradeId === trade.id
+          && input.nowMs === nowMs && input.direction === trade.direction && input.entryPrice === trade.entryPrice
+          && input.initialSlPrice === trade.initialSlPrice && input.initialRiskPrice === trade.rolloverInitialRiskPrice
+          && input.currentSlPrice === trade.slPrice && !!config.rolloverPolicy.triage;
+        const proposal = matches ? evaluateRolloverTriage({...structuredClone(input),config:config.rolloverPolicy.triage!,
+          ...(config.rolloverPolicy.peakSpread?{peakSpread:config.rolloverPolicy.peakSpread}:{})})
+          : {action:'HOLD' as const,reason:'unavailable_bilateral_asof_trade_context'};
+        // Existing CSV execution has no real Ask/cost stream or bilateral confirmation model.
+        // Keep proposal telemetry separate: never relabel a policy intent as an executed amend/fill.
+        (trade.rolloverTriage ??= []).push({nowMs,execution:'PROPOSAL_ONLY',proposal});
+      }
+      if (trade.executionPolicy?.profile === 'microstructure_v1') {
+        const ledger = (trade as ModeledTrade).executionBacktest!;
+        const quote = modeledExecutionQuote({ ...config, spreadPips: (ledger.fillQuote.ask - ledger.fillQuote.bid) / trade.executionInstrument!.pipSize }, currentPrice, nowMs, trade.executionInstrument);
+        const tf = (trade.tf ?? eventTf).replace(/[^0-9]/g, '') || eventTf;
+        if (quote && manageModeledTrade(trade, quote, getExecutionSnapshot(state, tf, nowMs), nowMs, ticker)) {
+          activeTrades.delete(tradeId);
+          updateDailyStatsFromClose(trade, dailyStats, config);
+        }
+        continue;
+      }
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
@@ -970,6 +1376,8 @@ function processAlert(
     return;
   }
 
+  if (contextOnly && prefix !== 'EVENTO_CHOCH' && prefix !== 'EVENTO_BOS' && prefix !== 'ZONE_BROKEN') return;
+
   // --- EVENTS WITH DIRECTION ---
   if (!currentDirection) return;
   const activeScore = currentDirection === 'BUY' ? state.scoreBuy : state.scoreSell;
@@ -981,6 +1389,8 @@ function processAlert(
     if (!state.biasTs) state.biasTs = {};
     state.marketBias[eventTf] = currentDirection;
     state.biasTs[eventTf] = nowMs;
+    // Bias is context; pre-boundary structure must not create a pending setup.
+    if (contextOnly) return;
 
     // 💥 Invalidación estructural acotada: el CHoCH/BOS borra del score CONTRARIO
     // los eventos de TF de igual o menor jerarquía que el gatillo
@@ -1025,6 +1435,12 @@ function processAlert(
             state.activeImpulseBuy = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
+              if (trade.executionPolicy?.profile === 'microstructure_v1') {
+                if (trade.direction === currentDirection && p.executionObservation?.breakBar?.closed) {
+                  (trade as ModeledTrade).executionBacktest!.latestStructuralOrigin = { price: newOrigin, direction: currentDirection, tf: eventTf, eventAtMs: nowMs, availableAtMs: nowMs };
+                }
+                continue;
+              }
               const sn = getSessionForTimestamp(trade.timestamp);
               const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
               const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
@@ -1059,6 +1475,12 @@ function processAlert(
             state.activeImpulseSell = newLeg;
             // 🆕 TRAILING STOP ESTRUCTURAL POST-TP1 (Mejora 4)
             for (const [, trade] of activeTrades) {
+              if (trade.executionPolicy?.profile === 'microstructure_v1') {
+                if (trade.direction === currentDirection && p.executionObservation?.breakBar?.closed) {
+                  (trade as ModeledTrade).executionBacktest!.latestStructuralOrigin = { price: newOrigin, direction: currentDirection, tf: eventTf, eventAtMs: nowMs, availableAtMs: nowMs };
+                }
+                continue;
+              }
               const sn = getSessionForTimestamp(trade.timestamp);
               const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
               const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
@@ -1142,7 +1564,8 @@ function processAlert(
     if (!activeScore.events.some(e => e.id === `Sweep_${readableTf}`)) {
       // 🆕 sep-2026 (Capa 1): multiplicador SWEEP × sesión
       const sweepMult = zoneWeightMult(config, 'SWEEP', currentSession);
-      if (upperText.includes('ABSORCION') && density >= state.densityMedian) { 
+      const densityMedian = state.densityMedian;
+      if (upperText.includes('ABSORCION') && densityMedian !== undefined && density >= densityMedian) {
         addedPoints = Math.round(6 * sweepMult); 
         addedEventId = `🩸_V-Shape_Absorb_${readableTf}`; 
       } else if (upperText.includes('ABSORCION')) { 
@@ -1213,7 +1636,11 @@ function processAlert(
 
             // SMART: verificar distancia excesiva al origen (igual que live)
             let fireNow = true;
-            if (config.entryTrigger === 'SMART') {
+            if (experimental && executionPolicy.smart && config.entryTrigger === 'SMART') {
+                const decision = pendingLeg.executionDecision ?? routeModeledSmart(pendingLeg, state, config, eventTf, nowMs, rDist,
+                  curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * ((config as any).fixedRR ?? 1.5), p.executionObservation);
+                fireNow = decision.takeDirectNow;
+            } else if (config.entryTrigger === 'SMART') {
                 const maxRisk = (config as any).maxSmartRiskPercent !== undefined ? (config as any).maxSmartRiskPercent : 0.15;
                 const pctLimit = curPrice * (maxRisk / 100);
                 let atr = 0;
@@ -1224,6 +1651,7 @@ function processAlert(
             if (fireNow) {
                 const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
                 const fixedRR = (config as any).fixedRR ?? 1.5;
+                if (experimental && (!Number.isFinite(Number(fixedRR)) || Number(fixedRR) <= 0)) return;
                 const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
                 const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * fixedRR) : curPrice - (rDist * fixedRR);
                 createTrade({
@@ -1476,6 +1904,9 @@ function processAlert(
         const tfConfig = sessionConfig?.[tfKey as keyof typeof sessionConfig] as any;
         const slBuff = tfConfig?.slBuff ?? 0;
         const activeFixedRR = tfConfig?.tp2 ?? 1.5;
+        // Explicit RR zero is not target absence. Reject before price rounding can
+        // turn an equal-entry request into a tiny favorable target.
+        if (experimental && (!Number.isFinite(Number(activeFixedRR)) || Number(activeFixedRR) <= 0)) return;
 
         // 🔧 FIX: misma fórmula de SL que el vivo (calculateDynamicSlBuffer + piso getMinPipDistance)
         const rawBuffer = slBuff > 0 ? slBuff : (config.slBufferPercent ?? 0.1);
@@ -1487,7 +1918,7 @@ function processAlert(
           : activeLeg.origin + slBufferAmt;
         
         const stopLoss = adjustedSL.toFixed(decimals);
-        const currentPrice = state.lastPrice ?? activeLeg.extreme;
+        const currentPrice = experimental && modeledQuote ? (currentDirection === 'BUY' ? modeledQuote.ask : modeledQuote.bid) : state.lastPrice ?? activeLeg.extreme;
         const riskDist = Math.abs(currentPrice - adjustedSL);
         const fixedTP1 = currentDirection === 'BUY' 
           ? currentPrice + riskDist 
@@ -1520,7 +1951,11 @@ function processAlert(
             oteSessionEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
         }
 
-        if (config.entryTrigger === 'SMART') {
+        if (experimental && executionPolicy.smart && config.entryTrigger === 'SMART') {
+            const decision = routeModeledSmart(activeLeg, state, config, eventTf, nowMs, riskDist, Number(tp2), p.executionObservation);
+            takeChoch = decision.takeDirectNow;
+            disableOte = decision.takeDirectNow;
+        } else if (config.entryTrigger === 'SMART') {
             function parseTfToMinutes(tfStr: string): number {
                 if (!tfStr) return 0;
                 const upper = tfStr.toUpperCase();
@@ -1663,6 +2098,34 @@ function minutesSinceSessionOpen(ts: number): number {
 }
 
 function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activeTrades: Map<string, BacktestTrade>, dailyStats: DailyStats, config: BacktestConfig, state: any) {
+  const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
+  const experimental = executionPolicy.profile === 'microstructure_v1';
+  let requestedTp2Price: number | undefined;
+  let overriddenTp2Price: number | undefined;
+  const currentQuote: ExecutionQuote | undefined = state.executionContext?.quote;
+  const fillQuote = experimental && currentQuote?.source === 'modeled' && currentQuote.timestampMs === nowMs ? currentQuote : undefined;
+  if (experimental) {
+    // This boundary covers direct CHOCH/BOS, late validation and Alpha OTE alike.
+    // SMART is a routing ablation, never permission to bypass causal market data.
+    const tf = oteData.executionTf ?? ({ '5M': '5', '15M': '15', '1H': '60', '4H': '240', '1D': 'D', '1W': 'W' } as Record<string, string>)[String(oteData.tf).toUpperCase()] ?? oteData.tf;
+    const setup = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
+    if (!setup?.bar || !setup.closedBar?.closed || !Number.isFinite(setup.atr14) || !(setup.atr14! > 0)
+        || setup.ticker !== config.ticker || setup.bar.tf !== setup.tf || setup.closedBar.tf !== setup.tf
+        || !fillQuote || setup.quote?.source !== 'modeled' || setup.quote.timestampMs !== nowMs
+        || !validateExecutionInstrument(config.executionInstrument) || config.executionInstrument.source !== 'explicit_model'
+        || config.executionInstrument.ticker !== config.ticker) {
+      console.warn(`[EXECUTION_BT] WAIT_DATA MISSING_CAUSAL_EXECUTION_CONTEXT_OR_INSTRUMENT at ${nowMs}`);
+      return;
+    }
+    oteData = { ...oteData, entryPrice: oteData.direction === 'BUY' ? fillQuote.ask : fillQuote.bid };
+    const sl = Number(oteData.stopLoss ?? oteData.slPrice);
+    if (!Number.isFinite(sl) || sl <= 0 || (oteData.direction === 'BUY' ? sl >= oteData.entryPrice : sl <= oteData.entryPrice)) return;
+    // Undefined alone means absent: explicit NaN/Infinity/zero must not become a default target.
+    const rawTp2 = oteData.tp2 !== undefined ? oteData.tp2 : oteData.tp2Price;
+    requestedTp2Price = rawTp2 === undefined ? undefined : Number(rawTp2);
+    if (requestedTp2Price !== undefined && (!Number.isFinite(requestedTp2Price) || requestedTp2Price <= 0
+        || (oteData.direction === 'BUY' ? requestedTp2Price <= oteData.entryPrice : requestedTp2Price >= oteData.entryPrice))) return;
+  }
   // 🆕 PARIDAD (sep-2026): gates direccionales del vivo, portados con su semántica exacta.
   // El vivo los chequea ANTES de ejecutar (trading.ts: BLOCKED_SELL_LIMIT / BUY_LIMIT /
   // MCL_LIMIT). maxSells/maxBuysPerDay cuentan ENTRADAS de hoy por dirección;
@@ -1687,18 +2150,11 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     }
   }
 
-  // 🛡️ REGLA C (sep-2026, A/B): bloqueo de entradas nuevas en la ventana de rollover del
-  // broker 20:29-21:30 UTC (17:29-18:30 ARG), días hábiles — feed muerto 20:29-21:00 +
-  // pico de spread ~19 pips 21:00-21:15 + residuo. Incidente real 10-sep: GBPJPY SELL
-  // entró 21:29 UTC, SL/TP rechazado (ask +30 pips en segundos) → cierre de emergencia.
-  // Flag de config (off por defecto; lo enciende el A/B y, si Bon lo aprueba, el vivo).
+  // Same per-symbol pause/DST calendar as live. Preserve the existing explicit
+  // A/B flag: candle/event history cannot establish fresh Bid/Ask normalization.
+  // This gate tests only the minimum calendar blackout, never a live spread thaw.
   if ((config as any).rolloverEntryBlock) {
-    const d = new Date(nowMs);
-    const dow = d.getUTCDay();
-    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (dow >= 1 && dow <= 5 && mins >= 20 * 60 + 29 && mins <= 21 * 60 + 30) {
-      return; // entrada bloqueada en ventana de rollover — mismo efecto que en vivo (no abre)
-    }
+    if (getRolloverCalendar(config.ticker, nowMs).entryWindow) return;
   }
   // ═══ TIMESFM FILTER (F1) — espejo del gate en dispatchOteSignal (src/db/trading.ts) ═══
   // Ubicado al inicio para que el modo collect registre TODOS los candles con trigger.
@@ -1710,7 +2166,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     if (tfmCfg.collectOnly) {
       appendTimesfmAudit(tfmCfg.collectPath, { ts: candleKey, ticker: config.ticker });
     } else {
-      const fc = timesfmForecastCache?.get(candleKey);
+      const fc = timesfmForecastAt ? timesfmForecastAt(nowMs, tfMin) : timesfmForecastCache?.get(candleKey);
       const atr = state.atr14 ?? 0;
       let decision: TimesfmDecision;
       if (!fc) {
@@ -1742,6 +2198,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
           const dyn = resolveTp2FromForecast(fc, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, tfmCfg.tp2Q90Step ?? 2);
           if (dyn !== null) {
             oteData.tp2 = String(dyn);
+            if (experimental) requestedTp2Price = dyn;
             oteData.tp2DynamicSource = 'q90';
             auditRec.tp2Dynamic = true;
             auditRec.tp2Price = dyn;
@@ -1777,7 +2234,25 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   const guardSl = parseFloat(oteData.stopLoss ?? oteData.slPrice);
   if (!isFinite(guardSl) || guardSl === oteData.entryPrice) return;
 
+  if (experimental) {
+    // TimesFM may have replaced the request after the entry boundary. Validate the
+    // actual requested target again, before caps or any reversal side effects.
+    const sign = oteData.direction === 'BUY' ? 1 : -1;
+    if (requestedTp2Price !== undefined && (!Number.isFinite(requestedTp2Price) || requestedTp2Price <= 0
+        || sign * (requestedTp2Price - oteData.entryPrice) <= 0)) return;
+    // With targets ablated this RR override is effective later, before the recap.
+    // Validate its source and resulting geometry now; never let abs() repair it.
+    if (!executionPolicy.targets && (config as any).tp2RR != null) {
+      const rr = Number((config as any).tp2RR);
+      const targetPrice: number = oteData.entryPrice + sign * Math.abs(guardSl - oteData.entryPrice) * rr;
+      overriddenTp2Price = targetPrice;
+      if (!Number.isFinite(rr) || rr <= 0 || !Number.isFinite(targetPrice) || targetPrice <= 0
+          || sign * (targetPrice - oteData.entryPrice) <= 0) return;
+    }
+  }
+
   // 🛡️ ANTI-PYRAMIDACIÓN & SAR
+  let commitReversal: (() => boolean) | undefined;
   let existingTradeForTicker: BacktestTrade | undefined;
   for (const t of activeTrades.values()) {
     existingTradeForTicker = t;
@@ -1789,57 +2264,73 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
       return; // Bloqueo de piramidación
     } else {
       if (oteData.points > existingTradeForTicker.points) {
-        // Ejecutar SAR (Reversión)
-        const currentPrice = state.lastPrice ?? existingTradeForTicker.entryPrice;
-        const originalSl = existingTradeForTicker.originalSlPrice ?? existingTradeForTicker.slPrice;
-        const slDist = Math.abs(originalSl - existingTradeForTicker.entryPrice);
-        const pnlDist = existingTradeForTicker.direction === 'BUY'
-          ? currentPrice - existingTradeForTicker.entryPrice
-          : existingTradeForTicker.entryPrice - currentPrice;
-        
-        const pipSize = getPipValue(config.ticker, currentPrice);
-        const riskPips = slDist / pipSize;
-        const cls = getAssetClass(config.ticker);
-        const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
-        const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
-        
-        const isChoch = existingTradeForTicker.events?.some(e => e.includes('EVENTO_CHOCH'));
-        const isBos = existingTradeForTicker.events?.some(e => e.includes('EVENTO_BOS'));
-        const hasOte = existingTradeForTicker.events?.some(e => e.includes('OTE_Retracement'));
-        
-        let tfSuffix = '15m';
-        if (existingTradeForTicker.tf) tfSuffix = existingTradeForTicker.tf.toLowerCase().endsWith('m') ? existingTradeForTicker.tf.toLowerCase() : existingTradeForTicker.tf.toLowerCase() + 'm';
-        else {
-           const tfEvent = existingTradeForTicker.events?.find(e => e.includes('TF: '));
-           if (tfEvent) {
-               const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-               if (match) tfSuffix = match[1].toLowerCase() + 'm';
-           }
-        }
-        
-        let ft = '';
-        if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
-        else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
-        else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
-        else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
-        const sn = getSessionForTimestamp(existingTradeForTicker.timestamp);
-        const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
-        const partialPct = lm?.partialClosePct ?? 0.5;
-        const remainderPct = 1 - partialPct;
-        const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * partialPct : 0;
-        const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? remainderPct : 1.0);
-        const slPct = (slDist / existingTradeForTicker.entryPrice) * 100;
-        
-        existingTradeForTicker.pnl = lockedPct + openPct;
-        existingTradeForTicker.rMultiple = slPct > 0 ? ((lockedPct + openPct) / slPct - transactionCostR) * (existingTradeForTicker.riskMult || 1.0) : 0;
-        existingTradeForTicker.result = existingTradeForTicker.rMultiple > 0 ? 'WIN' : existingTradeForTicker.rMultiple === 0 ? 'BE' : 'LOSS';
-        
-        existingTradeForTicker.resultTp2 = 'REVERSAL';
-        if (!existingTradeForTicker.tp1Hit) existingTradeForTicker.resultTp1 = 'REVERSAL';
-        existingTradeForTicker.closeTimestamp = nowMs;
-        existingTradeForTicker.durationMin = Math.round((nowMs - existingTradeForTicker.timestamp) / 60000);
-        activeTrades.delete(existingTradeForTicker.id);
-        updateDailyStatsFromClose(existingTradeForTicker, dailyStats, config);
+        // Eligibility is unchanged. Experimental candidates must finish all entry
+        // validation/preparation before consuming the existing position; legacy
+        // still commits here, including its historical later-rejection behavior.
+        const reversalCandidate = existingTradeForTicker;
+        commitReversal = () => {
+          const existingTradeForTicker = reversalCandidate;
+          if (existingTradeForTicker.executionPolicy?.profile === 'microstructure_v1') {
+            const ledger = (existingTradeForTicker as ModeledTrade).executionBacktest!;
+            const quote = modeledExecutionQuote({ ...config, spreadPips: (ledger.fillQuote.ask - ledger.fillQuote.bid) / existingTradeForTicker.executionInstrument!.pipSize }, state.lastPrice, nowMs, existingTradeForTicker.executionInstrument);
+            if (!quote) return false;
+            closeModeledTrade(existingTradeForTicker, existingTradeForTicker.direction === 'BUY' ? quote.bid : quote.ask, nowMs, 'REVERSAL');
+          } else {
+          // Ejecutar SAR (Reversión)
+          const currentPrice = state.lastPrice ?? existingTradeForTicker.entryPrice;
+          const originalSl = existingTradeForTicker.originalSlPrice ?? existingTradeForTicker.slPrice;
+          const slDist = Math.abs(originalSl - existingTradeForTicker.entryPrice);
+          const pnlDist = existingTradeForTicker.direction === 'BUY'
+            ? currentPrice - existingTradeForTicker.entryPrice
+            : existingTradeForTicker.entryPrice - currentPrice;
+
+          const pipSize = getPipValue(config.ticker, currentPrice);
+          const riskPips = slDist / pipSize;
+          const cls = getAssetClass(config.ticker);
+          const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
+          const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
+
+          const isChoch = existingTradeForTicker.events?.some(e => e.includes('EVENTO_CHOCH'));
+          const isBos = existingTradeForTicker.events?.some(e => e.includes('EVENTO_BOS'));
+          const hasOte = existingTradeForTicker.events?.some(e => e.includes('OTE_Retracement'));
+
+          let tfSuffix = '15m';
+          if (existingTradeForTicker.tf) tfSuffix = existingTradeForTicker.tf.toLowerCase().endsWith('m') ? existingTradeForTicker.tf.toLowerCase() : existingTradeForTicker.tf.toLowerCase() + 'm';
+          else {
+             const tfEvent = existingTradeForTicker.events?.find(e => e.includes('TF: '));
+             if (tfEvent) {
+                 const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
+                 if (match) tfSuffix = match[1].toLowerCase() + 'm';
+             }
+          }
+
+          let ft = '';
+          if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
+          else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
+          else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
+          else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
+          const sn = getSessionForTimestamp(existingTradeForTicker.timestamp);
+          const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
+          const partialPct = lm?.partialClosePct ?? 0.5;
+          const remainderPct = 1 - partialPct;
+          const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * partialPct : 0;
+          const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? remainderPct : 1.0);
+          const slPct = (slDist / existingTradeForTicker.entryPrice) * 100;
+
+          existingTradeForTicker.pnl = lockedPct + openPct;
+          existingTradeForTicker.rMultiple = slPct > 0 ? ((lockedPct + openPct) / slPct - transactionCostR) * (existingTradeForTicker.riskMult || 1.0) : 0;
+          existingTradeForTicker.result = existingTradeForTicker.rMultiple > 0 ? 'WIN' : existingTradeForTicker.rMultiple === 0 ? 'BE' : 'LOSS';
+
+          existingTradeForTicker.resultTp2 = 'REVERSAL';
+          if (!existingTradeForTicker.tp1Hit) existingTradeForTicker.resultTp1 = 'REVERSAL';
+          existingTradeForTicker.closeTimestamp = nowMs;
+          existingTradeForTicker.durationMin = Math.round((nowMs - existingTradeForTicker.timestamp) / 60000);
+          }
+          activeTrades.delete(existingTradeForTicker.id);
+          updateDailyStatsFromClose(existingTradeForTicker, dailyStats, config);
+          return true;
+        };
+        if (!experimental && !commitReversal()) return;
       } else {
         return; // Contra-tendencia más débil, ignorar entrada
       }
@@ -1852,7 +2343,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     direction: oteData.direction,
     entryPrice: oteData.entryPrice,
     tp1Price: parseFloat(oteData.tp1 || oteData.tp1Price),
-    tp2Price: capTp2Price(config.ticker, oteData.direction, oteData.entryPrice, parseFloat(oteData.stopLoss || oteData.slPrice), parseFloat(oteData.tp2 || oteData.tp2Price) || 0),
+    tp2Price: experimental && executionPolicy.targets ? requestedTp2Price ?? 0 : capTp2Price(config.ticker, oteData.direction, oteData.entryPrice, parseFloat(oteData.stopLoss || oteData.slPrice), parseFloat(oteData.tp2 || oteData.tp2Price) || 0),
     slPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
     originalSlPrice: parseFloat(oteData.stopLoss || oteData.slPrice),
     points: oteData.points,
@@ -1871,7 +2362,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   // 🧪 A/B de gestión (sep-2026): overrides de TP en R desde la config del backtest.
   // tp1RR / tp2RR re-calculan los TP como entry ± riskDist × RR (sin tocar AlphaModel vivo).
   // Default undefined = comportamiento actual (TPs del oteData).
-  if ((config as any).tp1RR != null || (config as any).tp2RR != null) {
+  if (!(experimental && executionPolicy.targets) && ((config as any).tp1RR != null || (config as any).tp2RR != null)) {
     const riskDist = Math.abs(trade.slPrice - trade.entryPrice);
     if (riskDist > 0) {
       if ((config as any).tp1RR != null) {
@@ -1880,7 +2371,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
           : trade.entryPrice - riskDist * (config as any).tp1RR;
       }
       if ((config as any).tp2RR != null) {
-        trade.tp2Price = trade.direction === 'BUY'
+        trade.tp2Price = experimental ? overriddenTp2Price! : trade.direction === 'BUY'
           ? trade.entryPrice + riskDist * (config as any).tp2RR
           : trade.entryPrice - riskDist * (config as any).tp2RR;
       }
@@ -1888,7 +2379,16 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   }
 
   // 🛡️ Techo de TP2 de producción (sep-2026): aplica SIEMPRE, incluso sobre overrides tp2RR.
-  trade.tp2Price = capTp2Price(config.ticker, trade.direction, trade.entryPrice, trade.slPrice, trade.tp2Price);
+  if (!(experimental && executionPolicy.targets)) trade.tp2Price = capTp2Price(config.ticker, trade.direction, trade.entryPrice, trade.slPrice, trade.tp2Price);
+  if (experimental && executionPolicy.targets) {
+    const targets = computeExecutionTargets({ direction: trade.direction, entryPrice: trade.entryPrice,
+      initialSlPrice: trade.slPrice, adr: getAdrPrice(config.ticker), regime: config.executionInstrument!.regime,
+      structuralTp1Price: oteData.structuralTp1Price, requestedTp2Price });
+    if (!targets.valid) return;
+    trade.tp1Price = targets.tp1Price;
+    trade.tp2Price = targets.tp2Price;
+    oteData.executionPartialClosePct = targets.partialClosePct;
+  }
 
   // 🛡️ ML F2: congelar las 12 features REALES del estado al momento de la entrada.
   // Usa exactamente extractFeatures de MLFilter.ts (la misma que evalúa el runtime),
@@ -1969,6 +2469,31 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   else if (isChoch && !hasOte) trade.triggerType = `choch${tfSuffix}`;
 
   // --- FRICTION MODEL INTERCEPTION ---
+  if (experimental) {
+    const instrument = Object.freeze(structuredClone(config.executionInstrument!));
+    const tf = (trade.tf ?? '15').replace(/[^0-9]/g, '') || '15';
+    const family = trade.triggerType ?? `choch${tf}m`;
+    const mgmt = structuredClone((config.sessions as any)?.[currentSession]?.[family] ?? oteData.mgmtOverrides ?? {});
+    const rawPct = oteData.executionPartialClosePct ?? mgmt.partialClosePct ?? 0;
+    const partialPct = rawPct > 1 ? rawPct / 100 : rawPct;
+    const commission = config.commissionPerLot ?? instrument.commissionPerLotSideUsd;
+    if (!Number.isFinite(partialPct) || partialPct < 0 || partialPct >= 1 || !Number.isFinite(commission) || commission < 0) return;
+    trade.executionPolicy = Object.freeze({ ...executionPolicy });
+    trade.executionInstrument = instrument;
+    trade.initialSlPrice = trade.slPrice;
+    trade.originalSlPrice = trade.slPrice;
+    trade.executionState = createExecutionPositionState({ direction: trade.direction, entryPrice: trade.entryPrice,
+      initialSlPrice: trade.slPrice, entryTimestampMs: nowMs });
+    (trade as ModeledTrade).executionBacktest = {
+      fillSource: 'MODELED', fillQuote: { ...fillQuote! }, managementOverrides: Object.freeze(mgmt),
+      partialClosePct: partialPct, remainingFraction: 1, realizedPriceDist: 0,
+      paidCommissionPrice: commission / instrument.pipValuePerLotUsd * instrument.pipSize,
+      exitCommissionPerLotUsd: commission, maxHoldMin: config.maxHoldMin,
+      minimalRoi: config.minimal_roi ? Object.freeze({ ...config.minimal_roi }) : undefined,
+      lastProcessedMs: nowMs,
+    };
+    trade.events = [...trade.events, 'EXECUTION_microstructure_v1_MODELED'];
+  } else {
   const clsFriction = getAssetClass(config.ticker);
   const customFriction = {
     baseSpreadPips: config.spreadPips !== undefined ? config.spreadPips : defaultFrictionConfig[clsFriction].baseSpreadPips,
@@ -2002,12 +2527,32 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   trade.tp1Price = frictionResult.netTrade.tp1Price;
   trade.tp2Price = frictionResult.netTrade.tp2Price;
   trade.slPrice = frictionResult.netTrade.slPrice;
+  }
+
+  // All experimental target/ML/cost checks and execution-state construction are
+  // complete. A failed SAR quote cannot create a new entry either.
+  if (experimental && commitReversal && !commitReversal()) return;
+  if (config.rolloverPolicy?.profile === 'rollover_triage_v1') {
+    trade.initialSlPrice = trade.slPrice;
+    trade.rolloverInitialRiskPrice = Math.abs(trade.entryPrice-trade.slPrice);
+  }
 
   // 🆕 PARIDAD (sep-2026): sesión de ENTRADA del trade (para la racha direccional) + conteo diario.
   (trade as any).btSession = dailyStats.currentSessionStr;
   if (dir === 'BUY') dailyStats.dailyBuys++;
   else dailyStats.dailySells++;
 
+  if (config.mlRegimeShadow === true) {
+    const tf = ({'5M':'5','15M':'15','1H':'60','4H':'240','D':'D'} as Record<string,string>)[String(trade.tf).toUpperCase()] ?? String(trade.tf ?? '15');
+    const sidecar = config.mlRegimeContexts?.[`${config.ticker}:${tf}:${trade.direction}:${nowMs}`];
+    // Preserve every source timestamp; reject mismatched identities instead of retiming data.
+    const valid = sidecar && sidecar.ticker === config.ticker && sidecar.tf === tf && sidecar.direction === trade.direction && sidecar.nowMs === nowMs;
+    const family = trade.triggerType ?? `choch${tf}m`;
+    const minimum = (config.sessions?.[currentSession] as any)?.[family]?.minScore ?? (trade.direction === 'BUY' ? config.minBuyPoints : config.minSellPoints);
+    const bound = valid && sidecar.entry?.value.entryPrice === trade.entryPrice && sidecar.entry?.value.initialSL === trade.slPrice
+      && sidecar.score?.value.points === trade.points && sidecar.score?.value.minRequired === minimum;
+    trade.mlRegimeShadow = predictRegime(bound ? structuredClone(sidecar) : {schema:REGIME_FEATURE_SCHEMA,ticker:config.ticker,tf,direction:trade.direction,nowMs});
+  }
   trades.push(trade);
   activeTrades.set(trade.id, trade);
 

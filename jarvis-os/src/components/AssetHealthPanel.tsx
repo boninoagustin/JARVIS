@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 
@@ -92,13 +92,24 @@ export default function AssetHealthPanel() {
   const activate = async (ticker: string) => {
     if (!confirm(`¿Activar ${ticker} en vivo? El bot empezará a operarlo con su configuración actual (preset de detección tuneado + config Firestore).`)) return;
     try {
-      await updateDoc(doc(db, 'asset_configs', ticker), { enabled: true, disabledReason: '' });
+      await setDoc(doc(db, 'asset_configs', ticker), { enabled: true, disabledReason: '' }, { merge: true });
+      // 🚀 Promover a active_tickers para que el optimizador semanal lo procese
+      try {
+        const atRef = doc(db, 'optimization_config', 'active_tickers');
+        const atSnap = await getDoc(atRef);
+        const cur: string[] = atSnap.exists() && Array.isArray(atSnap.data()?.tickers) ? atSnap.data().tickers : [];
+        if (!cur.includes(ticker)) {
+          await setDoc(atRef, { tickers: [...cur, ticker], updatedAt: new Date().toISOString() }, { merge: true });
+        }
+      } catch (err) {
+        console.warn('No se pudo auto-promover a active_tickers:', err);
+      }
       const hDoc = health[ticker];
       if (hDoc && hDoc.bestR !== null) {
-        await updateDoc(doc(db, 'detection_health', ticker), {
+        await setDoc(doc(db, 'detection_health', ticker), {
           status: 'OK',
           baselineR: hDoc.bestR,
-        });
+        }, { merge: true });
       }
       toast(`✅ ${ticker} activado. El bot lo toma en caliente (listener de Firestore).`, 'success');
     } catch (e: any) {

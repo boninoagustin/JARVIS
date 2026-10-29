@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
-"""run_weekly.py — Centro de Optimización Periódica (F3).
+"""Weekly optimization with one frozen production/evaluation contract.
 
-Ciclo semanal por activo (secuencial, de madrugada con mercado cerrado):
-  0. REFRESH de datos: regenera los CSVs SMC (POST Kronos /api/backtest/export-csv).
-     Los CSVs estaban congelados (ago-14) → re-tunear sin refrescar = overfit del MISMO OOS.
-  1. Frescura: skip si no hay datos nuevos (CSVs viejos Y <20 trades nuevos de journal).
-  2. Hyperopt Optuna (200 trials, split OOS 70/30 que ROLA con los datos refrescados —
-     estudio persistente `jarvis_<T>_weekly` → Optuna continúa exploración semana a semana).
-  3. Backtest de la config de PRODUCCIÓN actual (mismo worker/split → comparación 1:1).
-  4. Killswitch sweep v2 (`killswitch_tune.ts`) → maxDailyLossR/maxConsecutiveLosses
-     (etapa 1) + maxTradesPerDay/trailingDrawdownR (etapa 2), con tope de cuenta prop
-     (peor día ≤ 4R). APLICA a Firestore (source='killswitch_tune' — los killswitches
-     son el único bloque auto-aplicado; los gatillos NO se tocan).
-  4b. MCL direccional por sesión (`directional_mcl_tune.ts`, opción 2 sep-2026) →
-      maxBuyLosses/maxSellLosses ∈ {0,1,2} por sesión con trades. APLICA con dot-paths
-      (source='directional_mcl_tune').
-  5. Shadow TimesFM semanal (logs/timesfm_audit.jsonl) → resumen por activo (NO aplica).
-  6. Comparación OOS → RECOMMEND | HOLD | ERROR + sesiones aplicables (enabled/entryPercent).
-  7. Escribe reports/{TICKER}.json (el push a Firestore lo hace push_reports.js).
-
-Regla de oro: NUNCA toca asset_configs — solo propone.
-Uso: python3 run_weekly.py [--tickers ...] [--skip-refresh] [--skip-hyperopt] [--force]
+After refresh/precompute: snapshot production once, select on Train only, assemble
+all supported changes, evaluate_final, compare Validation and bootstrap the final
+candidate. Historic Validation is selection_validation, never independent Test.
+Authorized production runs deploy exact validated improvements and track them.
+Fixture/research/verification runs never deploy. No model promotion/preset rewrite.
+Use --verification --config-file ASSET.json --tickers EURUSD --output-dir /tmp/...
+for isolated budgets; --skip-aux/--skip-ml can reduce an explicitly agreed smoke.
 """
 from __future__ import annotations
 
@@ -36,6 +23,8 @@ from pathlib import Path
 
 REPO = Path("/opt/JARVIS")
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO / 'scripts' / 'hyperopt'))
+from objective_adapter import canonicalize_result, canonical_metrics
 VENV_PY = REPO / "scripts" / "hyperopt" / ".venv" / "bin" / "python"
 HYPEROPT = REPO / "scripts" / "hyperopt" / "run_hyperopt.py"
 EVAL_PROD = HERE / "eval_production.ts"
@@ -83,14 +72,14 @@ FETCH_ENABLED = True
 # 🆕 sep-2026 (paso 9, auto-aplicación por decisión de Bon): aplica automático lo que
 # pasa los gates estadísticos. El panel queda como auditor + revert (snapshots en
 # reports/prev_*.json). Apagar = desactivar con este flag.
-AUTO_APPLY_ENABLED = False  # congelado 05-oct-2026 (plan Paso 1): optimizador corre pero NO auto-aplica; volver a True para restaurar
+AUTO_APPLY_ENABLED = True  # autorización de Bon: mejoras evaluadas + MC, respaldo y seguimiento posterior
 
 # 🛡️ Sizing fraccional (sep-2026): propuesta del dominical (factores por sesión, n>=8, gate MC).
 # DESACTIVADO hasta OK de Bon — el módulo corre solo si este flag es True. PROPONE, NO aplica.
 SIZING_PROPOSAL_ENABLED = True
-# 🆕 10-oct-2026: DSR gate (Bailey/López de Prado) — barra de selección sobre los r OOS
-# de producción. Shadow: solo reporta. DSR_ENFORCE=False hasta OK de Bon; con True,
-# un RECOMMEND que no supera la barra degrada a HOLD_DSR (apply_weekly lo rechaza solo).
+# DSR is diagnostic on selection-Validation, NOT an independent Test or a final
+# pipeline certificate. Missing trial dispersion => unavailable, never unit-scale
+# calibration. Train dispersion must not be transplanted into Validation.
 DSR_ENFORCE = False
 
 # 🔴 Gatillos perdedores (09-sep-2026, idea de Bon): el dominical mide exp por gatillo con el
@@ -180,54 +169,6 @@ def load_last_report(ticker: str) -> dict:
     return {}
 
 
-def run_hyperopt(ticker: str, timesfm_cache: Path | None = None,
-                 current_sessions_file: Path | None = None,
-                 study_suffix: str = "") -> dict:
-    out = OPT_OUT_DIR / f"{ticker}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    # F3-etapa2: weekly3 (espacio por sesión, 28 dims) + 400 trials + timeout 75 min
-    # (medido ~3.2s/trial × 400 ≈ 21 min por activo; 75 min da margen para tickers lentos)
-    # n-startup 50: con 28 dims hacen falta más trials aleatorios iniciales para que TPE
-    # construya un modelo decente (20 era para el espacio de 10-13 params).
-    # F4 (07-sep-2026): weekly7→weekly8 — el espacio gana minScoreToOverrideReject
-    # (+1 dim) y las trials corren CON filtro TimesFM si hay cache precomputado.
-    # F5 (08-sep-2026): weekly8→weekly9 — walkTree de MLFilter corregido (antes prob=0.5
-    # constante en el gate ML) + pico spread rollover 20:29-21:15 en FrictionModel.
-    # Los trials de weekly8 están contaminados por el gate ciego → bump obligatorio.
-    # F6 (09-sep-2026): weekly9→weekly10 — cap de TP2 por volatilidad del activo
-    # (tp2Cap.ts: min(1.5R, 0.5×ADR)) — cambia el landscape de las trials.
-    # F7 (10-sep-2026): weekly10→weekly11 — gate ML cableado en las trials del worker
-    # (jarvis_hyperopt_worker.ts inyecta mlGate walk-forward; antes las trials corrían
-    # SIN filtro → prop↔prod no 1:1 con eval_production que SÍ gatea). El estudio
-    # weekly10 queda contaminado (trials sin gate) → bump obligatorio.
-    cmd = [str(VENV_PY), str(HYPEROPT), ticker,
-           # 🆕 sep-2026 weekly7: weekly6 arrancó sin el port del fireNow (re-validación tardía)
-           # ni el climax por rango (2×ATR). weekly7 corre con el SMART completo: 4 ramas +
-           # fireNow ported + climax-ATR + bias HTF reconstruido.
-           # F8 (22-sep-2026): weekly11→weekly12 — los estudios weekly11 de los tickers legacy
-           # mezclan trials pre-VWAP/pre-zoneWeights (space viejo) → best_trial sin vwapPts/zw_*
-           # rompía build_backtest_config (KeyError en 5 activos). Bump obligatorio.
-           "--study-name", f"jarvis_{ticker}_weekly12{study_suffix}",
-           "--n-trials", "400",
-           "--n-startup", "50",
-           "--output", str(out)]
-    if timesfm_cache and timesfm_cache.exists():
-        cmd += ["--timesfm-cache", str(timesfm_cache)]
-    # 🆕 sep-2026 (paridad de umbrales): overlay de sesiones vigentes del vivo
-    if current_sessions_file and current_sessions_file.exists():
-        cmd += ["--current-sessions", str(current_sessions_file)]
-    t0 = time.time()
-    # 🛡️ FIX 09-sep-2026: timeout 75→150 min — GBPUSD/AUDCAD/NZDUSD con cache TimesFM
-    # excedían 75 min (128/127/115 orígenes) y murieron por timeout en la corrida del 09-sep.
-    r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=150 * 60)
-    if r.returncode != 0:
-        raise RuntimeError(f"hyperopt exit {r.returncode}: {(r.stderr or r.stdout)[-400:]}")
-    data = json.loads(out.read_text())
-    mo = data.get("best_metrics_oos", {})
-    print(f"    hyperopt OK ({time.time()-t0:.0f}s) | OOS PF={mo.get('profit_factor')} exp={mo.get('expectancy')}", flush=True)
-    return data
-
-
 def collect_and_precompute(ticker: str) -> dict:
     """F4: 1 pasada collectOnly del backtest (config laxa) + precompute de forecasts
     TimesFM en los orígenes colectados (look-ahead cero). Devuelve stats del cache."""
@@ -264,73 +205,13 @@ def collect_and_precompute(ticker: str) -> dict:
             "cache": str(forecasts_p)}
 
 
-def eval_production(ticker: str) -> dict:
-    r = subprocess.run(["npx", "tsx", str(EVAL_PROD), ticker],
-                       cwd=str(REPO), capture_output=True, text=True, timeout=15 * 60)
-    if r.returncode != 0:
-        raise RuntimeError(f"eval_production exit {r.returncode}: {(r.stderr or r.stdout)[-400:]}")
-    for line in reversed(r.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            return json.loads(line)
-    raise RuntimeError("eval_production no devolvió JSON")
-
-
-def run_ks_sweep(ticker: str) -> dict | None:
-    """Killswitch sweep (v2, sep-2026) → propuesta {maxDailyLossR, maxConsecutiveLosses,
-    maxTradesPerDay, trailingDrawdownR, score}. El script APLICA a Firestore
-    (source='killswitch_tune', igual que la v1 — los killswitches son el único bloque
-    auto-aplicado del dominical); acá se parsea para el reporte."""
-    ks_cmd = ["npx", "tsx", str(KS_TUNE), ticker]
-    if not AUTO_APPLY_ENABLED:
-        ks_cmd.append("--dry-run")
-    r = subprocess.run(ks_cmd,
-                       cwd=str(REPO), capture_output=True, text=True, timeout=40 * 60)
-    best_line = None
-    best2_line = None
-    for line in (r.stdout or "").splitlines():
-        if "BEST maxDLR=" in line:
-            best_line = line
-        if "BEST2 maxTPD=" in line:
-            best2_line = line
-    if not best_line:
-        return None
-    try:
-        import re
-        m = re.search(r"BEST maxDLR=([\d.]+) maxCL=(\d+).*score=([\d.]+)", best_line)
-        out = {"maxDailyLossR": float(m.group(1)), "maxConsecutiveLosses": int(m.group(2)),
-               "score": float(m.group(3))}
-        if best2_line:
-            m2 = re.search(r"BEST2 maxTPD=(\d+) maxTDD=([\d.]+).*score=([\d.]+)", best2_line)
-            if m2:
-                out["maxTradesPerDay"] = int(m2.group(1))
-                out["trailingDrawdownR"] = float(m2.group(2))
-        return out
-    except Exception:
-        return None
-
-
-def run_directional_mcl_sweep(ticker: str) -> dict | None:
-    """Sweep MCL direccional por sesión (sep-2026, opción 2 de Bon) — APLICA a Firestore
-    con dot-paths (source='directional_mcl_tune') y devuelve el resumen para el reporte."""
-    mcl_cmd = ["npx", "tsx", str(REPO / "scripts" / "directional_mcl_tune.ts"), ticker]
-    if not AUTO_APPLY_ENABLED:
-        mcl_cmd.append("--dry-run")
-    r = subprocess.run(mcl_cmd,
-                       cwd=str(REPO), capture_output=True, text=True, timeout=40 * 60)
-    if r.returncode != 0:
-        print(f"  ⚠️ directional_mcl_tune {ticker} exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
-        return None
-    lines = [l for l in (r.stdout or "").splitlines() if "→" in l and ("BUY" in l or "SELL" in l)]
-    return {"ticker": ticker, "changes": lines[-12:]} if lines else None
-
-
 def run_montecarlo_gate(ticker: str, oos_r: list) -> dict | None:
     """MC gate (sep-2026): bootstrap de robustez sobre los r-multiples OOS de producción.
     Degrada RECOMMEND→HOLD_MC si el edge no sobrevive al resampling. NO aplica nada."""
     if not oos_r or len(oos_r) < 10:
         return {"note": "pocos trades OOS para MC", "skip": True}
-    tmp = HERE / "opt_out" / f"mc_{ticker}.json"
+    import tempfile
+    tmp = Path(tempfile.gettempdir()) / f'jarvis-mc-{ticker}-{time.time_ns()}.json'
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(json.dumps([{"rMultiple": float(r)} for r in oos_r]))
     try:
@@ -338,6 +219,8 @@ def run_montecarlo_gate(ticker: str, oos_r: list) -> dict | None:
             ["npx", "tsx", str(REPO / "scripts" / "montecarlo_validation.ts"), str(tmp), "--mode", "bootstrap"],
             cwd=str(REPO), capture_output=True, text=True, timeout=15 * 60,
         )
+        if r.returncode:
+            return {'error': f'MC exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}'}
         out = r.stdout or ""
         surv_line = next((l for l in out.splitlines() if "Supervivencia" in l), "")
         verdict_line = next((l for l in out.splitlines() if "🧾" in l), "")
@@ -357,9 +240,7 @@ def run_montecarlo_gate(ticker: str, oos_r: list) -> dict | None:
 
 
 def run_dsr_gate(ticker: str, oos_r: list, n_trials: int) -> dict:
-    """DSR gate (10-oct-2026): deflated Sharpe de Bailey/López de Prado sobre los r OOS
-    de producción. La barra E[max SR_N] descuenta el sesgo de selección de la búsqueda
-    (N = trials del estudio). Solo REPORTA — el gate se activa con DSR_ENFORCE."""
+    """Report calibration availability; an Optuna counter is not the full search."""
     sys.path.insert(0, str(HERE))
     try:
         from dsr import deflated_sharpe
@@ -367,85 +248,25 @@ def run_dsr_gate(ticker: str, oos_r: list, n_trials: int) -> dict:
         return {"skip": True, "note": "dsr.py no disponible"}
     if not oos_r or not n_trials:
         return {"skip": True, "note": "sin serie OOS o sin n_trials"}
-    return deflated_sharpe([float(r) for r in oos_r], int(n_trials))
+    result = deflated_sharpe(oos_r, n_trials)
+    return {**result, 'partition':'selection_validation',
+            'final_pipeline_dsr_certified':False,
+            'selection_coverage':'Optuna count only; GA/KS/bias/Validation not calibrated',
+            'enforced':False}
 
 
-def run_sizing_proposal() -> dict:
-    """Paso 7 (sep-2026): propuesta de sizing fraccional por sesión (ventana 12s, n>=8, banda muerta).
-    El TS calcula factores + secuencias; acá se valida con MC (bootstrap base vs ponderado).
-    RECOMMEND solo si el MC no degrada survival más de 2pp. PROPONE, NO aplica (regla de oro)."""
-    r = subprocess.run(["npx", "tsx", str(SIZING_PROPOSAL)], cwd=str(REPO),
-                       capture_output=True, text=True, timeout=15 * 60)
-    if r.returncode != 0:
-        raise RuntimeError(f"sizing_weekly_proposal exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
-    data = None
-    for line in (r.stdout or "").splitlines():
-        s = line.strip()
-        if s.startswith("{"):
-            try:
-                cand = json.loads(s)
-            except json.JSONDecodeError:
-                continue
-            if cand:
-                data = cand
-                break
-    if not data:
-        raise RuntimeError(f"sizing_weekly_proposal sin JSON: {(r.stdout or '')[-200:]}")
-    if data.get("status") != "PROPUESTA" or data.get("n", 0) < 10:
-        return {**data, "mc": None}
-
-    def _mc_survival(p: Path) -> float | None:
-        r2 = subprocess.run(
-            ["npx", "tsx", str(REPO / "scripts" / "montecarlo_validation.ts"), str(p), "--mode", "bootstrap"],
-            cwd=str(REPO), capture_output=True, text=True, timeout=15 * 60)
-        import re as _re
-        surv_line = next((l for l in (r2.stdout or "").splitlines() if "Supervivencia" in l), "")
-        m = _re.search(r"\((\d+(?:\.\d+)?)%\)", surv_line)
-        return float(m.group(1)) / 100 if m else None
-
-    surv_base = _mc_survival(OPT_OUT_DIR / "sizing_mc_base.json")
-    surv_w = _mc_survival(OPT_OUT_DIR / "sizing_mc_weighted.json")
-    mc = {"survival_base": surv_base, "survival_weighted": surv_w}
-    status = "HOLD"
-    if surv_base is not None and surv_w is not None:
-        status = "RECOMMEND" if surv_w >= surv_base - 0.02 else "HOLD_MC"
-    return {**data, "status": status, "mc": mc}
-
-
-def run_loser_triggers_proposal() -> dict:
-    """Paso 8 (09-sep-2026, idea de Bon): mide exp por gatillo (motor real + config de
-    producción) y PROPONE apagar los perdedores persistentes (n>=10, exp<=-0.15) con
-    minScore=99 (el enabled:false NO frena la OTE en SMART — el minScore sí).
-    Escribe reports/loser_triggers_proposal.json. NO aplica (regla de oro)."""
-    r = subprocess.run(["npx", "tsx", str(LOSER_TRIGGERS_PROPOSAL)], cwd=str(REPO),
-                       capture_output=True, text=True, timeout=60 * 60)
-    if r.returncode != 0:
-        raise RuntimeError(f"loser_triggers_proposal exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
-    out = (r.stdout or "") + (r.stderr or "")
-    lines = [l for l in out.splitlines() if l.strip().startswith("🔴") or "Loser-triggers:" in l]
-    print("\n".join(f"    {ln.strip()}" for ln in lines[-15:]), flush=True)
-    p = REPORTS_DIR / "loser_triggers_proposal.json"
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            return {"status": "PARSE_ERROR"}
-    return {"status": "SIN_REPORTE"}
-
-
-def run_bias_confluence(ticker: str) -> dict | None:
-    """Paso 1b (sep-2026): barrido de confluencia de bias (V1-V4) sobre el motor real.
-    Devuelve la PROPUESTA {status, recommended:{bc, metrics, objective, margin_vs_baseline}}.
-    NO aplica (regla de oro). V5 (binario viejo) excluida por datos vivos."""
-    r = subprocess.run(["npx", "tsx", str(BIAS_CF_TUNE), ticker],
-                       cwd=str(REPO), capture_output=True, text=True, timeout=30 * 60)
-    if r.returncode != 0:
-        raise RuntimeError(f"bias_confluence_tune exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
-    for line in reversed((r.stdout or "").splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            return json.loads(line)
-    raise RuntimeError("bias_confluence_tune no devolvió JSON")
+def objective_diagnostics(production_result: dict, candidate_result: dict) -> dict:
+    """Sidecar only: no status, certificate, application, or search mutation."""
+    def entry(result):
+        return {'available': result.get('objective_version') == canonical_metrics.OBJECTIVE_VERSION,
+                'legacy_score':result.get('objective'),
+                'shadow':result.get('objective_shadow'),
+                'metrics':result.get('metrics_train')}
+    return {'active_version':canonical_metrics.OBJECTIVE_VERSION,
+            'shadow_version':canonical_metrics.SHADOW_VERSION,
+            'partition':'train','changes_selection':False,'final_pipeline_dsr_certified':False,
+            'production_train':entry(production_result),'candidate_train':entry(candidate_result),
+            'note':'experimental uncalibrated weights; no Test ranking; not a prop-firm equity limit'}
 
 
 def shadow_week(ticker: str) -> dict:
@@ -496,6 +317,156 @@ def compare(prop_oos: dict, prod_oos: dict) -> dict:
         status = "RECOMMEND"
     return {"d_exp_oos": round(d_exp, 3), "dd_improve_ratio": round(dd_ratio, 3),
             "pnl_drop_ratio": round(pnl_drop, 3), "status": status}
+
+
+def deep_merge(base: dict, changes: dict) -> dict:
+    """Copy-on-merge: never mutate the production snapshot or a certified candidate."""
+    import copy
+    out = copy.deepcopy(base)
+    for key, value in changes.items():
+        if key != 'minimal_roi' and isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def assemble_candidate(production: dict, report: dict) -> dict:
+    import copy
+    changes = {k: v for k, v in (report.get("best_config") or {}).items() if k not in ('ticker', 'entryTrigger', 'entryStrategy', 'minRR', 'mlGate', 'spreadPips', 'commissionPerLot', 'sessionFilter', 'collectOnly')}
+    candidate = deep_merge(production, changes)
+    if report.get('session_apply_replace'):
+        candidate['sessions'] = copy.deepcopy(report.get('session_apply') or {})
+    else:
+        candidate['sessions'] = deep_merge(candidate.get('sessions') or {}, report.get('session_apply') or {})
+    tfm = {k: v for k, v in (report.get("timesfm_apply") or {}).items() if k != "source"}
+    if tfm:
+        candidate["timesfm"] = deep_merge(candidate.get("timesfm") or {}, tfm)
+    for key in ("maxDailyLossR", "maxConsecutiveLosses", "maxTradesPerDay", "trailingDrawdownR"):
+        if key in (report.get("ks_proposal") or {}):
+            candidate[key] = report["ks_proposal"][key]
+    for key, value in (report.get("directional_mcl") or {}).get("updates", {}).items():
+        parts = key.split(".")
+        if len(parts) != 3 or parts[0] != "sessions" or parts[2] not in ("maxBuyLosses", "maxSellLosses"):
+            raise ValueError(f"unsupported directional MCL field: {key}")
+        candidate["sessions"].setdefault(parts[1], {})[parts[2]] = value
+    bias = report.get("bias_confluence") or {}
+    if bias.get("status") == "RECOMMEND" and bias.get("recommended"):
+        candidate["biasConfluence"] = bias["recommended"]["bc"]
+    for change in (report.get("loser_triggers") or {}).get("disables", []):
+        candidate["sessions"].setdefault(change["session"], {}).setdefault(change["trigger"], {})["minScore"] = 99
+    for change in (report.get('loser_triggers') or {}).get('enables', []):
+        candidate['sessions'].setdefault(change['session'], {}).setdefault(change['trigger'], {}).update(minScore=4, enabled=True)
+    return candidate
+
+
+def json_fingerprint(value: dict) -> str:
+    """Use actual JS JSON number/string semantics, identical to worker/apply hashes."""
+    source = "const fs=require('fs'),crypto=require('crypto'); const v=JSON.parse(fs.readFileSync(0,'utf8')); const c=x=>x===null||typeof x!=='object'?JSON.stringify(x):Array.isArray(x)?'['+x.map(c).join(',')+']':'{'+Object.keys(x).sort().map(k=>JSON.stringify(k)+':'+c(x[k])).join(',')+'}'; process.stdout.write(crypto.createHash('sha256').update(c(v)).digest('hex'));"
+    return subprocess.run(['node', '-e', source], input=json.dumps(value, allow_nan=False), capture_output=True, text=True, check=True).stdout
+
+
+def selection_command(script, ticker, manifest_path, snapshot_path, logs_dir, *extra) -> list[str]:
+    return ['npx', 'tsx', str(script), ticker, '--evaluation-manifest', str(manifest_path),
+            '--config-file', str(snapshot_path), '--logs-dir', str(logs_dir), '--dry-run', *map(str, extra)]
+
+
+def assemble_asset_snapshot(asset: dict, production_config: dict, candidate: dict) -> dict:
+    import copy
+    out = copy.deepcopy(asset)
+    aliases = {'minBuyPoints': 'minPointsForBuy', 'minSellPoints': 'minPointsForSell'}
+    engine_only = {'ticker', 'mlGate', 'spreadPips', 'commissionPerLot', 'sessionFilter', 'collectOnly', 'minRR', 'entryStrategy'}
+    for key, value in candidate.items():
+        if key in engine_only or (key in production_config and value == production_config[key]):
+            continue
+        if key == 'timesfm':
+            value = copy.deepcopy(value)
+            if 'cachePath' not in (asset.get('timesfm') or {}):
+                value.pop('cachePath', None)
+        out[aliases.get(key, key)] = copy.deepcopy(value)
+    return out
+
+
+def validate_certified_report(report: dict) -> bool:
+    cert = report.get('evaluation_certificate') or {}
+    checks = (
+        cert == report.get('certificate'),
+        cert.get('config_fingerprint') == json_fingerprint(report.get('final_config') or {}),
+        cert.get('asset_fingerprint') == json_fingerprint(report.get('final_asset_config') or {}),
+        cert.get('version') == 1,
+        cert.get('evaluation_fingerprint') == report.get('evaluation_fingerprint') == json_fingerprint(report.get('evaluation_provenance') or {}),
+        (report.get('evaluation_provenance') or {}).get('evaluation_manifest') == report.get('evaluation_manifest'),
+        report.get('config_fingerprint') == cert.get('config_fingerprint') == (report.get('montecarlo') or {}).get('config_fingerprint'),
+        report.get('evaluation_fingerprint') == (report.get('montecarlo') or {}).get('evaluation_fingerprint'),
+        cert.get('montecarlo_config_fingerprint') == cert.get('config_fingerprint'),
+        cert.get('validation_role') == 'selection_validation',
+        report.get('production_asset_fingerprint') == json_fingerprint(report.get('production_asset_snapshot') or {}),
+        report.get('final_asset_fingerprint') == cert.get('asset_fingerprint'),
+        report.get('selection_payload_fingerprint') == json_fingerprint({k: report.get(k) for k in ('best_config', 'session_apply', 'session_apply_replace', 'timesfm_apply', 'ks_proposal', 'directional_mcl', 'bias_confluence', 'loser_triggers')}),
+    )
+    if not all(checks):
+        report.update(status='HOLD_INTEGRITY', apply_eligible=False, reason='candidate/manifest changed after certification or worker fingerprint mismatch')
+        return False
+    return True
+
+
+def certify_report(report: dict, production_config: dict, production_asset: dict, production_result: dict,
+                   manifest: dict, evaluate, montecarlo=run_montecarlo_gate) -> dict:
+    """Only gate after ALL applicable train-selected changes are assembled. Test is diagnostic."""
+    import copy
+    candidate = assemble_candidate(production_config, report)
+    result = evaluate(copy.deepcopy(candidate))
+    effective = result.get('config') or result.get('effective_config') or candidate
+    # Frozen base is already worker-resolved. Other than gate/cache normalization,
+    # a worker silently evaluating a different proposal must fail closed.
+    candidate_inputs = {k: v for k, v in candidate.items() if k not in ('mlGate', 'timesfm')}
+    effective_inputs = {k: v for k, v in effective.items() if k not in ('mlGate', 'timesfm')}
+    candidate = copy.deepcopy(effective)
+    asset = assemble_asset_snapshot(production_asset, production_config, candidate)
+    expected = json_fingerprint(candidate)
+    provenance = result.get('provenance') or {}
+    evaluation_hash = json_fingerprint(provenance)
+    production_hash = production_result.get('evaluation_fingerprint')
+    report.update(final_config=candidate, final_asset_config=asset, final_asset_fingerprint=json_fingerprint(asset),
+                  production_asset_snapshot=copy.deepcopy(production_asset), production_asset_fingerprint=json_fingerprint(production_asset),
+                  evaluation_manifest=copy.deepcopy(manifest), evaluation_provenance=copy.deepcopy(provenance),
+                  config_fingerprint=expected, final_config_fingerprint=expected, evaluation_fingerprint=evaluation_hash)
+    if (candidate_inputs != effective_inputs or provenance.get('evaluation_manifest') != manifest
+            or result.get('config_fingerprint') != expected or result.get('evaluation_fingerprint') != evaluation_hash
+            or production_hash != evaluation_hash
+            or json_fingerprint(production_result.get('provenance') or {}) != production_hash):
+        report.update(status='HOLD_INTEGRITY', apply_eligible=False, reason='worker config/evaluation fingerprint mismatch')
+        return report
+    report['proposal_validation'] = result.get('metrics_validation')
+    report['objective_diagnostics'] = objective_diagnostics(production_result, result)
+    report['production_validation'] = production_result.get('metrics_validation')
+    report['proposal_oos'] = result.get('metrics_validation')  # legacy alias: NOT independent OOS
+    report['production_oos'] = production_result.get('metrics_validation')
+    report['metrics_test'] = result.get('metrics_test')
+    report['test_evidence'] = copy.deepcopy(result.get('test_evidence'))
+    report['final_validation_r'] = result.get('validation_r') or []
+    report['proposal_test'] = result.get('metrics_test')
+    report['production_test'] = production_result.get('metrics_test')
+    report['delta'] = compare(result.get('metrics_validation') or {}, production_result.get('metrics_validation') or {})
+    report['status'] = report['delta']['status']
+    mc = montecarlo(report.get('ticker') or candidate.get('ticker'), result.get('validation_r') or []) or {}
+    report['montecarlo'] = {**mc, 'config_fingerprint': expected, 'evaluation_fingerprint': evaluation_hash, 'partition': 'validation'}
+    survival = mc.get('survival')
+    if report['status'] == 'RECOMMEND' and (type(survival) not in (int, float) or not 0.80 <= survival <= 1):
+        report['status'] = 'HOLD_MC'
+    report['evaluation_certificate'] = dict(version=1, config_fingerprint=expected, asset_fingerprint=report['final_asset_fingerprint'],
+        evaluation_fingerprint=evaluation_hash, montecarlo_config_fingerprint=expected,
+        validation_role='selection_validation', test_independence='unverified',
+        manifest_claimed_test_independence=manifest['test_independence'],
+        test_evaluated=manifest['test_end_ms'] > manifest['validation_end_ms'] and result.get('metrics_test') is not None,
+        evaluated_at_ms=int(time.time()*1000), test_evidence=copy.deepcopy(result.get('test_evidence')))
+    report['certificate'] = report['evaluation_certificate']
+    # Prospectivity needs an external future registry; a manifest assertion alone is not authorization.
+    report['apply_eligible'] = False
+    report['apply_hold_reason'] = 'independent prospective Test not registered/certified; validation is selection_validation'
+    report['selection_payload_fingerprint'] = json_fingerprint({k: report.get(k) for k in ('best_config', 'session_apply', 'session_apply_replace', 'timesfm_apply', 'ks_proposal', 'directional_mcl', 'bias_confluence', 'loser_triggers')})
+    validate_certified_report(report)
+    return report
 
 
 def sessions_apply_map(best_config: dict) -> dict:
@@ -553,422 +524,280 @@ def load_active_tickers_from_firestore() -> list[str]:
     return list(TICKERS_ALL)
 
 
+def command_json(cmd: list[str], *, timeout: int = 900) -> dict:
+    save_path = Path(cmd[cmd.index('--save')+1]) if '--save' in cmd else None
+    if save_path:
+        save_path.unlink(missing_ok=True)  # never accept a stale proposal artifact
+    r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError(f"{Path(cmd[2] if cmd[0] == 'npx' else cmd[1]).name} exit {r.returncode}: {(r.stderr or r.stdout)[-500:]}")
+    if save_path and save_path.exists():
+        return json.loads(save_path.read_text())
+    for line in reversed((r.stdout or '').splitlines()):
+        if line.strip().startswith('{'):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    raise RuntimeError(f"command returned no JSON: {cmd}")
+
+
+def weekly_rollout_allowed(args) -> bool:
+    return AUTO_APPLY_ENABLED and not any(getattr(args, key, False) for key in (
+        'verification', 'config_file', 'output_dir', 'wfa_shadow', 'no_apply',
+        'evaluation_manifest', 'logs_dir', 'trades_file'))
+
+
+def weekly_rollout_command(ticker: str, reports_dir: Path, *, followup_only: bool) -> list[str]:
+    return ['npx', 'tsx', str(HERE / 'apply_weekly.ts'), '--weekly-rollout',
+            '--reports-dir', str(reports_dir), '--tickers', ticker,
+            '--followup-only' if followup_only else '--skip-followup']
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--tickers", default=None, help="override manual; default: Firestore active_tickers (fallback TICKERS_ALL)")
-    ap.add_argument("--min-new-trades", type=int, default=MIN_NEW_TRADES)
-    ap.add_argument("--skip-fetch", action="store_true")
-    ap.add_argument("--skip-refresh", action="store_true")
-    ap.add_argument("--skip-hyperopt", action="store_true")
-    ap.add_argument("--force", action="store_true", help="ignora el chequeo de frescura")
-    ap.add_argument("--resume", action="store_true",
-                    help="continúa el ciclo desde donde quedó (lee weekly_progress.json; los tickers ya hechos se saltean)")
-    ap.add_argument("--study-suffix", default="",
-                    help="sufijo para el nombre del estudio Optuna (forzar estudio fresco, p.ej. '_v2')")
+    import tempfile
+    ap = argparse.ArgumentParser(description='Frozen selection + final Validation + authorized exact weekly rollout.')
+    ap.add_argument('--no-apply', action='store_true', help='Generate proposals only; no deployment or followup writes')
+    ap.add_argument('--tickers', default=None)
+    ap.add_argument('--min-new-trades', type=int, default=MIN_NEW_TRADES)
+    for flag in ('skip-fetch', 'skip-refresh', 'skip-hyperopt', 'skip-timesfm', 'skip-telemetry', 'skip-aux', 'skip-ml', 'force', 'resume', 'verification'):
+        ap.add_argument('--' + flag, action='store_true')
+    ap.add_argument('--study-suffix', default='')
+    ap.add_argument('--config-file', help='Single ticker asset fixture; no Firebase/key/journal/network reads')
+    ap.add_argument('--evaluation-manifest', help='Single ticker explicit manifest; otherwise resolved once from current CSVs')
+    ap.add_argument('--logs-dir', help='Single ticker exported CSV directory')
+    ap.add_argument('--trades-file', help='Optional journal snapshot for sizing')
+    ap.add_argument('--output-dir', help='Isolated reports, snapshots and Optuna storage root')
+    ap.add_argument('--n-trials', type=int, default=None)
+    ap.add_argument('--trigger-budget', type=int, default=None)
+    ap.add_argument('--wfa-shadow', action='store_true', help='Opt-in isolated rolling WFA research; never apply or open Vault')
+    ap.add_argument('--wfa-policy-file', help='Optional experimental WFA policy JSON; only with --wfa-shadow')
     args = ap.parse_args()
-
-    # ── checkpoint/resume (22-sep-2026) ──
-    if args.resume and PROGRESS_FILE.exists():
-        try:
-            prog = json.loads(PROGRESS_FILE.read_text())
-            done = set(prog.get("done") or [])
-            started_at = prog.get("started_at") or int(time.time() * 1000)
-            print(f"♻️ --resume: {len(done)} tickers ya completados en este ciclo: "
-                  f"{', '.join(sorted(done)) or '(ninguno)'}", flush=True)
-        except Exception as e:
-            print(f"⚠️ progress.json ilegible ({e}) — arranque desde cero", flush=True)
-            done = set()
-            started_at = int(time.time() * 1000)
-    else:
-        done = set()
-        started_at = int(time.time() * 1000)
-        OPT_OUT_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            PROGRESS_FILE.write_text(json.dumps({"started_at": started_at, "done": []}))
-        except Exception:
-            pass
-
-    tickers = [t.strip().upper() for t in (args.tickers or "").split(",") if t.strip()]
+    if args.verification:
+        args.skip_fetch = args.skip_refresh = args.skip_timesfm = args.skip_telemetry = True
+        if not args.output_dir:
+            args.output_dir = tempfile.mkdtemp(prefix='jarvis-weekly-verification-')
+    n_trials = args.n_trials if args.n_trials is not None else (2 if args.verification or args.wfa_shadow else 400)
+    trigger_budget = args.trigger_budget if args.trigger_budget is not None else (2 if args.verification or args.wfa_shadow else 80)
+    if n_trials < 1 or trigger_budget < 1:
+        ap.error('trial/tuning budgets must be positive')
+    tickers = [t.strip().upper() for t in (args.tickers or '').split(',') if t.strip()]
+    if args.wfa_shadow:
+        if not args.config_file or not args.output_dir or len(tickers)!=1:
+            ap.error('--wfa-shadow requires one explicit ticker, --config-file and isolated --output-dir')
+        if args.evaluation_manifest or args.trades_file or args.skip_hyperopt or args.resume or args.study_suffix:
+            ap.error('WFA uses its own fold identities; do not mix v1 manifest/resume/study/trades flags')
+        if Path(sys.prefix).resolve()!=VENV_PY.parent.parent.resolve():
+            if not VENV_PY.is_file():
+                ap.error('WFA requires the project hyperopt virtualenv')
+            return subprocess.run([str(VENV_PY),str(Path(__file__).resolve()),*sys.argv[1:]],cwd=str(REPO)).returncode
+        if str(REPO) not in sys.path:
+            sys.path.insert(0,str(REPO))
+        from scripts.periodic_opt.wfa_runner import run_wfa_shadow
+        result=run_wfa_shadow(ticker=tickers[0],
+            log_dir=Path(args.logs_dir).resolve() if args.logs_dir else REPO/'logs'/tickers[0].lower()/'history_exported',
+            asset_config=json.loads(Path(args.config_file).read_text()),output_dir=Path(args.output_dir),
+            n_trials=n_trials,trigger_budget=trigger_budget,skip_aux=args.skip_aux,skip_ml=args.skip_ml,
+            policy=json.loads(Path(args.wfa_policy_file).read_text()) if args.wfa_policy_file else None)
+        print(json.dumps({'status':result['status'],'apply_eligible':False,'wfa_report':result.get('report_path')},allow_nan=False))
+        return 0
+    if args.wfa_policy_file:
+        ap.error('--wfa-policy-file requires --wfa-shadow')
+    if any((args.config_file, args.evaluation_manifest, args.logs_dir, args.trades_file)) and len(tickers) != 1:
+        ap.error('explicit fixture/manifest/log paths require exactly one --tickers ticker')
+    if args.config_file:
+        if not args.output_dir:
+            args.output_dir = tempfile.mkdtemp(prefix='jarvis-weekly-fixture-')
+        args.skip_fetch = args.skip_refresh = args.skip_timesfm = args.skip_telemetry = True
     if not tickers:
         tickers = load_active_tickers_from_firestore()
-    api_key = get_api_key()
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    summary = []
-
-    # 0-preflight (21-sep-2026): el ciclo cuesta ~15h de CPU; antes de gastarlo, verificar
-    # que el wrapper del hyperopt acepta los flags que run_weekly le pasa. El 20-sep-2026
-    # el wrapper no tenía --current-sessions → 14 tickers ERROR × 3h CPU desperdiciadas y
-    # un día de demora hasta detectarlo. Si falla acá, exit 1 → OnFailure notifica.
-    try:
-        r = subprocess.run([sys.executable, str(HYPEROPT), "--help"],
-                           capture_output=True, text=True, timeout=60)
-        help_out = (r.stdout or "") + (r.stderr or "")
-        missing = [f for f in ("--current-sessions", "--timesfm-cache") if f not in help_out]
-        if missing:
-            print(f"❌ PREFLIGHT FAIL: run_hyperopt.py no acepta: {', '.join(missing)} — "
-                  f"cablear el flag en el wrapper antes de correr el ciclo.", flush=True)
+    reports_dir = Path(args.output_dir).resolve() / 'reports' if args.output_dir else REPORTS_DIR
+    opt_dir = Path(args.output_dir).resolve() / 'opt_out' if args.output_dir else OPT_OUT_DIR
+    progress_file = opt_dir / 'weekly_progress.json'
+    for d in (reports_dir, opt_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    started_at = int(time.time() * 1000)
+    done = set()
+    if args.resume and progress_file.exists():
+        progress = json.loads(progress_file.read_text())
+        done = set(progress.get('done') or [])
+        started_at = progress.get('started_at') or started_at
+    progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}))
+    if not args.skip_hyperopt:
+        r = subprocess.run([sys.executable, str(HYPEROPT), '--help'], capture_output=True, text=True, timeout=60)
+        text = (r.stdout or '') + (r.stderr or '')
+        required = ('--current-sessions', '--timesfm-cache', '--evaluation-manifest', '--base-config', '--log-dir')
+        missing = [flag for flag in required if flag not in text]
+        if r.returncode or missing:
+            print(f'PREFLIGHT FAIL: hyperopt wrapper missing flags {missing}', flush=True)
             return 1
-        print("✅ preflight OK: wrapper acepta current-sessions + timesfm-cache", flush=True)
-    except Exception as e:
-        print(f"❌ PREFLIGHT FAIL: no se pudo validar el wrapper ({e})", flush=True)
-        return 1
-
-    # 0a. DESCARGAR velas frescas de cTrader (16-sep-2026) — una sola corrida para todos
-    # los tickers, SIEMPRE antes del export (salvo --skip-fetch/--skip-refresh).
-    # OJO: usa el cliente cTrader → patea el stream del bot UNA vez (el bot se reconecta solo).
+    api_key = None if args.config_file else get_api_key()
     if FETCH_ENABLED and not args.skip_fetch and not args.skip_refresh:
-        print("═══ 0a. DESCARGANDO velas frescas de cTrader (fetch_history) ═══", flush=True)
-        try:
-            r = subprocess.run(
-                ["npx", "tsx", str(FETCH_HISTORY)],
-                cwd=str(REPO), capture_output=True, text=True, timeout=150 * 60,
-            )
-            if r.returncode != 0:
-                print(f"    ⚠️ fetch_history exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}", flush=True)
-            else:
-                print("    fetch_history OK", flush=True)
-        except Exception as e:
-            print(f"    ⚠️ fetch_history error: {e}", flush=True)
-
+        r = subprocess.run(['npx', 'tsx', str(FETCH_HISTORY)], cwd=str(REPO), capture_output=True, text=True, timeout=9000)
+        if r.returncode:
+            print(f'fetch_history failed: {(r.stderr or r.stdout)[-300:]}', flush=True)
+            return 1
+    summary = []
     for ticker in tickers:
         if ticker in done:
-            print(f"═══ {ticker} (ya completado en este ciclo — skip por --resume) ═══", flush=True)
             continue
-        print(f"═══ {ticker} ═══", flush=True)
-        last = load_last_report(ticker)
-        last_ts = int(last.get("timestamp") or 0)
-        report = {"ticker": ticker, "timestamp": int(time.time() * 1000), "status": "HOLD"}
-
+        print(f'═══ {ticker} ═══', flush=True)
+        report = {'ticker': ticker, 'timestamp': int(time.time()*1000), 'status': 'HOLD', 'apply_eligible': False}
         try:
-            # 0. REFRESH de datos (walk-forward: sin datos nuevos, el OOS no rola)
-            refresh = {"ok": True, "newest_mtime_ms": None}
+            last_path = reports_dir / f'{ticker}.json'
+            last = json.loads(last_path.read_text()) if last_path.exists() else {}
+            last_ts = int(last.get('timestamp') or 0)
+            refresh = {'ok': True}
             if not args.skip_refresh:
                 refresh = refresh_csvs(ticker)
-            report["data_refreshed_at"] = refresh.get("newest_mtime_ms")
-            if not refresh.get("ok"):
-                report["status"] = "REFRESH_ERROR"
-                report["reason"] = f"no se pudieron regenerar los CSVs: {refresh.get('detail') or refresh.get('error')}"
-                print(f"    ❌ {report['reason']}", flush=True)
-                (REPORTS_DIR / f"{ticker}.json").write_text(json.dumps(report, indent=2, default=str))
-                summary.append(f"{ticker}: {report['status']}")
-                continue
-
-            # 1. Frescura (16-sep-2026): se mira la ÚLTIMA VELA del archivo crudo, no el mtime.
-            new_trades = count_new_trades(api_key, ticker, last_ts)
-            last_candle = last_candle_ms(ticker)
-            data_newer = last_candle > last_ts
-            lc_str = datetime.fromtimestamp(last_candle / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if last_candle else "sin datos"
-            print(f"    trades nuevos: {new_trades} | última vela: {lc_str} | más nueva que el último reporte: {data_newer}", flush=True)
-            if not args.force and new_trades < args.min_new_trades and not data_newer:
-                report["reason"] = (f"sin datos nuevos (journal +{new_trades} trades, CSVs viejos) "
-                                    f"— no re-tunear sobre el MISMO OOS (anti-overfit walk-forward)")
-                print(f"    → {report['reason']}", flush=True)
-
-            # 2. Hyperopt (solo si hay datos nuevos o se fuerza)
-            elif not args.skip_hyperopt:
-                # 1.5a. Bruteforcer de presets del motor (sep-2026, Capa 2) — PROPONE.
-                # No bloqueante: si falla o tarda, el ciclo sigue. El preset vivo NO se
-                # toca (archivo _proposal); la migración es manual con OK de Bon.
-                if BRUTEFORCER_ENABLED:
+            report['data_refreshed_at'] = refresh.get('newest_mtime_ms')
+            if not refresh.get('ok'):
+                raise RuntimeError(f"refresh failed: {refresh.get('error') or refresh.get('detail')}")
+            if weekly_rollout_allowed(args):
+                review = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=True),
+                                        cwd=str(REPO), capture_output=True, text=True, timeout=3600)
+                print(f"{ticker} seguimiento: {(review.stdout or review.stderr)[-1500:]}", flush=True)
+                if review.returncode:
+                    raise RuntimeError(f'followup dispatch failed: {(review.stderr or review.stdout)[-500:]}')
+            new_trades = 0 if args.config_file else count_new_trades(api_key, ticker, last_ts)
+            if not args.force and not args.verification and new_trades < args.min_new_trades and last_candle_ms(ticker) <= last_ts:
+                report['reason'] = 'no fresh candles/journal: selection skipped (anti-overfit)'
+            else:
+                cache_p = None
+                if not args.skip_timesfm:
                     try:
-                        r = subprocess.run(
-                            ["npx", "tsx", str(SMC_BRUTEFORCER), ticker],
-                            cwd=str(REPO), capture_output=True, text=True, timeout=90 * 60,
-                        )
-                        prop_path = REPO / f"optimized_preset_{ticker}_proposal.json"
-                        if r.returncode == 0 and prop_path.exists():
-                            prop = json.loads(prop_path.read_text())
-                            trades = int((prop.get("Metrics") or {}).get("Trades") or 0)
-                            if trades <= 0:
-                                # 🆕 21-sep-2026: propuestas degeneradas (0 trades) se descartan —
-                                # no se proponen ni se auto-aplican (los bloques TF del motor no
-                                # se pueden validar por backtest y un preset vacío degrada el vivo).
-                                report["preset_proposal_note"] = (
-                                    "sin datos: propuesta con 0 trades — descartada (no se propone)"
-                                )
-                                print(f"    Bruteforcer: propuesta SIN DATOS (0 trades) — descartada", flush=True)
-                            else:
-                                report["preset_proposal"] = prop
-                                print(f"    Bruteforcer: propuesta de preset OK ({prop_path.name}, {trades} trades)", flush=True)
-                        else:
-                            report["preset_proposal_error"] = (r.stderr or r.stdout or "exit!=0")[-200:]
-                            print(f"    ⚠ Bruteforcer exit={r.returncode}", flush=True)
+                        info = collect_and_precompute(ticker)
+                        report['timesfm_cache'] = info
+                        cache_p = Path(info['cache'])
                     except Exception as e:
-                        report["preset_proposal_error"] = str(e)[:200]
-                        print(f"    ⚠ Bruteforcer falló: {e}", flush=True)
-                # F4 (07-sep-2026): colecta de orígenes + precompute de forecasts TimesFM.
-                # Si falla, el hyperopt sigue SIN filtro (robustez: el ciclo no se corta)
-                # y queda la nota en el reporte. Con cache, las trials miden el efecto
-                # real del umbral minScoreToOverrideReject.
-                tfm_cache_info: dict | None = None
-                try:
-                    tfm_cache_info = collect_and_precompute(ticker)
-                except Exception as e:
-                    print(f"    ⚠ TimesFM collect/precompute falló ({str(e)[:150]}) — hyperopt SIN filtro.", flush=True)
-                    report["timesfm_cache_error"] = str(e)[:200]
-                report["timesfm_cache"] = tfm_cache_info
-                cache_p = Path(tfm_cache_info["cache"]) if tfm_cache_info else None
-
-                # 🆕 sep-2026 (paridad de umbrales): volcar sesiones vigentes del vivo
-                # para que las trials del hyperopt midan SOBRE los minScore/slBuff/tp2/
-                # gestión per-gatillo que el vivo aplica (dueño: per_trigger_tune).
-                cs_file: Path | None = None
-                try:
-                    cs_file = REPORTS_DIR / f"current_sessions_{ticker}.json"
-                    subprocess.run(
-                        ["npx", "tsx", str(GET_CURRENT_SESSIONS), ticker, "--out", str(cs_file)],
-                        cwd=str(REPO), capture_output=True, text=True, timeout=120, check=True,
-                    )
-                except Exception as e:
-                    cs_file = None
-                    print(f"    ⚠ current-sessions dump falló ({str(e)[:120]}) — hyperopt sin overlay", flush=True)
-
-                prop = run_hyperopt(ticker, timesfm_cache=cache_p, current_sessions_file=cs_file,
-                                    study_suffix=args.study_suffix)
-                prod = eval_production(ticker)
-                cmp = compare(prop.get("best_metrics_oos", {}), prod.get("metrics_oos", {}))
-                report.update({
-                    "status": cmp["status"],
-                    "delta": cmp,
-                    "proposal_oos": prop.get("best_metrics_oos"),
-                    "production_oos": prod.get("metrics_oos"),
-                    "best_config": prop.get("best_config"),
-                    "oos_split": prod.get("oos_split"),
-                    "session_apply": sessions_apply_map(prop.get("best_config") or {}),
-                })
-                # 🛡️ MC gate (sep-2026): bootstrap de robustez sobre los r OOS de producción.
-                # Si el edge de la base actual no sobrevive al resampling, ningún RECOMMEND se promueve.
-                try:
-                    mc = run_montecarlo_gate(ticker, prod.get("oos_r") or [])
-                    report["montecarlo"] = mc
-                    if mc.get("survival") is not None:
-                        print(f"    MC gate: supervivencia={mc['survival']*100:.0f}% | {mc.get('verdict_short')}", flush=True)
-                        if cmp["status"] == "RECOMMEND" and mc["survival"] < 0.80:
-                            report["status"] = "HOLD_MC"
-                            print(f"    🛡️ MC gate: RECOMMEND degradado a HOLD_MC (edge de la base no robusto al bootstrap)", flush=True)
-                except Exception as e:
-                    report["montecarlo_error"] = str(e)[:200]
-                    print(f"    ⚠ MC gate falló: {e}", flush=True)
-                # 🔬 DSR gate (10-oct-2026, shadow): barra de selección Bailey/López de Prado
-                # sobre los r OOS de producción. Solo reporta; degradar RECOMMEND→HOLD_DSR
-                # requiere DSR_ENFORCE=True (pendiente OK de Bon).
-                try:
-                    dsr_res = run_dsr_gate(ticker, prod.get("oos_r") or [], prop.get("n_trials") or 0)
-                    report["dsr"] = dsr_res
-                    if dsr_res.get("skip"):
-                        print(f"    DSR shadow: skip — {dsr_res.get('note')}", flush=True)
-                    else:
-                        print(f"    DSR shadow: sr={dsr_res['sr']} | barra={dsr_res['selection_bar']} | "
-                              f"dsr={dsr_res['dsr']} → {dsr_res['verdict']}", flush=True)
-                        if DSR_ENFORCE and cmp["status"] == "RECOMMEND" and dsr_res["verdict"] == "BELOW":
-                            report["status"] = "HOLD_DSR"
-                            print(f"    🛡️ DSR gate: RECOMMEND degradado a HOLD_DSR (no supera la barra de selección)", flush=True)
-                except Exception as e:
-                    report["dsr_error"] = str(e)[:200]
-                    print(f"    ⚠ DSR shadow falló: {e}", flush=True)
-                # F4: propuesta del umbral TimesFM (solo propone — la aplicación sigue
-                # siendo manual, igual que el resto de session_apply).
-                bp = prop.get("best_params") or {}
-                if cache_p and "minScoreToOverrideReject" in bp:
-                    report["timesfm_apply"] = {
-                        "minScoreToOverrideReject": bp["minScoreToOverrideReject"],
-                        "source": "hyperopt_weekly8",
-                    }
-                else:
-                    report["timesfm_apply"] = None
-                print(f"    → {cmp['status']} | ΔexpOOS={cmp['d_exp_oos']:+0.3f}R | "
-                      f"ΔDD={cmp['dd_improve_ratio']*100:+.1f}% | ΔPnL={cmp['pnl_drop_ratio']*100:+.1f}%", flush=True)
-
-            # 2b. Tune por sesión×gatillo (sep-2026, dueño-único) — PROPONE en --dry-run.
-            # minScore/slBuff/tp2/gestión por gatillo → merge en session_apply → panel.
-            if TRIGGER_TUNE_ENABLED:
-                try:
-                    tt_out = REPORTS_DIR / f"trigger_tune_{ticker}.json"
-                    r = subprocess.run(
-                        ["npx", "tsx", str(PER_TRIGGER_TUNE), ticker,
-                         "--budget", "80", "--concurrency", "2",
-                         "--dry-run", "--save", str(tt_out)],
-                        cwd=str(REPO), capture_output=True, text=True, timeout=4 * 60 * 60,
-                    )
-                    if r.returncode == 0 and tt_out.exists():
-                        tt = json.loads(tt_out.read_text())
-                        report["trigger_tune"] = tt.get("final")
-                        sa = report.get("session_apply") or {}
-                        for sess, trigs in (tt.get("sessions") or {}).items():
-                            sa.setdefault(sess, {})
-                            for trig, cfg in trigs.items():
-                                if isinstance(cfg, dict):
-                                    sa[sess][trig] = {**(sa[sess].get(trig) or {}), **cfg}
-                        report["session_apply"] = sa
-                        print(f"    Trigger-tune: {len(tt.get('sessions') or {})} sesiones propuestas "
-                              f"(final={tt.get('final')})", flush=True)
-                    else:
-                        report["trigger_tune_error"] = (r.stderr or r.stdout or "exit!=0")[-200:]
-                        print(f"    ⚠ Trigger-tune exit={r.returncode}", flush=True)
-                except Exception as e:
-                    report["trigger_tune_error"] = str(e)[:200]
-                    print(f"    ⚠ Trigger-tune falló: {e}", flush=True)
-
-            # 3. Killswitch sweep (siempre, es barato relativo y no depende del OOS)
-            try:
-                ks = run_ks_sweep(ticker)
-                if ks:
-                    report["ks_proposal"] = ks
-                    print(f"    KS propuesta: maxDLR={ks['maxDailyLossR']} maxCL={ks['maxConsecutiveLosses']} "
-                          f"maxTPD={ks.get('maxTradesPerDay', '-')} maxTDD={ks.get('trailingDrawdownR', '-')} "
-                          f"(score={ks['score']})", flush=True)
-            except Exception as e:
-                report["ks_error"] = str(e)[:200]
-                print(f"    ⚠ KS sweep falló: {e}", flush=True)
-
-            # 3.1 MCL direccional por sesión (sep-2026, opción 2 de Bon) — APLICA igual
-            # que el KS sweep (dot-paths, source='directional_mcl_tune').
-            try:
-                dm = run_directional_mcl_sweep(ticker)
-                if dm:
-                    report["directional_mcl"] = dm
-                    print(f"    MCL direccional: {len(dm['changes'])} cambios evaluados", flush=True)
-            except Exception as e:
-                report["directional_mcl_error"] = str(e)[:200]
-                print(f"    ⚠ MCL direccional falló: {e}", flush=True)
-
-            # 3b. Confluencia de bias (Paso 1b sep-2026): barrido V1-V4 por activo.
-            # PROPONE el bloque biasConfluence (RECOMMEND/HOLD) — NO aplica.
-            try:
-                bc = run_bias_confluence(ticker)
-                if bc:
-                    report["bias_confluence"] = bc
-                    if bc.get("status") == "RECOMMEND" and bc.get("recommended"):
-                        rec = bc["recommended"]
-                        print(f"    biasConfluence: RECOMMEND {rec['bc']} (obj {rec['objective']}, Δ{rec.get('margin_vs_baseline')})", flush=True)
-                    else:
-                        print(f"    biasConfluence: {bc.get('status')}", flush=True)
-            except Exception as e:
-                report["bias_confluence_error"] = str(e)[:200]
-                print(f"    ⚠ biasConfluence barrido falló: {e}", flush=True)
-
-            # 4. Shadow TimesFM semanal
-            report["shadow_week"] = shadow_week(ticker)
-            sw = report["shadow_week"]
-            print(f"    Shadow 7d: {sw.get('n', 0)} decisiones ({sw.get('approve', 0)}✓ / {sw.get('downgrade', 0)}↓ / {sw.get('reject', 0)}✗)", flush=True)
-
+                        report['timesfm_cache_error'] = str(e)[:300]
+                logs_dir = Path(args.logs_dir).resolve() if args.logs_dir else REPO / 'logs' / ticker.lower() / 'history_exported'
+                asset_file = opt_dir / f'production_asset_{ticker}.json'
+                manifest_file = opt_dir / f'evaluation_manifest_{ticker}.json'
+                base_file = opt_dir / f'production_backtest_{ticker}.json'
+                prod_file = opt_dir / f'production_result_{ticker}.json'
+                # This is the sole Firestore asset read. Snapshot-only also resolves
+                # the worker's effective config and production metrics exactly once.
+                snapshot_cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--snapshot-only', '--snapshot-out', str(asset_file), '--manifest-out', str(manifest_file), '--logs-dir', str(logs_dir), '--save', str(prod_file)]
+                if args.config_file:
+                    snapshot_cmd += ['--config-file', args.config_file]
+                if args.evaluation_manifest:
+                    snapshot_cmd += ['--evaluation-manifest', args.evaluation_manifest]
+                if cache_p:
+                    snapshot_cmd += ['--timesfm-cache', str(cache_p)]
+                prod = canonicalize_result(command_json(snapshot_cmd))
+                production_asset = json.loads(asset_file.read_text())
+                manifest = json.loads(manifest_file.read_text())
+                production_config = prod['config']
+                report['production_backtest_config'] = production_config
+                base_file.write_text(json.dumps(production_config, indent=2))
+                cs_file = opt_dir / f'current_sessions_{ticker}.json'
+                cs_file.write_text(json.dumps({**production_asset, 'ticker':ticker, 'sessions':production_asset.get('sessions') or {}, 'mlGateEnabled':production_asset.get('mlGateEnabled') is True}, indent=2))
+                prop = {}
+                if not args.skip_hyperopt:
+                    hp_out = opt_dir / f'{ticker}.json'
+                    hp_cmd = [str(VENV_PY), str(HYPEROPT), ticker, '--study-name', f'jarvis_{ticker}_weekly_protocol1{args.study_suffix}', '--n-trials', str(n_trials), '--n-startup', str(min(50, n_trials)), '--output', str(hp_out), '--evaluation-manifest', str(manifest_file), '--current-sessions', str(cs_file), '--base-config', str(base_file), '--log-dir', str(logs_dir)]
+                    if args.output_dir:
+                        hp_cmd += ['--storage', str(opt_dir / 'study.db')]
+                    if cache_p:
+                        hp_cmd += ['--timesfm-cache', str(cache_p)]
+                    r = subprocess.run(hp_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=9000)
+                    if r.returncode:
+                        raise RuntimeError(f'hyperopt exit {r.returncode}: {(r.stderr or r.stdout)[-500:]}')
+                    prop = json.loads(hp_out.read_text())
+                    report['best_config'] = prop.get('best_config') or {}
+                    report['objective_comparison'] = prop.get('objective_comparison')
+                    report['session_apply'] = sessions_apply_map(report['best_config'])
+                    if cache_p and 'minScoreToOverrideReject' in (prop.get('best_params') or {}):
+                        report['timesfm_apply'] = {'minScoreToOverrideReject': prop['best_params']['minScoreToOverrideReject']}
+                if not args.skip_aux:
+                    selectors = []
+                    if TRIGGER_TUNE_ENABLED:
+                        selectors.append(('trigger_tune', PER_TRIGGER_TUNE, ['--budget', str(trigger_budget), '--concurrency', '1' if args.verification else '2']))
+                    selectors += [('ks_proposal', KS_TUNE, []), ('directional_mcl', REPO/'scripts/directional_mcl_tune.ts', []), ('bias_confluence', BIAS_CF_TUNE, [])]
+                    if LOSER_TRIGGERS_ENABLED:
+                        selectors.append(('loser_triggers', LOSER_TRIGGERS_PROPOSAL, []))
+                    if SIZING_PROPOSAL_ENABLED:
+                        selectors.append(('sizing_proposal', SIZING_PROPOSAL, []))
+                    for key, script, extra in selectors:
+                        save_file = opt_dir / f'{key}_{ticker}.json'
+                        cmd = selection_command(script, ticker, manifest_file, asset_file, logs_dir, '--backtest-config-file', base_file, '--save', save_file, *extra)
+                        if key == 'sizing_proposal':
+                            if args.trades_file:
+                                cmd += ['--trades-file', args.trades_file]
+                            elif args.config_file:
+                                # Fixture mode never reads journal; an empty explicit
+                                # snapshot gives an honest insufficient-sample HOLD.
+                                empty = opt_dir / f'journal_{ticker}.json'
+                                empty.write_text('[]')
+                                cmd += ['--trades-file', str(empty)]
+                            else:
+                                cmd += ['--allow-journal-read']
+                        try:
+                            selected = command_json(cmd, timeout=14400)
+                            report[key] = selected
+                            if key == 'trigger_tune':
+                                report['session_apply'] = selected.get('sessions') or {}
+                                report['session_apply_replace'] = True
+                        except Exception as e:
+                            report[key + '_error'] = str(e)[:500]
+                candidate_file = opt_dir / f'final_backtest_{ticker}.json'
+                def evaluate(candidate):
+                    candidate_file.write_text(json.dumps(candidate, indent=2))
+                    cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--evaluation-manifest', str(manifest_file), '--config-file', str(asset_file), '--backtest-config-file', str(candidate_file), '--logs-dir', str(logs_dir), '--save', str(opt_dir/f'final_result_{ticker}.json')]
+                    if cache_p:
+                        cmd += ['--timesfm-cache', str(cache_p)]
+                    return canonicalize_result(command_json(cmd))
+                certify_report(report, production_config, production_asset, prod, manifest, evaluate, montecarlo=run_montecarlo_gate)
+                selection_errors = [k for k in report if k.endswith('_error') and k != 'timesfm_cache_error']
+                if selection_errors:
+                    report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False)
+                report['dsr'] = run_dsr_gate(ticker, report.get('final_validation_r') or [], prop.get('n_trials') or 0)
+                if DSR_ENFORCE and report['status'] == 'RECOMMEND' and report['dsr'].get('verdict') == 'BELOW':
+                    report['status'] = 'HOLD_DSR'
+                if not args.skip_ml:
+                    ml_config = dict(production_config)
+                    ml_config.pop('mlGate', None)  # trainer explicitly collects unfiltered paired labels
+                    ml_config_file = opt_dir / f'ml_unfiltered_config_{ticker}.json'
+                    ml_config_file.write_text(json.dumps(ml_config, indent=2))
+                    ml_cmd = [str(VENV_PY), str(HERE/'train_ml_weekly.py'), '--tickers', ticker, '--dry-run', '--evaluation-manifest', str(manifest_file), '--config', str(ml_config_file), '--log-dir', str(logs_dir), '--output-dir', str(opt_dir/'ml_candidates')]
+                    ml = subprocess.run(ml_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=10800)
+                    report['ml_training'] = {'dry_run': True, 'exit_code': ml.returncode, 'output': (ml.stdout or ml.stderr)[-2000:]}
+                    if ml.returncode not in (0, 2):
+                        report.update(status='HOLD_ML_ERROR', apply_eligible=False)
+                if not args.skip_telemetry:
+                    report['shadow_week'] = shadow_week(ticker)
         except Exception as e:
-            report["status"] = "ERROR"
-            report["reason"] = str(e)[:300]
-            print(f"    ❌ ERROR: {e}", flush=True)
-
-        (REPORTS_DIR / f"{ticker}.json").write_text(json.dumps(report, indent=2, default=str))
-        summary.append(f"{ticker}: {report['status']}")
-        # checkpoint: marcar como hecho (el resume salta este ticker si el ciclo muere después)
-        done.add(ticker)
-        try:
-            PROGRESS_FILE.write_text(json.dumps({"started_at": started_at, "done": sorted(done)}, indent=2))
-        except Exception:
-            pass
-
-    # 5. Paridad VIVO vs BACKTEST (telemetría de gatillos, Plan B ago-2026)
-    # Compara lo que pasó en vivo (trigger_telemetry) con lo que el optimizador espera.
-    try:
-        pr = subprocess.run(
-            ["npx", "tsx", str(REPO / "scripts" / "trigger_parity_report.ts"), "--days=7"],
-            cwd=str(REPO), capture_output=True, text=True, timeout=10 * 60,
-        )
-        parity_out = (pr.stdout or "") + (pr.stderr or "")
-        print("    Parity vivo-vs-backtest:")
-        print("\n".join(f"      {ln}" for ln in parity_out.splitlines()[-25:]), flush=True)
-        if pr.returncode != 0:
-            print(f"    ⚠ Parity report exit={pr.returncode}", flush=True)
-    except Exception as e:
-        print(f"    ⚠ Parity report falló: {e}", flush=True)
-
-    # 5b. OTE vs DIRECTO (1-oct-2026, pedido Bon): cruza trade_journal (entryType) contra
-    # la telemetría del embudo — resultados reales por tipo de entrada + sanity check de
-    # ejecuciones. Read-only, escribe scripts/periodic_opt/reports/ote_vs_directo.json.
-    # Ventana semanal como el parity (la cobertura real la acota el journal solo).
-    try:
-        od = subprocess.run(
-            ["npx", "tsx", str(REPO / "scripts" / "ote_vs_directo.ts"), "--days=7", "--telegram"],
-            cwd=str(REPO), capture_output=True, text=True, timeout=10 * 60,
-        )
-        od_out = (od.stdout or "") + (od.stderr or "")
-        print("    OTE vs DIRECTO:")
-        print("\n".join(f"      {ln}" for ln in od_out.splitlines()[-30:]), flush=True)
-        if od.returncode != 0:
-            print(f"    ⚠ OTE vs DIRECTO exit={od.returncode}", flush=True)
-    except Exception as e:
-        print(f"    ⚠ OTE vs DIRECTO falló: {e}", flush=True)
-
-    # 6. Re-entrenamiento ML semanal (ML F3, sep-2026) — AL FINAL del ciclo.
-    # El modelo entrenado HOY (con datos hasta hoy) evalúa la semana QUE VIENE: walk-forward.
-    # Si se entrenara ANTES del hyperopt, trainedAt=ahora → el gate quedaría inerte esta corrida.
-    # train_ml_weekly.py tiene sus propios guardrails (≥30 trades nuevos WIN/LOSS, solo
-    # reemplaza si la accuracy mejora). Un fallo NO corta el ciclo (el gate usa el modelo previo).
-    try:
-        r = subprocess.run(
-            ["python3", str(HERE / "train_ml_weekly.py"), "--tickers", ",".join(tickers)],
-            cwd=str(REPO), capture_output=True, text=True, timeout=3 * 60 * 60,
-        )
-        ml_out = (r.stdout or "") + (r.stderr or "")
-        print("    Re-entrenamiento ML semanal:")
-        print("\n".join(f"      {ln}" for ln in ml_out.splitlines()[-12:]), flush=True)
-        if r.returncode != 0:
-            print(f"    ⚠ train_ml_weekly exit={r.returncode}", flush=True)
-    except Exception as e:
-        print(f"    ⚠ Re-entrenamiento ML falló: {e}", flush=True)
-
-    # 7. Sizing fraccional (sep-2026) — PROPONE, NO aplica. Flag SIZING_PROPOSAL_ENABLED.
-    if SIZING_PROPOSAL_ENABLED:
-        try:
-            sp = run_sizing_proposal()
-            (REPORTS_DIR / "sizing_proposal.json").write_text(json.dumps(sp, indent=2, default=str))
-            print(f"    Sizing: {sp['status']} | factores={sp.get('factors')} | MC={sp.get('mc')}", flush=True)
-        except Exception as e:
-            print(f"    ⚠ Sizing proposal falló: {e}", flush=True)
-    else:
-        print("    Sizing: DESACTIVADO (SIZING_PROPOSAL_ENABLED=False) — módulo listo, pendiente OK de Bon", flush=True)
-
-    # 8. Gatillos perdedores (09-sep-2026, idea de Bon) — PROPONE, NO aplica.
-    if LOSER_TRIGGERS_ENABLED:
-        try:
-            lt = run_loser_triggers_proposal()
-            print(f"    Trigger-state: {lt.get('status')} ({len(lt.get('disables', []))} apagar, {len(lt.get('enables', []))} activar)", flush=True)
-        except Exception as e:
-            print(f"    ⚠ Loser-triggers falló: {e}", flush=True)
-
-    # 9. AUTO-APLICADOR (sep-2026, decisión de Bon): aplica automático SOLO lo que pasa
-    # los gates (RECOMMEND + MC survival >= 80% + frescura + activo enabled). Snapshot
-    # previo por activo para rollback. Disables de gatillos perdedores auto; enables
-    # manuales. El preset del motor (bruteforcer) NO se auto-aplica (migración manual).
-    if AUTO_APPLY_ENABLED:
-        try:
-            r = subprocess.run(
-                ["npx", "tsx", str(HERE / "apply_weekly.ts")],
-                cwd=str(REPO), capture_output=True, text=True, timeout=15 * 60,
-            )
-            print("    Auto-apply:")
-            print("\n".join(f"      {ln}" for ln in (r.stdout or "").splitlines()[-20:]), flush=True)
-            if r.returncode != 0:
-                print(f"    ⚠ Auto-apply exit={r.returncode}: {(r.stderr or '')[-200:]}", flush=True)
-        except Exception as e:
-            print(f"    ⚠ Auto-apply falló: {e}", flush=True)
-
-    print("════ RESUMEN ════")
-    print("\n".join(summary))
-    # 🆕 10-sep-2026: exit code real — si algún activo salió ERROR, el proceso devuelve 1
-    # para que systemd/health check lo vean (antes la re-corrida "fallida" salía exit=0).
-    errors = [s for s in summary if s.endswith(": ERROR")]
+            report.update(status='ERROR', apply_eligible=False, reason=str(e)[:1000])
+            print(f'ERROR {ticker}: {e}', flush=True)
+        (reports_dir/f'{ticker}.json').write_text(json.dumps(report, indent=2, allow_nan=False, default=str))
+        if weekly_rollout_allowed(args):
+            deployment = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=False),
+                                        cwd=str(REPO), capture_output=True, text=True, timeout=300)
+            print(f"{ticker} aplicación: {(deployment.stdout or deployment.stderr)[-1500:]}", flush=True)
+            if deployment.returncode:
+                # A deployment error may occur after commit. Preserve the file/state
+                # written by the applicator and mark the cycle failed, never claim no write.
+                report = json.loads((reports_dir/f'{ticker}.json').read_text())
+                report['deployment_error'] = (deployment.stderr or deployment.stdout)[-1000:]
+                (reports_dir/f'{ticker}.json').write_text(json.dumps(report, indent=2, allow_nan=False, default=str))
+                report['status'] = 'ERROR'
+        summary.append((ticker, report['status']))
+        if report['status'] not in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR'):
+            done.add(ticker)
+        progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}, indent=2))
+        print(f"{ticker}: {report['status']} | prospective_certified=False | weekly_rollout={weekly_rollout_allowed(args)}", flush=True)
+    if not args.skip_telemetry:
+        for script in ('trigger_parity_report.ts', 'ote_vs_directo.ts'):
+            r = subprocess.run(['npx', 'tsx', str(REPO/'scripts'/script), '--days=7'], cwd=str(REPO), capture_output=True, text=True, timeout=600)
+            print(f'{script}: exit={r.returncode}', flush=True)
+    # Prospective certification remains separate; never relabel historical evidence.
+    errors = [t for t, status in summary if status in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR')]
     if errors:
-        print(f"⚠ {len(errors)} activo(s) en ERROR — exit code 1", flush=True)
-        # El checkpoint se CONSERVA: un --resume posterior no re-corre lo ya hecho,
-        # y el ERROR queda en el panel para diagnóstico.
         return 1
-    # Ciclo completo sin errores → borrar el checkpoint (el próximo arranque es un ciclo nuevo).
-    try:
-        PROGRESS_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
+    progress_file.unlink(missing_ok=True)
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

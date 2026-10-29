@@ -1,11 +1,12 @@
 import type { ActiveTrade } from './Types.js';
 import { getDecimals } from './AlphaModel.js';
+import { getRolloverCalendar } from './RolloverSpreadGate.js';
 
 export interface FrictionConfig {
     commissionPerLot: number; // Comisión por lado (ej. $3)
     baseSpreadPips: number;   // Spread raw promedio (ej. 0.1)
     latencyMs: number;        // Latencia estimada al broker
-    rolloverPeakPips?: number; // 🛡️ sep-2026: pico de spread en 20:29-21:00 UTC (default 19; 0 = off)
+    rolloverPeakPips?: number; // Broker pause→reopen+15m (default 19; 0 = off)
 }
 
 export const defaultFrictionConfig: Record<string, FrictionConfig> = {
@@ -90,17 +91,13 @@ export function evaluateNetTrade(
     const pipValue = getPipValue(trade.ticker, trade.entryPrice);
     const decimals = getDecimals(trade.ticker);
 
-    // 1. Spread Dinámico — 🛡️ FIX rollover (sep-2026): ventana real 20:29→21:15 UTC,
-    // pico ~19 pips. Medido en vivo: feed muerto 20:29-21:00 y reapertura con cortes
-    // 21:00-21:15 con spread 15-19 pips (barridos de SL por spread puro en 21:00-21:20).
-    // Antes: hourUTC===21 con ×5 → ventana corrida (21:00-22:00, arranque de ASIA)
-    // y magnitud 38× corta (0.5 pips forex).
+    // Dynamic spread uses the same broker calendar (historical DST included).
+    // Conservative magnitude remains unchanged; zero explicitly disables for A/B.
     let activeSpreadPips = config.baseSpreadPips;
     const rolloverPeak = config.rolloverPeakPips ?? 19;
     if (rolloverPeak > 0) {
-        const _d = new Date(nowMs);
-        const minutesUTC = _d.getUTCHours() * 60 + _d.getUTCMinutes();
-        if (minutesUTC >= 20 * 60 + 29 && minutesUTC < 21 * 60 + 15) {
+        const calendar = getRolloverCalendar(trade.ticker, nowMs);
+        if (calendar.pauseStartMs !== null && calendar.reopenMs !== null && nowMs >= calendar.pauseStartMs && nowMs < calendar.reopenMs + 15 * 60_000) {
             activeSpreadPips = Math.max(activeSpreadPips, rolloverPeak);
         }
     }

@@ -1,4 +1,8 @@
-import { OHLCV, Pivot, SMCEvents } from '../types.js';
+import { OHLCV, Pivot, SMCEvents, Direction } from '../types.js';
+import { resolveSignalPolicy } from '../signal_profiles.js';
+import { isValidImpulseCandle } from '../math/directional_impulse.js';
+import type { DirectionalImpulseSnapshot } from '../math/directional_impulse.js';
+import { evaluateSweepImpulse } from '../math/sweep_absorption.js';
 import { PivotEngine } from './pivots.js';
 import { ZScoreCalculator } from '../math/zscore.js';
 
@@ -90,9 +94,9 @@ export class LiquidityEngine {
     private crtWindow: OHLCV[] = [];
     private static readonly CRT_MAX_WINDOW = 10; // máximo de velas intermedias entre V1 y V2
 
-    public constructor(zscore: ZScoreCalculator, strBars: number = 5) {
+    public constructor(zscore: ZScoreCalculator, strBars: number = 5, pivotOptions: { allowRightTies?: boolean } = {}) {
         this.zscore = zscore;
-        this.swingPivots = new PivotEngine(strBars, strBars);
+        this.swingPivots = new PivotEngine(strBars, strBars, pivotOptions);
     }
 
     /**
@@ -279,8 +283,13 @@ export class LiquidityEngine {
         candle: OHLCV,
         currentAtr: number,
         preset: any,
-        zScoreVal: number | null = null  // 🆕 Bug 2 Fix: recibido de SMCEngine, no calculado internamente
+        signal: number | null | DirectionalImpulseSnapshot = null,
+        options: { availableAt?: number; legacyZScore?: number | null } = {}
     ): Array<{ type: 'EVENT_SWEEP' } & SMCEvents['EVENT_SWEEP']> {
+        if (resolveSignalPolicy(preset ?? {}).experimental) {
+            return this.processExperimentalCandle(candle, currentAtr, preset, signal, options);
+        }
+        const zScoreVal = typeof signal === 'number' ? signal : null;
         const events: any[] = [];
         this.barCount++;
 
@@ -397,5 +406,85 @@ export class LiquidityEngine {
         return events;
     }
 
+    /** The legacy calculator is retained only for constructor/API compatibility. */
+    public rebindLegacyZScore(calculator: ZScoreCalculator): void {
+        this.zscore = calculator;
+    }
+
+    /** Query after the bar has aged; delayed mode excludes newly detected sweeps. */
+    public getSweepDirections(includeCurrentBar: boolean = true): readonly Direction[] {
+        return (['Bullish', 'Bearish'] as const).filter(direction => {
+            const age = this.barCount - this.lastSweepDirBar[direction];
+            return age >= (includeCurrentBar ? 0 : 1) && age < LiquidityEngine.SWEEP_COOLDOWN_BARS;
+        });
+    }
+
+    private processExperimentalCandle(
+        candle: OHLCV, currentAtr: number, preset: any,
+        signal: number | null | DirectionalImpulseSnapshot,
+        options: { availableAt?: number; legacyZScore?: number | null }
+    ): Array<{ type: 'EVENT_SWEEP' } & SMCEvents['EVENT_SWEEP']> {
+        const events: Array<{ type: 'EVENT_SWEEP' } & SMCEvents['EVENT_SWEEP']> = [];
+        if (!isValidImpulseCandle(candle) || (this.prevCandle && candle.timestamp <= this.prevCandle.timestamp)) return events;
+        const policy = resolveSignalPolicy(preset);
+        const availableAt = options.availableAt ?? candle.timestamp;
+        const snapshot = typeof signal === 'object' ? signal : null;
+        const legacyZ = options.legacyZScore ?? (typeof signal === 'number' ? signal : null);
+        this.barCount++;
+        this.crtWindow.push({ ...candle });
+        if (this.crtWindow.length > LiquidityEngine.CRT_MAX_WINDOW) this.crtWindow.shift();
+
+        const emit = (direction: Direction, pending: NonNullable<typeof this.pendingSweepBull>) => {
+            events.push({ type: 'EVENT_SWEEP', direction, price: pending.price, sweepType: pending.sweepType,
+                timestamp: pending.candle.timestamp, originTimestamp: pending.candle.timestamp,
+                availableAt, signalProfile: policy.profile });
+        };
+        // Delaying an already supplied closed-input snapshot does not certify a broker final.
+        if (this.pendingSweepBull) emit('Bullish', this.pendingSweepBull);
+        if (this.pendingSweepBear) emit('Bearish', this.pendingSweepBear);
+        this.pendingSweepBull = this.pendingSweepBear = null;
+
+        const range = candle.high - candle.low;
+        if (Number.isFinite(currentAtr) && currentAtr > 0 && range > 0) {
+            const low = [this.dailyLow, this.h4Low, this.asiaLow, this.lastSwingLow]
+                .find(level => Number.isFinite(level) && candle.low < level && candle.close > level);
+            const high = [this.dailyHigh, this.h4High, this.asiaHigh, this.lastSwingHigh]
+                .find(level => Number.isFinite(level) && candle.high > level && candle.close < level);
+            const minWickPct = preset.min_sweep_wick_pct ?? .5;
+            for (const direction of ['Bullish', 'Bearish'] as const) {
+                const level = direction === 'Bullish' ? low : high;
+                const previous = direction === 'Bullish' ? this.lastSweptLow : this.lastSweptHigh;
+                if (level === undefined || level === previous || !this.sweepCooldownOk(direction)) continue;
+                let sweepType: 'CRT' | 'LIQ_GRAB';
+                if (policy.sweepAbsorption) {
+                    const result = evaluateSweepImpulse({ candle, sweptLevel: level, direction, currentAtr, minWickPct, snapshot });
+                    if (!result.accepted) continue;
+                    sweepType = result.sweepType;
+                } else {
+                    // Independent ablation: use the original VWAP gate, never directional Z.
+                    const bullish = direction === 'Bullish';
+                    const wick = bullish ? Math.min(candle.open, candle.close) - candle.low : candle.high - Math.max(candle.open, candle.close);
+                    const wickPct = wick / range;
+                    const bigEnough = range >= currentAtr * .5;
+                    const grab = bigEnough && wickPct >= this.grabWickPct && range >= currentAtr * this.grabAtrMin;
+                    const crt = bigEnough && (bullish ? candle.close > candle.open : candle.close < candle.open)
+                        && wickPct + .0001 >= minWickPct && (!preset.crt_3candle_model || this.validateCRT(candle, bullish));
+                    if (!(grab || crt) || legacyZ === null || !(Math.abs(legacyZ) >= 2)) continue;
+                    sweepType = grab ? 'LIQ_GRAB' : 'CRT';
+                }
+                this.lastSweepDirBar[direction] = this.barCount;
+                if (direction === 'Bullish') this.lastSweptLow = level;
+                else this.lastSweptHigh = level;
+                const pending = { price: level, sweepType, candle: { ...candle } };
+                if (policy.sameBarSweeps) emit(direction, pending);
+                else if (direction === 'Bullish') this.pendingSweepBull = pending;
+                else this.pendingSweepBear = pending;
+            }
+        }
+        // Includes zero-range bars: CRT, aging and levels each advance exactly once.
+        this.updateLevels(candle);
+        this.prevCandle = { ...candle };
+        return events;
+    }
 
 }

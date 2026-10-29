@@ -19,6 +19,10 @@
 
 import { smcManager } from './SMCManager.js';
 import { OHLCV } from './types.js';
+import { appendExecutionEnvelope, buildExecutionObservation } from '../ExecutionContext.js';
+import type { ExecutionBar, ExecutionImpulse, ExecutionQuote } from '../ExecutionTypes.js';
+import { normalizeTimesfmTf } from '../TimesfmFilter.js';
+import { notifyTimesfmCandleClosed } from '../TimesfmLiveCacheNode.js';
 
 // Mapeo de periodos internos al formato que espera el bot (TF_WEIGHT: '5','15','60','240','D')
 const TF_MAP: Record<string, string> = {
@@ -52,6 +56,28 @@ const lastPingSent = new Map<string, number>();
 
 type AlertFn = (alertText: string) => Promise<any>;
 
+const executionClosedBars = new Map<string, ExecutionBar>();
+const executionLegs = new Map<string, { impulse: ExecutionImpulse; breakBar: ExecutionBar }>();
+let executionQuoteReader: ((ticker: string, nowMs: number) => {bid:number;ask:number;ts:number}|null) | undefined;
+const EXECUTION_DURATION: Record<string,number> = { '5':300000,'15':900000,'60':3600000,'240':14400000,D:86400000,W:604800000 };
+function executionBar(candle: OHLCV, tf: string, closed: boolean, availableAtMs: number): ExecutionBar {
+    return { tf,openTimeMs:candle.timestamp,closeTimeMs:candle.timestamp+EXECUTION_DURATION[tf],availableAtMs,open:candle.open,high:candle.high,low:candle.low,close:candle.close,closed };
+}
+function withExecutionContext(text: string, ticker: string, period: string | undefined, candle: OHLCV, previous: OHLCV | ExecutionBar | undefined, closed: boolean, observedAtMs: number, leg?: {impulse:ExecutionImpulse;breakBar:ExecutionBar}): string {
+    // Unknown source period must not acquire a guessed M15 identity.
+    const tf=period ? TF_MAP[period]??period : '';
+    if (!EXECUTION_DURATION[tf]) return text;
+    try {
+        const raw=executionQuoteReader?.(ticker,observedAtMs);
+        const quote:ExecutionQuote|undefined=raw?{bid:raw.bid,ask:raw.ask,timestampMs:raw.ts,source:'broker'}:undefined;
+        const previousClosedBar=previous?('openTimeMs' in previous?previous:executionBar(previous,tf,true,previous.timestamp+EXECUTION_DURATION[tf])):undefined;
+        return appendExecutionEnvelope(text,buildExecutionObservation({ticker,tf,observedAtMs,bar:executionBar(candle,tf,closed,observedAtMs),previousClosedBar,quote,impulse:leg?.impulse,breakBar:leg?.breakBar}));
+    } catch(e) {
+        console.warn(`[SMC-BRIDGE] Contexto EX1 omitido ${ticker}:${tf}: ${e instanceof Error?e.message:'invalid_context'}`);
+        return text;
+    }
+}
+
 function dispatch(processAlert: AlertFn, alertText: string) {
     processAlert(alertText).catch((err: any) =>
         console.error(`[SMC-BRIDGE] Error procesando "${alertText.substring(0, 60)}...":`, err.message)
@@ -63,22 +89,38 @@ function dispatch(processAlert: AlertFn, alertText: string) {
 // 🆕 TimesFM F1: alimentar el bridge residente con cada vela cerrada (fire-and-forget).
 // Si el bridge está caído la degradación es silenciosa: NUNCA frena el trading.
 const TIMESFM_BRIDGE_URL = process.env.TIMESFM_BRIDGE_URL || 'http://127.0.0.1:8788';
+let timesfmIngestUrl = TIMESFM_BRIDGE_URL;
+let timesfmIngestTfs = new Set((process.env.TIMESFM_TFS || '15,5').split(',').map(normalizeTimesfmTf).filter((v): v is number => v !== null));
+/** Explicit deployment hook; does not start timers, ingest or configure RAM. */
+export function configureTimesfmIngest(args: {tfMinutes: number[]; bridgeUrl?: string}): void {
+    timesfmIngestTfs = new Set(args.tfMinutes.filter(tf => normalizeTimesfmTf(tf) === tf));
+    if (args.bridgeUrl) timesfmIngestUrl = args.bridgeUrl.replace(/\/$/, '');
+}
 function ingestTimesfmCandle(ticker: string, period: string, candle: OHLCV) {
+    const tfMinutes = normalizeTimesfmTf(period);
+    if (tfMinutes === null || !timesfmIngestTfs.has(tfMinutes)) return;
+    const contextCloseTimeMs = candle.timestamp + tfMinutes * 60000;
+    if (!Number.isSafeInteger(contextCloseTimeMs) || contextCloseTimeMs > Date.now() || contextCloseTimeMs % (tfMinutes * 60000) !== 0 || !Number.isFinite(candle.close) || candle.close <= 0) return;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1500);
-    fetch(`${TIMESFM_BRIDGE_URL}/ingest`, {
+    fetch(`${timesfmIngestUrl}/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, tf: period, ts: candle.timestamp, close: candle.close }),
+        body: JSON.stringify({ ticker, tf: tfMinutes, ts: contextCloseTimeMs, contextCloseTimeMs, close: candle.close, schema_version: 2, timestamp_convention: 'context_close_ms_v2' }),
         signal: controller.signal,
     }).catch(() => { /* bridge caído → skip silencioso */ })
       .finally(() => clearTimeout(timer));
+    notifyTimesfmCandleClosed({ticker,tfMinutes,contextCloseTimeMs,bridgeUrl:timesfmIngestUrl});
 }
 
 function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, events: any[], isHistorical: boolean = false) {
     const [ticker, period] = key.split(':');
     const tf = TF_MAP[period] ?? period;
     const ts = isHistorical ? candle.timestamp : Date.now();
+    const observedAtMs = isHistorical ? candle.timestamp + (EXECUTION_DURATION[tf] ?? 0) : ts;
+    const cached = executionClosedBars.get(key);
+    const previous = cached && cached.closeTimeMs <= candle.timestamp ? cached : undefined;
+    if (EXECUTION_DURATION[tf] && (!cached || cached.openTimeMs < candle.timestamp)) executionClosedBars.set(key, executionBar(candle,tf,true,observedAtMs));
 
     if (!isHistorical) ingestTimesfmCandle(ticker, period, candle);
 
@@ -124,8 +166,20 @@ function handleEngineEvents(processAlert: AlertFn, key: string, candle: OHLCV, e
         }
 
         if (alert) {
+            if (ev.type === 'EVENT_CHOCH' || ev.type === 'EVENT_BOS') {
+                // Source FVGs have no impulse identifier; never attach a gap by
+                // proximity or by borrowing the previous/opposite leg's identity.
+                executionLegs.delete(key);
+                const direction=dirToBot(ev.direction), origin=ev.origin;
+                // The native structural alert initializes the real impulse at
+                // Precio=candle.close; a wick would identify a different leg.
+                const extreme=candle.close;
+                if ((ev.breakTimestamp ?? ev.timestamp ?? candle.timestamp)===candle.timestamp && Number.isFinite(origin) && origin>0 && (direction==='BUY'?extreme>origin:extreme<origin) && EXECUTION_DURATION[tf]) {
+                    executionLegs.set(key,{impulse:{direction,origin,extreme,createdAtMs:ts},breakBar:executionBar(candle,tf,true,observedAtMs)});
+                }
+            }
             if (isHistorical) alert += ' | BOOTSTRAP';
-            dispatch(processAlert, alert);
+            dispatch(processAlert, withExecutionContext(alert,ticker,period,candle,previous,true,observedAtMs,executionLegs.get(key)));
         }
     }
 }
@@ -198,7 +252,7 @@ function heartbeatTick(processAlert: AlertFn) {
 
 // ─── PING_PRICE desde ticks spot ────────────────────────────────────────────
 
-function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV, prevCandle?: OHLCV) {
+function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV, prevCandle?: OHLCV, period?: string) {
     const now = Date.now();
     if (now - (lastPingSent.get(baseTicker) ?? 0) < PING_THROTTLE_MS) return;
     lastPingSent.set(baseTicker, now);
@@ -210,7 +264,8 @@ function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV
     // estire el extreme del leg solo con velas cerradas (paridad live↔backtest).
     const prevTag = prevCandle ? ` | PrevHigh: ${fmt(prevCandle.high)} | PrevLow: ${fmt(prevCandle.low)}` : '';
 
-    dispatch(processAlert, `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${prevTag}${vwapTag} | TS: ${now}`);
+    const alert = `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${prevTag}${vwapTag} | TS: ${now}`;
+    dispatch(processAlert, withExecutionContext(alert,baseTicker,period,candle,prevCandle,false,now,period?executionLegs.get(`${baseTicker}:${period}`):undefined));
 }
 
 // ─── Inicialización ─────────────────────────────────────────────────────────
@@ -224,7 +279,8 @@ export async function initSMCBridge() {
 
     // Imports dinámicos para evitar ciclos (trading.ts y ctrader.ts son pesados)
     const { processTradingAlert } = await import('../../db/trading.js');
-    const { setSpotTickListener } = await import('../../services/ctrader.js');
+    const { setSpotTickListener, getLastBidAsk } = await import('../../services/ctrader.js');
+    executionQuoteReader = getLastBidAsk;
 
     // 🧲 Filtro de correlación cross-asset: registrar su listener ANTES del de eventos
     // para que el bootstrap histórico (getHistoricalCandles → processLiveCandles(true))
@@ -241,7 +297,7 @@ export async function initSMCBridge() {
     setInterval(() => heartbeatTick(processTradingAlert), HEARTBEAT_INTERVAL_MS);
 
     // 3. PING de precio desde ticks spot (reemplaza al PING de cierre de vela de TradingView)
-    setSpotTickListener((baseTicker, candle, prevCandle) => handleSpotTick(processTradingAlert, baseTicker, candle, prevCandle));
+    setSpotTickListener((baseTicker, candle, prevCandle, period) => handleSpotTick(processTradingAlert, baseTicker, candle, prevCandle, period));
 
     console.log('[SMC-BRIDGE] 🌉 Bridge SMC → JARVIS activo (eventos + SYNC + HEARTBEAT + PING por ticks)');
 }

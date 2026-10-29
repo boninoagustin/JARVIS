@@ -52,7 +52,11 @@ function metrics(ft: any[]) {
 }
 
 const THRESHOLDS = [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75];
-const TICKERS = ['AUDCAD', 'AUDJPY', 'EURUSD', 'GBPJPY', 'GBPUSD', 'JP225', 'NZDUSD', 'USDJPY', 'XAUUSD'];
+// Activos oficiales del roster con historia SMC lista para sweep
+const atSnap = await db.collection('optimization_config').doc('active_tickers').get();
+const TICKERS: string[] = (atSnap.exists && Array.isArray(atSnap.data()?.tickers))
+  ? atSnap.data().tickers
+  : ['AUDCAD', 'AUDJPY', 'EURUSD', 'GBPJPY', 'GBPUSD', 'JP225', 'NZDUSD', 'USDJPY', 'XAUUSD'];
 
 const out: any = {};
 for (const T of TICKERS) {
@@ -117,24 +121,19 @@ fs.writeFileSync('/opt/JARVIS/scripts/hyperopt/ml_threshold_sweep.json', JSON.st
 console.log('\n[sweep] resultados → scripts/hyperopt/ml_threshold_sweep.json');
 
 // 🆕 16-sep-2026: publicar a Firestore (ml_gate_evals/{TICKER}) para el botón GATE ML del panel.
-// El bot de producci&oacute;n NO debe correr mientras esto escribe (usa admin SDK, colección aparte).
+// El bot de producción NO debe correr mientras esto escribe (usa admin SDK, colección aparte).
 try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const admin = require('firebase-admin');
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert('/opt/JARVIS/firebase-key.json'),
-        });
-    }
-    const db = admin.firestore();
     for (const T of TICKERS) {
         const row = out[T];
+        if (!row || !row.runs || !row.runs['sin-gate']) continue;
         const sinGate = row.runs['sin-gate'];
         let best: any = null; let bestKey = '';
         for (const th of THRESHOLDS) {
             const m = row.runs[`th_${th}`];
+            if (!m) continue;
             if (!best || m.pnlR > best.pnlR) { best = m; bestKey = `th_${th}`; }
         }
+        if (!best) continue;
         await db.collection('ml_gate_evals').doc(T).set({
             ticker: T,
             modelo: row.modelo,
@@ -146,7 +145,7 @@ try {
         }, { merge: true });
     }
     console.log(`[sweep] ✅ publicado a Firestore (ml_gate_evals × ${TICKERS.length}) — visible en el panel GATE ML`);
-} catch (err) {
+} catch (err: any) {
     console.log('[sweep] ⚠️ no se pudo publicar a Firestore:', err?.message ?? err);
 }
 process.exit(0);

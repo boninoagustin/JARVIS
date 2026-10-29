@@ -2,12 +2,33 @@ import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
-import { Rocket, RefreshCw, AlertTriangle, Clock, ShieldCheck, HeartPulse } from 'lucide-react';
+import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
+
+// Legacy panel reconstructs fragments, not the certified final asset. Keep its
+// weekly apply path read-only; application belongs to the guarded applicator.
+const WEEKLY_PANEL_APPLICATION_ENABLED = false;
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
     expectancy?: number; profit_factor?: number; net_pnl_r?: number;
     max_drawdown_r?: number; win_rate?: number; trade_count?: number;
+}
+interface WeeklyFollowup { status?: string; reason?: string; at?: number | string }
+interface WeeklyApplication {
+    status?: string; reason?: string; at?: number | string; report_timestamp?: number;
+    asset_fingerprint?: string; followup?: WeeklyFollowup;
+}
+interface WeeklyApplied extends WeeklyApplication {
+    applied_asset_fingerprint?: string; prev_path?: string;
+}
+interface WeeklyAutoState {
+    applied?: Record<string, WeeklyApplied>;
+    latest?: Record<string, WeeklyApplication>;
+}
+interface WeeklyConfigMetadata {
+    autotune?: { report_timestamp?: number; applied_at_ms?: number; asset_fingerprint?: string; tracking_id?: string };
+    updatedBy?: string;
+    currentSnapshot?: Record<string, any>;
 }
 interface OptReport {
     ticker: string; timestamp: number; status: 'RECOMMEND' | 'HOLD' | 'HOLD_MC' | 'ERROR' | 'REFRESH_ERROR';
@@ -22,6 +43,12 @@ interface OptReport {
     oos_split?: { train: number; test: number };
     data_refreshed_at?: number;
     appliedAt?: number; new_trades?: number;
+    application?: WeeklyApplication;
+    followup?: WeeklyFollowup;
+    final_asset_config?: Record<string, any>;
+    final_asset_fingerprint?: string;
+    production_asset_snapshot?: Record<string, any>;
+    production_asset_fingerprint?: string;
     // 🆕 sep-2026: veredicto Monte Carlo + propuestas nuevas del dominical
     montecarlo?: { survival?: number; verdict?: string; verdict_short?: string; n?: number };
     timesfm_apply?: { minScoreToOverrideReject?: number; source?: string } | null;
@@ -51,38 +78,115 @@ interface ScoutReport { generatedAt?: string; windowDays?: number; universe?: st
 interface HealthItem { check: string; status: 'PASS' | 'WARN' | 'FAIL'; detail: string }
 interface HealthReport { timestamp: number; status: 'OK' | 'FAIL'; items: HealthItem[] }
 
-// Mapeo best_config (espacio hyperopt) → asset_configs (producción).
-// 🚫 sessions/quedan fuera: el hyperopt las optimiza con el esquema del backtest
-//    (tp2/slBuff por gatillo) que NO mapea 1:1 al esquema live → F3 con validación.
-const APPLY_FIELDS: { src: string; dst: string; label: string; fmt: (v: any) => string }[] = [
-    { src: 'minBuyPoints', dst: 'minPointsForBuy', label: 'Puntos Mín. BUY', fmt: v => String(Math.round(v)) },
-    { src: 'minSellPoints', dst: 'minPointsForSell', label: 'Puntos Mín. SELL', fmt: v => String(Math.round(v)) },
-    // 🆕 sep-2026 (A/B VWAP): peso del evento VWAP en el scoring (por activo)
-    { src: 'vwapPts', dst: 'vwapPts', label: 'Peso VWAP (pts)', fmt: v => String(Math.round(v)) },
-    // 🆕 sep-2026 (Capa 1): pesos de zona × sesión (OB/GOD/SB/BREAKER/SWEEP/DIV × sesión)
-    { src: 'zoneWeights', dst: 'zoneWeights', label: 'Pesos de zona × sesión', fmt: v => JSON.stringify(v) },
-    { src: 'fixedRR', dst: 'fixedRR', label: 'R:R Fijo (TP2)', fmt: v => Number(v).toFixed(2) },
-    { src: 'slBufferPercent', dst: 'slBufferPercent', label: 'SL Buffer %', fmt: v => Number(v).toFixed(3) },
-    { src: 'oteEntryPercent', dst: 'oteEntryPercent', label: 'OTE Entry %', fmt: v => String(Math.round(v)) },
-    { src: 'minimal_roi', dst: 'minimal_roi', label: 'ROI time-decay', fmt: v => JSON.stringify(v) },
-    // F3-etapa3: TP1 estructural a nivel activo (fallback cuando el gatillo no lo tiene)
-    { src: 'tp1StructuralMinRR', dst: 'tp1StructuralMinRR', label: 'TP1 min RR estructural', fmt: v => Number(v).toFixed(2) },
-];
 
 const fmtR = (v?: number) => (v === undefined || v === null ? '—' : Number(v).toFixed(2));
 const fmtPct = (v?: number) => (v === undefined || v === null ? '—' : `${(v * 100).toFixed(1)}%`);
 
+// Browser-safe identity comparison: never import the Node-only hashing/protocol
+// module into Vite. Display a recorded hash only after matching its exact payload.
+function normalizedSnapshot(value: any): string {
+    const normalize = (item: any): any => Array.isArray(item) ? item.map(normalize)
+        : item !== null && typeof item === 'object'
+            ? Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]))
+            : item;
+    return JSON.stringify(normalize(JSON.parse(JSON.stringify(value))));
+}
+
+function weeklyOperationalStatus(report: OptReport, autoState: WeeklyAutoState = {}, config: WeeklyConfigMetadata = {}, stateError: string | null = null) {
+    const applied = autoState.applied?.[report.ticker];
+    const latest = autoState.latest?.[report.ticker];
+    // A prior application must never mark a new weekly candidate as applied.
+    const validReportTimestamp = typeof report.timestamp === 'number' && Number.isFinite(report.timestamp);
+    const sameReport = (entry?: WeeklyApplication) => validReportTimestamp && entry?.report_timestamp === report.timestamp;
+    const application = (sameReport(latest) ? latest : undefined) ?? report.application;
+    const appliedForReport = sameReport(applied) ? applied : undefined;
+    const metadataForReport = validReportTimestamp && config.autotune?.report_timestamp === report.timestamp ? config.autotune : undefined;
+    const applicationStatus = application?.status ?? (appliedForReport || metadataForReport ? 'APPLIED' : undefined);
+    const currentFollowup = (sameReport(latest) ? latest?.followup : undefined) ?? report.followup ?? report.application?.followup;
+    // Keep the previous config's pending/review evidence visible when a new report replaces it.
+    const followup = currentFollowup ?? applied?.followup ?? latest?.followup;
+    const followupReportTimestamp = currentFollowup ? report.timestamp
+        : applied?.followup ? applied.report_timestamp : latest?.followup ? latest.report_timestamp : undefined;
+    let followupLabel = 'Seguimiento posterior: sin información';
+    switch (followup?.status) {
+        case 'PENDING': followupLabel = 'Seguimiento posterior pendiente (PENDING)'; break;
+        case 'KEEP': followupLabel = 'Seguimiento posterior: conservar (KEEP)'; break;
+        case 'ROLLBACK': followupLabel = 'Seguimiento posterior: revertir (ROLLBACK)'; break;
+        case undefined: break;
+        default: followupLabel = `Seguimiento posterior: estado desconocido (${followup?.status})`;
+    }
+    let applicationLabel = 'Aplicación sin información';
+    switch (applicationStatus) {
+        case 'APPLIED': applicationLabel = 'Aplicada automáticamente'; break;
+        case 'UNCHANGED': applicationLabel = 'Se conserva la configuración válida anterior'; break;
+        case 'BLOCKED': applicationLabel = 'Aplicación bloqueada'; break;
+        case 'ROLLED_BACK': applicationLabel = 'Restaurada la configuración válida anterior'; break;
+        case 'ERROR': applicationLabel = 'Error de aplicación'; break;
+        case undefined:
+            if (stateError) applicationLabel = 'Estado automático no disponible';
+            else if (report.appliedAt) applicationLabel = 'Aplicación registrada (legado)';
+            else if (report.status === 'RECOMMEND') applicationLabel = 'Recomendada · aplicación automática pendiente';
+            else if (report.status === 'HOLD' || report.status === 'HOLD_MC') applicationLabel = 'Se conserva la configuración válida anterior';
+            break;
+        default: applicationLabel = `Estado de aplicación desconocido (${applicationStatus})`;
+    }
+    let version = config.autotune?.asset_fingerprint || 'Sin versión informada';
+    if (config.currentSnapshot && (report.final_asset_config || report.production_asset_snapshot)) {
+        const current = normalizedSnapshot(config.currentSnapshot);
+        if (report.final_asset_config && current === normalizedSnapshot(report.final_asset_config) && report.final_asset_fingerprint)
+            version = report.final_asset_fingerprint;
+        else if (report.production_asset_snapshot && current === normalizedSnapshot(report.production_asset_snapshot) && report.production_asset_fingerprint)
+            version = report.production_asset_fingerprint;
+        else version = 'Configuración actual diferente de los snapshots del reporte';
+    }
+    return {
+        applicationLabel,
+        reason: application?.reason ?? (applicationStatus === 'BLOCKED' || applicationStatus === 'ERROR' ? 'Sin motivo informado' : report.reason),
+        appliedAt: application?.at ?? (applicationStatus === 'APPLIED'
+            ? appliedForReport?.at ?? metadataForReport?.applied_at_ms
+            : applicationStatus === undefined ? report.appliedAt : undefined),
+        version,
+        trackingId: config.autotune?.tracking_id ?? (application as any)?.tracking_id,
+        updatedBy: config.updatedBy,
+        registeredVersion: applied?.applied_asset_fingerprint,
+        followupLabel,
+        followupReason: followup?.reason === 'future_interval_not_yet_available'
+            ? 'Todavía no hay datos posteriores a la aplicación para comparar. La optimización ya está aplicada.'
+            : followup?.reason === 'insufficient_trades' ? 'Todavía no hay suficientes operaciones para comparar ambas configuraciones.'
+                : followup?.reason,
+        followupReportTimestamp,
+    };
+}
+
+function WeeklyOperationalStatus({ report, autoState = {}, config = {}, stateError = null }: {
+    report: OptReport; autoState?: WeeklyAutoState; config?: WeeklyConfigMetadata; stateError?: string | null;
+}) {
+    const status = weeklyOperationalStatus(report, autoState, config, stateError);
+    const date = status.appliedAt ? new Date(status.appliedAt) : null;
+    return <div role="status" style={{ marginTop: '16px', padding: '12px', border: '1px solid #333', borderRadius: '4px', color: '#ccc', fontSize: '0.8rem' }}>
+        <b>{status.applicationLabel}</b>
+        {stateError && <div style={{ color: '#ffaa00' }}>{stateError}</div>}
+        {date && Number.isFinite(date.getTime()) && <div>Fecha registrada: {date.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}</div>}
+        {status.reason && <div>{status.reason}</div>}
+        <div style={{ marginTop: '8px', overflowWrap: 'anywhere' }}>Versión de configuración actual (metadatos): <code>{status.version}</code></div>
+        {status.trackingId && <div>Seguimiento: <code>{status.trackingId}</code></div>}
+        {status.updatedBy && <div>Actualizada por: {status.updatedBy}</div>}
+        {status.registeredVersion && status.registeredVersion !== status.version && <div style={{ overflowWrap: 'anywhere' }}>Última versión automática registrada: <code>{status.registeredVersion}</code></div>}
+        <div style={{ marginTop: '8px' }}><b>{status.followupLabel}</b></div>
+        {status.followupReportTimestamp !== undefined && status.followupReportTimestamp !== report.timestamp && <div>Revisión de una aplicación anterior · reporte {new Date(status.followupReportTimestamp).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}</div>}
+        {status.followupReason && <div>{status.followupReason}</div>}
+        <div style={{ marginTop: '8px', color: '#888' }}>Estado registrado en almacenamiento; sin confirmación de recepción del bot.</div>
+    </div>;
+}
+
 export default function PeriodicOptPanel() {
     const { toast } = useToast();
     const [reports, setReports] = useState<OptReport[]>([]);
+    const [autoState, setAutoState] = useState<WeeklyAutoState>({});
+    const [configMetadata, setConfigMetadata] = useState<Record<string, WeeklyConfigMetadata>>({});
+    const [stateError, setStateError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
-    const [confirming, setConfirming] = useState<{
-        ticker: string;
-        diff: { label: string; old: string; new: string }[];
-        mergedSessions: Record<string, Record<string, any>> | null;
-        mergedTimesfm: Record<string, any> | null;
-        mergedBias: any;
-    } | null>(null);
+
     const [applying, setApplying] = useState<string | null>(null);
     const [health, setHealth] = useState<HealthReport | null>(null);
     // 🆕 sep-2026: reporte de gatillos perdedores (gatillo×sesión) + desactivar activo
@@ -121,7 +225,30 @@ export default function PeriodicOptPanel() {
     const fetchReports = async () => {
         setLoading(true);
         try {
-            const snap = await getDocs(collection(db, 'opt_reports'));
+            // Refresh all lifecycle evidence together; a denied auxiliary read must
+            // not hide reports or silently leave a stale version/status on screen.
+            const [reportResult, autoResult, configResult] = await Promise.allSettled([
+                getDocs(collection(db, 'opt_reports')),
+                getDoc(doc(db, 'optimization_config', 'auto_state')),
+                getDocs(collection(db, 'asset_configs')),
+            ]);
+            setAutoState(autoResult.status === 'fulfilled' && autoResult.value.exists()
+                ? autoResult.value.data() as WeeklyAutoState : {});
+            const metadata: Record<string, WeeklyConfigMetadata> = {};
+            if (configResult.status === 'fulfilled') {
+                configResult.value.forEach(d => {
+                    if (d.id === 'GLOBAL') return;
+                    const c = d.data();
+                    metadata[d.id] = { autotune: c.autotune, updatedBy: c.updatedBy, currentSnapshot: c };
+                });
+            }
+            setConfigMetadata(metadata);
+            const errors = [];
+            if (autoResult.status === 'rejected') errors.push('No se pudo consultar el estado automático.');
+            if (configResult.status === 'rejected') errors.push('No se pudo consultar la versión de configuración actual.');
+            setStateError(errors.join(' ') || null);
+            if (reportResult.status === 'rejected') throw reportResult.reason;
+            const snap = reportResult.value;
             // 🩺 FIX key-warning: opt_reports también guarda docs sin ticker (ej. PARITY_LIVE_VS_BACKTEST
             // del report de paridad), que no son reports por activo. Filtrarlos evita key={undefined}
             // en el map de abajo (warning de React) y que aparezcan como tarjetas fantasma.
@@ -385,97 +512,25 @@ export default function PeriodicOptPanel() {
 
     useEffect(() => { fetchReports(); fetchHealth(); fetchLoser(); fetchScout(); }, []);
 
-    const prepareApply = async (report: OptReport) => {
-        const ticker = report.ticker;
-        const currentSnap = await getDoc(doc(db, 'asset_configs', ticker));
-        const current = currentSnap.exists() ? currentSnap.data() : {};
-        const diff: { label: string; old: string; new: string }[] = [];
-        for (const f of APPLY_FIELDS) {
-            const proposed = report.best_config?.[f.src];
-            if (proposed === undefined || proposed === null) continue;
-            const cur = current[f.dst];
-            const newStr = f.fmt(proposed);
-            const oldStr = cur === undefined || cur === null ? '(sin configurar)' : f.fmt(cur);
-            if (oldStr !== newStr) diff.push({ label: f.label, old: oldStr, new: newStr });
-        }
-        // Sesiones: SOLO enabled/entryPercent por gatillo (lo que el motor live lee).
-        // Merge profundo: Firestore merge es shallow — si no fusionamos acá, se pisa toda la sesión.
-        let mergedSessions: Record<string, Record<string, any>> | null = null;
-        const sessionDiff: { label: string; old: string; new: string }[] = [];
-        if (report.session_apply && Object.keys(report.session_apply).length > 0) {
-            const currentSessions = (current.sessions || {}) as Record<string, Record<string, any>>;
-            mergedSessions = JSON.parse(JSON.stringify(currentSessions));
-            for (const [session, triggers] of Object.entries(report.session_apply)) {
-                mergedSessions[session] = mergedSessions[session] || {};
-                for (const [trig, changes] of Object.entries(triggers)) {
-                    // 🆕 11-sep-2026: política gatillo-por-gatillo (solo-5M derogada por Bon):
-                    // los 15m ganadores (AUDJPY/XAUUSD.oteChoch15m) ahora se proponen y aplican.
-                    mergedSessions[session][trig] = { ...(mergedSessions[session][trig] || {}), ...changes };
-                    const curT = currentSessions[session]?.[trig] || {};
-                    for (const [k, v] of Object.entries(changes)) {
-                        const oldV = curT[k] === undefined ? '(sin configurar)' : String(curT[k]);
-                        if (String(v) !== String(curT[k])) sessionDiff.push({ label: `${session}/${trig} · ${k}`, old: oldV, new: String(v) });
-                    }
-                }
-            }
-        }
-        diff.push(...sessionDiff);
-        // 🆕 sep-2026: umbral TimesFM tuneado por activo — merge PROFUNDO del bloque timesfm
-        let mergedTimesfm: Record<string, any> | null = null;
-        const tfProposed = report.timesfm_apply?.minScoreToOverrideReject;
-        if (tfProposed !== undefined && tfProposed !== null) {
-            const curTf = (current.timesfm || {}) as Record<string, any>;
-            if ((curTf.minScoreToOverrideReject ?? 15) !== tfProposed) {
-                mergedTimesfm = { ...curTf, minScoreToOverrideReject: tfProposed };
-                diff.push({ label: '🌙 TimesFM umbral', old: String(curTf.minScoreToOverrideReject ?? 15), new: String(tfProposed) });
-            }
-        }
-        // 🆕 sep-2026: confluencia de bias por activo (bono de alineación)
-        let mergedBias: any = null;
-        const bcRec = report.bias_confluence?.recommended?.bc;
-        if (bcRec && Array.isArray(bcRec.tfs) && bcRec.tfs.length) {
-            const curBc = (current.biasConfluence || {}) as any;
-            const newStr = JSON.stringify(bcRec);
-            const oldStr = curBc && Object.keys(curBc).length ? JSON.stringify(curBc) : '(default 3/3 macro)';
-            if (oldStr !== newStr) {
-                mergedBias = bcRec;
-                diff.push({ label: '🧭 Bias confluencia', old: oldStr, new: newStr });
-            }
-        }
-        if (diff.length === 0) {
-            toast(`La propuesta de ${ticker} ya está aplicada — no hay cambios`, 'success');
+    const prepareApply = async (_report: OptReport) => {
+        if (!WEEKLY_PANEL_APPLICATION_ENABLED) {
+            toast('La aplicación semanal es automática. Este panel sólo muestra su estado; no reconstruye propuestas parciales.', 'error');
             return;
         }
-        setConfirming({ ticker, diff, mergedSessions, mergedTimesfm, mergedBias });
+        // Retired permanently: changing the legacy flag cannot restore partial merges.
     };
 
     const confirmApply = async () => {
-        if (!confirming) return;
-        const ticker = confirming.ticker;
-        setApplying(ticker);
-        try {
-            const report = reports.find(r => r.ticker === ticker)!;
-            const payload: Record<string, any> = { updatedAt: new Date().toISOString(), updatedBy: 'periodic_opt' };
-            for (const f of APPLY_FIELDS) {
-                const proposed = report.best_config?.[f.src];
-                if (proposed !== undefined && proposed !== null) payload[f.dst] = proposed;
-            }
-            if (confirming.mergedSessions) payload.sessions = confirming.mergedSessions;
-            // 🆕 sep-2026: bloque timesfm (merge profundo) y confluencia de bias
-            if (confirming.mergedTimesfm) payload.timesfm = confirming.mergedTimesfm;
-            if (confirming.mergedBias) payload.biasConfluence = confirming.mergedBias;
-            await setDoc(doc(db, 'asset_configs', ticker), payload, { merge: true });
-            await setDoc(doc(db, 'opt_reports', ticker), { appliedAt: Date.now(), appliedBy: 'operador' }, { merge: true });
-            toast(`✅ Optimización aplicada para ${ticker}`, 'success');
-            setConfirming(null);
-            fetchReports();
-        } catch (e) {
-            console.error(e);
-            toast(`❌ Error aplicando optimización de ${ticker}`, 'error');
-        } finally {
-            setApplying(null);
+        if (!WEEKLY_PANEL_APPLICATION_ENABLED) {
+            toast('Aplicación desde este panel suspendida: usar el candidato final y el aplicador certificado.', 'error');
+            return;
         }
+        // No legacy write path, even if called directly with stale UI state.
     };
+
+    // Retained only as defensive legacy entrypoints; no UI can invoke these merges.
+    void prepareApply;
+    void confirmApply;
 
     // 🆕 sep-2026: DESACTIVAR activo (killswitch maestro, sobrevive al tune — solo mergea sessions)
     const confirmDisable = async () => {
@@ -552,8 +607,8 @@ export default function PeriodicOptPanel() {
     };
 
     const statusBadge = (r: OptReport) => {
-        if (r.appliedAt) return <span style={{ ...badge, background: '#0088ff20', color: '#0088ff', borderColor: '#0088ff40' }}>✓ APLICADA</span>;
-        if (r.status === 'RECOMMEND') return <span style={{ ...badge, background: '#00e67620', color: '#00e676', borderColor: '#00e67640' }}>● RECOMIENDA APLICAR</span>;
+        // This badge is the report verdict, not evidence of application or bot receipt.
+        if (r.status === 'RECOMMEND') return <span style={{ ...badge, background: '#00e67620', color: '#00e676', borderColor: '#00e67640' }}>● RECOMENDADA</span>;
         if (r.status === 'HOLD_MC') return <span style={{ ...badge, background: '#ffaa0020', color: '#ffaa00', borderColor: '#ffaa0040' }}>⛔ SIN EDGE (MC)</span>;
         if (r.status === 'ERROR') return <span style={{ ...badge, background: '#ff333320', color: '#ff3333', borderColor: '#ff333340' }}>⚠ ERROR</span>;
         return <span style={{ ...badge, background: '#333', color: '#aaa', borderColor: '#444' }}>— SIN CAMBIOS</span>;
@@ -710,7 +765,7 @@ export default function PeriodicOptPanel() {
                             </span>
                         )}
                         {r.timesfm_apply?.minScoreToOverrideReject !== undefined && r.timesfm_apply?.minScoreToOverrideReject !== null && (
-                            <span title="Umbral del filtro TimesFM tuneado por activo (se aplica con el botón de abajo)">
+                            <span title="Umbral propuesto para el candidato semanal; consultar el estado de aplicación automática">
                                 🌙 <b>TimesFM umbral propuesto:</b> {r.timesfm_apply.minScoreToOverrideReject}
                             </span>
                         )}
@@ -722,19 +777,12 @@ export default function PeriodicOptPanel() {
                     </div>
                     {r.session_apply && Object.keys(r.session_apply).length > 0 && (
                         <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '8px', marginBottom: 0 }}>
-                            ⚙️ La propuesta incluye ajustes por gatillo (enabled/entryPercent) — se muestran en el modal de confirmación.
+                            ⚙️ La propuesta incluye ajustes por gatillo (enabled/entryPercent); su aplicación depende del proceso automático.
                         </p>
                     )}
 
-                    {r.status === 'RECOMMEND' && !r.appliedAt && (
-                        <button
-                            onClick={() => prepareApply(r)}
-                            disabled={applying === r.ticker}
-                            style={{ marginTop: '16px', padding: '10px 20px', background: '#00e676', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: applying === r.ticker ? 'wait' : 'pointer' }}
-                        >
-                            {applying === r.ticker ? 'APLICANDO...' : 'REVISAR Y APLICAR'}
-                        </button>
-                    )}
+
+                    <WeeklyOperationalStatus report={r} autoState={autoState} config={configMetadata[r.ticker]} stateError={stateError} />
 
                     {/* 🆕 sep-2026: HOLD_MC + producción perdiendo → sugerencia de desactivar el activo */}
                     {r.status === 'HOLD_MC' && !r.appliedAt && assetEnabled[r.ticker] !== false && (r.production_oos?.net_pnl_r ?? 0) < 0 && (
@@ -747,7 +795,7 @@ export default function PeriodicOptPanel() {
                                 {applying === r.ticker ? 'APLICANDO...' : '🔴 DESACTIVAR ACTIVO'}
                             </button>
                             <span style={{ fontSize: '0.75rem', color: '#ffaa00' }}>
-                                El backtest propone mejorar, pero el Monte Carlo no confirma edge y la producción OOS pierde {fmtR(r.production_oos.net_pnl_r)}R. Si lo dejás, seguí de cerca.
+                                El backtest propone mejorar, pero el Monte Carlo no confirma edge y la producción OOS pierde {fmtR(r.production_oos?.net_pnl_r)}R. Si lo dejás, seguí de cerca.
                             </span>
                         </div>
                     )}
@@ -763,7 +811,7 @@ export default function PeriodicOptPanel() {
                                 {applying === r.ticker ? 'APLICANDO...' : '🔵 ACTIVAR ACTIVO'}
                             </button>
                             <span style={{ fontSize: '0.75rem', color: '#888' }}>
-                                Este activo está desactivado o nunca operó. Activarlo deja que el bot entre en sus señales (aplicá primero la optimización si querés la config fina).
+                                Este activo está desactivado o nunca operó. Revisá la versión y el estado de la configuración automática antes de activarlo.
                             </span>
                         </div>
                     )}
@@ -872,7 +920,7 @@ export default function PeriodicOptPanel() {
                                             <td style={{ padding: '6px 8px', color: '#e6e6e6', fontWeight: 600 }}>{row.ticker}</td>
                                             <td style={{ padding: '6px 8px', color: '#aaa' }}>{row.cat}</td>
                                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: row.error ? '#ff6666' : '#aaa' }}>{row.error ? '⚠' : row.win84?.n ?? '—'}</td>
-                                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#aaa' }}>{row.error ? '—' : (row.win84?.pf ?? '—').toFixed(2)}</td>
+                                            <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#aaa' }}>{row.error ? '—' : row.win84?.pf?.toFixed(2) ?? '—'}</td>
                                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: (row.win84?.netR ?? 0) >= 0 ? '#00e676' : '#ff6666' }}>{row.error ? '—' : (row.win84?.netR ?? 0).toFixed(1)}</td>
                                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#aaa' }}>{row.error ? '—' : (row.win84?.maxDD ?? 0).toFixed(1)}</td>
                                             <td style={{ padding: '6px 8px', fontWeight: 700, color: vColor }}>{row.error ? 'ERROR' : v}</td>
@@ -900,41 +948,6 @@ export default function PeriodicOptPanel() {
                 </div>
             )}
 
-            {/* Modal de confirmación con diff */}
-            {confirming && (
-                <div className="modal-overlay" onClick={() => setConfirming(null)}>
-                    <div className="modal-content-premium" onClick={e => e.stopPropagation()} style={{ borderColor: 'var(--border-color)', maxWidth: '460px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                        <div className="modal-header-premium" style={{ justifyContent: 'space-between', width: '100%', flexShrink: 0 }}>
-                            <span style={{ color: 'var(--accent-gold)' }}>🚀</span>
-                            <h3 style={{ margin: 0 }}>APLICAR OPTIMIZACIÓN — {confirming.ticker}</h3>
-                        </div>
-                        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, paddingRight: '4px' }}>
-                        <p style={{ fontSize: '0.8rem', color: '#888' }}>Cambios que se van a escribir en asset_configs:</p>
-                        <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
-                            <tbody>
-                                {confirming.diff.map(d => (
-                                    <tr key={d.label} style={{ borderBottom: '1px solid #1a1a1a' }}>
-                                        <td style={{ padding: '8px 4px', color: '#aaa' }}>{d.label}</td>
-                                        <td style={{ padding: '8px 4px', color: '#ff3333', fontFamily: 'monospace' }}>{d.old}</td>
-                                        <td style={{ padding: '8px 4px', color: '#888' }}>→</td>
-                                        <td style={{ padding: '8px 4px', color: '#00e676', fontFamily: 'monospace' }}>{d.new}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '8px' }}>
-                            <ShieldCheck size={12} style={{ verticalAlign: '-2px' }} /> Se escribe SOLO lo listado (merge). Sesiones/gatillos no se tocan. El bot toma la config nueva al instante (listener Firestore).
-                        </p>
-                        </div>
-                        <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexShrink: 0 }}>
-                            <button onClick={() => setConfirming(null)} style={{ flex: 1, padding: '10px', background: '#111', color: '#e6e6e6', border: '1px solid #333', borderRadius: '4px', cursor: 'pointer' }}>Cancelar</button>
-                            <button onClick={confirmApply} disabled={applying === confirming.ticker} style={{ flex: 1, padding: '10px', background: '#00e676', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 700, cursor: applying === confirming.ticker ? 'wait' : 'pointer' }}>
-                                {applying === confirming.ticker ? 'APLICANDO...' : 'CONFIRMAR'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* 🆕 sep-2026: modal de confirmación para DESACTIVAR activo */}
             {disabling && (
@@ -975,7 +988,7 @@ export default function PeriodicOptPanel() {
                                 Vas a escribir <b>enabled=true</b> en asset_configs/{activating}.
                             </p>
                             <p style={{ fontSize: '0.8rem', color: '#aaa' }}>
-                                El bot empieza a tomar señales de este activo al instante (listener Firestore). Si el activo nunca operó, conviene aplicar primero la optimización recomendada (botón verde) para que entre con la config fina del dominical y no con defaults.
+                                Activarlo permite que el bot tome señales de este activo. Antes de hacerlo, verificá la versión y el estado de la aplicación automática para evitar operar con una configuración no revisada.
                             </p>
                         </div>
                         <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexShrink: 0 }}>

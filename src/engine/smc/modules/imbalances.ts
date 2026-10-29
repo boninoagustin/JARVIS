@@ -1,5 +1,7 @@
 // src/engine/smc/modules/imbalances.ts
 import { OHLCV, Imbalance, SMCPreset } from '../types.js';
+import { resolveSignalPolicy } from '../signal_profiles.js';
+import { isValidImpulseCandle } from '../math/directional_impulse.js';
 
 export class ImbalanceEngine {
     private history: OHLCV[] = [];
@@ -14,6 +16,7 @@ export class ImbalanceEngine {
         preset: SMCPreset,
         periodMs?: number
     ): Array<any> {
+        const policy = resolveSignalPolicy(preset);
         const events: any[] = [];
         this.history.push(candle);
 
@@ -129,16 +132,27 @@ export class ImbalanceEngine {
             const hasTimeGap = periodMs !== undefined && periodMs > 0 &&
                 (c0.timestamp - c1.timestamp > periodMs * 2.5 || c1.timestamp - c2.timestamp > periodMs * 2.5);
 
-            const fvgAtrMult = preset.fvg_min_atr_factor !== undefined ? preset.fvg_min_atr_factor : 0.5;
+            const fvgAtrMult = policy.fvgQuality ? policy.fvg.minAtr :
+                (preset.fvg_min_atr_factor !== undefined ? preset.fvg_min_atr_factor : 0.5);
             const minGapSize = currentAtr * fvgAtrMult;
+            // Experimental .55 body / max 3 ATR are the user variant, not Pine parity.
+            // Lifecycle above is deliberately unchanged, including mitigated FVG -> iFVG.
+            const qualityReady = !policy.fvgQuality || (
+                Number.isFinite(currentAtr) && currentAtr > 0 &&
+                [c2, c1, c0].every(isValidImpulseCandle) &&
+                c2.timestamp < c1.timestamp && c1.timestamp < c0.timestamp &&
+                c1.high > c1.low && Math.abs(c1.close - c1.open) / (c1.high - c1.low) >= policy.fvg.minBodyFraction
+            );
+            const qualityGap = (gap: number) => qualityReady && (!policy.fvgQuality || gap <= currentAtr * policy.fvg.maxAtr);
 
             // Detección FVG Alcista
             if (!hasTimeGap && c0.low > c2.high) {
                 const gapSize = c0.low - c2.high;
-                if (gapSize >= minGapSize && (preset.require_displacement ? c1.close > c1.open : true)) {
+                if (gapSize >= minGapSize && qualityGap(gapSize) && (preset.require_displacement ? c1.close > c1.open : true)) {
                     const fvg: Imbalance = {
                         id: `FVG-BULL-${c1.timestamp}`,
                         timestamp: c1.timestamp,
+                        ...(policy.experimental ? { availableAt: c0.timestamp } : {}),
                         direction: 'Bullish',
                         top: c0.low,
                         bottom: c2.high,
@@ -155,10 +169,11 @@ export class ImbalanceEngine {
             // Detección FVG Bajista
             if (!hasTimeGap && c0.high < c2.low) {
                 const gapSize = c2.low - c0.high;
-                if (gapSize >= minGapSize && (preset.require_displacement ? c1.close < c1.open : true)) {
+                if (gapSize >= minGapSize && qualityGap(gapSize) && (preset.require_displacement ? c1.close < c1.open : true)) {
                     const fvg: Imbalance = {
                         id: `FVG-BEAR-${c1.timestamp}`,
                         timestamp: c1.timestamp,
+                        ...(policy.experimental ? { availableAt: c0.timestamp } : {}),
                         direction: 'Bearish',
                         top: c2.low,
                         bottom: c0.high,

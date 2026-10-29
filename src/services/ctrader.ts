@@ -14,11 +14,17 @@
 
 import { config } from '../config.js';
 import { refreshIfNeeded, startTokenAutoRenewal, refreshCtraderToken } from './ctraderToken.js';
-import { TrendbarPeriod, PayloadType } from 'ctrader-ts';
+import { TrendbarPeriod, PayloadType, CTraderTrading } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
 import { tickFlow } from '../engine/TickFlow.js';
-import { computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
+import { notifyRolloverVerifiedFill } from '../engine/RolloverLiveFillRegistry.js';
+import { registerRolloverSchedule, evaluateRolloverEntryGate } from '../engine/RolloverSpreadGate.js';
+import { getRolloverSpreadReference } from '../engine/RolloverSpreadReference.js';
+import type { ExecutionInstrument } from '../engine/ExecutionTypes.js';
+import { classifyExecutionRegime, validateExecutionInstrument } from '../engine/ExecutionCosts.js';
+import { createTradeRiskSnapshot, type TradeRiskSnapshot } from '../engine/TradeRisk.js';
+import { validateOrderLevels, sizeOrderVolume, lossConversionRate, validateBrokerOrderMetadata, orderCommission, prepareBrokerDispatch, authorizedBrokerRequest, isAuthoritativeBrokerRejection } from '../engine/OrderSafety.js';
 
 // ─── Types ───
 
@@ -31,6 +37,9 @@ export interface CTraderOrderParams {
     tp2Price?: number;
     riskPercent?: number;   // Override risk per trade (default from config)
     tradeId: string;        // JARVIS internal trade ID for tracking
+    minimumRR?: number; // Optional existing strategy requirement; no universal RR gate.
+    beforeExecution?: () => Promise<string | null>;
+    rolloverEntryBlock?: boolean;
 }
 
 export interface CTraderOrderResult {
@@ -38,7 +47,11 @@ export interface CTraderOrderResult {
     positionId?: string;
     executedPrice?: number;
     lots?: number;
+    riskSnapshot?: TradeRiskSnapshot;
+    filledVolumeCents?: number;
+    riskBudgetAccount?: number;
     error?: string;
+    executionUncertain?: boolean; // Never automatically retry an ambiguous broker send.
 }
 
 export interface CTraderAccountInfo {
@@ -54,10 +67,67 @@ export let ctClient: any = null;
 // 🛡️ 24-sep-2026: moneda de depósito de la cuenta detectada de cTrader (no fija).
 // detectAccountCurrency() la setea al conectar; getAccountInfo la usa para account_state.
 let accountCurrency: string | null = null;
+let executionAccountCurrencyVerified = false;
 export function getAccountCurrency(): string { return accountCurrency || 'USD'; }
+/** Accounting must never treat the display fallback as broker evidence. */
+export function getVerifiedAccountCurrency(): string | null { return executionAccountCurrencyVerified ? accountCurrency : null; }
+
+// Experimental, read-only metadata. Populated only by requests/events already
+// in the existing pipeline; the getter below NEVER connects or queries a broker.
+const executionSymbolMetadata = new Map<string, any>();
+const executionAssetNames = new Map<number, string>();
+const executionExitCosts = new Map<string, {commissionPerLot:number;currency:string;slippagePrice:number;timestampMs:number}>();
+function cacheExecutionSymbol(ticker: string, info: any): void {
+    if (!info || !Number.isFinite(info.symbolId)) return;
+    const light=ctClient?.symbols?.idToSymbol?.get(Number(info.symbolId));
+    executionSymbolMetadata.set(ticker.toUpperCase(),{...info,safetyFetchedAtMs:Date.now(),baseAssetId:info.baseAssetId??light?.baseAssetId,quoteAssetId:info.quoteAssetId??light?.quoteAssetId});
+}
+function executionUsdRate(currency: string, nowMs: number): number | undefined {
+    if (currency==='USD') return 1;
+    for (const [ticker,meta] of executionSymbolMetadata) {
+        const base=executionAssetNames.get(meta.baseAssetId), quote=executionAssetNames.get(meta.quoteAssetId);
+        const q=getLastBidAsk(ticker,nowMs);
+        if (!q || !(q.bid>0 && q.ask>=q.bid) || q.ts>nowMs || nowMs-q.ts>10000) continue;
+        // Conservative liquidation conversion; do not infer FX from a CFD name.
+        if (base===currency && quote==='USD') return q.bid;
+        if (base==='USD' && quote===currency) return 1/q.bid;
+    }
+    return undefined;
+}
+function captureExecutionExitCosts(event: any): void {
+    const d=event?.deal, symbolId=Number(event?.position?.tradeData?.symbolId??event?.order?.tradeData?.symbolId);
+    const ticker=symbolToTicker.get(symbolId)?.toUpperCase(), meta=ticker?executionSymbolMetadata.get(ticker):undefined;
+    const nowMs=Date.now(), ts=Number(d?.executionTimestamp), volume=Number(d?.volume), price=Number(d?.executionPrice), digits=Number(d?.moneyDigits);
+    if (!ticker || !meta || !executionAccountCurrencyVerified || !accountCurrency || !d?.closePositionDetail || ![2,3].includes(Number(d.dealStatus)) || !Number.isFinite(ts) || ts>nowMs || nowMs-ts>10000 || !Number.isFinite(volume) || volume<=0 || !Number.isFinite(meta.lotSize) || meta.lotSize<=0 || !Number.isFinite(price) || price<=0 || !Number.isInteger(digits) || digits<0 || digits>8 || !Number.isFinite(d.commission) || ![1,2].includes(d.tradeSide)) return;
+    const q=getLastBidAsk(ticker,ts);
+    if (!q || q.ts>ts || ts-q.ts>10000 || q.bid<=0 || q.ask<q.bid) return;
+    const commissionPerLot=Math.max(0,-d.commission)/10**digits/(volume/meta.lotSize);
+    const slippagePrice=Math.max(0,d.tradeSide===2?q.bid-price:price-q.ask);
+    const old=executionExitCosts.get(ticker);
+    executionExitCosts.set(ticker,{commissionPerLot:Math.max(old?.currency===accountCurrency?old.commissionPerLot:0,commissionPerLot),currency:accountCurrency,slippagePrice:Math.max(old?.slippagePrice??0,slippagePrice),timestampMs:ts});
+}
+/** Broker units + observed exit-cost estimates, never universal pip-value guesses.
+ * Unknown slippage/commission stays unknown until a real exit has been observed.
+ * These historical estimates are not a guarantee of future execution costs. */
+export function getLiveExecutionInstrument(ticker: string): ExecutionInstrument | undefined {
+    const key=ticker.toUpperCase(), nowMs=Date.now(), meta=executionSymbolMetadata.get(key), costs=executionExitCosts.get(key);
+    const regime=classifyExecutionRegime(key);
+    if (!meta || !costs || !regime || !executionAccountCurrencyVerified || !accountCurrency || costs.currency!==accountCurrency || costs.timestampMs>nowMs || nowMs-costs.timestampMs>86400000) return undefined;
+    if (!Number.isInteger(meta.digits) || meta.digits<0 || meta.digits>10 || !Number.isInteger(meta.pipPosition) || meta.pipPosition<0 || meta.pipPosition>meta.digits || !Number.isFinite(meta.lotSize) || meta.lotSize<=0 || !Number.isFinite(meta.slDistance) || meta.slDistance<0) return undefined;
+    const quoteCurrency=executionAssetNames.get(meta.quoteAssetId), rate=quoteCurrency?executionUsdRate(quoteCurrency,nowMs):undefined, costRate=executionUsdRate(costs.currency,nowMs);
+    const spread=tickFlow.getStructuralSpread(key), pipSize=10**-meta.pipPosition, tickSize=10**-meta.digits;
+    if (rate===undefined || costRate===undefined || spread===null || !Number.isFinite(spread) || spread<0) return undefined;
+    let minStopDistance:number;
+    if (meta.distanceSetIn===1) minStopDistance=meta.slDistance*tickSize;
+    else if (meta.distanceSetIn===2) { const q=getLastBidAsk(key,nowMs); if (!q) return undefined; minStopDistance=q.ask*meta.slDistance/100; }
+    else return undefined;
+    const instrument:ExecutionInstrument={ticker:key,regime,pipSize,tickSize,pipValuePerLotUsd:pipSize*(meta.lotSize/100)*rate,baseSpreadPips:spread/pipSize,exitSlippagePips:costs.slippagePrice/pipSize,commissionPerLotSideUsd:costs.commissionPerLot*costRate,minStopDistance,source:'broker_metadata'};
+    return validateExecutionInstrument(instrument)?instrument:undefined;
+}
 
 /** Lee trader.depositAssetId y lo mapea con el catálogo de activos → "EUR"/"USD"/... */
 async function detectAccountCurrency(): Promise<string> {
+    executionAccountCurrencyVerified=false;
     if (!ctClient) return 'USD';
     try {
         const traderResp: any = await ctClient.raw.account.getTrader();
@@ -65,9 +135,12 @@ async function detectAccountCurrency(): Promise<string> {
         const depId = Number(trader?.depositAssetId);
         if (!depId) return 'USD';
         const assets: any[] = await ctClient.raw.market.getAssets();
+        for (const asset of assets) {
+            if (Number.isFinite(Number(asset.assetId)) && typeof asset.name==='string') executionAssetNames.set(Number(asset.assetId),asset.name.toUpperCase());
+        }
         const a = assets.find(x => Number(x.assetId) === depId);
         const name = String(a?.name ?? a?.displayName ?? '').toUpperCase();
-        if (name.length >= 3 && name.length <= 6 && /^[A-Z]+$/.test(name)) return name;
+        if (name.length >= 3 && name.length <= 6 && /^[A-Z]+$/.test(name)) { executionAccountCurrencyVerified=true; return name; }
         return 'USD';
     } catch {
         return 'USD';
@@ -147,6 +220,7 @@ async function connectWithRetry(): Promise<boolean> {
                 console.log(`[CTRADER] 💱 Moneda de la cuenta detectada: ${c}`);
             }).catch(() => { /* sin moneda → queda 'USD' */ });
             
+            installTimestampedSpotRequests(client);
             setupCTraderEvents(client);
 
             // 🆕 FIX (ago-2026): al (re)conectarse, disparar la reconciliación en caliente para
@@ -247,8 +321,32 @@ export function isCTraderReady(): boolean {
 
 // ─── Event Listeners ───
 
+/**
+ * SDK 1.0.1 restoreSubscriptions() drops subscribeToSpotTimestamp and its
+ * subscribeSpots() dedupes already-active IDs. Adapt only this protocol request
+ * at the application boundary, preserving SDK restore ordering/trendbars and
+ * avoiding unsubscribe/resubscribe races or modifications to node_modules.
+ */
+function installTimestampedSpotRequests(client: any): void {
+    const connection = client.connection;
+    const request = connection.request;
+    connection.request = function (type: number, payload: any, ...args: any[]) {
+        return request.call(this, type, type === PayloadType.SUBSCRIBE_SPOTS_REQ
+            ? { ...payload, subscribeToSpotTimestamp: true } : payload, ...args);
+    };
+}
+
+function configureSpotBootstrap(ticker: string, referencePrice = 1): void {
+    // Same per-asset normalized units as the gate. Crypto's pip proxy varies
+    // with price, NOT with spread; refresh it before processing each live quote.
+    tickFlow.configureBootstrapSpread(ticker.toUpperCase(), getRolloverSpreadReference(ticker, referencePrice));
+}
+
 function setupCTraderEvents(client: any) {
+    const closeAccountingInFlight = new Set<string>();
     client.onExecution(async (event: any) => {
+        // Optional local evidence must never change legacy execution handling.
+        try { captureExecutionExitCosts(event); } catch { /* unavailable evidence stays unknown */ }
         try {
             // 🆕 ago-2026: loguear deals RECHAZADOS para diagnóstico. cTrader acepta la orden,
             // devuelve positionId y puede rechazar el deal internamente ~400ms después
@@ -263,11 +361,18 @@ function setupCTraderEvents(client: any) {
             const positionId = event.position.positionId.toString();
             const executionType = event.executionType;
             
-            // executionType 2 = ORDER_FILLED (Apertura, Modificación, Parcial o Cierre Total)
-            if (executionType !== 2) return;
+            // Protocol: 2=ACCEPTED (not filled), 3=FILLED, 11=PARTIAL_FILL.
+            if (![3,11].includes(executionType)) return;
             
             console.log(`[CTRADER-EVENT] ExecutionEvent recibido para Position ID: ${positionId}`);
-            
+            // Block entry admission even when the journal is absent or its
+            // lookup fails. Broker closure alone is not durable accounting.
+            let ramTrades:any[]=[];
+            if (event.position.positionStatus===2) {
+                const { globalState } = await import('../db/trading.js');
+                ramTrades=[...(globalState?.activeTrades?.values()??[])].filter((t:any)=>String(t.ctraderPositionId)===positionId);
+                for (const t of ramTrades) t.closeAccountingPending=true;
+            }
             if (!db) return;
             const tradesRef = db.collection('trade_journal');
             const snapshot = await tradesRef.where('ctraderPositionId', '==', positionId).limit(1).get();
@@ -277,72 +382,29 @@ function setupCTraderEvents(client: any) {
             const tradeDoc = snapshot.docs[0];
             const trade = tradeDoc.data();
             
-            // ─── Extraer PnL NETO del deal (gross + commission + swap) ───
-            // 🛡️ sep-2026: antes se sumaba SOLO grossProfit → el acumulado no coincidía
-            // con el neto del historial de cTrader (la comisión se cobra en CADA deal:
-            // apertura, parcial TP1 y cierre final). Ahora: neto real por deal.
-            let dealPnl = 0;
-            if (event.deal && event.deal.closePositionDetail) {
-                const cp = event.deal.closePositionDetail;
-                const rawProfit = Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
-                const moneyDigits = event.deal.moneyDigits || cp.moneyDigits || 2;
-                dealPnl = rawProfit / Math.pow(10, moneyDigits);
-            } else if (event.deal && (event.deal.commission || event.deal.grossProfit)) {
-                const moneyDigits = event.deal.moneyDigits || 2;
-                dealPnl = Number(event.deal.commission || 0) / Math.pow(10, moneyDigits);
-            }
-
-            const positionStatus = event.position.positionStatus; // 1 = OPEN, 2 = CLOSED, 3 = CREATED
-
-            // Acumular PnL de deals parciales (no sobreescribir)
-            const previousPnl = trade.ctrader_real_pnl || 0;
-            const accumulatedPnl = Number((previousPnl + dealPnl).toFixed(2));
-
-            // 3 = CREATED: evento transitorio de apertura — nada que hacer
-            if (positionStatus === 3) {
-                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} creado (evento transitorio) — sin acción.`);
-            }
-            // 2 = CLOSED: la posición cerró del todo (SL, TP2 o manual)
-            else if (positionStatus === 2) {
-                let resultStatus: string;
-                if (accumulatedPnl > 0.5) resultStatus = 'WIN';
-                else if (accumulatedPnl < -0.5) resultStatus = 'LOSS';
-                else resultStatus = 'BREAKEVEN';
-                const trigger = (event.deal?.stopTriggerBase ?? event.deal?.closePositionDetail?.closeTriggerBase ?? '').toString().toUpperCase();
-                // 🛡️ sep-2026: rMultiple real = PnL neto / riesgo real (SL estructural, lots reales).
-                // Sanidad: SL del lado correcto (BUY: sl<entry | SELL: sl>entry); si no, null.
-                const evEntry = Number(trade.entryPrice ?? 0);
-                const evSl = Number(trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice ?? evEntry);
-                const evDir = String(trade.direction || '').toUpperCase();
-                const evSlOk = !evDir || (evDir === 'BUY' ? evSl < evEntry : evSl > evEntry);
-                const usdjpy = (trade.ticker || '').toUpperCase().includes('JPY')
-                    ? (lastBidAsk.get('USDJPY')?.bid ?? undefined) : undefined;
-                const rMultiple = evSlOk ? computeRMultipleFromPnlUsd(
-                    trade.ticker || '', evEntry, evSl,
-                    Number(trade.ctraderLots ?? trade.lots ?? 0), accumulatedPnl, usdjpy,
-                ) : null;
-                if (trade.manualResult) {
-                    console.log(`[CTRADER-EVENT] ⏭️ #${tradeDoc.id} manualResult — se respeta, no se escribe resultado automático.`);
-                } else {
-                    await tradeDoc.ref.update({
-                        result: resultStatus,
-                        ctrader_real_pnl: accumulatedPnl,
-                        rMultiple,
-                        status: 'CLOSED',
-                        slHit: trigger === 'STOP_LOSS',
-                        tp2Hit: trigger === 'TAKE_PROFIT',
-                    });
-                }
-                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cerrado. PnL neto acumulado: $${accumulatedPnl} -> ${resultStatus} (${rMultiple}R, trigger: ${trigger || 'n/d'})`);
-            }
-            // 1 = OPEN + deal con closePositionDetail: cierre parcial (TP1)
-            else if (positionStatus === 1 && event.deal && event.deal.closePositionDetail) {
-                await tradeDoc.ref.update({
-                    result: 'PARTIAL_TP1',
-                    ctrader_real_pnl: accumulatedPnl,
-                    tp1Hit: true
-                });
-                console.log(`[CTRADER-EVENT] Trade #${tradeDoc.id} cierre parcial. Deal PnL: $${dealPnl}, Acumulado: $${accumulatedPnl}`);
+            const positionStatus = event.position.positionStatus;
+            if (trade.manualResult) return;
+            if (positionStatus === 2) {
+                if (closeAccountingInFlight.has(positionId)) return;
+                closeAccountingInFlight.add(positionId);
+                try {
+                // Events may be duplicated, out of order or the final fragment of
+                // multiple fills. Only complete deal-history accounting can write
+                // final net PnL/R; it validates the immutable broker-fill snapshot.
+                const { finalizeClosedPositionFromDeals } = await import('../db/trading.js');
+                const final = await finalizeClosedPositionFromDeals(positionId,trade);
+                if (!final) return; // Incomplete history stays pending, not estimated.
+                const { commitTradeCloseAccounting } = await import('../engine/TradeAccountingPersistence.js');
+                await commitTradeCloseAccounting(db,tradeDoc.id,final,{status:'CLOSED',
+                    tp2Hit:String(event.deal?.stopTriggerBase??event.deal?.closePositionDetail?.closeTriggerBase??'').toUpperCase()==='TAKE_PROFIT'});
+                for (const t of ramTrades) Object.assign(t,{closeAccountingPending:false,executionIncidentPending:false,
+                    executionUncertain:false,executionFillUnverified:false,ctraderStatus:'EXECUTED'});
+                // Reconciliation owns RAM/active_trades cleanup, never this event.
+                } finally { closeAccountingInFlight.delete(positionId); }
+            } else if (positionStatus === 1 && event.deal?.closePositionDetail && trade.status !== 'CLOSED') {
+                // A partial is not a closed trade and is not a trustworthy running
+                // monetary total. Duplicate delivery must not double-count PnL.
+                await tradeDoc.ref.update({tp1Hit:true});
             }
         } catch (err: any) {
             console.error('[CTRADER-EVENT] Error procesando ExecutionEvent:', err.message);
@@ -358,20 +420,15 @@ function setupCTraderEvents(client: any) {
                 const symbolId = msg.symbolId;
                 const divider = 100000; // cTrader Open API always multiplies prices by 100000
                 
-                // 1. Process real-time ticks (msg.bid) for visual chart animation
+                // Process either side, including Ask-only events, before chart Bid work.
+                const flowTicker = symbolToTicker.get(Number(symbolId));
+                if (flowTicker && (msg.bid != null || msg.ask != null)) {
+                    const referencePrice = Number(msg.bid ?? msg.ask) / divider;
+                    if (Number.isFinite(referencePrice) && referencePrice > 0) configureSpotBootstrap(flowTicker, referencePrice);
+                    ingestSpotQuote(flowTicker, msg);
+                }
                 if (msg.bid) {
                     const currentPrice = msg.bid / divider;
-                    const askPrice = msg.ask ? msg.ask / divider : NaN;
-
-                    // 🌊 TickFlow: micro-estructura (velocidad, spread, sweeps) — 1 vez por tick
-                    const flowTicker = symbolToTicker.get(symbolId);
-                    if (flowTicker) {
-                        try { tickFlow.onTick(flowTicker, Date.now(), currentPrice, askPrice); } catch { /* nunca romper el feed */ }
-                    }
-                    // 📊 Guardar último bid/ask por ticker (TP/SL del lado correcto + spread en radar)
-                    if (flowTicker && !Number.isNaN(askPrice)) {
-                        lastBidAsk.set(flowTicker, { bid: currentPrice, ask: askPrice, ts: Date.now() });
-                    }
                     
                     // Buscar si tenemos el activo en buffer para actualizar visualmente
                     for (const [key, subSymbolId] of subscribedSymbols.entries()) {
@@ -405,7 +462,7 @@ function setupCTraderEvents(client: any) {
                                     if (updated) {
                                         // 🆕 Hook para SMCBridge: PING de precio nativo hacia JARVIS
                                         // (el bridge throttlear por ticker; reemplaza al PING de TradingView)
-                                        spotTickListener?.(baseTicker, lastCandle, prevCandle ?? undefined);
+                                        spotTickListener?.(baseTicker, lastCandle, prevCandle ?? undefined, periodStr);
 
                                         // Broadcast tick to UI without triggering heavy SMC Engine logic
                                         import('./ws_server.js').then(({ broadcastCandle }) => {
@@ -489,6 +546,10 @@ const subscribedSpots = new Set<number>();
 const subscribedTrendbars = new Set<string>();
 
 function clearSubscriptionState(): void {
+    executionSymbolMetadata.clear();
+    executionAssetNames.clear();
+    executionExitCosts.clear();
+    executionAccountCurrencyVerified=false;
     subscribedSymbols.clear();
     symbolToTicker.clear();
     subscribedSpots.clear();
@@ -498,7 +559,7 @@ function clearSubscriptionState(): void {
 
 // 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
 // Se invoca con (baseTicker, vela actualizada por el tick) desde el handler de SpotEvent.
-type SpotTickListener = (baseTicker: string, candle: OHLCV, prevCandle?: OHLCV) => void;
+type SpotTickListener = (baseTicker: string, candle: OHLCV, prevCandle?: OHLCV, period?: string) => void;
 let spotTickListener: SpotTickListener | null = null;
 export function setSpotTickListener(fn: SpotTickListener | null) {
     spotTickListener = fn;
@@ -506,9 +567,56 @@ export function setSpotTickListener(fn: SpotTickListener | null) {
 
 // 📊 Último bid/ask por ticker (el SpotEvent trae ambos; se guardan para
 // detección de TP/SL del lado de ejecución correcto y para el spread en el radar).
+export const MAX_QUOTE_AGE_MS = 10_000;
 const lastBidAsk = new Map<string, { bid: number; ask: number; ts: number }>();
-export function getLastBidAsk(ticker: string): { bid: number; ask: number; ts: number } | null {
-    return lastBidAsk.get(ticker.toUpperCase()) ?? null;
+const quoteSides = new Map<string, { bid?: number; ask?: number; bidTs?: number; askTs?: number }>();
+/** Decode bid-only/ask-only SpotEvents without manufacturing fresh opposite sides. */
+export function ingestSpotQuote(ticker: string, msg: { bid?: unknown; ask?: unknown; timestamp?: unknown }, nowMs = Date.now()): void {
+    const key = ticker.toUpperCase();
+    // No receipt-time fallback: delayed broker prices must never become fresh.
+    const eventTs = msg.timestamp == null ? NaN : Number(msg.timestamp);
+    if (!Number.isFinite(eventTs) || eventTs <= 0) {
+        lastBidAsk.delete(key);
+        quoteSides.delete(key);
+        tickFlow.invalidateQuote(key);
+        return;
+    }
+    if (eventTs > nowMs || nowMs - eventTs > MAX_QUOTE_AGE_MS) return;
+    const sides = quoteSides.get(key) ?? {};
+    for (const side of ['bid', 'ask'] as const) {
+        const value = Number(msg[side]) / 100000;
+        const tsKey = side === 'bid' ? 'bidTs' : 'askTs';
+        if (Number.isFinite(value) && value > 0 && eventTs >= (sides[tsKey] ?? 0)) {
+            sides[side] = value;
+            sides[tsKey] = eventTs;
+        }
+    }
+    quoteSides.set(key, sides);
+    const fresh = (ts: number | undefined) => ts !== undefined && nowMs >= ts && nowMs - ts <= MAX_QUOTE_AGE_MS;
+    const bid = fresh(sides.bidTs) ? sides.bid! : NaN;
+    const ask = fresh(sides.askTs) ? sides.ask! : NaN;
+    if (Number.isFinite(bid) && Number.isFinite(ask) && ask >= bid) lastBidAsk.set(key, { bid, ask, ts: Math.min(sides.bidTs!, sides.askTs!) });
+    else lastBidAsk.delete(key);
+    if (Number.isFinite(bid) || Number.isFinite(ask)) {
+        // Missing/stale Bid still advances TickFlow's event clock and invalidates
+        // a prior executable snapshot; never manufacture Bid from an Ask-only tick.
+        try { tickFlow.onTick(key, eventTs, bid, !Number.isFinite(bid) || ask >= bid ? ask : NaN, {
+            bidTick: msg.bid != null && Number(msg.bid) > 0 && sides.bidTs === eventTs,
+            quoteTs: Math.min(sides.bidTs ?? eventTs, sides.askTs ?? eventTs),
+        }); }
+        catch (e: any) { console.error(`[CTRADER] TickFlow quote failed for ${key}:`, e.message); }
+    }
+}
+/** Defensive bilateral snapshot retaining each broker side's actual vintage. */
+export function getRolloverQuote(ticker: string, nowMs = Date.now()): {bid:number;ask:number;bidTimestampMs:number;askTimestampMs:number}|null {
+    const s = quoteSides.get(ticker.toUpperCase());
+    if (!s || ![s.bid,s.ask,s.bidTs,s.askTs].every(v => Number.isFinite(v)) || !(s.bid! > 0 && s.ask! >= s.bid!)
+        || ![s.bidTs!,s.askTs!].every(ts => ts <= nowMs && nowMs-ts <= MAX_QUOTE_AGE_MS)) return null;
+    return {bid:s.bid!,ask:s.ask!,bidTimestampMs:s.bidTs!,askTimestampMs:s.askTs!};
+}
+export function getLastBidAsk(ticker: string, nowMs = Date.now()): { bid: number; ask: number; ts: number } | null {
+    const q = lastBidAsk.get(ticker.toUpperCase());
+    return q && nowMs >= q.ts && nowMs - q.ts <= MAX_QUOTE_AGE_MS ? q : null;
 }
 
 /**
@@ -522,7 +630,7 @@ export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarP
 
     const ctraderSymbol = mapToCTraderSymbol(ticker);
     try {
-        const info = await ctClient.getSymbolInfo(ctraderSymbol);
+        const info = await getSymbolInfo(ctraderSymbol);
         if (!info || !info.symbolId) throw new Error(`Symbol no encontrado: ${ctraderSymbol}`);
 
         const symbolId = info.symbolId;
@@ -532,12 +640,14 @@ export async function subscribeToLiveTrendbars(ticker: string, period: TrendbarP
         // Guardamos la relación para cuando llegue el SpotEvent
         subscribedSymbols.set(key, symbolId);
         symbolToTicker.set(symbolId, ticker);
+        registerRolloverSchedule(ticker, { scheduleTimeZone: info.scheduleTimeZone, schedule: info.schedule });
+        configureSpotBootstrap(ticker, lastBidAsk.get(ticker.toUpperCase())?.bid ?? 1);
         
         // Suscribirse vía la API de bajo nivel
         // REQUIRES subscribing to Spots first!
         // 🛡️ FIX C: solo suscribir si no está ya activo en esta conexión (evita ALREADY_SUBSCRIBED)
         if (!subscribedSpots.has(symbolId)) {
-            await ctClient.raw.market.subscribeSpots([symbolId]);
+            await ctClient.raw.market.subscribeSpots([symbolId], true);
             subscribedSpots.add(symbolId);
         }
         const tbKey = `${symbolId}:${period}`;
@@ -650,7 +760,7 @@ export async function getHistoricalCandles(ticker: string, period: TrendbarPerio
 
     const ctraderSymbol = mapToCTraderSymbol(ticker);
     try {
-        const info = await ctClient.getSymbolInfo(ctraderSymbol);
+        const info = await getSymbolInfo(ctraderSymbol);
         if (!info || !info.symbolId) throw new Error(`Symbol no encontrado: ${ctraderSymbol}`);
         
         // Obtener historial desde hace X minutos dependiendo del timeframe
@@ -870,15 +980,16 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
     // Check max positions
     try {
         const state = await ctClient.getState();
-        const positions = state?.positions || [];
-        if (positions && positions.length >= config.CTRADER_MAX_POSITIONS) {
+        if (!Array.isArray(state?.positions) || state?.errorCode) return {success:false,error:'BLOCKED_ACCOUNT_STATE: broker position count unavailable'};
+        const positions = state.positions;
+        if (positions.length >= config.CTRADER_MAX_POSITIONS) {
             return { 
                 success: false, 
                 error: `Máximo de posiciones abiertas alcanzado (${config.CTRADER_MAX_POSITIONS})` 
             };
         }
     } catch (err: any) {
-        console.warn('[CTRADER] ⚠️ No se pudo verificar posiciones abiertas:', err.message);
+        return {success:false,error:`BLOCKED_ACCOUNT_STATE: ${err.message}`};
     }
 
     // 🛡️ FIX (30-sep-2026): guardrail de sanidad de niveles ANTES de tocar el broker.
@@ -921,6 +1032,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
     }
 
     try {
+        if (!executionAccountCurrencyVerified) accountCurrency = await detectAccountCurrency();
         // Get account info for lot calculation
         const accountInfo = await getAccountInfo();
         if (!accountInfo) {
@@ -930,105 +1042,79 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         // Get current market price
         const currentPrice = params.entryPrice;
         
-        // Calculate lot size
-        let lots = calculateLotSize(
-            accountInfo.equity,
-            currentPrice,
-            slPrice,
-            riskPercent,
-            ticker
-        );
-
-        // Map JARVIS ticker to cTrader symbol name
+        // Never use the legacy USD/pip calculator for a live broker write.
         const ctraderSymbol = mapToCTraderSymbol(ticker);
-        
-        let info: any = null;
-        try {
-            info = await ctClient.getSymbolInfo(ctraderSymbol);
-        } catch(e) {
-            console.warn('[CTRADER] ⚠️ No se pudo obtener symbolInfo para ajustar lotaje');
-        }
-
-        const tUpper = ctraderSymbol.toUpperCase();
-        
-        let lotSizeCents = info?.lotSize;
-        let stepVolumeCents = info?.stepVolume || 100000; // default for forex
-        let minVolumeCents = info?.minVolume || stepVolumeCents;
-
-        // 🛡️ FIX (15-sep-2026): micro-lotes en XAUUSD VERIFICADOS empíricamente en demo —
-        // orden de 0.01 lote enviada y ACEPTADA por el broker. El override previo de
-        // 1.00 lote se basaba en UN rechazo del 07-sep (cuando el API reportaba minVolume
-        // inconsistente) y abortaba los trades de oro sin motivo (ej. 15/9: 0.0648 lotes
-        // necesarios vs "mínimo" falso de 1.00). minVolumeCents=100 = 0.01 lote (lotSize 10000).
-        // NOTA: US 500 SÍ exige 1.00 lote real (TRADING_BAD_VOLUME verificado) — sin override,
-        // se respeta el minVolume reportado por el broker.
-        if (tUpper.includes('XAU') || tUpper.includes('GOLD')) {
-            minVolumeCents = Math.max(minVolumeCents, 100); // 0.01 lote de oro (mínimo real)
-        }
-        
-        if (!lotSizeCents) {
-            if (tUpper.includes('XAU') || tUpper.includes('GOLD')) lotSizeCents = 10000; // 100 units
-            else if (tUpper.includes('BTC') || tUpper.includes('ETH')) lotSizeCents = 100; // 1 unit
-            else if (tUpper.includes('US30') || tUpper.includes('NAS') || tUpper.includes('SPX') || tUpper.includes('US100') || tUpper.includes('USTEC')) lotSizeCents = 100; // 1 unit
-            else if (tUpper.includes('XAG') || tUpper.includes('SILVER')) lotSizeCents = 500000; // 5000 units
-            else lotSizeCents = 10000000; // 100k units (forex)
-        }
-
-        if (!info || !info.stepVolume) {
-            if (tUpper.includes('BTC') || tUpper.includes('ETH')) {
-                stepVolumeCents = 1; // 0.01 units
-                minVolumeCents = 1;
-            } else if (tUpper.includes('US30') || tUpper.includes('NAS') || tUpper.includes('SPX') || tUpper.includes('US100') || tUpper.includes('USTEC')) {
-                stepVolumeCents = 10; // 0.1 units
-                minVolumeCents = 10;
-            } else if (tUpper.includes('XAU') || tUpper.includes('GOLD')) {
-                stepVolumeCents = 100; // 1 unit
-                minVolumeCents = 100;
-            }
-        }
-
-        // El lotSize que devuelve la API ya está en centavos (ej: EURUSD = 10,000,000; BTCUSD = 100)
-        let exactRequiredCents = lots * lotSizeCents;
-        
-        // GUARDRAIL DE RIESGO: Si el volumen necesario para mantener el 1% es menor al mínimo del broker,
-        // no debemos forzar el mínimo ni redondear hacia arriba, porque expondríamos la cuenta a una pérdida mayor.
-        if (exactRequiredCents < minVolumeCents) {
-            const riskMsg = `Volumen requerido exacto (${(exactRequiredCents / lotSizeCents).toFixed(4)} lotes) es menor al mínimo del broker (${minVolumeCents / lotSizeCents} lotes). Trade abortado por exceso de riesgo.`;
-            console.warn(`[CTRADER] ⛔ ${riskMsg}`);
-            return { success: false, error: riskMsg };
-        }
-
-        // Alinear al stepVolume (incremento mínimo)
-        let correctVolumeCents = Math.round(exactRequiredCents / stepVolumeCents) * stepVolumeCents;
-
-        if (info && info.maxVolume) {
-            correctVolumeCents = Math.min(info.maxVolume, correctVolumeCents);
-        }
-
-        // Convertir a lotes reales SOLO para el display y el fallback MARKET (ctClient.buy/sell).
-        // 🛡️ FIX display: correctVolumeCents está en CENTAVOS de moneda base (1 lote forex = 10,000,000 centavos).
-        // Antes se dividía por 100,000 (factor de unidades) → el log mostraba "24 lotes" cuando eran 0.24.
-        // El `volume` que se manda al protocolo SIGUE siendo correctVolumeCents (centavos), sin tocar.
-        lots = correctVolumeCents / (lotSizeCents || 10000000);
-
-        console.log(`[CTRADER] 📊 Calculado: ${lots} lotes | Equity: $${accountInfo.equity} | Risk: ${riskPercent}% | SL dist: ${Math.abs(currentPrice - slPrice).toFixed(5)}`);
-
+        const info = await getSymbolInfo(ctraderSymbol);
+        if (!info) return {success:false,error:'BLOCKED_METADATA: broker symbol unavailable'};
+        let riskSnapshot: TradeRiskSnapshot | null = null;
+        let quoteToAccountRate = 0;
+        let riskBudgetAccount = 0;
+        let lots = 0;
+        let correctVolumeCents = 0;
         // ─── Ejecución con cap de slippage + telemetría (arrival vs fill) ───
-        const digits = info?.digits ?? await getSymbolDigits(info?.symbolId, ctraderSymbol);
+        const metadataBlock = validateBrokerOrderMetadata(info, Date.now());
+        if (metadataBlock) return {success:false,error:metadataBlock};
+        const digits = info.digits;
         const roundTo = (val: number, d: number) => Number(val.toFixed(d));
         // pipSize derivado de digits: 5d→0.0001, 4d→0.0001, 3d→0.01, 2d→0.01, 1d→1 punto
-        const pipSize = digits % 2 === 1 ? 10 * Math.pow(10, -digits) : Math.pow(10, -digits);
+        const pipSize = 10 ** -info.pipPosition;
 
         // 🆕 ago-2026: anclar el rango al ÚLTIMO precio VIVO del feed (SpotEvent de cTrader).
         // El currentPrice del radar puede tener minutos de atraso en pares de bajo tickeo
         // (madrugada asiática) → el MARKET_RANGE quedaba anclado a un precio viejo, el
         // mercado se había movido → INTERNALLY_REJECTED. Con el precio vivo (<10s), el
         // rango se calcula contra el mercado REAL del instante.
-        const live = lastBidAsk.get(ticker);
-        const arrivalPrice = (live && Date.now() - live.ts < 10_000)
-            ? (direction === 'BUY' ? live.ask : live.bid)
-            : currentPrice;
-        const t0 = Date.now();
+        let slippageInPoints = 0;
+        let arrivalPrice = currentPrice;
+        let t0 = Date.now();
+        // Run after ALL preparation awaits, including fallback symbol resolution.
+        // No await between the final quote/calendar checks and the order request.
+        const beforeRequest = (): string | null => {
+            const now = Date.now();
+            const metadataBlock=validateBrokerOrderMetadata(info,now);
+            if (metadataBlock) return metadataBlock;
+            const live = getLastBidAsk(ticker, now);
+            if (!live || ![live.bid,live.ask,live.ts].every(Number.isFinite) || live.bid<=0 || live.ask<live.bid || live.ts>now || now-live.ts>10000) return 'BLOCKED_QUOTE: cotización bilateral ausente o vencida';
+            const spread = live.ask - live.bid;
+            const pad = 0.5 * spread;
+            if (!Number.isFinite(slNum) || !(direction === 'BUY' ? slNum < live.bid - pad : slNum > live.ask + pad)) {
+                return 'BLOCKED_STOPS: SL no despeja el spread vivo';
+            }
+            if (params.rolloverEntryBlock !== false) {
+                const flow = tickFlow.getSpreadSnapshot(ticker, now);
+                const snapshot = flow ? { ...flow, bid: live.bid, ask: live.ask, spread: Math.max(flow.spread, spread), ts: Math.min(flow.ts, live.ts) } : null;
+                const reference = getRolloverSpreadReference(ticker, live.bid);
+                if (evaluateRolloverEntryGate(ticker, now, snapshot, { live: true, ...reference }).blocked) return 'BLOCKED_ROLLOVER';
+            }
+            arrivalPrice = direction === 'BUY' ? live.ask : live.bid;
+            const levelBlock = validateOrderLevels(direction, arrivalPrice, formattedSl, roundTo(tp1Price, digits), tp2Price === undefined ? undefined : roundTo(tp2Price, digits), params.minimumRR);
+            if (levelBlock) return levelBlock;
+            const structuralSpread = tickFlow.getStructuralSpread(ticker) ?? tickFlow.getSpread(ticker) ?? 0;
+            const authorizedCap=config.CTRADER_MAX_SLIPPAGE_PIPS*pipSize;
+            if (!Number.isFinite(authorizedCap) || authorizedCap<10**-digits) return 'BLOCKED_SLIPPAGE: configured cap below native price tick';
+            const capDist = Math.min(Math.max(2*structuralSpread,0.2*pipSize),authorizedCap);
+            slippageInPoints = Math.max(1,Math.floor(capDist*10**digits));
+            if (!Number.isSafeInteger(slippageInPoints) || slippageInPoints<1) return 'BLOCKED_SLIPPAGE: no finite native cap';
+            if (!executionAccountCurrencyVerified || !accountCurrency || accountInfo.currency!==accountCurrency) return 'BLOCKED_CURRENCY: deposit currency unverified';
+            const quoteCurrency=executionAssetNames.get(info.quoteAssetId ?? executionSymbolMetadata.get(ticker.toUpperCase())?.quoteAssetId);
+            const rate=lossConversionRate(quoteCurrency,accountCurrency,executionAssetNames,executionSymbolMetadata,getLastBidAsk,now);
+            if (rate===undefined) return 'BLOCKED_CONVERSION: fresh liability conversion unavailable';
+            const worstEntry=arrivalPrice+(direction==='BUY'?1:-1)*slippageInPoints*10**-digits;
+            const worstLevels=validateOrderLevels(direction,worstEntry,formattedSl,roundTo(tp1Price,digits),tp2Price===undefined?undefined:roundTo(tp2Price,digits),params.minimumRR);
+            if (worstLevels) return worstLevels;
+            const commission=orderCommission(info,Math.max(worstEntry,formattedSl),quoteCurrency!,accountCurrency,
+                (from,to)=>lossConversionRate(from,to,executionAssetNames,executionSymbolMetadata,getLastBidAsk,now));
+            if (!commission) return 'BLOCKED_COST: known commission cannot be converted safely';
+            const sized = sizeOrderVolume({equity:accountInfo.equity,riskPercent,
+                worstEntry,sl:formattedSl,rate,meta:info,commission});
+            if (sized.ok === false) return sized.error;
+            quoteToAccountRate=rate;
+            riskBudgetAccount=sized.budget;
+            correctVolumeCents=sized.volume;
+            lots=correctVolumeCents/info.lotSize;
+            t0 = now;
+            return null;
+        };
         const tp = tp2Price || tp1Price;
         const formattedSl = roundTo(slPrice, digits);
         const formattedTp = tp ? roundTo(tp, digits) : undefined;
@@ -1038,16 +1124,48 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         let orderType: 'MARKET_RANGE' | 'MARKET' = 'MARKET';
         let sltpAttached = false;
 
+        // Until read-back proves otherwise, a partial accepted order can still fill.
+        let pendingOrderUnresolved=true;
+        const isOwnedOrder=(o:any)=> (o.tradeData?.label===params.tradeId && Number(o.tradeData?.symbolId)===Number(info.symbolId))
+            || (positionId!=='' && String(o.positionId??'')===positionId);
+        const cancelOwnedRemainders=async()=>{
+            let state=await ctClient.getState();
+            if (!Array.isArray(state?.positions)||!Array.isArray(state?.orders)) throw new Error('FILL_UNVERIFIED: broker state unavailable');
+            const pending=state.orders.filter(isOwnedOrder);
+            for (const order of pending) {
+                const orderId=Number(order.orderId);
+                if (!Number.isSafeInteger(orderId)||orderId<=0) throw new Error('FILL_UNVERIFIED: invalid pending remainder ID');
+                const cancelled=await ctClient.connection.request(PayloadType.CANCEL_ORDER_REQ,{
+                    ctidTraderAccountId:parseInt(config.CTRADER_ACCOUNT_ID,10)||0,orderId});
+                if (cancelled?.errorCode) throw new Error(`FILL_UNVERIFIED: remainder cancel rejected (${cancelled.errorCode})`);
+            }
+            if (pending.length) state=await ctClient.getState();
+            if (!Array.isArray(state?.positions)||!Array.isArray(state?.orders)||state.orders.some(isOwnedOrder)) throw new Error('FILL_UNVERIFIED: pending remainder cancellation unverified');
+            pendingOrderUnresolved=false;
+            return state;
+        };
+        try {
         // 🛡️ MARKET_RANGE: mercado con cap de slippage nativo de cTrader + SL/TP atómico.
         // Cap adaptativo: max(2 × spread estructural, 0.2 pip), techo CTRADER_MAX_SLIPPAGE_PIPS.
         if (config.CTRADER_MARKET_RANGE && info?.symbolId) {
+            // A local authorization/preparation failure cannot imply a broker fill.
+            let brokerRequestStarted=false;
             try {
-                const structuralSpread = tickFlow.getStructuralSpread(ticker) ?? tickFlow.getSpread(ticker) ?? 0;
-                let capDist = Math.max(2 * structuralSpread, 0.2 * pipSize);
-                capDist = Math.min(capDist, config.CTRADER_MAX_SLIPPAGE_PIPS * pipSize);
-                const slippageInPoints = Math.max(1, Math.round(capDist * Math.pow(10, digits)));
-
-                const ev: any = await (ctClient as any).raw.trading.marketRangeOrder({
+                // Routine account/symbol reads consume the SDK's 50ms slot.
+                // Wait outside its mutation queue, then freeze quote/size below.
+                const callbackBlock = await prepareBrokerDispatch(ctClient.connection,params.beforeExecution);
+                if (callbackBlock) return { success: false, error: callbackBlock };
+                const blocked = beforeRequest();
+                if (blocked) return { success: false, error: blocked };
+                // Scoped SDK instance: each payload retains its own send guard
+                // through the installed connection's queue and retry loop.
+                const trading = new CTraderTrading({request:(type:number,payload:any)=>authorizedBrokerRequest(ctClient.connection,type,payload,()=>{
+                    const block=beforeRequest();if(block) return block;
+                    return payload.volume!==correctVolumeCents || payload.baseSlippagePrice!==arrivalPrice || payload.slippageInPoints!==slippageInPoints
+                        ? 'BLOCKED_DISPATCH: execution authorization changed' : null;
+                })} as any,parseInt(config.CTRADER_ACCOUNT_ID,10)||0);
+                brokerRequestStarted=true;
+                const ev: any = await trading.marketRangeOrder({
                     symbolId: info.symbolId,
                     tradeSide: direction === 'BUY' ? 1 : 2, // TradeSide.BUY=1, SELL=2
                     volume: correctVolumeCents, // centavos de moneda base (protocolo cTrader)
@@ -1058,9 +1176,14 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     label: params.tradeId,
                 });
 
+                // A rejected remainder can carry an already-filled position.
+                // Capture its identity before inspecting any rejection fields.
+                const rawPid = ev?.position?.positionId ?? ev?.order?.positionId ?? ev?.deal?.positionId;
+                if (rawPid !== undefined && rawPid !== null) positionId=String(rawPid);
+                const fillPossible = !!positionId || Number(ev?.deal?.filledVolume)>0 || Number(ev?.order?.executedVolume)>0
+                    || [2,3].includes(Number(ev?.deal?.dealStatus));
                 if (ev?.errorCode) {
-                    // Rechazo limpio del servidor → NO se llenó nada, es seguro el fallback
-                    throw Object.assign(new Error(`MARKET_RANGE rechazada (${ev.errorCode})`), { rejected: true });
+                    throw Object.assign(new Error(`MARKET_RANGE rechazada (${ev.errorCode})`), { rejected: true,fillPossible });
                 }
                 // 🛡️ FIX: cTrader puede reservar positionId PERO rechazar el deal internamente.
                 // Señal confiable de rechazo = dealStatus >= 4 (REJECTED/INTERNALLY_REJECTED/ERROR/MISSED)
@@ -1074,10 +1197,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 if (execType === 7 || rejectedDeal) {
                     throw Object.assign(
                         new Error(`MARKET_RANGE rechazada internamente (dealStatus=${dealStatus}, execType=${execType})`),
-                        { rejected: true }
+                        { rejected: true,fillPossible }
                     );
                 }
-                const rawPid = ev?.position?.positionId ?? ev?.order?.positionId;
                 if (rawPid === undefined || rawPid === null) {
                     throw new Error('MARKET_RANGE ejecutada sin positionId en el ExecutionEvent.');
                 }
@@ -1086,56 +1208,33 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 orderType = 'MARKET_RANGE';
                 sltpAttached = true;
             } catch (mrErr: any) {
-                if (!mrErr.rejected) {
-                    // Timeout/ambigüedad: la orden PUDO haberse llenado. No reintentar → posible doble fill.
-                    throw mrErr;
+                if (!brokerRequestStarted || isAuthoritativeBrokerRejection(mrErr)) return {success:false,error:mrErr.message};
+                if (mrErr.brokerNotSubmitted) return {success:false,error:mrErr.message};
+                // An identity-bearing rejection must pass fill/protection
+                // reconciliation, never become a clean zero-exposure refusal.
+                if (mrErr.rejected && !positionId && !mrErr.fillPossible) return {success:false,error:mrErr.message};
+                // A transport timeout / accepted-only response is NOT a rejection.
+                // Reconcile by our unique label, symbol and side, never send again.
+                let owned:any[]=[];
+                try {
+                    const state=await ctClient.getState();
+                    if (Array.isArray(state?.positions)) owned=state.positions.filter((p:any)=>
+                        (positionId ? String(p.positionId)===positionId : p.tradeData?.label===params.tradeId) && Number(p.tradeData?.symbolId)===Number(info.symbolId)
+                        && Number(p.tradeData?.tradeSide)===(direction==='BUY'?1:2));
+                } catch { /* remains explicitly ambiguous; no retry */ }
+                if (owned.length!==1) {
+                    if (positionId) throw mrErr; // outer safety path cancels/closes retained identity
+                    return {success:false,error:`EXECUTION_UNCERTAIN: ${mrErr.message}; do not retry`,executionUncertain:true};
                 }
-                console.warn(`[CTRADER] ⚠️ ${mrErr.message}. Fallback a MARKET clásico (sin cap de slippage).`);
+                positionId=String(owned[0].positionId);
+                executedPrice=Number(owned[0].price);
+                orderType='MARKET_RANGE';
+                sltpAttached=true; // Require readback below; never loosen SL in repair.
+
             }
         }
 
-        if (orderType === 'MARKET') {
-            // 🛡️ FIX: fallback MARKET clásico. Usamos el raw protocol con correctVolumeCents (centavos),
-            // igual que MARKET_RANGE. NO usar ctClient.buy/sell: su lotsToUnits() asume 1 lote=100,000
-            // unidades, pero el protocolo cTrader espera centavos (1 lote=10,000,000) → mandaría 100× menos.
-            let symbolId = info?.symbolId;
-            if (symbolId === undefined) {
-                symbolId = await (ctClient as any).symbols.resolveId(ctraderSymbol);
-            }
-            const ev: any = await (ctClient as any).raw.trading.marketOrder({
-                symbolId,
-                tradeSide: direction === 'BUY' ? 1 : 2,
-                volume: correctVolumeCents,
-                stopLoss: formattedSl,
-                ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
-                label: params.tradeId,
-            });
-            // 🛡️ FIX ago-2026: el fallback MARKET no leía el errorCode — un rechazo limpio del
-            // servidor (errorCode presente) dejaba pasar una "posición fantasma".
-            if (ev?.errorCode) {
-                throw Object.assign(
-                    new Error(`MARKET rechazada por el broker (${ev.errorCode})`),
-                    { rejected: true }
-                );
-            }
-            const dealStatus = Number(ev?.deal?.dealStatus ?? 0);
-            if (dealStatus >= 4) { // REJECTED / INTERNALLY_REJECTED / ERROR / MISSED
-                throw Object.assign(
-                    new Error(`MARKET rechazada internamente (dealStatus=${dealStatus})`),
-                    { rejected: true }
-                );
-            }
-            const rawPositionId = ev?.position?.positionId ?? ev?.order?.positionId;
-            if (rawPositionId === undefined || rawPositionId === null) {
-                throw new Error('Orden ejecutada pero sin positionId en la respuesta.');
-            }
-            positionId = String(rawPositionId);
-            executedPrice = Number(ev?.deal?.executionPrice ?? ev?.position?.price ?? currentPrice) || currentPrice;
-            // 🛡️ Paso 2 (05-oct-2026): el fallback MARKET ahora manda SL/TP atómicos en la orden.
-            // Marcar attached para saltear el amend post-fill (que era la fuente de BAD_STOPS
-            // con posición desnuda y cierre de emergencia pagando comisión+spread).
-            sltpAttached = true;
-        }
+        if (orderType === 'MARKET') return {success:false,error:'BLOCKED_UNBOUNDED_MARKET: native capped execution required'};
 
         // 🛡️ FIX ago-2026: confirmar el FILL antes de tocar SL/TP (ver confirmOrderFilled).
         // Si el broker rechazó el deal, NO hay posición: error limpio, sin cierre de emergencia
@@ -1161,7 +1260,6 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         }
 
         // SL/TP ABSOLUTOS sobre la posición ya abierta (skip si MARKET_RANGE ya los adjuntó)
-        try {
             if (!sltpAttached) {
                 // 🛡️ FIX ago-2026: reintentar el amend ante POSITION_NOT_OPEN — en aperturas de
                 // mercado el fill puede registrarse segundos después del ExecutionEvent.
@@ -1189,11 +1287,46 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             if (!verified) {
                 throw new Error('SL/TP no verificados en el broker tras la orden (posible rechazo silencioso).');
             }
+            // The immediate event/deal may be accepted-only or one partial fill.
+            // Read the actual protected position and its weighted fill/volume.
+            const actualState=await cancelOwnedRemainders();
+            const matches=actualState.positions.filter((p:any)=>String(p.positionId)===positionId);
+            if (matches.length!==1) throw new Error('FILL_UNVERIFIED: actual position unavailable');
+            const actual=matches[0], fill=Number(actual.price), volume=Number(actual.tradeData?.volume);
+            const actualSl=Number(actual.stopLoss);
+            if (!Number.isFinite(fill)||fill<=0 || !Number.isSafeInteger(volume)||volume<=0||volume>correctVolumeCents
+                || Number(actual.tradeData?.symbolId)!==Number(info.symbolId) || Number(actual.tradeData?.tradeSide)!==(direction==='BUY'?1:2)
+                || !Number.isFinite(actualSl)||Math.abs(actualSl-formattedSl)>10**-digits/2
+                || (formattedTp!==undefined && (!Number.isFinite(Number(actual.takeProfit))||Math.abs(Number(actual.takeProfit)-formattedTp)>10**-digits/2))) throw new Error('FILL_UNVERIFIED: price, volume, identity or initial protection');
+            const fillNow=Date.now();
+            const fillRate=lossConversionRate(executionAssetNames.get(info.quoteAssetId),accountCurrency!,executionAssetNames,executionSymbolMetadata,getLastBidAsk,fillNow);
+            if (fillRate===undefined) throw new Error('FILL_UNVERIFIED: fill-side conversion unavailable');
+            const actualRisk=Math.abs(fill-actualSl)*(volume/100)*fillRate;
+            const fillCommission=orderCommission(info,Math.max(fill,actualSl),executionAssetNames.get(info.quoteAssetId)!,accountCurrency!,
+                (from,to)=>lossConversionRate(from,to,executionAssetNames,executionSymbolMetadata,getLastBidAsk,fillNow));
+            if (!fillCommission) throw new Error('FILL_UNVERIFIED: commission conversion unavailable');
+            const actualBudgetUse=actualRisk+2*Math.max(fillCommission.minSideAccount,volume*fillCommission.perCentAccount);
+            const badLevels=validateOrderLevels(direction,fill,actualSl,roundTo(tp1Price,digits),tp2Price===undefined?undefined:roundTo(tp2Price,digits),params.minimumRR);
+            const adverse=(direction==='BUY'?1:-1)*(fill-arrivalPrice);
+            if (badLevels || adverse>slippageInPoints*10**-digits+10**-digits/2 || actualBudgetUse>riskBudgetAccount+1e-8) throw new Error(`FILL_RISK_BREACH: ${badLevels??'native cap or monetary budget exceeded'}`);
+            executedPrice=fill;
+            correctVolumeCents=volume;
+            lots=volume/info.lotSize;
+            quoteToAccountRate=fillRate;
+            riskSnapshot=createTradeRiskSnapshot({ticker:ticker.toUpperCase(),direction,currency:accountCurrency!,entryPrice:fill,initialSlPrice:actualSl,
+                filledVolumeCents:volume,quoteToAccountRate:fillRate,capturedAtMs:fillNow});
+            if (!riskSnapshot) throw new Error('FILL_UNVERIFIED: invalid immutable risk snapshot');
         } catch (amendErr: any) {
+                // Protection/confirmation may fail BEFORE any fill-state read.
+                // Cancel first so a late remainder cannot reopen after emergency close.
+                try { await cancelOwnedRemainders(); } catch { pendingOrderUnresolved=true; }
+                if (!positionId) return {success:false,executionUncertain:true,error:`EXECUTION_UNCERTAIN: ${amendErr.message}; do not retry`};
+                let emergencyClosed=false;
                 console.error(`[CTRADER] 🚨 Error al establecer SL/TP en posID ${positionId}:`, amendErr.message);
                 console.error(`[CTRADER] 🔴 Cerrando posición de emergencia para evitar riesgo no acotado...`);
                 try {
-                    await ctClient.close(Number(positionId));
+                    if (!await closePosition(positionId)) throw new Error('Emergency close not verified absent in broker');
+                    emergencyClosed=true;
                     console.log(`[CTRADER] ✅ Posición ${positionId} cerrada de emergencia exitosamente.`);
                 } catch (closeErr: any) {
                     console.error(`[CTRADER] ❌ FATAL: No se pudo cerrar la posición ${positionId} de emergencia!`, closeErr.message);
@@ -1220,8 +1353,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     for (const delayMs of [2000, 5000, 10000]) {
                         await new Promise(r => setTimeout(r, delayMs));
                         try {
-                            await ctClient.close(Number(positionId));
+                            if (!await closePosition(positionId)) throw new Error('Emergency close not verified absent in broker');
                             closed = true;
+                            emergencyClosed=true;
                             console.log(`[CTRADER] ✅ Posición ${positionId} cerrada en reintento (backoff ${delayMs}ms).`);
                             if (db) db.collection('ghost_positions').doc(String(positionId)).delete().catch(() => {});
                             break;
@@ -1246,14 +1380,29 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                         console.error('[CTRADER] ❌ No se pudo enviar alerta Telegram de ghost position:', tgErr.message);
                     }
                 }
-                throw new Error(`Fallo al establecer SL/TP: ${amendErr.message}. Posición abortada por seguridad.`);
+                return {success:false,positionId,executionUncertain:!emergencyClosed||pendingOrderUnresolved,
+                    error:`FILL_SAFETY: ${amendErr.message}. ${emergencyClosed&&!pendingOrderUnresolved?'Position closed [broker verified]':'POSITION OR REMAINDER MAY REMAIN OPEN — manual reconciliation required; do not retry'}`};
         }
 
+        // All callers converge here only after real fill/protection verification.
+        // Legacy observers do not request an additional broker/storage read.
+        try {
+            await notifyRolloverVerifiedFill({tradeId:params.tradeId,ticker,positionId:String(positionId),nowMs:Date.now(),
+                readPosition:async () => {
+                    const positions = await getOpenPositions(ticker);
+                    const matches = positions.filter(p => String(p.positionId) === String(positionId));
+                    return matches.length === 1 ? matches[0] : null;
+                }});
+        } catch (error: any) {
+            // Broker fill already exists: NEVER misreport a storage error as a rejected order.
+            console.error('[CTRADER] Rollover fill observer unavailable:',error.message);
+        }
         // 📈 Telemetría de ejecución: slippage (arrival vs fill) y latencia decisión→ack
         const ackLatencyMs = Date.now() - t0;
         const signedSlippage = direction === 'BUY' ? executedPrice - arrivalPrice : arrivalPrice - executedPrice;
         const slippagePips = signedSlippage / pipSize;
         console.log(`[EXEC] ${orderType} ${direction} ${ticker} | arrival=${arrivalPrice} fill=${executedPrice} | slip=${slippagePips.toFixed(2)} pips | ack=${ackLatencyMs}ms | posID=${positionId}`);
+        try {
         if (db) {
             db.collection('execution_metrics').add({
                 ticker, direction, orderType,
@@ -1266,6 +1415,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 timestamp: Date.now(),
             }).catch((err: any) => console.error('[CTRADER] ❌ Fallo guardando execution_metrics:', err?.message ?? err));
         }
+        } catch (metricsError:any) {
+            console.error('[CTRADER] Execution telemetry unavailable:',metricsError.message);
+        }
 
         console.log(`[CTRADER] ✅ Orden ejecutada: ${direction} ${ticker} | ${lots} lotes @ ${executedPrice} | posID: ${positionId}`);
 
@@ -1274,6 +1426,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             positionId: String(positionId),
             executedPrice,
             lots,
+            riskSnapshot: riskSnapshot!,
+            filledVolumeCents: correctVolumeCents,
+            riskBudgetAccount,
         };
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error ejecutando orden ${direction} ${ticker}:`, err.message);
@@ -1289,6 +1444,36 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
 // 2) leen el errorCode del server vía connection.request directo,
 // 3) verifican el estado real de la posición tras cada operación.
 
+/** All broker symbol-detail reads register the real weekly calendar. */
+export async function getSymbolInfo(symbol: string | number): Promise<any | null> {
+    if (!isCTraderReady() && !await connectCTrader()) return null;
+    try {
+        const brokerSymbol = typeof symbol === 'string' ? mapToCTraderSymbol(symbol) : symbol;
+        const info = await ctClient.getSymbolInfo(brokerSymbol);
+        const ticker = typeof symbol === 'string' ? symbol.toUpperCase() : symbolToTicker.get(Number(symbol));
+        if (ticker && info) registerRolloverSchedule(ticker, { scheduleTimeZone: info.scheduleTimeZone, schedule: info.schedule });
+        // Map broker aliases too when callers use a numeric ID or broker name.
+        const canonical = info && symbolToTicker.get(Number(info.symbolId));
+        if (info) {
+            if (ticker) cacheExecutionSymbol(ticker,info);
+            if (canonical && canonical!==ticker) cacheExecutionSymbol(canonical,info);
+        }
+        if (canonical && canonical !== ticker) registerRolloverSchedule(canonical, { scheduleTimeZone: info.scheduleTimeZone, schedule: info.schedule });
+        return info ? {...info,...(ticker?executionSymbolMetadata.get(ticker):canonical?executionSymbolMetadata.get(canonical):{} )} : null;
+    } catch (e: any) {
+        console.error('[CTRADER] Symbol metadata unavailable:', e.message);
+        return null;
+    }
+}
+export async function getSymbolDetails(symbols: (string | number)[]): Promise<any[]> {
+    const result: any[] = [];
+    for (const symbol of symbols) {
+        const info = await getSymbolInfo(symbol);
+        if (info) result.push(info);
+    }
+    return result;
+}
+
 const digitsCache = new Map<number, number>();
 
 async function getSymbolDigits(symbolId?: number, fallbackName?: string): Promise<number> {
@@ -1296,13 +1481,13 @@ async function getSymbolDigits(symbolId?: number, fallbackName?: string): Promis
     let digits: number | undefined;
     try {
         if (symbolId) {
-            const info = await ctClient.getSymbolInfo(symbolId);
+            const info = await getSymbolInfo(symbolId);
             if (info?.digits != null) digits = info.digits;
         }
     } catch { /* reintentamos por nombre */ }
     if (digits == null && fallbackName) {
         try {
-            const info = await ctClient.getSymbolInfo(fallbackName);
+            const info = await getSymbolInfo(fallbackName);
             if (info?.digits != null) digits = info.digits;
         } catch { /* último recurso por clase de activo */ }
     }
@@ -1320,7 +1505,8 @@ async function getSymbolDigits(symbolId?: number, fallbackName?: string): Promis
 
 async function amendSltpChecked(
     positionId: number,
-    params: { stopLoss?: number; takeProfit?: number }
+    params: { stopLoss?: number; takeProfit?: number },
+    beforeSend?: () => boolean
 ): Promise<{ ok: boolean; errorCode?: string; description?: string }> {
     const payload: any = {
         ctidTraderAccountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
@@ -1328,7 +1514,10 @@ async function amendSltpChecked(
     };
     if (params.stopLoss !== undefined) payload.stopLoss = params.stopLoss;
     if (params.takeProfit !== undefined) payload.takeProfit = params.takeProfit;
-    const res = await (ctClient as any).connection.request(PayloadType.AMEND_POSITION_SLTP_REQ, payload);
+    const res = await authorizedBrokerRequest((ctClient as any).connection, PayloadType.AMEND_POSITION_SLTP_REQ, payload,
+        () => null,
+        {allowQueue:true,authorizationTtlMs:beforeSend?1000:Infinity,
+            authorizeAtDispatch:() => beforeSend && beforeSend() !== true ? 'AUTHORIZATION_DENIED' : null});
     if (res?.errorCode) {
         return { ok: false, errorCode: String(res.errorCode), description: String(res.description ?? '') };
     }
@@ -1346,16 +1535,19 @@ async function confirmOrderFilled(positionId: number, timeoutMs = 8000): Promise
     while (Date.now() < deadline) {
         try {
             const deals = await (ctClient as any).getDealsByPosition(positionId, Date.now() - 10 * 60 * 1000, Date.now());
-            if (deals && deals.length > 0) {
-                const last = deals[deals.length - 1];
-                const st = Number(last.dealStatus ?? 0);
-                if (st >= 4) {
-                    return { rejected: true, dealStatusName: names[st] ?? `status_${st}`, deal: last };
+            if (Array.isArray(deals) && deals.length > 0 && deals.every(d => String(d.positionId) === String(positionId))) {
+                // A terminal rejected remainder does not undo a positive opening fill.
+                // Protection, live volume and pending remainders are reconciled by the caller.
+                const filled = deals.find(d => !d.closePositionDetail && [2, 3].includes(Number(d.dealStatus))
+                    && Number.isSafeInteger(d.filledVolume) && d.filledVolume > 0);
+                if (filled) return { rejected: false, dealStatusName: names[Number(filled.dealStatus)], deal: filled };
+                // Only explicit zero-fill terminal attempts prove rejection. Requested
+                // volume or a status alone is not execution (or non-execution) evidence.
+                if (deals.every(d => d.filledVolume === 0 && !d.closePositionDetail && [4, 5, 6, 7].includes(Number(d.dealStatus)))) {
+                    const last = deals[deals.length - 1];
+                    return { rejected: true, dealStatusName: names[Number(last.dealStatus)], deal: last };
                 }
-                if (st === 2 || st === 3) {
-                    return { rejected: false, dealStatusName: names[st], deal: last };
-                }
-                // st 0/1 (in progress/unknown): seguir esperando el deal definitivo
+                // Unknown/incomplete evidence: keep polling, then require live readback.
             }
         } catch { /* reintentar */ }
         await new Promise(r => setTimeout(r, 500));
@@ -1419,7 +1611,7 @@ async function verifyVolumeReduced(
 /**
  * Modify stop loss of an existing position (e.g., move to breakeven).
  */
-export async function modifyStopLoss(positionId: string, newSlPrice: number, _currentPrice?: number): Promise<boolean> {
+export async function modifyStopLoss(positionId: string, newSlPrice: number, _currentPrice?: number, beforeAmend?: (position?: any) => boolean): Promise<boolean> {
     if (!isCTraderReady()) {
         const connected = await connectCTrader();
         if (!connected) return false;
@@ -1444,16 +1636,22 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, _cu
         const roundTo = (val: number, d: number) => Number(val.toFixed(d));
         const formattedSl = roundTo(newSlPrice, digits);
 
-        let existingTp = undefined;
-        if (pos && pos.takeProfit) {
-            existingTp = pos.takeProfit;
+        // Opt-in final guard receives a post-preparation broker snapshot, not RAM SL.
+        let sendPosition = pos;
+        if (beforeAmend) {
+            const fresh = await ctClient.getState();
+            if (!Array.isArray(fresh?.positions)) return false;
+            sendPosition = fresh.positions.find((p: any) => String(p.positionId) === String(positionId));
+            if (!sendPosition) return false;
         }
+        const existingTp = sendPosition.takeProfit || undefined;
 
         // 🛡️ amend directo para leer el errorCode del server (la lib lo descarta)
+        // Synchronous final guard: all connection/state/digits preparation has yielded.
         const amendRes = await amendSltpChecked(Number(positionId), {
             stopLoss: formattedSl,
             ...(existingTp !== undefined ? { takeProfit: existingTp } : {}),
-        });
+        }, beforeAmend ? () => beforeAmend(sendPosition) : undefined);
         if (!amendRes.ok) {
             console.error(`[CTRADER] ❌ Amend SL rechazado por el broker (${amendRes.errorCode}): ${amendRes.description ?? ''}`);
             return false;
@@ -1477,19 +1675,64 @@ export async function modifyStopLoss(positionId: string, newSlPrice: number, _cu
 /**
  * Close a position completely.
  */
-export async function closePosition(positionId: string): Promise<boolean> {
+export async function closePosition(positionId: string, beforeSend?: (position?: any) => boolean): Promise<boolean> {
     if (!isCTraderReady()) {
         const connected = await connectCTrader();
         if (!connected) return false;
     }
 
     try {
-        await ctClient.close(Number(positionId));
-        console.log(`[CTRADER] 🔴 Posición ${positionId} cerrada completamente.`);
-        return true;
+        const id = Number(positionId);
+        if (!Number.isSafeInteger(id) || id <= 0) return false;
+        const state = await ctClient.getState();
+        if (!Array.isArray(state?.positions)) return false;
+        const position = state.positions.find((p: any) => Number(p.positionId ?? p.id) === id);
+        if (!position) return true; // explicit broker readback already absent
+        const volume = Number(position.tradeData?.volume);
+        if (!Number.isFinite(volume) || volume <= 0) return false;
+        const payload = {
+            ctidTraderAccountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
+            positionId: id,
+            volume,
+        };
+        const res = await authorizedBrokerRequest((ctClient as any).connection, PayloadType.CLOSE_POSITION_REQ, payload,
+            () => null,
+            {allowQueue:true,authorizationTtlMs:beforeSend?1000:Infinity,
+                authorizeAtDispatch:() => beforeSend && beforeSend(position) !== true ? 'AUTHORIZATION_DENIED' : null});
+        if (res?.errorCode) {
+            console.error(`[CTRADER] Close rejected: ${String(res.errorCode)}`);
+            return false;
+        }
+        for (let i = 0; i < 6; i++) {
+            const verified = await readPositionProtection(positionId);
+            if (verified && !verified.exists) {
+                console.log(`[CTRADER] Position ${positionId} fully closed [verified absent in broker]`);
+                return true;
+            }
+            if (i < 5) await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        console.error(`[CTRADER] Full close unverified for ${positionId}`);
+        return false;
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error cerrando posición ${positionId}:`, err.message);
         return false;
+    }
+}
+/** null = unavailable, never confuse an API failure with a closed position. */
+export async function readPositionProtection(positionId: string): Promise<{ exists: boolean; stopLoss: number | null } | null> {
+    if (!isCTraderReady()) return null;
+    try {
+        const id = Number(positionId);
+        if (!Number.isSafeInteger(id) || id <= 0) return null;
+        const state = await ctClient.getState();
+        if (!Array.isArray(state?.positions)) return null;
+        const position = state.positions.find((p: any) => Number(p.positionId ?? p.id) === id);
+        if (!position) return { exists: false, stopLoss: null };
+        const sl = Number(position.stopLoss);
+        return { exists: true, stopLoss: Number.isFinite(sl) && sl > 0 ? sl : null };
+    } catch (e: any) {
+        console.error(`[CTRADER] Protection readback failed for ${positionId}:`, e.message);
+        return null;
     }
 }
 
@@ -1520,7 +1763,7 @@ export async function closePartial(positionId: string, percentToClose: number = 
         let step = 1;
         if (symbolId > 0) {
             try {
-                const info = await ctClient.getSymbolInfo(symbolId);
+                const info = await getSymbolInfo(symbolId);
                 if (info?.stepVolume) step = info.stepVolume;
             } catch { /* fallback step=1 */ }
         }
@@ -1624,12 +1867,12 @@ export async function getAccountInfo(): Promise<CTraderAccountInfo | null> {
  * @param ticker Optional ticker to filter by.
  */
 export async function getOpenPositions(ticker?: string): Promise<any[]> {
-    if (!isCTraderReady()) {
-        return [];
-    }
+    // [] means confirmed absence ONLY. Unavailable reconciliation must propagate.
+    if (!isCTraderReady()) throw new Error('Broker positions unavailable: disconnected');
     try {
         const state = await ctClient.getState();
-        let positions = state?.positions || [];
+        if (state?.errorCode || !Array.isArray(state?.positions) || state.positions.some((p: any) => !p || p.positionId == null)) throw new Error('Broker positions unavailable: invalid state');
+        let positions = state.positions;
         if (ticker) {
             const want = ticker.toUpperCase();
             // El payload de Position NO trae symbolName — se resuelve con el mapa
@@ -1637,15 +1880,15 @@ export async function getOpenPositions(ticker?: string): Promise<any[]> {
             // Antes el filtro comparaba contra campos inexistentes → devolvía todo.
             positions = positions.filter((p: any) => {
                 const symId = p?.tradeData?.symbolId ?? p?.symbolId;
-                if (symId == null) return false;
-                const tk = symbolToTicker.get(Number(symId));
-                return tk != null && tk.toUpperCase() === want;
+                const tk = symId == null ? undefined : symbolToTicker.get(Number(symId));
+                if (!tk) throw new Error('Broker positions unavailable: unmapped symbol');
+                return tk.toUpperCase() === want;
             });
         }
         return positions;
     } catch (err: any) {
         console.error('[CTRADER] ❌ Error obteniendo posiciones:', err.message);
-        return [];
+        throw err;
     }
 }
 

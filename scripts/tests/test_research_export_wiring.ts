@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';
+import {parseSmcExportArgs} from '../smc_export_context';
+const root=process.cwd(),tmp=fs.mkdtempSync(path.join(os.tmpdir(),'research-export-'));const raw=path.join(tmp,'raw');fs.mkdirSync(raw);
+try {
+ const policy=path.join(tmp,'rollover.json');fs.writeFileSync(policy,JSON.stringify({profile:'rollover_triage_v1',freezeSignals:true}));
+ assert.throws(()=>parseSmcExportArgs(['UNKNOWN','--rollover-policy-file',policy],root),/output-dir/);
+ const args=parseSmcExportArgs(['UNKNOWN','--rollover-policy-file',policy,'--ml-regime-shadow','--output-dir',path.join(tmp,'out')],root);
+ assert.equal((args as any).mlRegimeShadow,true);
+ fs.writeFileSync(path.join(raw,'history_M5.csv'),'timestamp,open,high,low,close,volume\n1784059200000,100,101,99,100,10\n1784059500000,100,102,98,101,10\n');
+ const run=spawnSync(path.join(root,'node_modules/.bin/tsx'),['scripts/export_smc_csv.ts','UNKNOWN','--input-dir',raw,'--output-dir',path.join(tmp,'out'),'--rollover-policy-file',policy,'--ml-regime-shadow','--timeframes','M5','--quiet'],{cwd:root,encoding:'utf8',timeout:60000});
+ assert.equal(run.status,0,run.stderr+run.stdout);
+ const m=JSON.parse(fs.readFileSync(path.join(tmp,'out/export_manifest.json'),'utf8'));
+ assert.equal(m.apply_eligible,false);assert.equal(m.rollover_policy.profile,'rollover_triage_v1');assert.equal(m.research_context_version,1);
+ const output=fs.readFileSync(m.exports[0].path,'utf8');assert.equal(output.split('PING_PRICE').length-1,2,'raw observations remain exported');
+ assert.deepEqual(m.exports[0].eventCounts,{});assert.equal(m.exports[0].excludedSignalBars,2);
+ const shadow=fs.readFileSync(m.exports[0].mlRegimeShadowPath,'utf8').trim().split('\n').map(s=>JSON.parse(s));
+ assert.equal(shadow.length,4);assert.ok(shadow.every(x=>x.prediction.status==='UNAVAILABLE'&&!('probability' in x.prediction)));
+ const legacyPolicy=path.join(tmp,'legacy.json');fs.writeFileSync(legacyPolicy,JSON.stringify({profile:'legacy',freezeSignals:true}));
+ const legacy=spawnSync(path.join(root,'node_modules/.bin/tsx'),['scripts/export_smc_csv.ts','UNKNOWN','--input-dir',raw,'--output-dir',path.join(tmp,'legacy'),'--rollover-policy-file',legacyPolicy,'--timeframes','M5','--quiet'],{cwd:root,encoding:'utf8',timeout:60000});
+ assert.equal(legacy.status,0,legacy.stderr+legacy.stdout);
+ const lm=JSON.parse(fs.readFileSync(path.join(tmp,'legacy/export_manifest.json'),'utf8'));assert.equal(lm.exports[0].excludedSignalBars,0,'legacy profile cannot opt into mutation freeze through stray flag');
+ const scheduleFile=path.join(tmp,'schedule.json');fs.writeFileSync(scheduleFile,JSON.stringify({schema:1,schedules:{XAUUSD:{scheduleTimeZone:'UTC',schedule:Array.from({length:5},(_,i)=>({startSecond:79260+i*86400,endSecond:161940+i*86400}))}}}));
+ const goldRaw=path.join(tmp,'gold-raw');fs.mkdirSync(goldRaw);
+ fs.writeFileSync(path.join(goldRaw,'history_M5.csv'),'timestamp,open,high,low,close,volume\n'+['2026-07-14T21:55:00Z','2026-07-14T22:00:00Z','2026-07-14T22:15:00Z'].map(s=>[Date.parse(s),100,101,99,100,10].join(',')).join('\n')+'\n');
+ const gold=spawnSync(path.join(root,'node_modules/.bin/tsx'),['scripts/export_smc_csv.ts','XAUUSD','--input-dir',goldRaw,'--output-dir',path.join(tmp,'gold'),'--rollover-policy-file',policy,'--rollover-schedules-file',scheduleFile,'--timeframes','M5','--quiet'],{cwd:root,encoding:'utf8',timeout:60000});
+ assert.equal(gold.status,0,gold.stderr+gold.stdout);
+ const gm=JSON.parse(fs.readFileSync(path.join(tmp,'gold/export_manifest.json'),'utf8'));assert.equal(gm.exports[0].excludedSignalBars,2,'full bars intersect broker XAU UTC window; accepted post-window raw bar not globally frozen');assert.ok(gm.inputHashes[scheduleFile]);
+ console.log('PASS actual research exporter flags, isolated manifest, signal exclusion, raw and UNAVAILABLE shadow');
+}finally{fs.rmSync(tmp,{recursive:true,force:true});}

@@ -10,6 +10,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runBacktest, prepareEntries, getSessionForTimestamp } from '../../jarvis-os/src/services/backtestEngine';
 import type { LogEntry } from '../../jarvis-os/src/services/backtestTypes';
+import {parseSelectionArgs, readAssetSnapshot, selectionEntries, selectionReplayOptions, selectionManifest, readSelectionConfig, completedSelectionTrades, loadSelectionLogs, saveSelection} from './selection_context.js';
+const selection = parseSelectionArgs();
+const manifest = selectionManifest(selection);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,55 +23,30 @@ const EXP_LIMIT = -0.15;
 const DEAD_MINSCORE = 99;
 
 function loadLogs(ticker: string): Map<string, string[]> {
-    const tickerDir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
-    const logs = new Map<string, string[]>();
-    if (!fs.existsSync(tickerDir)) return logs;
-    for (const tf of ['M5', 'M15']) {
-        const found = [
-            path.join(tickerDir, `pine-logs-SMC Master_${tf}.csv`),
-            path.join(tickerDir, `pine-logs-SMC Master_${tf.toUpperCase()}.csv`),
-        ].find(c => fs.existsSync(c));
-        if (found) logs.set(tf, fs.readFileSync(found, 'utf8').split('\n').filter(l => l.trim().length > 0));
-    }
-    return logs;
+  return loadSelectionLogs(selection);
 }
-
 async function main() {
-    const key = JSON.parse(readFileSync("/opt/JARVIS/firebase-key.json", "utf8"));
-    if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(key) });
-    const db = admin.firestore();
-
     const out: any = { generatedAt: new Date().toISOString(), status: "HOLD", disables: [], enables: [], perTicker: {} };
-    for (const ticker of TICKERS) {
-        const doc = await db.collection("asset_configs").doc(ticker).get();
+    for (const ticker of [selection.ticker]) {
         const logs = loadLogs(ticker);
-        if (!doc.exists || !logs.has('M5')) { out.perTicker[ticker] = { note: "sin doc o sin logs" }; continue; }
-        const d = doc.data() || {};
+        if (!logs.has('5')) { out.perTicker[ticker] = { note: "sin logs" }; continue; }
+        const d = await readAssetSnapshot(selection);
 
         // ── Corrida A: config de PRODUCCIÓN → perdedores de gatillos ENCENDIDOS ──
-        const prodCfg: any = {
-            ticker,
-            entryTrigger: d.entryTrigger || 'SMART',
-            minBuyPoints: d.minPointsForBuy ?? 4,
-            minSellPoints: d.minPointsForSell ?? 4,
-            slBufferPercent: d.slBufferPercent ?? 0.1,
-            fixedRR: d.fixedRR ?? 2.0,
-            oteEntryPercent: d.oteEntryPercent ?? 50,
-            spreadPips: 0, commissionPerLot: 0,
-            sessions: d.sessions || {}, enabled: true,
-        };
-        const prepared: LogEntry[] = await prepareEntries(logs);
-        const resA = runBacktest(logs, prodCfg, undefined, prepared);
+        const prodCfg: any = readSelectionConfig(selection, d);
+        const prepared: LogEntry[] = selectionEntries(await prepareEntries(logs), manifest, selection);
+  const replayOptions = selectionReplayOptions(selection, manifest);
+        const resA = runBacktest(logs, prodCfg, undefined, prepared, replayOptions);
 
         // ── Corrida B: config SONDA (todo encendido, minScore 4) → ganadores APAGADOS hoy ──
-        const sondeoSessions: any = {};
+        const sondeoSessions: any = JSON.parse(JSON.stringify(prodCfg.sessions ?? {}));
         for (const s of ['ASIA', 'LONDON', 'NY', 'OFF']) {
-            sondeoSessions[s] = {};
+            sondeoSessions[s] ??= {};
             for (const t of ['choch5m', 'bos5m', 'choch15m', 'bos15m', 'oteChoch5m', 'oteBos5m', 'oteChoch15m', 'oteBos15m'])
-                sondeoSessions[s][t] = { enabled: true, minScore: 4 };
+                sondeoSessions[s][t] = {...sondeoSessions[s][t], enabled: true, minScore: 4 };
         }
         const sondaCfg: any = { ...prodCfg, sessions: sondeoSessions };
-        const resB = runBacktest(logs, sondaCfg, undefined, prepared);
+        const resB = runBacktest(logs, sondaCfg, undefined, prepared, replayOptions);
 
         // 🆕 10-sep-2026: VENTANA MÓVIL de 84 días (3 meses calendario) — pedido de Bon.
         // La señal se mide SOLO sobre los trades de la ventana reciente (el motor igual corrió
@@ -76,9 +54,9 @@ async function main() {
         // régimen visible; muestra mínima relajada a n>=8 para los gatillos lentos.
         const WINDOW_DAYS = 84;
         const allTs = [...resA.trades, ...resB.trades].map(t => (t as any).timestamp).filter((x): x is number => Number.isFinite(x));
-        const cut = (allTs.length ? Math.max(...allTs) : Date.now()) - WINDOW_DAYS * 86400000;
-        const winA = resA.trades.filter(t => (t as any).timestamp >= cut);
-        const winB = resB.trades.filter(t => (t as any).timestamp >= cut);
+        const cut = Math.max(manifest.from_ms, manifest.train_end_ms - WINDOW_DAYS * 86400000);
+        const winA = completedSelectionTrades(resA.trades, manifest, prepared).filter(t => (t as any).timestamp >= cut);
+        const winB = completedSelectionTrades(resB.trades, manifest, prepared).filter(t => (t as any).timestamp >= cut);
 
         // Gatillos APAGADOS hoy (minScore>=99 o enabled===false en TODAS las sesiones)
         const prodSessions: any = d.sessions || {};
@@ -157,8 +135,10 @@ async function main() {
         if (enables.length) console.log(`  🟢 ${ticker} ACTIVAR: ${enables.map(l => `${l.session}/${l.trigger} (${l.n}t, +${l.exp}R/t)`).join(" · ")}`);
     }
     out.status = (out.disables.length || out.enables.length) ? "PROPUESTA" : "HOLD";
-    mkdirSync("/opt/JARVIS/scripts/periodic_opt/reports", { recursive: true });
-    writeFileSync("/opt/JARVIS/scripts/periodic_opt/reports/loser_triggers_proposal.json", JSON.stringify(out, null, 2));
+    out.selection_partition = 'train';
+    out.evaluation_manifest = manifest;
+    saveSelection({...selection, save: selection.save ?? '/opt/JARVIS/scripts/periodic_opt/reports/loser_triggers_proposal.json'}, out);
+    console.log(JSON.stringify(out));
     console.log(`Trigger-state: ${out.status} (${out.disables.length} apagar, ${out.enables.length} activar) → reports/loser_triggers_proposal.json`);
     process.exit(0);
 }

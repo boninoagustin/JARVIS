@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import ts from 'typescript';
+const text=fs.readFileSync('src/services/ctrader.ts','utf8'), ast=ts.createSourceFile('ctrader.ts',text,ts.ScriptTarget.Latest,true);
+const names=['modifyStopLoss','amendSltpChecked','closePosition','getRolloverQuote'];
+const selected=ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&names.includes(n.name?.text??'')).map(n=>n.getText(ast)).join('\n');
+const events:string[]=[],positions=[{positionId:42,stopLoss:90,tradeData:{volume:100,symbolId:1}}];let allowed=true,count=0;
+const sandbox:any={exports:{},console:{log(){},warn(){},error(){}},Date,Number,Promise,MAX_QUOTE_AGE_MS:10000,quoteSides:new Map([['EURUSD',{bid:100,ask:101,bidTs:100,askTs:150}]]),isCTraderReady:()=>true,config:{CTRADER_ACCOUNT_ID:'1'},PayloadType:{CLOSE_POSITION_REQ:'close',AMEND_POSITION_SLTP_REQ:'amend'},symbolToTicker:new Map([[1,'EURUSD']]),getSymbolDigits:async()=>{events.push('digits');await Promise.resolve();return 2;},verifyPositionProtection:async()=>true,readPositionProtection:async()=>({exists:false}),ctClient:{getState:async()=>{events.push('state');await Promise.resolve();return {positions};},connection:{request:(kind:string)=>{events.push(kind);assert.equal(count,1,'authorization exactly once at send');return Promise.resolve({});}}}};
+const code=ts.transpileModule(selected,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+const api=vm.runInNewContext(code+'\n({modifyStopLoss,closePosition,getRolloverQuote:typeof getRolloverQuote === "function"?getRolloverQuote:undefined})',sandbox);
+const authorize=(position:any)=>{assert.equal(position?.positionId,42,'final callback needs actual broker position');events.push('authorize');count++;return allowed;};
+await api.closePosition('42',authorize);assert.deepEqual(events,['state','authorize','close']);
+events.length=0;count=0;allowed=false;await api.closePosition('42',authorize);assert.deepEqual(events,['state','authorize']);
+events.length=0;count=0;allowed=true;await api.modifyStopLoss('42',91,undefined,authorize);assert.deepEqual(events,['state','digits','state','authorize','amend']);
+events.length=0;count=0;allowed=false;await api.modifyStopLoss('42',91,undefined,authorize);assert.deepEqual(events,['state','digits','state','authorize']);
+assert.equal(typeof api.getRolloverQuote,'function');const q=api.getRolloverQuote('EURUSD',200);assert.equal(q.bidTimestampMs,100);assert.equal(q.askTimestampMs,150);q.bid=1;assert.equal(api.getRolloverQuote('EURUSD',200).bid,100);assert.equal(api.getRolloverQuote('EURUSD',10101),null);assert.equal(api.getRolloverQuote('EURUSD',120),null);
+console.log('ROLLOVER_LIVE_SEND_BOUNDARY: PASS');

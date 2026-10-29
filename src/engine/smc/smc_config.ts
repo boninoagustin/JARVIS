@@ -1,5 +1,6 @@
 // src/engine/smc/smc_config.ts
 import { SMCPreset } from './types.js';
+import { resolveSignalPolicy } from './signal_profiles.js';
 
 export const PRESETS: Record<string, SMCPreset> = {
     'Forex - 3. Balanceado': {
@@ -51,11 +52,29 @@ export function getPreset(name: string): SMCPreset {
 import fs from 'fs';
 import path from 'path';
 
-export function loadOptimizedPreset(ticker: string, period: string, basePresetName: string = 'Forex - 3. Balanceado'): SMCPreset {
+export interface SMCPresetLoadOptions {
+    presetFile?: string;
+    signalOverrides?: Partial<SMCPreset>;
+}
+
+export function applySMCSignalOverrides(preset: SMCPreset, overrides: Partial<SMCPreset> = {}): SMCPreset {
+    const allowed = ['signal_profile','signal_ablation','signal_impulse','signal_fvg'];
+    if (Object.keys(overrides).some(key => !allowed.includes(key))) throw new Error('Unknown signal override');
+    const result = structuredClone({...preset,...overrides});
+    const policy = resolveSignalPolicy(result);
+    if (policy.experimental) {
+        result.fvg_min_atr_factor = policy.fvg.minAtr;
+        result.fvg_min_atr = policy.fvg.minAtr;
+    }
+    return result;
+}
+
+export function loadOptimizedPreset(ticker: string, period: string, basePresetName: string = 'Forex - 3. Balanceado', options: SMCPresetLoadOptions = {}): SMCPreset {
     const basePreset = { ...getPreset(basePresetName) };
-    
+    let signalBlockSeen = false;
     try {
-        const presetPath = path.resolve(process.cwd(), `optimized_preset_${ticker}.json`);
+        const presetPath = options.presetFile ?? path.resolve(process.cwd(), `optimized_preset_${ticker}.json`);
+        if (options.presetFile && !fs.existsSync(presetPath)) throw new Error('Frozen preset file missing');
         if (fs.existsSync(presetPath)) {
             const data = JSON.parse(fs.readFileSync(presetPath, 'utf8'));
             
@@ -99,12 +118,17 @@ export function loadOptimizedPreset(ticker: string, period: string, basePresetNa
                 }
                 if (applied > 0) console.log(`[SMC_CONFIG] Applied Detection params for ${ticker} (${applied}/13)`);
             }
+            if (data.SignalProfile !== undefined) {
+                signalBlockSeen = true;
+                if (!data.SignalProfile || typeof data.SignalProfile !== 'object' || Array.isArray(data.SignalProfile)) throw new Error('Invalid SignalProfile');
+                Object.assign(basePreset,applySMCSignalOverrides(basePreset,data.SignalProfile));
+            }
         }
     } catch (e) {
+        if (options.presetFile || options.signalOverrides || signalBlockSeen) throw e;
         console.error(`[SMC_CONFIG] Error loading optimized preset for ${ticker}:`, e);
     }
-    
-    return basePreset;
+    return options.signalOverrides ? applySMCSignalOverrides(basePreset,options.signalOverrides) : basePreset;
 }
 
 export function getOptimizedRisk(ticker: string) {

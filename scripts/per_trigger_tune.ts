@@ -17,6 +17,7 @@ import { runBacktest, prepareEntries } from '../jarvis-os/src/services/backtestE
 import { geneticSearch, type TriggerGenome } from '../jarvis-os/src/services/optimizer.js';
 import type { LogEntry } from '../jarvis-os/src/services/backtestTypes.js';
 import admin from 'firebase-admin';
+import {parseSelectionArgs, readAssetSnapshot, selectionEntries, selectionReplayOptions, selectionManifest, readSelectionConfig, completedSelectionTrades, loadSelectionLogs, isolateTriggerConfig} from './periodic_opt/selection_context.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,24 +30,8 @@ const ALL_TRIGGERS = ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m', 'choch15m', 
 const DISABLED_15M = ['choch15m', 'bos15m', 'oteChoch15m', 'oteBos15m'];
 
 function loadLogs(ticker: string, tfs: string[]): Map<string, string[]> {
-  const tickerDir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
-  if (!fs.existsSync(tickerDir)) throw new Error(`No existe: ${tickerDir}`);
-  const logs = new Map<string, string[]>();
-  const tfNum: Record<string, string> = { 'M5': '5', 'M15': '15', 'H1': '60', 'H4': '240', 'D1': 'D' };
-  for (const tf of tfs) {
-    const candidates = [
-      path.join(tickerDir, `pine-logs-SMC Master_${tf}.csv`),
-      path.join(tickerDir, `pine-logs-SMC Master_${tf.toUpperCase()}.csv`),
-    ];
-    const alt = tfNum[tf];
-    const all = alt ? candidates.concat([path.join(tickerDir, `pine-logs-SMC Master_${alt}.csv`)]) : candidates;
-    const found = all.find(c => fs.existsSync(c));
-    if (!found) continue;
-    logs.set(tf, fs.readFileSync(found, 'utf8').split('\n').filter(l => l.trim().length > 0));
-  }
-  return logs;
+  return loadSelectionLogs(parseSelectionArgs());
 }
-
 function parseArgs(argv: string[]) {
   const args: Record<string, any> = { ticker: null, budget: 300, concurrency: 4, dryRun: false, sessions: null };
   for (let i = 0; i < argv.length; i++) {
@@ -56,6 +41,7 @@ function parseArgs(argv: string[]) {
     else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--sessions') args.sessions = argv[++i].split(',').map((s: string) => s.trim());
     else if (a === '--save') args.save = argv[++i];
+    else if (['--evaluation-manifest', '--config-file', '--logs-dir', '--backtest-config-file'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (!args.ticker) args.ticker = a.toUpperCase();
   }
   if (!args.ticker) { console.error('Uso: per_trigger_tune.ts <TICKER> [--budget N] [--concurrency N] [--dry-run] [--sessions LONDON,NY]'); process.exit(1); }
@@ -66,20 +52,20 @@ async function main() {
   const argv = parseArgs(process.argv.slice(2));
   const { ticker, budget, concurrency, dryRun, sessions: sessionFilter } = argv;
 
-  // Firebase
-  const sa = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'service-account.json'), 'utf8'));
-  if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
-  const db = admin.firestore();
+  const selection = parseSelectionArgs();
+  const manifest = selectionManifest(selection);
+  if (selection.configFile && !dryRun) throw new Error('offline config-file requires --dry-run');
+  const current = await readAssetSnapshot(selection);
 
   // Cargar logs + preparar (una sola vez)
   const t0 = Date.now();
   const logs = loadLogs(ticker, ['M5', 'M15', 'H1', 'H4', 'D1']);
-  const prepared: LogEntry[] = await prepareEntries(logs);
+  const prepared: LogEntry[] = selectionEntries(await prepareEntries(logs), manifest, selection);
+  const replayOptions = selectionReplayOptions(selection, manifest);
   console.error(`[tune] ${ticker}: ${prepared.length} eventos preparados en ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
   // Leer config actual de Firestore
-  const docSnap = await db.doc(`asset_configs/${ticker}`).get();
-  const current = docSnap.exists ? (docSnap.data() as any) : {};
+  // One immutable production snapshot; never re-read Firestore during selection.
   const currentSessions: Record<string, any> = current.sessions || {};
 
   // Construir lista de tareas (gatillos habilitados)
@@ -101,13 +87,7 @@ async function main() {
       if (trigs[t] && typeof trigs[t] === 'object' && trigs[t].enabled === true && !DISABLED_15M.includes(t)) push(s, t);
     }
   }
-  // 2) Si no hay ninguno habilitado, usar default conservador (5m en todas las sesiones)
-  if (tasks.length === 0) {
-    console.error('[tune] ⚠️ No hay gatillos habilitados en Firestore → usando default 5m × 4 sesiones');
-    for (const s of sessionFilter || ALL_SESSIONS) {
-      for (const t of ['choch5m', 'bos5m', 'oteChoch5m', 'oteBos5m']) push(s, t);
-    }
-  }
+  // No eligibility fallback. Re-enabling is a separate explicit loser proposal.
 
   console.error(`[tune] ${tasks.length} gatillos a optimizar (budget=${budget}, concurrency=${concurrency})`);
 
@@ -115,38 +95,14 @@ async function main() {
   // 🛡️ sep-2026: guard de muestra mínima — si un gatillo tiene < MIN_TRADES trades en
   // aislamiento, el GA no tiene señal (fitness plano) y su genoma es ruido: se descarta
   // en el ensamblado (se conserva la config vigente del gatillo).
-  const MIN_TRADES = 5;
+  const baseConfig = readSelectionConfig(selection, current);
+  const MIN_TRADES = selection.wfaReplayFile ? 20 : 5; // experimental WFA only; legacy unchanged
   const tradeCounts = new Map<string, number>();
   const evaluate = (sessionKey: string, triggerKey: string) => (genome: TriggerGenome): number => {
-    const sessions: Record<string, any> = {};
-    for (const s of ALL_SESSIONS) {
-      sessions[s] = {};
-      for (const t of ALL_TRIGGERS) sessions[s][t] = { enabled: false };
-    }
-    if (!sessions[sessionKey]) sessions[sessionKey] = {};
-    sessions[sessionKey][triggerKey] = {
-      enabled: true,
-      minScore: genome.minScore,
-      slBuff: genome.slBuff,
-      tp2: genome.tp2,
-      partialClosePct: genome.partialClosePct,
-      slAfterTp1: genome.slAfterTp1,
-      tp15BeEnabled: genome.tp15BeEnabled,
-      atrTrailEnabled: genome.atrTrailEnabled,
-      structuralTrailEnabled: genome.structuralTrailEnabled,
-      minimal_roi: genome.minimal_roi || undefined,
-      entryPercent: genome.entryPercent,
-      tp1StructuralMinRR: 1.2,
-    };
-    const configToRun: any = {
-      ticker, entryTrigger: 'SMART',
-      minBuyPoints: 4, minSellPoints: 4, slBufferPercent: 0.1, fixedRR: 2.0, oteEntryPercent: 50,
-      sessions, sessionFilter: [sessionKey], enabled: true,
-      spreadPips: 0.1, commissionPerLot: 3.0, tp1StructuralMinRR: 1.2,
-    };
-    const res = runBacktest(logs, configToRun, undefined, prepared);
+    const configToRun = isolateTriggerConfig(baseConfig, sessionKey, triggerKey, {...genome, minimal_roi:genome.minimal_roi ?? null});
+    const res = runBacktest(logs, configToRun, undefined, prepared, replayOptions);
     let pnlR = 0, wins = 0, totalTrades = 0;
-    for (const t of res.trades) {
+    for (const t of completedSelectionTrades(res.trades, manifest, prepared)) {
       if (t.triggerType === triggerKey && (t.points || 0) >= genome.minScore) {
         if (t.rMultiple !== undefined && !Number.isNaN(t.rMultiple)) {
           pnlR += t.rMultiple; totalTrades++;
@@ -179,7 +135,7 @@ async function main() {
 
   // Ensamblar config completa
   const newSessions: Record<string, any> = JSON.parse(JSON.stringify(currentSessions));
-  for (const s of ALL_SESSIONS) if (!newSessions[s]) newSessions[s] = {};
+
   for (const [key, r] of Object.entries(results)) {
     const [sessionKey, triggerKey] = key.split('/');
     // 🛡️ guard de muestra mínima: si el gatillo aislado no junta MIN_TRADES trades,
@@ -209,21 +165,9 @@ async function main() {
   }
 
   // Backtest final full-fidelity con la config ensamblada + killswitches de producción
-  const finalConfig: any = {
-    ticker, entryTrigger: current.entryTrigger || 'SMART',
-    minBuyPoints: current.minPointsForBuy ?? 4, minSellPoints: current.minPointsForSell ?? 4,
-    slBufferPercent: current.slBufferPercent ?? 0.1, fixedRR: current.fixedRR ?? 2.0, oteEntryPercent: current.oteEntryPercent ?? 50,
-    sessions: newSessions,
-    maxDailyLossR: current.maxDailyLossR || undefined,
-    dailyProfitTargetR: current.dailyProfitTargetR || undefined,
-    maxConsecutiveLosses: current.maxConsecutiveLosses || undefined,
-    maxTradesPerDay: current.maxTradesPerDay || undefined,
-    trailingDrawdownR: current.trailingDrawdownR || undefined,
-    enabled: current.enabled ?? true,
-    spreadPips: 0.1, commissionPerLot: 3.0, tp1StructuralMinRR: 1.2,
-  };
-  const finalRes = runBacktest(logs, finalConfig, undefined, prepared);
-  const ft = finalRes.trades;
+  const finalConfig: any = {...baseConfig, sessions:newSessions};
+  const finalRes = runBacktest(logs, finalConfig, undefined, prepared, replayOptions);
+  const ft = completedSelectionTrades(finalRes.trades, manifest, prepared);
   const fw = ft.filter(t => (t.rMultiple ?? 0) > 0).length;
   const fl = ft.filter(t => (t.rMultiple ?? 0) < 0).length;
   const fpnl = ft.reduce((s, t) => s + (t.rMultiple ?? 0), 0);
@@ -236,7 +180,7 @@ async function main() {
 
   // Guardar config localmente (si se pidió) para inspección/resumen sin re-optimizar
   if (argv.save) {
-    fs.writeFileSync(path.resolve(argv.save), JSON.stringify({ ticker, sessions: newSessions, final: { trades: ft.length, winRate: fwr, profitFactor: fpf, pnlR: fpnl, maxDD: mdd } }, null, 2));
+    fs.writeFileSync(path.resolve(argv.save), JSON.stringify({ ticker, evaluation_manifest: manifest, selection_partition: 'train', sessions: newSessions, final: { trades: ft.length, winRate: fwr, profitFactor: fpf, pnlR: fpnl, maxDD: mdd } }, null, 2));
     console.error(`[tune] 💾 config guardada en ${argv.save}`);
   }
 
@@ -250,7 +194,7 @@ async function main() {
     console.error('[tune] DRY-RUN: no se escribió a Firestore.');
     console.log(JSON.stringify({ ticker, optimized: results, sessions: newSessions, final: { trades: ft.length, winRate: fwr, profitFactor: fpf, pnlR: fpnl, maxDD: mdd } }, null, 2));
   } else {
-    await db.doc(`asset_configs/${ticker}`).set(payload, { merge: true });
+    await admin.firestore().doc(`asset_configs/${ticker}`).set(payload, { merge: true });
     console.error(`[tune] ✅ Escrito a asset_configs/${ticker} (merge, ${Object.keys(results).length} gatillos)`);
     console.log(JSON.stringify({ ticker, optimizedCount: Object.keys(results).length, final: { trades: ft.length, winRate: fwr, profitFactor: fpf, pnlR: fpnl, maxDD: mdd } }));
   }

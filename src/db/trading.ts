@@ -2,7 +2,10 @@ import { db } from './memory.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { logTrade, recordResult, sendDailyReview } from '../services/journal.js';
-import { getLastBidAsk, syncScannerRoster } from '../services/ctrader.js';
+import * as rolloverBroker from '../services/ctrader.js';
+import { runRolloverTriageExecution } from '../engine/RolloverTriageExecutor.js';
+import { setRolloverLiveFillObserver } from '../engine/RolloverLiveFillRegistry.js';
+import { getLastBidAsk, getRolloverQuote, syncScannerRoster, getLiveExecutionInstrument } from '../services/ctrader.js';
 import * as fs from 'fs';
 
 import { z } from 'zod';
@@ -20,17 +23,30 @@ import {
     gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
-import { evaluateNetTrade, getPipValue, getAssetClass, defaultFrictionConfig, computeRMultipleFromPnlUsd } from '../engine/FrictionModel.js';
-import { capTp2Price } from '../engine/tp2Cap.js';
+import { freezeTradeRiskForTrade, resolveTradeCloseAccounting, type TradeRiskSnapshot, type ClosedTradeAccounting } from '../engine/TradeRisk.js';
+import { commitTradeCloseAccounting } from '../engine/TradeAccountingPersistence.js';
+import { buildExecutionNotice } from '../engine/ExecutionNotice.js';
+import { evaluateNetTrade, getPipValue, getAssetClass, defaultFrictionConfig } from '../engine/FrictionModel.js';
+import { capTp2Price, getAdrPrice } from '../engine/tp2Cap.js';
+import type { ExecutionPolicyInput, ExecutionPolicy, ExecutionInstrument, ExecutionQuote, ExecutionMarketSnapshot, ExecutionCostInput, ExecutionPositionState } from '../engine/ExecutionTypes.js';
+import { resolveExecutionPolicy, evaluateSmartEntryRouting, createExecutionPositionState, advanceExecutionPositionState, evaluateDynamicBreakeven, computeMultiAssetTrailingSl, computeExecutionTargets, REGIME_PROFILES } from '../engine/ExecutionMicrostructure.js';
+import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../engine/ExecutionCosts.js';
+import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../engine/ExecutionContext.js';
 import { setMLGateOverride } from '../engine/MLFilter.js';
-import { fetchLiveTimesfmDecision, resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision } from '../engine/TimesfmFilter.js';
+import { predictRegime, regimeUnavailable, REGIME_FEATURE_SCHEMA, REGIME_VELOCITY_PROFILE, type RegimeContextInput } from '../engine/MLRegimeFeatures.js';
+import { resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision, type TimesfmFilterConfig } from '../engine/TimesfmFilter.js';
+import { fetchLiveTimesfmDecision, configureTimesfmLiveCache, resetTimesfmLiveCache } from '../engine/TimesfmLiveCacheNode.js';
+import { buildRolloverSignalContext, type RolloverRuntimePolicy } from '../engine/RolloverRuntimeContext.js';
+import { shouldFreezeRolloverObservation } from '../engine/RolloverTriagePolicy.js';
 import { evaluateCorrelationGate, resolveCorrelationConfig, appendCorrelationAudit, syncCorrTickers } from '../services/correlation.js';
 
 import { tickFlow } from '../engine/TickFlow.js';
+import { getRolloverCalendar, evaluateRolloverEntryGate, isSpreadNormalized } from '../engine/RolloverSpreadGate.js';
+import { getRolloverAssetClass, getRolloverSpreadReference } from '../engine/RolloverSpreadReference.js';
 import { telemetry } from '../services/telemetry.js';
 
 import {
-    evaluateGlobalRisk, evaluateAssetRisk, getFxDayStartMs, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
+    hasPendingExecutionIncident, invalidateRiskCache, evaluateGlobalRisk, evaluateAssetRisk, getFxDayStartMs, countDailySellsForTicker as pmCountDailySells, countDailyBuysForTicker as pmCountDailyBuys, countConsecutiveLossesForAsset
 } from '../engine/PortfolioModel.js';
 
 // 🏥 Export para healthcheck
@@ -46,6 +62,207 @@ const lastTfmByTicker = new Map<string, { action: string; riskMult: number; degr
 // 🛡️ Dedupe de journal: un gatillo puede llegar dos veces en <1s (2 eventos SMC del
 // mismo quiebre) y cada dispatch creaba un doc → trades duplicados en la bitácora.
 const journalDedupe = new Map<string, number>();
+
+/** Capture only the exact, verified NEW broker position. Never call during adoption. */
+export function captureRolloverVerifiedFill(trade: ActiveTrade, position: any, policy: RolloverRuntimePolicy | undefined, nowMs: number): boolean {
+    if (trade.rolloverFill || trade.isBacktest || !trade.ctraderPositionId || String(position?.positionId) !== trade.ctraderPositionId) return false;
+    const td = position.tradeData;
+    const side = td?.tradeSide ?? td?.direction;
+    const direction = side === 1 || side === 'BUY' ? 'BUY' : side === 2 || side === 'SELL' ? 'SELL' : null;
+    const entryPrice = Number(td?.openPrice ?? position.price), initialSlPrice = Number(position.stopLoss);
+    const openedAtMs = Number(td?.openTimestamp), volume = Number(td?.volume);
+    const initialRiskPrice = (trade.direction === 'BUY' ? 1 : -1) * (entryPrice - initialSlPrice);
+    if (direction !== trade.direction || ![entryPrice,initialSlPrice,initialRiskPrice,openedAtMs,volume].every(v => Number.isFinite(v) && v > 0)
+        || !Number.isFinite(nowMs) || openedAtMs > nowMs) return false;
+    trade.rolloverFill = { schema: 1, positionId: trade.ctraderPositionId, positionKey: `${trade.ctraderPositionId}:${openedAtMs}`,
+        ticker: trade.ticker, direction: trade.direction, openedAtMs, capturedAtMs: nowMs, entryPrice, initialSlPrice, initialRiskPrice,
+        policy: structuredClone(policy ?? { profile: 'legacy' }) };
+    return true;
+}
+
+/** Shared broker success boundary: automatic AND confirmation-button orders. */
+async function handleVerifiedRolloverFill(event: import('../engine/RolloverLiveFillRegistry.js').RolloverVerifiedFillEvent): Promise<void> {
+    const trade = globalState.activeTrades.get(event.tradeId);
+    const policy = structuredClone(getConfigForTicker(event.ticker,event.nowMs).rolloverPolicy);
+    if (!trade || trade.isBacktest || trade.rolloverFill || trade.ticker !== event.ticker || (trade as any).adopted
+        || policy?.profile !== 'rollover_triage_v1' || (trade.ctraderPositionId && trade.ctraderPositionId !== event.positionId)) return;
+    trade.ctraderPositionId = event.positionId;
+    try {
+        const position = await event.readPosition();
+        if (!captureRolloverVerifiedFill(trade,position,policy,event.nowMs)) return;
+        trade.rolloverTriageState = {pending:null,widenReference:null};
+        trade.rolloverTriageTracked = true;
+        trade.rolloverTriageDurable = false;
+        rolloverTriageRecords.set(event.tradeId,trade);
+        await persistLiveRolloverRecord(event.tradeId,trade,undefined,'FILL');
+    } catch (error: any) {
+        trade.rolloverTriageDurable = false;
+        console.error('[ROLLOVER] Verified fill storage unavailable; no new mutation until durable retry:',error.message);
+    }
+}
+setRolloverLiveFillObserver(handleVerifiedRolloverFill);
+
+/** Called only after an acknowledged NEW fill, never by hydration/adoption. */
+export function freezeExecutionFill(trade: ActiveTrade, input: { policy: ExecutionPolicy; instrument?: ExecutionInstrument; executedPrice?: number; filledAtMs: number; lots?: number; quote?: ExecutionQuote }): boolean {
+    if (trade.executionState || input.policy.profile !== 'microstructure_v1' || !validateExecutionInstrument(input.instrument)
+        || input.instrument.ticker !== trade.ticker || !(input.executedPrice! > 0) || !Number.isFinite(input.executedPrice)
+        || !(input.lots! > 0) || !Number.isFinite(input.lots) || !(trade.initialSlPrice! > 0)) return false;
+    const q = input.quote;
+    if (!q || q.source !== 'broker' || ![q.bid,q.ask,q.timestampMs].every(Number.isFinite) || !(q.bid > 0 && q.ask >= q.bid) || input.filledAtMs < q.timestampMs || input.filledAtMs - q.timestampMs > 10000) return false;
+    try {
+        const state = createExecutionPositionState({ direction: trade.direction, entryPrice: input.executedPrice!, initialSlPrice: trade.initialSlPrice!, entryTimestampMs: input.filledAtMs });
+        trade.entryPrice = input.executedPrice!;
+        trade.executionPolicy = { ...input.policy };
+        trade.executionInstrument = { ...input.instrument };
+        trade.executionState = state;
+        (trade as any).executionLots = input.lots;
+        return true;
+    } catch { return false; }
+}
+
+/** Real setup adapter: the break and Wilder ATR must have the same closed-bar vintage. */
+export function routeExecutionSetup(state: RadarState, leg: ImpulseLeg, config: any, tf: string, nowMs: number, currentPrice: number, initialSlPrice: number, requestedTp2Price: number) {
+    const snapshot = getExecutionSnapshot(state, tf, nowMs);
+    const waiting = (reason: string) => ({ mode: 'WAIT_DATA' as const, takeDirectNow: false, requiresCloseConfirmation: false, reason });
+    let decision;
+    if (!leg.executionSnapshot?.breakBar || !leg.executionSnapshot.impulse || !snapshot?.breakBar || !snapshot.closedBar
+        || leg.executionSnapshot.impulse.createdAtMs !== snapshot.impulse?.createdAtMs
+        || leg.executionSnapshot.breakBar.openTimeMs !== snapshot.breakBar.openTimeMs || snapshot.breakBar.tf !== snapshot.closedBar.tf
+        || snapshot.breakBar.openTimeMs !== snapshot.closedBar.openTimeMs || !snapshot.impulse
+        || snapshot.impulse.direction !== leg.dir || snapshot.impulse.origin !== leg.origin || snapshot.impulse.extreme !== leg.extreme) {
+        decision = waiting('WAIT_DATA_BREAK_ATR_VINTAGE_OR_IMPULSE');
+    } else {
+        const direction = leg.dir;
+        const riskDist = Math.abs(currentPrice - initialSlPrice);
+        let plannedTp2Price = requestedTp2Price;
+        const policy = resolveExecutionPolicy(config.executionPolicy);
+        // Validate the original request before a legacy abs-distance cap can flip its side.
+        if (policy.profile === 'microstructure_v1' && requestedTp2Price !== undefined
+            && (!Number.isFinite(requestedTp2Price) || (direction === 'BUY' ? requestedTp2Price-currentPrice : currentPrice-requestedTp2Price) <= 0)) {
+            decision = waiting('WAIT_DATA_UNFAVORABLE_PLANNED_TP2');
+        } else if (policy.targets) {
+            const instrument = config.executionInstrument;
+            const targets = validateExecutionInstrument(instrument) && instrument.ticker === snapshot.ticker
+                ? computeExecutionTargets({ direction, entryPrice: currentPrice, initialSlPrice, requestedTp2Price, regime: instrument.regime, adr: getAdrPrice(snapshot.ticker) }) : undefined;
+            if (!targets?.valid) decision = waiting('WAIT_DATA_TARGET_INSTRUMENT');
+            else plannedTp2Price = targets.tp2Price;
+        } else plannedTp2Price = capTp2Price(snapshot.ticker, direction, currentPrice, initialSlPrice, requestedTp2Price);
+        if (!decision) {
+            const distances = state.zones.filter(z => z.dir !== direction).map(z => direction === 'BUY' ? z.btm-currentPrice : currentPrice-z.top).filter(d => Number.isFinite(d) && d > 0);
+            decision = evaluateSmartEntryRouting({ ticker: snapshot.ticker, direction, nowMs, currentPrice,
+                originPrice: snapshot.impulse.origin, extremePrice: snapshot.impulse.extreme, riskDist,
+                atr14: snapshot.atr14, adr: getAdrPrice(snapshot.ticker), plannedTp2Price,
+                ...(distances.length ? { rewardToOppositeZone: Math.min(...distances) } : {}),
+                breakBar: snapshot.breakBar, impulseCreatedAtMs: snapshot.impulse.createdAtMs,
+                fvgs: snapshot.fvgs, tickActivity: snapshot.tickActivity,
+                htfAligned: ['60','240','D'].filter(key => state.marketBias[key] === direction
+                    && nowMs - (state.biasTs?.[key] ?? 0) < ({ '60': 8, '240': 48, D: 120 }[key]! * 3600e3)).length });
+        }
+    }
+    leg.executionDecision = decision;
+    leg.executionDecisionAtMs = nowMs;
+    if (snapshot && decision.mode !== 'WAIT_DATA') leg.executionSnapshot = JSON.parse(JSON.stringify(snapshot));
+    return decision;
+}
+
+interface ExecutionBrokerBoundary {
+    now(): number;
+    quote(): ExecutionQuote | undefined;
+    rolloverBlocked(): boolean;
+    accounting(): Promise<ExecutionCostInput | undefined>;
+    /** Boolean false is ambiguous; only an explicit rejected status proves no close was accepted. */
+    partial(percent: number): Promise<boolean | { status: 'confirmed' | 'unconfirmed' | 'rejected' }>;
+    readProtection(): Promise<{ exists: boolean; stopLoss: number | null } | null>;
+    amend(price: number, beforeAmend: () => boolean): Promise<boolean>;
+    persist(fields: Record<string, unknown>): Promise<void>;
+}
+
+/** Live boundary shared by PING management and offline VM tests; no broker success is presumed. */
+export async function manageExecutionPosition(trade: ActiveTrade, snapshot: ExecutionMarketSnapshot | undefined, nowMs: number, partialClosePct: number, boundary: ExecutionBrokerBoundary): Promise<string> {
+    const policy = trade.executionPolicy, instrument = trade.executionInstrument;
+    if (!trade.executionState || trade.executionState.schema !== 1 || trade.executionState.profile !== 'microstructure_v1'
+        || policy?.profile !== 'microstructure_v1') return 'LEGACY_POSITION';
+    if (!validateExecutionInstrument(instrument) || instrument.ticker !== trade.ticker) return 'UNKNOWN_COST_METADATA';
+    const q = boundary.quote();
+    if (!q || q.source !== 'broker' || ![q.bid,q.ask,q.timestampMs].every(Number.isFinite) || !(q.bid > 0 && q.ask >= q.bid) || q.timestampMs <= trade.executionState.entryTimestampMs || q.timestampMs > nowMs || nowMs-q.timestampMs > 10000) return 'WAIT_DATA_QUOTE';
+    const executable = trade.direction === 'BUY' ? q.bid : q.ask;
+    const touched = trade.tp1Price > 0 && (trade.direction === 'BUY' ? executable >= trade.tp1Price : executable <= trade.tp1Price);
+    const next = advanceExecutionPositionState(trade.executionState, { direction: trade.direction, entryPrice: trade.entryPrice, quote: q, nowMs, tp1Touched: touched });
+    await boundary.persist({ executionState: next });
+    trade.executionState = next;
+    if (boundary.rolloverBlocked()) return 'ROLLOVER_BLOCKED';
+    let accounting = await boundary.accounting();
+    if ((policy.management || policy.trailing) && next.tp1Touched && !next.partialConfirmed && partialClosePct > 0 && partialClosePct < 1) {
+        // Persist intent before broker side effect. An uncertain acknowledgement must not duplicate the partial.
+        if (!(trade as any).executionPartialPending) {
+            if (!accounting || !(accounting.remainingLots > 0)) return 'UNKNOWN_REMAINING_QUANTITY';
+            const beforeLots = accounting.remainingLots;
+            await boundary.persist({ executionPartialPending: true, executionPartialBeforeLots: beforeLots });
+            (trade as any).executionPartialPending = true;
+            (trade as any).executionPartialBeforeLots = beforeLots;
+            const success = await boundary.partial(Math.round(partialClosePct * 100));
+            // The legacy boolean API also returns false after an accepted close whose
+            // readback timed out. Keep the durable intent until observed volume reconciles it.
+            if (typeof success === 'object' && success.status === 'rejected') {
+                await boundary.persist({ executionPartialPending: false });
+                (trade as any).executionPartialPending = false;
+                return 'PARTIAL_REJECTED';
+            }
+            if (success !== true && (typeof success !== 'object' || success.status !== 'confirmed')) return 'WAIT_PARTIAL_READBACK';
+        }
+        accounting = await boundary.accounting();
+        if (!accounting || !(accounting.remainingLots > 0 && accounting.remainingLots < (trade as any).executionPartialBeforeLots)) return 'WAIT_PARTIAL_READBACK';
+        const confirmed = { ...next, partialConfirmed: true };
+        await boundary.persist({ executionState: confirmed, tp1Hit: true, executionPartialPending: false, executionRemainingLots: accounting.remainingLots });
+        trade.executionState = confirmed;
+        trade.tp1Hit = true;
+        (trade as any).executionPartialPending = false;
+    }
+    const costs = accounting ? estimatePendingExecutionCosts({ ...accounting, instrument }) : undefined;
+    if (!costs?.valid) return costs?.reason ?? 'UNKNOWN_COST_METADATA';
+    const state = trade.executionState;
+    let candidate = trade.slPrice, stage: ExecutionPositionState['stage'] = state.stage;
+    if (policy.management) {
+        const result = evaluateDynamicBreakeven({ ticker: trade.ticker, direction: trade.direction, entryPrice: trade.entryPrice,
+            currentSlPrice: trade.slPrice, currentQuote: q, instrument, state, atr14: snapshot?.atr14, adr: getAdrPrice(trade.ticker),
+            nowMs, pendingCostPrice: costs.pendingCostPrice, rolloverBlocked: boundary.rolloverBlocked() });
+        if (result.shouldUpdateSl) { candidate = result.newSlPrice; stage = result.stage; }
+    }
+    // Never trail on a net stage proposed in this observation; require the persisted previous stage.
+    if (policy.trailing && state.stage === 'NET_PROTECTION_ESTIMATE') {
+        const impulse = snapshot?.impulse;
+        candidate = computeMultiAssetTrailingSl({ ticker: trade.ticker, direction: trade.direction, entryPrice: trade.entryPrice,
+            currentSlPrice: candidate, tp2Price: trade.tp2Price, currentQuote: q, instrument, state, atr14: snapshot?.atr14, nowMs,
+            rolloverBlocked: boundary.rolloverBlocked(), latestStructuralOrigin: impulse && snapshot?.breakBar ? {
+                price: impulse.origin, direction: impulse.direction, tf: snapshot.tf, eventAtMs: snapshot.breakBar.closeTimeMs, availableAtMs: snapshot.breakBar.availableAtMs } : undefined });
+    }
+    const valid = validateExecutionStop({ direction: trade.direction, candidateSl: candidate, currentSl: trade.slPrice, quote: q, instrument, nowMs });
+    if (!valid.valid || boundary.rolloverBlocked()) return valid.reason;
+    const before = await boundary.readProtection();
+    if (!before?.exists || before.stopLoss === null) return 'WAIT_BROKER_PROTECTION';
+    // Recovery after an earlier accepted amend whose immediate readback/persist was unavailable.
+    if (Math.abs(before.stopLoss-valid.price) <= instrument.tickSize/2) {
+        const recovered = { ...trade.executionState, stage, lastConfirmedSlPrice: before.stopLoss };
+        await boundary.persist({ slPrice: before.stopLoss, executionState: recovered });
+        trade.slPrice = before.stopLoss; trade.executionState = recovered;
+        return stage;
+    }
+    // A/D/restore or another manager may already have stronger protection. Never loosen it.
+    const baseline = trade.direction === 'BUY' ? Math.max(trade.slPrice, before.stopLoss) : Math.min(trade.slPrice, before.stopLoss);
+    const beforeAmend = () => {
+        const quote = boundary.quote(), at = boundary.now();
+        return !boundary.rolloverBlocked() && !!quote && validateExecutionStop({ direction: trade.direction, candidateSl: valid.price,
+            currentSl: baseline, quote, instrument, nowMs: at }).valid;
+    };
+    if (!beforeAmend() || !await boundary.amend(valid.price, beforeAmend)) return 'AMEND_REJECTED';
+    const readback = await boundary.readProtection();
+    if (!readback?.exists || readback.stopLoss === null || Math.abs(readback.stopLoss-valid.price) > instrument.tickSize/2) return 'AMEND_UNCONFIRMED';
+    const confirmed = { ...trade.executionState, stage, lastConfirmedSlPrice: readback.stopLoss };
+    await boundary.persist({ slPrice: readback.stopLoss, executionState: confirmed });
+    trade.slPrice = readback.stopLoss;
+    trade.executionState = confirmed;
+    return stage;
+}
 
 /** 🆕 Radar v2: estado operativo del bot por activo (killswitches, sesión, cooldown, posición, TimesFM) */
 function buildBotStatus(ticker: string, s: any): any {
@@ -170,19 +387,6 @@ function scheduleRawSignalSave(data: any) {
 export const getActiveTradeCount = () => globalState.activeTrades.size;
 export const getLastPingTime = () => globalState.lastPingTime;
 
-// 🛡️ FIX C: calcula el rMultiple real = PnL en USD / riesgo en USD del trade.
-// El riesgo real = distancia entry→SL en pips × valor por pip × lotes.
-// Ya no se usa el $50 fijo (que era falso para lotes de 23-31 en cuenta ~$4.6k).
-// 🛡️ sep-2026: usa USDJPY medido (lastBidAsk) para pares xxxJPY → riesgo real, no $10/pip.
-function computeRMultipleFromRealPnl(trade: any, pnlUsd: number): number {
-    const ticker = (trade.ticker || '').toUpperCase();
-    const entry = Number(trade.entryPrice);
-    const sl = Number(trade.slPrice ?? trade.originalSlPrice);
-    const lots = Number(trade.ctraderLots ?? trade.lots ?? trade.volume ?? 0);
-    const usdjpy = ticker.includes('JPY') ? (getLastBidAsk('USDJPY')?.bid ?? undefined) : undefined;
-    return computeRMultipleFromPnlUsd(ticker, entry, sl, lots, pnlUsd, usdjpy);
-}
-
 // 👻 RECONCILIACIÓN cTrader ↔ RAM/Firestore: si el stream de cTrader pierde un evento
 // de cierre (desconexión, token expirado), la posición queda "fantasma" en activeTrades
 // y congela al activo (anti-piramidación + "mantiene operación actual"). Este reconciler
@@ -190,66 +394,14 @@ function computeRMultipleFromRealPnl(trade: any, pnlUsd: number): number {
 // fantasmas consultando el historial real de la posición.
 let lastReconcileTs = 0;
 
-// Resuelve el resultado REAL de una posición cerrada consultando los deals del broker.
-// Devuelve null si no hay deal de cierre (no se fabrica resultado).
-// 🛡️ sep-2026: suma TODOS los deals de la posición (apertura + parciales + cierre final),
-// con comisión y swap de cada uno → PnL neto idéntico al historial de cTrader.
-// Antes tomaba solo el primer deal con closePositionDetail → en trades con parcial TP1
-// el PnL quedaba incompleto (ej. $1.87 guardado vs $27.08 real).
-async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number | null; slHit: boolean; balanceAfterUsd: number | null } | null> {
+// Broker-verified close: full volume, deduped deals, per-deal money scale and immutable opening risk.
+async function resolveClosedFromDeals(positionId: string, trade: any): Promise<ClosedTradeAccounting | null> {
     try {
-        const { getDealsByPosition } = await import('../services/ctrader.js');
-        const deals = await getDealsByPosition(positionId);
-        const closeDeals = deals.filter((d: any) => d?.closePositionDetail);
-        if (closeDeals.length === 0) return null;
-        // 🛡️ FIX 24-sep-2026: cTrader devuelve deals en orden DESCENDENTE → el último del
-        // array es el MÁS VIEJO (el parcial TP1), no el cierre final. Con parciales, el
-        // saldo quedaba "a mitad de trade" (medido: journal $3983 vs broker $3998.87).
-        // El cierre FINAL es el deal con mayor balanceVersion (contador monotónico por cuenta).
-        const finalDeal = closeDeals.reduce((best: any, d: any) => {
-            if (!best) return d;
-            return Number(d.closePositionDetail?.balanceVersion ?? 0) > Number(best.closePositionDetail?.balanceVersion ?? 0) ? d : best;
-        }, null as any);
-        const finalCp = finalDeal?.closePositionDetail;
-        // 🛡️ sep-2026: PnL NETO = Σ over todos los deals (grossProfit + commission + swap).
-        // El volumen del protocolo viene en centavos: 1 lote forex = 10.000.000 centavos.
-        const moneyDigits = Number(finalCp?.moneyDigits ?? finalDeal?.moneyDigits ?? 2);
-        // 🛡️ 24-sep-2026 (MEDIDO con balanceVersion): la comisión del deal de APERTURA NO se
-        // debita del saldo en esta cuenta (campo informativo). Antes se restaba → P&L subestimado
-        // (período: panel +1.92 vs saldo real +33.50). PnL = Σ deals de CIERRE (gross+comm+swap).
-        // Verificación: NCBETA pre-TP1 3972.48 → post-TP1 3983.00 = +10.52 = gross 11.86 − comm 1.34.
-        let rawProfit = 0;
-        for (const d of deals) {
-            const cp = d?.closePositionDetail;
-            if (cp) {
-                rawProfit += Number(cp.grossProfit || 0) + Number(cp.commission || 0) + Number(cp.swap || 0);
-            }
-        }
-        const pnl = rawProfit / Math.pow(10, moneyDigits);
-        // Saldo post-cierre del deal FINAL (no del parcial) → curva de saldo real del broker.
-        const balanceAfterUsd = finalCp?.balance != null ? Number(finalCp.balance) / Math.pow(10, moneyDigits) : null;
-        const slHit = deals.some((d: any) => d?.stopTriggerBase === 'STOP_LOSS' || d?.closePositionDetail?.closeTriggerBase === 'STOP_LOSS');
-        const result = pnl > 0.1 ? 'WIN' : pnl < -0.1 ? 'LOSS' : 'BREAKEVEN';
-        // 🛡️ sep-2026: rMultiple contra el SL ESTRUCTURAL original (no el vigente con BE-buffer
-        // → riesgo ≈ 0 → R inflado). Lots reales desde el deal de apertura si el trade no los trae.
-        // Sanidad: SL del lado correcto (BUY: sl<entry | SELL: sl>entry); si no, rMultiple null.
-        const openDeal = deals.find((d: any) => !d?.closePositionDetail);
-        // 🛡️ 16-sep-2026: filledVolume está en centavos de moneda base; el divisor DEBE ser el
-        // lotSize del activo (antes 10^7 fijo → XAU quedaba con 0.00001 lotes → riesgo ~$0.014
-        // → rMultiple 3763). getLotSizeCents: forex 10^7, XAU/OIL 10^4, BTC/índices 100.
-        const lotSizeCents = (await import('../services/ctrader.js')).getLotSizeCents(String(trade.ticker || ''));
-        const dealLots = openDeal?.filledVolume ? Number(openDeal.filledVolume) / lotSizeCents : 0;
-        const slPrice = Number(trade.initialSlPrice ?? trade.originalSlPrice ?? trade.slPrice);
-        const entryPrice = Number(trade.entryPrice ?? openDeal?.executionPrice ?? 0);
-        const dir = String(trade.direction || '').toUpperCase();
-        const slOk = !dir || (dir === 'BUY' ? slPrice < entryPrice : slPrice > entryPrice);
-        const effTrade = {
-            ...trade,
-            slPrice,
-            ctraderLots: Number(trade.ctraderLots ?? trade.lots ?? trade.volume ?? 0) || dealLots,
-        };
-        const rMultiple = slOk ? computeRMultipleFromRealPnl(effTrade, pnl) : null;
-        return { result, pnl, rMultiple, slHit, balanceAfterUsd };
+        const broker = await import('../services/ctrader.js');
+        const deals = await broker.getDealsByPosition(positionId);
+        // Old display getter silently defaults to USD. Only verified metadata establishes the denominator currency.
+        const currency = (broker as any).getVerifiedAccountCurrency?.() ?? null;
+        return resolveTradeCloseAccounting(positionId, trade, deals, currency);
     } catch (e: any) {
         console.warn(`[RECONCILE] no se pudo leer historial de posID ${positionId}: ${e.message}`);
         return null;
@@ -262,13 +414,57 @@ async function resolveClosedFromDeals(positionId: string, trade: any): Promise<{
  *  escribía recordResult('REVERSAL') sin PnL y el trade quedaba para SIEMPRE con '—'
  *  en el Diario (el reconcile de arranque no lo revisa: el doc de active_trades ya
  *  estaba borrado). Medido 23-sep-2026: 2 reversiones sin PnL real en el journal. */
-export async function finalizeClosedPositionFromDeals(positionId: string, trade: any): Promise<{ result: string; pnl: number; rMultiple: number | null; slHit: boolean; balanceAfterUsd: number | null } | null> {
+export async function finalizeClosedPositionFromDeals(positionId: string, trade: any): Promise<ClosedTradeAccounting | null> {
     for (let attempt = 0; attempt < 4; attempt++) {
         const resolved = await resolveClosedFromDeals(positionId, trade);
         if (resolved) return resolved;
         if (attempt < 3) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
     }
     return null;
+}
+
+// Keep the RAM entry-only hold across broker history, durable accounting and active cleanup.
+async function completeLiveTradeClose(trade: ActiveTrade, store: StateStore, extra: Record<string, unknown> = {}, accounting?: ClosedTradeAccounting): Promise<boolean> {
+    (trade as any).closeAccountingPending = true;
+    extra = { ...(trade as any).closeAccountingExtra, ...extra };
+    (trade as any).closeAccountingExtra = extra;
+    invalidateRiskCache();
+    try {
+        if (!trade.ctraderPositionId) throw new Error('CLOSE_ACCOUNTING_PENDING: broker position identity unavailable');
+        const resolved = accounting ?? await finalizeClosedPositionFromDeals(String(trade.ctraderPositionId), trade);
+        if (!resolved) throw new Error('CLOSE_ACCOUNTING_PENDING: broker history incomplete');
+        (trade as any).brokerCloseConfirmed = true; // Complete broker deals, not an entry incident, prove closure.
+        await commitTradeCloseAccounting(db, trade.journalId!, resolved, extra);
+        await db!.collection('active_trades').doc(trade.tradeId).delete();
+        Object.assign(trade, { executionIncidentPending: false, executionUncertain: false, closeAccountingPending: false, executionFillUnverified: false });
+        store.activeTrades.delete(trade.tradeId);
+        return true;
+    } catch (error: any) {
+        (trade as any).closeAccountingPending = true;
+        console.warn(`[ACCOUNTING] ${trade.ticker} #${trade.tradeId}: close retained for retry: ${error.message}`);
+        if (db) {
+            // A journal-only recovery may have no active doc yet. Persist the full
+            // retry identity/immutable evidence, not a flag-only restart tombstone.
+            const retained = JSON.parse(JSON.stringify({ ...trade, closeAccountingPending: true, closeAccountingExtra: extra }));
+            const activeRef: import('firebase-admin').firestore.DocumentReference = db.collection('active_trades').doc(trade.tradeId);
+            try {
+                await db.runTransaction(async (tx: import('firebase-admin').firestore.Transaction) => {
+                    const existing = (await tx.get(activeRef)).data();
+                    if (existing) {
+                        for (const key of ['tradeId', 'journalId', 'ticker', 'direction', 'ctraderPositionId',
+                            'riskSnapshot', 'riskAmountAccount', 'accountCurrency', 'initialSlPrice', 'originalSlPrice']) {
+                            if (existing[key] != null && retained[key] != null && JSON.stringify(existing[key]) !== JSON.stringify(retained[key])) {
+                                throw new Error(`CLOSE_ACCOUNTING_PENDING: conflicting recovery ${key}`);
+                            }
+                        }
+                    }
+                    tx.set(activeRef, retained, { merge: true });
+                });
+            } catch (error: any) { console.warn(`[ACCOUNTING] recovery identity retained in RAM: ${error.message}`); }
+            if (trade.journalId) await db.collection('trade_journal').doc(trade.journalId).set({ closeAccountingPending: true }, { merge: true }).catch(() => {});
+        }
+        return false;
+    } finally { invalidateRiskCache(); }
 }
 
 // 🛑 16-sep-2026: registro de señales BLOQUEADAS para el contrafactual semanal
@@ -300,10 +496,11 @@ export async function reconcileCTraderPositions(): Promise<void> {
             return;
         }
         const open = await getOpenPositions();
+        if (!Array.isArray(open)) throw new Error('Broker positions unavailable; reconciliation skipped');
+        if (await loadRolloverJournalPending() === false) throw new Error('Journal safety unavailable; reconciliation skipped');
         console.log(`[RECONCILE] run: activeTrades=${globalState.activeTrades.size} | posiciones abiertas en cTrader=${open.length}${open.length ? ' → ' + open.map((p: any) => String(p.positionId)).join(',') : ''}`);
         if (globalState.activeTrades.size === 0 && open.length === 0) {
-            console.log('[RECONCILE] run: nada que reconciliar (RAM y cTrader vacíos).');
-            return;
+            console.log('[RECONCILE] RAM y cTrader vacíos; se auditan journals pendientes igualmente.');
         }
         const openIds = new Set(open.map((p: any) => String(p.positionId)));
         const GRACE_MS = 5 * 60 * 1000;
@@ -314,7 +511,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
         // XAUUSD y R33DI4 GBPJPY del 28-sep). Antigüedad > 2h → eliminar y marcar SKIP.
         const nowTs = Date.now();
         for (const [ramId, ramTrade] of [...globalState.activeTrades.entries()]) {
-            if (ramTrade.isBacktest || ramTrade.ctraderPositionId) continue;
+            if (ramTrade.isBacktest || ramTrade.ctraderPositionId || hasPendingExecutionIncident(ramTrade as any) || rolloverDWideMap.has(ramId)) continue;
             const ageMs = nowTs - Number(ramTrade.timestamp || 0);
             if (ageMs > 2 * 60 * 60 * 1000) {
                 console.log(`[RECONCILE] 🧹 Huérfano sin ejecución #${ramId} (${ramTrade.ticker}, ${(ageMs / 3600000).toFixed(1)}h) eliminado de active_trades.`);
@@ -322,7 +519,8 @@ export async function reconcileCTraderPositions(): Promise<void> {
                 if (db) {
                     db.collection('active_trades').doc(ramId).delete().catch(() => { });
                     const jid = (ramTrade as any).journalId;
-                    if (jid) db.collection('trade_journal').doc(jid).update({ result: 'SKIP', ctraderStatus: 'ABORTED', skipReason: 'Huérfano sin ejecución (barrido del reconciler).' }).catch(() => { });
+                    // Age without a position id is not broker evidence of a rejected/unsubmitted order.
+                    if (jid) db.collection('trade_journal').doc(jid).update({ staleSignalExpired: true }).catch(() => { });
                 }
             }
         }
@@ -335,31 +533,26 @@ export async function reconcileCTraderPositions(): Promise<void> {
             let pnl = 0;
             let result = 'BREAKEVEN';
             let slHit = false;
+            (trade as any).closeAccountingPending = true;
+            invalidateRiskCache();
             const resolved = await resolveClosedFromDeals(trade.ctraderPositionId!, trade);
-            if (resolved) {
-                pnl = resolved.pnl; result = resolved.result; slHit = resolved.slHit;
-            } else {
-                console.warn(`[RECONCILE] ⚠️ Sin deal de cierre en historial para posID ${trade.ctraderPositionId} — se marca BREAKEVEN conservador.`);
+            if (!resolved) {
+                console.warn(`[RECONCILE] ⚠️ Historial incompleto para posID ${trade.ctraderPositionId} — se conserva pendiente, sin fabricar resultado.`);
+                continue;
             }
-            // 🛡️ FIX C: rMultiple = PnL real en USD / riesgo real en USD (ya no $50 fijos).
-            const rMultiple = resolved ? resolved.rMultiple : computeRMultipleFromRealPnl(trade, pnl);
-            globalState.activeTrades.delete(trade.tradeId);
-            if (db) {
-                const journalId = trade.journalId || trade.tradeId;
-                // 🛡️ sep-2026: no pisar un resultado registrado a mano desde el panel.
-                const jSnap = await db.collection('trade_journal').doc(journalId).get().catch(() => null);
+            pnl = resolved.pnl; result = resolved.result; slHit = resolved.slHit;
+            const rMultiple = resolved.rMultiple;
+            const journalId = trade.journalId;
+            if (db && journalId) {
+                // A manual annotation is not permission to discard broker accounting obligations.
+                const jSnap = await db.collection('trade_journal').doc(journalId).get();
                 if (jSnap?.data()?.manualResult) {
-                    console.log(`[RECONCILE] ⏭️ #${journalId} tiene resultado MANUAL — se respeta, no se reconcilia.`);
-                } else {
-                    db.collection('trade_journal').doc(journalId).set(
-                        { result, rMultiple, ctrader_real_pnl: pnl, balanceAfterUsd: resolved?.balanceAfterUsd ?? null, slHit, reconciled: true, closedAt: new Date().toISOString() },
-                        { merge: true }
-                    ).catch(() => {});
+                    console.warn(`[RECONCILE] #${journalId}: resultado manual en conflicto; se conserva pendiente.`);
+                    continue;
                 }
-                // 🛡️ FIX 16-sep-2026: borrar SIEMPRE el doc de active_trades al reconciliar un
-                // fantasma (antes solo se borraba en el branch manual → los docs cerrados por
-                // stream perdido quedaban para siempre y reaparecían como fantasmas en cada boot).
-                db.collection('active_trades').doc(trade.tradeId).delete().catch(() => {});
+            }
+            if (!await completeLiveTradeClose(trade, globalState, { reconciled: true }, resolved)) { lastReconcileTs = 0; continue; }
+            if (db) {
                 // 🆕 Dedupe: otros docs abiertos con el mismo posID son duplicados de este cierre.
                 try {
                     const dupSnap = await db.collection('trade_journal')
@@ -447,6 +640,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
             // 1) docs con result pero posición VIVA en el broker → resultado inválido → REABRIR.
             // 2) varios docs abiertos con el mismo posID → mergear (queda uno).
             let existingJournalId: string | null = null;
+            let existingJournalData: any = null;
             if (db) {
                 try {
                     const dupSnap = await db.collection('trade_journal')
@@ -482,6 +676,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
                     } else if (openDocs.length === 1) {
                         existingJournalId = openDocs[0].id;
                     }
+                    existingJournalData = openDocs.find(o => o.id === existingJournalId)?.x ?? null;
                 } catch (e: any) {
                     console.warn(`[RECONCILE] ⚠️ no se pudo chequear duplicado de journal: ${e.message}`);
                 }
@@ -506,7 +701,8 @@ export async function reconcileCTraderPositions(): Promise<void> {
                 }
             }
             // Si la posición tiene label del bot, se adopta con ese id (vincula con el historial)
-            const tradeId = existingJournalId ?? ((td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`);
+            const tradeId = (existingJournalData?.rolloverFill?.positionId === pid && existingJournalData?.rolloverTriageIdentity?.tradeId)
+                || existingJournalId || ((td.label && /^[A-Z0-9]{6}$/.test(td.label)) ? td.label : `ADOPT${pid}`);
             const now = Date.now();
             const trade: any = {
                 tradeId, ticker: sym, direction: dir as 'BUY' | 'SELL',
@@ -514,17 +710,62 @@ export async function reconcileCTraderPositions(): Promise<void> {
                 tp2Price: capTp2Price(sym, dir as 'BUY' | 'SELL', entry, slPrice ?? entry, tpPrice ?? entry), originalSlPrice: slPrice ?? entry,
                 timestamp: now, score: 0, ctraderPositionId: pid,
                 adopted: true, adoptedFromCTrader: true, openTs,
+                journalId: existingJournalId ?? tradeId,
+                ...Object.fromEntries(Object.entries(existingJournalData ?? {}).filter(([key]) => key.startsWith('rollover'))),
             };
+            // Recover opening evidence, never infer initial risk from the current (possibly trailed) stop.
+            for (const key of ['riskSnapshot','accountCurrency','riskAmountAccount','riskAccountingStatus','riskAccountingProvenance','riskBudgetAccount','requestedRiskPercent',
+                'initialSlPrice','originalSlPrice','executionUncertain','executionIncidentPending','closeAccountingPending','executionFillUnverified']) {
+                if (existingJournalData?.[key] !== undefined) trade[key] = existingJournalData[key];
+            }
+            if (freezeTradeRiskForTrade(trade) && Math.abs(trade.riskSnapshot.entryPrice - entry) <= Math.max(1, entry) * 1e-12) {
+                trade.initialSlPrice = trade.riskSnapshot.initialSlPrice;
+                trade.originalSlPrice = trade.riskSnapshot.initialSlPrice;
+                trade.riskAmountAccount = trade.riskSnapshot.riskAmountAccount;
+                trade.riskAccountingProvenance = trade.riskSnapshot.source;
+            } else {
+                // A valid snapshot for a different actual entry is still mismatched evidence.
+                if (trade.riskAccountingStatus === 'VERIFIED') trade.riskAccountingStatus = 'INVALID';
+                // A legacy position can be managed, but cannot invent a historical denominator.
+                const original = existingJournalData?.originalSlPrice ?? existingJournalData?.initialSlPrice;
+                if (Number.isFinite(original) && original > 0) trade.originalSlPrice = original;
+                else delete trade.originalSlPrice;
+            }
+            // Restore only an already-versioned position; current asset configuration is NEVER an adoption source.
+            if (existingJournalData?.executionState?.schema === 1 && existingJournalData?.executionPolicy?.profile === 'microstructure_v1') {
+                const frozen = existingJournalData, execution = frozen.executionState;
+                const knownInitial = Number(frozen.initialSlPrice);
+                if (validateExecutionInstrument(frozen.executionInstrument) && frozen.executionInstrument.ticker === sym
+                    && execution.profile === 'microstructure_v1' && Number.isFinite(knownInitial) && knownInitial > 0
+                    && knownInitial === execution.initialSlPrice && Number.isFinite(execution.initialRiskDist) && execution.initialRiskDist > 0
+                    && Math.abs(Math.abs(entry-knownInitial)-execution.initialRiskDist) <= frozen.executionInstrument.tickSize/2) {
+                    Object.assign(trade, JSON.parse(JSON.stringify(Object.fromEntries(['executionState','executionPolicy','executionInstrument','executionLots',
+                        'executionRemainingLots','executionPartialPending','executionPartialBeforeLots','executionTf','initialSlPrice','mgmtOverrides']
+                        .filter(key => frozen[key] !== undefined).map(key => [key,frozen[key]])))));
+                    if (Number.isFinite(frozen.tp1Price) && frozen.tp1Price > 0) trade.tp1Price = frozen.tp1Price;
+                    if (Number.isFinite(frozen.tp2Price) && frozen.tp2Price >= 0) trade.tp2Price = frozen.tp2Price;
+                    trade.tp1Hit = execution.partialConfirmed === true;
+                } else trade.executionFillUnverified = true;
+            }
+            // Journal-only boot recovery may use a prior trade id; migrate safety identity.
+            for (const [pendingId, pending] of rolloverDWideMap) {
+                if (String(pending.positionId) !== pid) continue;
+                Object.assign(trade, { rolloverDWidened: true, rolloverDSlOriginal: pending.orig, rolloverDSlWide: pending.wide, rolloverDRestoreTries: pending.tries, rolloverDNextRetryAt: pending.nextRetryAt ?? 0, rolloverDWidenedAt: pending.at, rolloverDPositionId: pid, rolloverDTicker: sym, rolloverDDirection: dir });
+                if (pending.journalId) trade.journalId = pending.journalId;
+                if (pendingId !== tradeId) rolloverDWideMap.delete(pendingId);
+                break;
+            }
+            rehydrateRolloverPending(tradeId, trade);
             globalState.activeTrades.set(tradeId, trade);
             if (db) {
-                db.collection('active_trades').doc(tradeId).set(trade).catch(() => {});
+                db.collection('active_trades').doc(tradeId).set(trade, { merge: true }).catch(() => {});
                 db.collection('trade_journal').doc(tradeId).set({
                     id: tradeId, ticker: sym, direction: dir, grade: 'Reconciliado',
                     points: 0, timestamp: openTs, entryPrice: entry, slPrice: slPrice ?? entry,
                     tp1Price: tpPrice ?? entry, tp2Price: tpPrice ?? entry,
                     ctraderStatus: 'EXECUTED', adopted: true,
                     ctraderPositionId: pid,
-                }).catch(() => {});
+                }, { merge: true }).catch(() => {});
             }
             console.log(`[RECONCILE] ✅ Adoptada posición ${sym} ${dir} posID=${pid} como #${tradeId} (gestión reanudada)`);
         }
@@ -546,15 +787,11 @@ export async function reconcileCTraderPositions(): Promise<void> {
                     if (Date.now() - Number(x.timestamp ?? 0) < 5 * 60 * 1000) continue; // gracia
                     const resolved = await resolveClosedFromDeals(pid, x);
                     if (!resolved) continue; // sin deal de cierre → dejar abierto, no fabricar
-                    await docSnap.ref.set({
-                        result: resolved.result,
-                        rMultiple: resolved.rMultiple,
-                        ctrader_real_pnl: resolved.pnl,
-                        balanceAfterUsd: resolved.balanceAfterUsd,
-                        slHit: resolved.slHit,
-                        reconciled: true,
-                        closedAt: new Date().toISOString(),
-                    }, { merge: true });
+                    const recoveryId = x.tradeId || docSnap.id;
+                    if (globalState.activeTrades.has(recoveryId)) continue; // Never replace another management identity.
+                    const recoveryTrade = { ...x, tradeId: recoveryId, journalId: docSnap.id, closeAccountingPending: true } as ActiveTrade;
+                    globalState.activeTrades.set(recoveryId, recoveryTrade);
+                    if (!await completeLiveTradeClose(recoveryTrade, globalState, { reconciled: true }, resolved)) { lastReconcileTs = 0; continue; }
                     console.log(`[RECONCILE] 📖 Journal abierto #${docSnap.id} (posID ${pid}) resuelto con deals: ${resolved.result} (${resolved.rMultiple}R)`);
                 }
             } catch (e: any) {
@@ -562,6 +799,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
             }
         }
     } catch (e: any) {
+        lastReconcileTs = 0; // Failed read/write is not a completed pass.
         console.warn('[RECONCILE] error:', e.message);
     }
 }
@@ -712,8 +950,13 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     correlationFilter?: any;
     /** 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación parametrizado) */
     biasConfluence?: BiasConfluenceConfig;
+    rolloverEntryBlock?: boolean;
+    rolloverPolicy?: RolloverRuntimePolicy;
+    mlRegimeShadow?: boolean;
     /** 🆕 T6 (oct-2026): pesos de zona × sesión (hyperopt, 6 familias × 4 sesiones) */
     zoneWeights?: Record<string, Record<string, number>>;
+    executionPolicy?: ExecutionPolicyInput;
+    executionInstrument?: ExecutionInstrument;
     /** 🆕 T6 (oct-2026): peso VWAP por activo (hyperopt, rango 2-6) */
     vwapPts?: number;
     sessions?: Record<string, {
@@ -761,7 +1004,10 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             sellScorePenalty: config.sellScorePenalty ?? 0,
             maxBuysPerDay: config.maxBuysPerDay ?? 0,
             buyScorePenalty: config.buyScorePenalty ?? 0,
+            rolloverEntryBlock: (config as any).rolloverEntryBlock !== false,
             partialClosePct: config.partialClosePct,
+            executionPolicy: config.executionPolicy,
+            executionInstrument: validateExecutionInstrument(config.executionInstrument) ? config.executionInstrument : undefined,
             slAfterTp1: config.slAfterTp1,
             tp15BeEnabled: config.tp15BeEnabled,
             atrTrailEnabled: config.atrTrailEnabled,
@@ -775,6 +1021,8 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
             trailingDrawdownR: (config as any).trailingDrawdownR,
             riderEnabled: config.riderEnabled as boolean | undefined,
             riderTf: config.riderTf as string | undefined,
+            rolloverPolicy: (config as any).rolloverPolicy,
+            mlRegimeShadow: (config as any).mlRegimeShadow,
             timesfm: (config as any).timesfm, // 🆕 F1/F2: filtro direccional TimesFM (asset_configs/{ticker}.timesfm)
             correlationFilter: (config as any).correlationFilter, // 🧲 filtro de correlación cross-asset
             biasConfluence: (config as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo
@@ -788,32 +1036,77 @@ function getConfigForTicker(ticker: string, nowMs?: number): typeof globalState.
     return { ...globalState.dynamicBotConfig, sessionEnabled: false, maxSellsPerDay: 0, sellScorePenalty: 0, maxBuysPerDay: 0, buyScorePenalty: 0 };
 }
 
+/** Independent telemetry only: legacy12 score/gate/features and sizing are untouched. */
+function evaluateLiveRegimeShadow(ticker: string, state: RadarState, signal: any, nowMs: number, cfg: { mlRegimeShadow?: boolean }) {
+    if (cfg.mlRegimeShadow !== true) return undefined;
+    try {
+    const rawTf = String(signal.executionTf ?? signal.tf ?? '').toUpperCase();
+    const tf = ({ M3:'3', '3M':'3', M5:'5', '5M':'5', M15:'15', '15M':'15', H1:'60', H4:'240', D1:'D' } as Record<string,string>)[rawTf] ?? rawTf;
+    const quote = getLastBidAsk(ticker, nowMs);
+    const velocity = tickFlow.getTickVelocitySnapshot(ticker, nowMs);
+    const input: RegimeContextInput = { ...state.mlRegimeObservations,
+        schema: REGIME_FEATURE_SCHEMA, ticker, tf, direction: signal.direction, nowMs,
+        // These are observations made at this actual signal boundary, not invented historical vintages.
+        entry: { value: { entryPrice: Number(signal.entryPrice), initialSL: Number(signal.stopLoss) },
+            observedAtMs: nowMs, availableAtMs: nowMs, maxAgeMs: 10000, provenance: 'live-signal-initial-stop/v1', source: 'signal-initial-stop' },
+        quote: quote ? { value: { bid: quote.bid, ask: quote.ask }, units: 'price', observedAtMs: quote.ts,
+            availableAtMs: nowMs, maxAgeMs: 10000, provenance: 'live-broker-quote-read/v1' } : undefined,
+        price: quote ? { value: signal.direction === 'BUY' ? quote.ask : quote.bid, observedAtMs: quote.ts,
+            availableAtMs: nowMs, maxAgeMs: 10000, provenance: 'live-executable-price-read/v1' } : undefined,
+        velocity: velocity && velocity.samples > 50 ? { value: { zScore: velocity.zScore }, observedAtMs: velocity.observedAtMs,
+            availableAtMs: velocity.availableAtMs, maxAgeMs: 10000, provenance: 'tickflow-decision-snapshot/v1',
+            samples: velocity.samples, baselineVarianceMs2: velocity.baselineVarianceMs2,
+            baselineHourUtc: velocity.baselineHourUtc, profile: REGIME_VELOCITY_PROFILE } : undefined,
+    };
+    return predictRegime(input);
+    } catch { return regimeUnavailable('live-shadow-observation-unavailable'); }
+}
+
 // 🧠 INICIALIZACIÓN DE LA MEMORIA (Carga los trades de Firebase si el servidor se reinicia)
 const unsubscribers: (() => void)[] = [];
 // 🛡️ Auditoría T1: aviso único por doc de config inválido (fail-closed)
 const invalidConfigNotified = new Set<string>();
+const experimentalRuntimeRegistrations = new Map<string, { signature: string; cfg: TimesfmFilterConfig }>();
+/** Lifecycle only: never register/invalidate the RAM cache from a signal trigger. */
+function configureExperimentalRuntime(ticker: string, asset: any): void {
+    const cfg = resolveTimesfmConfig(asset?.timesfm);
+    if (asset?.enabled === false || asset?.sessionEnabled === false) cfg.enabled = false;
+    const signature = JSON.stringify(cfg);
+    const previous = experimentalRuntimeRegistrations.get(ticker);
+    if (previous?.signature !== signature) {
+        if (previous) for (const tfMinutes of [5, 15])
+            configureTimesfmLiveCache({ ticker, tfMinutes, cfg: { ...previous.cfg, enabled: false } });
+        for (const tfMinutes of [5, 15]) configureTimesfmLiveCache({ ticker, tfMinutes, cfg });
+        experimentalRuntimeRegistrations.set(ticker, { signature, cfg });
+    }
+    (globalState.smcManager as any)?.configureRolloverPolicy?.(ticker, asset?.rolloverPolicy);
+}
 
 if (db) {
     try {
-        db.collection('active_trades').get().then((snap: any) => {
-            snap.forEach((doc: any) => {
-                globalState.activeTrades.set(doc.id, structuredClone(doc.data() as ActiveTrade));
+        db.collection('active_trades').get().catch((e: any) => {
+            console.error('[RADAR] Active memory unavailable; recovering journal safety:', e.message);
+            return null;
+        }).then(async (snap: any) => {
+            snap?.forEach((doc: any) => {
+                const restored = structuredClone(doc.data() as ActiveTrade);
+                freezeTradeRiskForTrade(restored);
+                globalState.activeTrades.set(doc.id, restored);
                 // 🛡️ Regla D: recuperar SL ensanchados del rollover si el bot se reinició en la ventana
                 const x = doc.data() as any;
-                if (x.rolloverDWidened && Number.isFinite(Number(x.rolloverDSlOriginal)) && Number.isFinite(Number(x.rolloverDSlWide))) {
-                    rolloverDWideMap.set(doc.id, { orig: Number(x.rolloverDSlOriginal), wide: Number(x.rolloverDSlWide), tries: 0, at: Number(x.rolloverDWidenedAt) || Date.now() });
-                }
+                rehydrateRolloverPending(doc.id, x);
             });
             console.log(`[RADAR] 🧠 Memoria restaurada: ${globalState.activeTrades.size} trades activos cargados.`);
-            // 🛡️ Regla D: si quedaron SL ensanchados por un reinicio y ya pasó la ventana de
-            // restauración, restaurarlos YA (el rollover ya terminó, el spread está normal).
-            if (rolloverDWideMap.size > 0) {
-                applyRolloverRestore(Date.now(), true).catch((e: any) => console.error('[ROLLOVER] ❌ Restore post-reinicio:', e.message));
+            await loadRolloverJournalPending();
+            // Boot only schedules evidence-based recovery; never assumes normal spread.
+            if (rolloverDWideMap.size > 0 || rolloverTriageRecords.size > 0) {
+                runRolloverCycle(Date.now()).catch((e: any) => console.error('[ROLLOVER] ❌ Recovery post-restart:', e.message));
             }
 
             // 🏇 Inyectar SMCManager para consultas HTF (RIDER mode y otros usos futuros)
             import('../engine/smc/SMCManager.js').then(({ smcManager }) => {
                 globalState.smcManager = smcManager;
+                for (const [ticker, asset] of globalState.assetSessionConfigs) configureExperimentalRuntime(ticker, asset);
                 console.log('[RIDER] 🏇 SMCManager inyectado en StateStore — RIDER mode disponible.');
             }).catch(() => { /* SMCManager no disponible (modo solo Pine logs) */ });
 
@@ -849,7 +1142,9 @@ if (db) {
 
         // 🆕 v6.0: Listener para configs por activo+sesión
         unsubscribers.push(db.collection('asset_configs').onSnapshot((snap: FirebaseFirestore.QuerySnapshot) => {
+            const runtimeIds = new Set<string>();
             snap.forEach(doc => {
+                runtimeIds.add(doc.id);
                 if (doc.id === 'GLOBAL') {
                     const data = doc.data() || {};
                     globalState.globalPortfolioConfig = {
@@ -873,6 +1168,7 @@ if (db) {
                         enabled: false,
                         disabledReason: 'CONFIG_INVALID (schema Zod) — ver JARVIS-error.log',
                     } as any);
+                    configureExperimentalRuntime(doc.id, { enabled: false });
                     if (!invalidConfigNotified.has(doc.id)) {
                         invalidConfigNotified.add(doc.id);
                         sendTelegramAlert(`🚨 <b>[CONFIG INVÁLIDA] ${doc.id}</b>\nasset_configs/${doc.id} no pasa el schema → activo BLOQUEADO hasta corregirlo.`).catch(() => { });
@@ -880,6 +1176,8 @@ if (db) {
                     return;
                 }
                 const data = parsed.data;
+                // Pure validation only: never writes or enables a live profile.
+                resolveExecutionPolicy(data.executionPolicy);
                 globalState.assetSessionConfigs.set(doc.id, {
                     minPointsForBuy: data.minPointsForBuy || globalState.dynamicBotConfig.minPointsForBuy,
                     minPointsForSell: data.minPointsForSell || globalState.dynamicBotConfig.minPointsForSell,
@@ -893,6 +1191,8 @@ if (db) {
                     maxBuysPerDay: data.maxBuysPerDay || 0,
                     buyScorePenalty: data.buyScorePenalty || 0,
                     partialClosePct: data.partialClosePct,
+                    executionPolicy: data.executionPolicy,
+                    executionInstrument: data.executionInstrument,
                     slAfterTp1: data.slAfterTp1,
                     tp15BeEnabled: data.tp15BeEnabled,
                     atrTrailEnabled: data.atrTrailEnabled,
@@ -910,6 +1210,8 @@ if (db) {
                     riderTf: data.riderTf,
                     autoTrading: data.autoTrading,
                     maxSmartRiskPercent: data.maxSmartRiskPercent,
+                    rolloverPolicy: (data as any).rolloverPolicy,
+                    mlRegimeShadow: (data as any).mlRegimeShadow,
                     timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
                     correlationFilter: (data as any).correlationFilter, // 🧲 ago-2026: sin esto, asset_configs correlationFilter={shadow:false} NO activa el bloqueo real
                     biasConfluence: (data as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación)
@@ -922,7 +1224,19 @@ if (db) {
                 // 🛡️ 16-sep-2026: gate ML por activo en CALIENTE (default OFF — los modelos de
                 // 11-ago restan PnL). mlGateEnabled=true en el doc → gate ON en vivo sin restart.
                 setMLGateOverride(doc.id, (doc.data() as any).mlGateEnabled === true);
+                configureExperimentalRuntime(doc.id, globalState.assetSessionConfigs.get(doc.id));
             });
+            // Cancel only the new experimental lifecycle on document removal; do not
+            // reinterpret legacy asset fallback/deletion semantics in this transport change.
+            for (const ticker of [...experimentalRuntimeRegistrations.keys()]) {
+                if (runtimeIds.has(ticker)) continue;
+                configureExperimentalRuntime(ticker, { enabled: false });
+                experimentalRuntimeRegistrations.delete(ticker);
+                const retained = globalState.assetSessionConfigs.get(ticker);
+                if (retained) globalState.assetSessionConfigs.set(ticker, { ...retained,
+                    rolloverPolicy: undefined, mlRegimeShadow: undefined,
+                    timesfm: retained.timesfm && typeof retained.timesfm === 'object' ? { ...retained.timesfm, liveTransport: 'legacy_http' } : undefined });
+            }
             // 🛡️ 16-sep-2026: matriz de correlación DINÁMICA — todo activo habilitado entra
             // al set EWMA (incluye promovidos del Asset Scout; sin esto, ρ vs no-core = undefined).
             syncCorrTickers([...globalState.assetSessionConfigs.keys()].filter(k => k !== 'GLOBAL'));
@@ -939,6 +1253,7 @@ if (db) {
         const cleanupAndExit = () => {
             console.log('[SHUTDOWN] Limpiando listeners de Firestore en trading.ts...');
             unsubscribers.forEach(unsub => unsub());
+            resetTimesfmLiveCache();
         };
         process.on('SIGTERM', cleanupAndExit);
         process.on('SIGINT', cleanupAndExit);
@@ -1015,18 +1330,38 @@ async function sendTelegramAlert(message: string) {
 
 function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: number, highPrice: number, lowPrice: number, prevHighPrice: number | undefined, prevLowPrice: number | undefined, ticker: string, state: RadarState, nowMs: number, store: StateStore = globalState, isBacktest: boolean = false) {
     const config = getConfigForTicker(ticker, nowMs);
+    const rolloverSignal = config.rolloverPolicy?.freezeSignals === true
+        ? buildRolloverSignalContext(ticker, nowMs, config.rolloverPolicy, state.rolloverSignalObservation,
+            { high: highPrice, low: lowPrice, prevHigh: prevHighPrice, prevLow: prevLowPrice }) : {};
+    if (rolloverSignal.rolloverFreeze && shouldFreezeRolloverObservation(rolloverSignal.observationInterval?.startMs ?? NaN,
+        rolloverSignal.observationInterval?.endMs ?? NaN, rolloverSignal.rolloverFreeze))
+        return { updatedLeg: leg, triggerOte: false, oteData: null };
+    const policy = resolveExecutionPolicy(config.executionPolicy);
+    const alphaConfig = policy.profile === 'microstructure_v1'
+        ? { ...config, executionInstrument: getLiveExecutionInstrument(ticker) ?? (config.executionInstrument?.source === 'explicit_model' ? config.executionInstrument : undefined) } : config;
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
+    if (leg && policy.smart && (!leg.executionDecision || leg.executionDecision.mode === 'WAIT_DATA')) {
+        const tf = leg.executionSnapshot?.tf ?? leg.chochEvents?.find(e => /_(5|15)M$/.test(e))?.match(/_(5|15)M$/)?.[1];
+        const snapshot = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
+        const quote = snapshot?.quote;
+        const price = leg.dir === 'BUY' ? quote?.ask : quote?.bid;
+        const buffer = Math.max(calculateDynamicSlBuffer(ticker, leg.origin, sessionConfig?.slBufferPercent ?? config.slBufferPercent), (snapshot?.atr14 ?? NaN) * .5);
+        const sl = leg.origin + (leg.dir === 'BUY' ? -buffer : buffer);
+        routeExecutionSetup(state, leg, alphaConfig, tf ?? '', nowMs, price ?? NaN, sl, (price ?? NaN) + (leg.dir === 'BUY' ? 1 : -1) * Math.abs((price ?? NaN)-sl) * config.fixedRR);
+    }
 
     const decision = evaluateImpulseCore(leg, currentPrice, highPrice, lowPrice, ticker, state, nowMs, {
-        config, currentSession, sessionConfig,
+        config: alphaConfig, currentSession, sessionConfig, ...rolloverSignal,
         // 🛡️ sep-2026 fix OTE: vela cerrada para estirar el extreme (paridad live↔backtest)
         prevHigh: prevHighPrice, prevLow: prevLowPrice,
     });
 
     if (decision.newTrade) {
         // 🔥 ESCUDO: Evaluar el trade contra el Modelo de Fricción (Prop Firm)
-        const frictionEval = evaluateNetTrade(decision.newTrade, nowMs);
+        const frictionEval = policy.profile === 'microstructure_v1'
+            ? { approved: true, netTrade: decision.newTrade, frictionCostDetails: 'Actual executable quote; entry spread/slip already in fill' }
+            : evaluateNetTrade(decision.newTrade, nowMs);
 
         if (!frictionEval.approved) {
             console.log(`[FRICTION] 🛡️ Trade RECHAZADO en ${ticker}: ${frictionEval.reason}`);
@@ -1041,7 +1376,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
             (netTrade as any).isBacktest = isBacktest;
-            store.activeTrades.set(netTrade.tradeId, netTrade);
+            // New pre-trade only, never infer this for hydrated/adopted positions.
+            const capturedTrade = { ...netTrade, initialSlPrice: netTrade.initialSlPrice ?? netTrade.slPrice };
+            store.activeTrades.set(netTrade.tradeId, capturedTrade);
             // 🛡️ T1: NO persistir el pre-trade (carrera con los delete() de dispatchOteSignal → fantasmas en Firestore).
             // El camino exitoso persiste en dispatchOteSignal antes de ejecutar.
         }
@@ -1131,6 +1468,9 @@ async function countConsecutiveLosses(ticker: string, session: string, direction
 
 export async function processTradingAlert(alertText: string, store: StateStore = globalState) {
     if (!db) return;
+    const executionEnvelope = alertText;
+    // Strip even malformed metadata BEFORE bootstrap, direction, scoring, payload or TS parsing.
+    alertText = alertText.replace(/\s*\|\s*EX1:\s*.*$/, '');
 
     // 🔄 BOOTSTRAP: eventos históricos del arranque construyen estado (puntos, OTE, sesgos)
     // pero NO ejecutan trades, NO envían Telegram, NO loguean al journal.
@@ -1275,6 +1615,22 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             if (!state) state = emptyState();
             store.localRadarStates.set(ticker, state);
         }
+        const incomingConfig = getConfigForTicker(ticker, nowMs);
+        const incomingPolicy = resolveExecutionPolicy(incomingConfig.executionPolicy);
+        // Root policy governs new entries; an already-frozen live position still needs
+        // its own closed-bar/ATR context after the root returns to legacy.
+        const needsExecutionContext = incomingPolicy.profile === 'microstructure_v1' || incomingConfig.rolloverPolicy?.freezeSignals === true
+            || incomingConfig.mlRegimeShadow === true || [...store.activeTrades.values()].some(trade =>
+            trade.ticker === ticker && !trade.isBacktest && trade.executionState?.schema === 1
+            && trade.executionState.profile === 'microstructure_v1' && trade.executionPolicy?.profile === 'microstructure_v1'
+            && (trade.executionPolicy.management || trade.executionPolicy.trailing));
+        const parsedExecution = needsExecutionContext ? parseExecutionEnvelope(executionEnvelope, nowMs) : { text: alertText, observation: undefined };
+        if (prefix === 'PING_PRICE') state.rolloverSignalObservation = undefined;
+        if (parsedExecution.observation?.ticker === ticker) {
+            const result = ingestExecutionContext(state, parsedExecution.observation, nowMs);
+            if (result.accepted && prefix === 'PING_PRICE') state.rolloverSignalObservation = structuredClone(parsedExecution.observation);
+            if (!result.accepted) console.warn(`[EXECUTION] ${ticker}: ${result.reason}`);
+        }
 
         if (!state.scoreBuy) state.scoreBuy = { points: 0, lastUpdate: nowMs, events: [] };
         if (!state.scoreSell) state.scoreSell = { points: 0, lastUpdate: nowMs, events: [] };
@@ -1381,12 +1737,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             // Defaults = comportamiento histórico (parcial 50%, SL al 50% del riesgo, TP1.5 y trail ATR activos).
 
             if (!isKillswitched) {
+                const macroRollover = config.rolloverPolicy?.freezeSignals === true
+                    ? buildRolloverSignalContext(ticker, nowMs, config.rolloverPolicy, state.rolloverSignalObservation,
+                        { high: highPrice, low: lowPrice, prevHigh: prevHighPrice, prevLow: prevLowPrice }) : {};
                 // 🗺️ Estirar patas Macro si están activas
                 if (state.activeMacroImpulseBuy) {
-                    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs);
+                    state.activeMacroImpulseBuy = evaluateMacroStretching(state.activeMacroImpulseBuy, highPrice, lowPrice, nowMs, macroRollover.rolloverFreeze, macroRollover.observationInterval);
                 }
                 if (state.activeMacroImpulseSell) {
-                    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs);
+                    state.activeMacroImpulseSell = evaluateMacroStretching(state.activeMacroImpulseSell, highPrice, lowPrice, nowMs, macroRollover.rolloverFreeze, macroRollover.observationInterval);
                 }
 
                 const buyRes = evaluateImpulse(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, prevHighPrice, prevLowPrice, ticker, state, nowMs, store, isBacktest);
@@ -1405,7 +1764,83 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 for (const [tradeId, trade] of store.activeTrades) {
                     if (trade.ticker !== ticker) continue;
                     if (!!(trade as any).isBacktest !== isBacktest) continue;
+                    // Accounting retries do not depend on a new TP/SL price touch and precede fill-management holds.
+                    if (!isBacktest && (trade as any).closeAccountingPending && trade.ctraderPositionId) {
+                        try {
+                            const broker = await import('../services/ctrader.js');
+                            const positions = await broker.getOpenPositions(ticker);
+                            if (!Array.isArray(positions)) continue;
+                            if (!positions.some((p: any) => String(p.positionId) === String(trade.ctraderPositionId))) {
+                                await completeLiveTradeClose(trade, store, { reconciled: true });
+                                continue;
+                            }
+                            // An entry/accounting incident is not evidence that this live position closed.
+                            (trade as any).brokerCloseConfirmed = false;
+                        } catch (error: any) { console.warn(`[ACCOUNTING] ${tradeId}: retry read unavailable: ${error.message}`); continue; }
+                    }
+                    if ((trade as any).executionFillUnverified) continue; // new fill without verified immutable denominator is never adopted as legacy
+                    if (!isBacktest && !trade.ctraderPositionId) continue; // A pending approval is not a simulated live position.
                     const nowTrade = nowMs;
+                    const versionedExecution = trade.executionState?.schema === 1 && trade.executionPolicy?.profile === 'microstructure_v1';
+                    const executionStages = versionedExecution && (trade.executionPolicy!.management || trade.executionPolicy!.trailing);
+                    if (versionedExecution && !isBacktest && trade.ctraderPositionId) {
+                        await runNormalStopMutation(tradeId, trade, async () => {
+                            const broker = await import('../services/ctrader.js');
+                            const tf = (trade as any).executionTf;
+                            const snapshot = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
+                            const liveQuote = () => { const q = getLastBidAsk(ticker, Date.now()); return q ? { bid: q.bid, ask: q.ask, timestampMs: q.ts, source: 'broker' as const } : undefined; };
+                            const profilePartial = trade.executionPolicy!.targets ? REGIME_PROFILES[trade.executionInstrument!.regime].partialClosePct
+                                : (trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? .5);
+                            const reason = await manageExecutionPosition(trade, snapshot, nowMs, profilePartial, {
+                                now: () => Date.now(), quote: liveQuote,
+                                rolloverBlocked: () => {
+                                    const cal = getRolloverCalendar(ticker, Date.now());
+                                    return !rolloverJournalRecoveryReady || !cal.metadataAvailable || !cal.marketOpen || cal.protectionWindow || cal.widenWindow || cal.entryWindow || rolloverDWideMap.has(tradeId);
+                                },
+                                accounting: async () => {
+                                    const lots = Number((trade as any).executionLots);
+                                    const positions = await broker.getOpenPositions(ticker);
+                                    const p = positions.find((p: any) => String(p.positionId) === String(trade.ctraderPositionId));
+                                    const volume = Number(p?.tradeData?.volume);
+                                    const deals = await broker.getDealsByPosition(trade.ctraderPositionId!);
+                                    const openingVolume = deals.filter((d: any) => !d.closePositionDetail).reduce((sum: number, d: any) => sum + Number(d.filledVolume ?? 0), 0);
+                                    if (!(lots > 0 && openingVolume > 0 && volume > 0 && volume <= openingVolume)) return undefined;
+                                    const currency = broker.getAccountCurrency();
+                                    const direct = getLastBidAsk(currency+'USD', Date.now()), inverse = getLastBidAsk('USD'+currency, Date.now());
+                                    const fresh = (q: {bid:number;ask:number;ts:number}|null|undefined) => !!q && Number.isFinite(q.bid) && q.bid>0 && q.ask>=q.bid && Date.now()>=q.ts && Date.now()-q.ts<=10000;
+                                    const usdRate = currency === 'USD' ? 1 : fresh(direct) ? direct!.bid : fresh(inverse) ? 1/inverse!.bid : undefined;
+                                    if (!usdRate) return undefined;
+                                    const paidCostsUsd = deals.filter((d: any) => d.closePositionDetail).reduce((sum: number, d: any) => {
+                                        const cp = d.closePositionDetail;
+                                        return sum + Math.max(0, -Number(cp.commission ?? 0)) / Math.pow(10, Number(cp.moneyDigits ?? d.moneyDigits ?? 2)) * usdRate;
+                                    }, 0);
+                                    // Entry spread/slip is paid in the actual fill. Pending commission defaults ONE side.
+                                    return { instrument: trade.executionInstrument!, lots, remainingLots: lots * volume / openingVolume, paidCostsUsd,
+                                        ...(p.swap != null ? { accruedSwapUsd: Number(p.swap) / Math.pow(10, Number(p.moneyDigits ?? 2)) * usdRate } : {}) };
+                                },
+                                partial: async pct => {
+                                    const ok = await broker.closePartial(trade.ctraderPositionId!, pct);
+                                    if (ok) {
+                                        const deal = await broker.getLastCloseDealForPosition(trade.ctraderPositionId!);
+                                        if (deal && db) {
+                                            const fields = { tp1PartialAt: Date.now(), tp1PartialPrice: deal.executionPrice, tp1PartialPnlUsd: deal.grossProfit };
+                                            await db.collection('active_trades').doc(tradeId).update(fields);
+                                            if (trade.journalId) await db.collection('trade_journal').doc(trade.journalId).update(fields);
+                                        }
+                                    }
+                                    return ok;
+                                },
+                                readProtection: () => broker.readPositionProtection(trade.ctraderPositionId!),
+                                amend: (sl, before) => broker.modifyStopLoss(trade.ctraderPositionId!, sl, undefined, before),
+                                persist: async fields => {
+                                    if (!db) throw new Error('EXECUTION_PERSIST_UNAVAILABLE');
+                                    if (trade.journalId) await db.collection('trade_journal').doc(trade.journalId).update(fields);
+                                    await db.collection('active_trades').doc(tradeId).update(fields);
+                                }
+                            });
+                            (trade as any).executionHoldReason = reason;
+                        }).catch(e => console.warn(`[EXECUTION] ${ticker}: ${e.message}`));
+                    }
 
                     // 🛡️ v5.4: Anti-instantáneo — no evaluar TP/SL si el trade se creó hace < 5s
                     // Evita que un trade se cierre en el mismo ciclo que se abrió (falsos TP1)
@@ -1416,7 +1851,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🆕 Overrides por gatillo (auto-tune): congelados en el trade al entrar; fallback a config raíz
-                    const mgmtPartialT = Math.min(Math.max(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? 0.5, 0), 1);
+                    const mgmtPartialT = versionedExecution && trade.executionPolicy!.targets && trade.executionInstrument
+                        ? REGIME_PROFILES[trade.executionInstrument.regime].partialClosePct : Math.min(Math.max(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? 0.5, 0), 1);
                     const mgmtSlModeT: 'midpoint' | 'breakeven' | 'none' = trade.mgmtOverrides?.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint';
                     const mgmtTp15T = trade.mgmtOverrides?.tp15BeEnabled ?? config.tp15BeEnabled ?? true;
                     const mgmtAtrTrailT = trade.mgmtOverrides?.atrTrailEnabled ?? config.atrTrailEnabled ?? true;
@@ -1436,13 +1872,16 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 if (isDuplicate(`ROI_${trade.tradeId}_${ticker}`, nowTrade)) continue;
                                 // 🛡️ T1: en vivo cerrar en cTrader ANTES de marcar WIN (sin esto la posición
                                 // quedaba viva sin gestor y el journal registraba un WIN falso).
-                                if (!isBacktest && trade.ctraderPositionId) {
-                                    const { closePosition } = await import('../services/ctrader.js');
-                                    const ok = await closePosition(String(trade.ctraderPositionId));
-                                    if (!ok) {
-                                        console.warn(`[ROI] ⚠️ ${ticker} ${trade.direction} #${tradeId}: closePosition falló — se reintenta tras la ventana de dedupe.`);
-                                        continue;
+                                if (!isBacktest) {
+                                    if (trade.ctraderPositionId && !(trade as any).brokerCloseConfirmed) {
+                                        const { closePosition } = await import('../services/ctrader.js');
+                                        const ok = await closePosition(String(trade.ctraderPositionId));
+                                        if (!ok) continue;
                                     }
+                                    if (await completeLiveTradeClose(trade, store, { roiDecayApplied: roiLabel, durationMin: Math.round(tradeAgeMs / 60000) })) {
+                                        sendTelegramAlert(`✅ ROI ${ticker} #${tradeId}: cierre confirmado con contabilidad real del broker.`).catch(() => {});
+                                    }
+                                    continue;
                                 }
                                 store.activeTrades.delete(tradeId);
                                 if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
@@ -1468,7 +1907,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 console.log(`[ROI] ⏱️ ${ticker} ${trade.direction} #${tradeId}: ROI exit (${roiLabel}) PnL=+${currentPnlPct.toFixed(2)}%`);
                                 continue;
                             }
-                        } else if (effectiveROI === 0 && !trade.roiDecayApplied) {
+                        } else if (effectiveROI === 0 && !trade.roiDecayApplied && !executionStages) {
                             // ROI = 0 (breakeven): ajustar SL con buffer de fricción para que el cierre real quede ≈ 0
                             trade.roiDecayApplied = 'breakeven';
                             const beSl = breakevenBufferPrice(ticker, trade.entryPrice, trade.direction);
@@ -1502,7 +1941,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🔄 REINTENTO DE MODIFICACIÓN DE SL (Si quedó pendiente de un tick anterior)
-                    if (trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId && !(trade as any).slAmendInFlight) {
+                    if (!executionStages && trade.targetSlPending && trade.targetSlPrice !== undefined && !isBacktest && trade.ctraderPositionId && !(trade as any).slAmendInFlight) {
                         trade.targetSlRetries = (trade.targetSlRetries || 0) + 1;
                         // 🛡️ ago-2026 Fix: tope de reintentos. Un SL rechazado de forma persistente
                         // (TRADING_BAD_STOPS, posición cerrada/inexistente) no se va a resolver solo;
@@ -1515,8 +1954,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         } else {
                             const sentSl = trade.targetSlPrice!;
                             console.log(`[CTRADER] 🔄 Reintentando modificar SL a ${sentSl} (Intento ${trade.targetSlRetries}) para posID: ${trade.ctraderPositionId}`);
-                            (trade as any).slAmendInFlight = true;
-                            import('../services/ctrader.js').then(async (ctrader) => {
+                            await runNormalStopMutation(tradeId, trade, () => import('../services/ctrader.js').then(async (ctrader) => {
                                 const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, sentSl);
                                 if (success) {
                                     console.log(`[CTRADER] ✅ Éxito al modificar SL a ${sentSl} en reintento.`);
@@ -1532,16 +1970,14 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }
                             }).catch(err => {
                                 console.error(`[CTRADER] ❌ Error importando módulo para reintento de Breakeven: ${err.message}`);
-                            }).finally(() => {
-                                (trade as any).slAmendInFlight = false;
-                            });
+                            }));
                         }
                     }
 
                     const openTimeStr = new Date(trade.timestamp).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' });
 
                     // 🎯 EVALUACIÓN DE TP1
-                    if (!trade.tp1Hit) {
+                    if (!trade.tp1Hit && !executionStages) {
                         // 🆕 ago-2026: guardia de precio del BROKER contra falsos positivos del feed.
                         // El feed de TV puede marcar wicks que el broker nunca imprimió (caso real:
                         // USDJPY SELL creyó ver TP1 26 pips abajo y ejecutó el parcial a mercado
@@ -1640,12 +2076,19 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             // 🆕 EJECUCIÓN AUTOMÁTICA EN cTrader
                             if (!isBacktest && trade.ctraderPositionId) {
-                                import('../services/ctrader.js').then(async (ctrader) => {
+                                await runNormalStopMutation(tradeId, trade, () => import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Risk Reduction Automático para posID: ${trade.ctraderPositionId}`);
                                     let partialOk = true;
                                     if (mgmtPartialT > 0) {
                                         partialOk = await ctrader.closePartial(trade.ctraderPositionId!, Math.round(mgmtPartialT * 100));
                                         if (partialOk) {
+                                            if (versionedExecution && trade.executionState) {
+                                                const confirmed = { ...trade.executionState, partialConfirmed: true, tp1Touched: true };
+                                                if (db) {
+                                                    await db.collection('active_trades').doc(tradeId).update({ executionState: confirmed });
+                                                    trade.executionState = confirmed;
+                                                }
+                                            }
                                             // 🆕 (ago-2026) Persistir los datos REALES del parcial (precio ejecutado + PnL)
                                             // para que el Diario Analítico muestre la toma parcial, no solo "abierto".
                                             try {
@@ -1695,7 +2138,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error importando módulo para Breakeven: ${err.message}`);
                                     sendTelegramAlert(buildTp1Msg(`⚠️ Error interno al ejecutar en cTrader — verificar la posición manualmente.`)).catch(() => { });
-                                });
+                                }));
                             } else if (!isBacktest) {
                                 // Sin "gancho" de posición (reinicio previo al fix de persistencia): avisar la verdad.
                                 sendTelegramAlert(buildTp1Msg(`⚠️ TP1 detectado pero NO se pudo ejecutar en cTrader (sin enlace de posición). El reconciler adoptará la posición con niveles reales.`)).catch(() => { });
@@ -1717,13 +2160,16 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     if (isDuplicate(`RIDER_${trade.tradeId}_${ticker}`, nowTrade)) continue;
                                     // 🛡️ T1: en vivo cerrar en cTrader ANTES de marcar WIN (sin esto la posición
                                     // quedaba viva sin gestor y el journal registraba un WIN falso).
-                                    if (!isBacktest && trade.ctraderPositionId) {
-                                        const { closePosition } = await import('../services/ctrader.js');
-                                        const ok = await closePosition(String(trade.ctraderPositionId));
-                                        if (!ok) {
-                                            console.warn(`[RIDER] ⚠️ ${ticker} ${trade.direction} #${tradeId}: closePosition falló — se reintenta tras la ventana de dedupe.`);
-                                            continue;
+                                    if (!isBacktest) {
+                                        if (trade.ctraderPositionId && !(trade as any).brokerCloseConfirmed) {
+                                            const { closePosition } = await import('../services/ctrader.js');
+                                            const ok = await closePosition(String(trade.ctraderPositionId));
+                                            if (!ok) continue;
                                         }
+                                        if (await completeLiveTradeClose(trade, store, { managementMode: 'RIDER', riderTf: trade.riderTf ?? 'H1', durationMin: Math.round(tradeAgeMs / 60000) })) {
+                                            sendTelegramAlert(`✅ RIDER ${ticker} #${tradeId}: cierre confirmado con contabilidad real del broker.`).catch(() => {});
+                                        }
+                                        continue;
                                     }
                                     store.activeTrades.delete(tradeId);
                                     if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
@@ -1759,7 +2205,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // 🆕 GATILLO DE BREAKEVEN DIFERIDO (TP 1.5)
-                    if (trade.tp1Hit && !trade.slHalfwayHit && mgmtTp15T) {
+                    if (!executionStages && trade.tp1Hit && !trade.slHalfwayHit && mgmtTp15T) {
                         const riskDist = Math.abs(trade.tp1Price - trade.entryPrice);
                         const tp1_5Price = trade.direction === 'BUY' ? trade.tp1Price + (riskDist * 0.5) : trade.tp1Price - (riskDist * 0.5);
 
@@ -1812,7 +2258,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 + summary;
 
                             if (!isBacktest && trade.ctraderPositionId) {
-                                import('../services/ctrader.js').then(async (ctrader) => {
+                                await runNormalStopMutation(tradeId, trade, () => import('../services/ctrader.js').then(async (ctrader) => {
                                     console.log(`[CTRADER] 🔄 Ejecutando Breakeven Definitivo para posID: ${trade.ctraderPositionId}`);
                                     const success = await ctrader.modifyStopLoss(trade.ctraderPositionId!, trade.targetSlPrice!);
                                     if (success) {
@@ -1828,7 +2274,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 }).catch(err => {
                                     console.error(`[CTRADER] ❌ Error en Breakeven Definitivo: ${err.message}`);
                                     sendTelegramAlert(buildBeMsg(`⚠️ Error interno al mover el SL — se reintentará automáticamente.`)).catch(() => { });
-                                });
+                                }));
                             } else if (!isBacktest) {
                                 // Sin "gancho" de posición: avisar la verdad, no mentir.
                                 sendTelegramAlert(buildBeMsg(`⚠️ NO se pudo mover el SL en cTrader (sin enlace de posición). El reconciler adoptará la posición con niveles reales.`)).catch(() => { });
@@ -1837,7 +2283,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     }
 
                     // Complemento PING: trailing continuo post-TP1 por distancia
-                    if (trade.tp1Hit && mgmtAtrTrailT) {
+                    if (!executionStages && trade.tp1Hit && mgmtAtrTrailT) {
                         const atrThreshold = (state.atr14 ?? 0) * 1.5;
                         const ratchetStep = (state.atr14 ?? 0) * 0.25;
                         // 🛡️ FIX D: el trailing nunca debe cruzar el SL al lado equivocado del entry.
@@ -1930,20 +2376,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 // restarts/gaps de conexión), este loop spamea para siempre y el trade
                                 // queda fantasma (caso real: XTIUSD 30-sep, loop "[TP2] ✅" eterno).
                                 // Fallback: tras 8 detecciones seguidas, finalizar con los deals reales.
+                                (trade as any).closeAccountingPending = true;
+                                invalidateRiskCache();
                                 (trade as any).closeMissedCount = ((trade as any).closeMissedCount || 0) + 1;
                                 if ((trade as any).closeMissedCount > 8) {
                                     console.log(`[TP2] 🔧 ${ticker} #${tradeId}: evento de cierre no llegó tras ${(trade as any).closeMissedCount} detecciones — finalizando con deals reales.`);
-                                    try {
-                                        const fin = await finalizeClosedPositionFromDeals(String(trade.ctraderPositionId), trade);
-                                        const jid = (trade as any).journalId;
-                                        if (fin && jid && db && !trade.isBacktest) {
-                                            await db.collection('trade_journal').doc(jid).set({ result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reconciled: true, closedAt: new Date().toISOString() }, { merge: true }).catch(() => { });
-                                        }
-                                    } catch (e: any) {
-                                        console.warn(`[TP2] ⚠️ fallback finalize falló para ${tradeId}: ${e.message}`);
-                                    }
-                                    store.activeTrades.delete(tradeId);
-                                    if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                                    await completeLiveTradeClose(trade, store, { reconciled: true });
                                 } else {
                                     console.log(`[TP2] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — esperando evento real (detección ${(trade as any).closeMissedCount}/8).`);
                                 }
@@ -2048,20 +2486,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             // 🛡️ FIX (30-sep-2026): mismo fallback que el path de TP2 — si el evento
                             // de cierre no llega, finalizar con deals reales tras 8 detecciones
                             // (caso real: XTIUSD 30-sep, loop "[SL] ✅" eterno).
+                            (trade as any).closeAccountingPending = true;
+                            invalidateRiskCache();
                             (trade as any).closeMissedCount = ((trade as any).closeMissedCount || 0) + 1;
                             if ((trade as any).closeMissedCount > 8) {
                                 console.log(`[SL] 🔧 ${ticker} #${tradeId}: evento de cierre no llegó tras ${(trade as any).closeMissedCount} detecciones — finalizando con deals reales.`);
-                                try {
-                                    const fin = await finalizeClosedPositionFromDeals(String(trade.ctraderPositionId), trade);
-                                    const jid = (trade as any).journalId;
-                                    if (fin && jid && db && !trade.isBacktest) {
-                                        await db.collection('trade_journal').doc(jid).set({ result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reconciled: true, closedAt: new Date().toISOString() }, { merge: true }).catch(() => { });
-                                    }
-                                } catch (e: any) {
-                                    console.warn(`[SL] ⚠️ fallback finalize falló para ${tradeId}: ${e.message}`);
-                                }
-                                store.activeTrades.delete(tradeId);
-                                if (db && !trade.isBacktest) db.collection('active_trades').doc(tradeId).delete().catch(() => { });
+                                await completeLiveTradeClose(trade, store, { reconciled: true });
                             } else {
                                 console.log(`[SL] ✅ ${ticker} #${tradeId}: posición cerrada en cTrader — esperando evento real (detección ${(trade as any).closeMissedCount}/8).`);
                             }
@@ -2337,6 +2767,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 tp2: macroTarget,
                                 oteScored: false
                             };
+                            if (parsedExecution.observation?.breakBar && parsedExecution.observation?.impulse && incomingPolicy.profile === 'microstructure_v1') {
+                                const setup = getExecutionSnapshot(state, parsedExecution.observation.tf, nowMs);
+                                if (setup) newLeg.executionSnapshot = JSON.parse(JSON.stringify(setup));
+                            }
 
                             if (isBuy) state.activeImpulseBuy = newLeg;
                             else state.activeImpulseSell = newLeg;
@@ -2354,6 +2788,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                     if (!!(tTrade as any).isBacktest !== isBacktest) continue;
                                     if (tTrade.direction !== currentDirection) continue;
                                     if (!tTrade.tp1Hit) continue;
+                                    if (tTrade.executionState?.schema === 1 && (tTrade.executionPolicy?.management || tTrade.executionPolicy?.trailing)) continue;
                                     const stEnabled = tTrade.mgmtOverrides?.structuralTrailEnabled
                                         ?? (stCfg as any).structuralTrailEnabled ?? false;
                                     if (!stEnabled) continue;
@@ -2609,12 +3044,19 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 const dec = getDecimals(ticker);
                                 const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
                                 const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
-                                const curPrice = state.lastPrice ?? pendingLeg.extreme;
+                                const latePolicy = resolveExecutionPolicy(lateConfig.executionPolicy);
+                                const lateSnapshot = latePolicy.profile === 'microstructure_v1' ? getExecutionSnapshot(state, pendingLeg.executionSnapshot?.tf ?? lateLegTf, nowMs) : undefined;
+                                const curPrice = latePolicy.profile === 'microstructure_v1'
+                                    ? (currentDirection === 'BUY' ? lateSnapshot?.quote?.ask : lateSnapshot?.quote?.bid) ?? NaN : state.lastPrice ?? pendingLeg.extreme;
                                 const rDist = Math.abs(curPrice - adjSL);
 
                                 // SMART mode: verificar distancia excesiva al origen
                                 let fireNow = true;
-                                if (lateConfig.entryTrigger === 'SMART') {
+                                if (lateConfig.entryTrigger === 'SMART' && latePolicy.smart) {
+                                    const instrument = getLiveExecutionInstrument(ticker) ?? (lateConfig.executionInstrument?.source === 'explicit_model' ? lateConfig.executionInstrument : undefined);
+                                    fireNow = routeExecutionSetup(state, pendingLeg, { ...lateConfig, executionInstrument: instrument }, parsedExecution.observation?.tf ?? pendingLeg.executionSnapshot?.tf ?? lateLegTf,
+                                        nowMs, curPrice, adjSL, curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * lateConfig.fixedRR).takeDirectNow;
+                                } else if (lateConfig.entryTrigger === 'SMART') {
                                     const maxRisk = lateConfig.maxSmartRiskPercent !== undefined ? lateConfig.maxSmartRiskPercent : 0.15;
                                     const pctLimit = curPrice * (maxRisk / 100);
                                     let atr = 0;
@@ -2654,6 +3096,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         bestZone: pendingLeg.bestZone || null,
                                         marketBias: { ...state.marketBias },
                                         isChochEntry: true,
+                                        ...(latePolicy.profile === 'microstructure_v1' ? { executionTf: lateSnapshot?.tf } : {}),
                                         tf: legTf
                                     };
                                     triggerOte = true;
@@ -2964,7 +3407,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             // BROKER (bid/ask vivo <30s, lado correcto) — no contra state.lastPrice
                             // del radar, que puede divergir pips del fill real (caso USOIL: 9 pips).
                             const baEntry = getLastBidAsk(ticker);
-                            const currentPrice = (baEntry && Date.now() - baEntry.ts < 30_000)
+                            const setupPolicy = resolveExecutionPolicy(config.executionPolicy);
+                            const setupTf = parsedExecution.observation?.tf ?? eventTf;
+                            const setupSnapshot = setupPolicy.profile === 'microstructure_v1' ? getExecutionSnapshot(state, setupTf, nowMs) : undefined;
+                            const currentPrice = setupPolicy.profile === 'microstructure_v1'
+                                ? (currentDirection === 'BUY' ? setupSnapshot?.quote?.ask : setupSnapshot?.quote?.bid) ?? NaN
+                                : (baEntry && Date.now() - baEntry.ts < 30_000)
                                 ? (currentDirection === 'BUY' ? baEntry.ask : baEntry.bid)
                                 : (state.lastPrice ?? activeLeg.extreme);
                             const riskDist = Math.abs(currentPrice - adjustedSL);
@@ -2987,6 +3435,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true,
+                                ...(setupPolicy.profile === 'microstructure_v1' ? { executionTf: setupTf } : {}),
                                 tf: readableTf,
                                 // 🆕 genes de gestión tuneados por el auto-tune para ESTE gatillo
                                 mgmtOverrides: extractMgmtOverrides(liveTriggerCfg)
@@ -3013,7 +3462,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 oteSessionEnabled = (config.entryTrigger === 'OTE' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                             }
 
-                            if (config.entryTrigger === 'SMART') {
+                            if (config.entryTrigger === 'SMART' && setupPolicy.smart) {
+                                const instrument = getLiveExecutionInstrument(ticker) ?? (config.executionInstrument?.source === 'explicit_model' ? config.executionInstrument : undefined);
+                                const decision = routeExecutionSetup(state, activeLeg, { ...config, executionInstrument: instrument }, setupTf, nowMs, currentPrice, adjustedSL, fixedTP2);
+                                takeChoch = decision.takeDirectNow;
+                                disableOte = decision.takeDirectNow;
+                                oteData.executionDecision = decision;
+                                oteData.executionTf = setupTf;
+                                smartReport = `\nExecution microstructure_v1: ${decision.reason}`;
+                            } else if (config.entryTrigger === 'SMART') {
                                 function parseTfToMinutes(tfStr: string): number {
                                     if (!tfStr) return 0;
                                     const upper = tfStr.toUpperCase();
@@ -3208,244 +3665,546 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 const WATCHDOG_INTERVAL_MS = 2 * 60 * 1000;
 let watchdogStarted = false;
 
-// =========================================================
-// 🛡️ PROTECCIÓN ROLLOVER (Regla A, sep-2026)
-// El broker cierra la vela diaria a las 21:00 UTC (18:00 ARG): el feed muere 20:29→21:00 UTC
-// y el spread se abre a ~15-20 pips (medido sobre M1: barrió 4 SL por spread en 3 semanas, -$133).
-// Regla: en la ventana 20:20-20:28 UTC, toda posición con ganancia flotante suficiente
-// mueve su SL a breakeven + buffer. No cierra nada; solo protege lo que ya está en verde.
-// =========================================================
-const ROLLOVER_BE_START_MIN_UTC = 20 * 60 + 20; // 20:20 UTC (17:20 ARG)
-const ROLLOVER_BE_END_MIN_UTC = 20 * 60 + 28;   // 20:28 UTC — el feed muere 20:29
+// Broker-calendar safety: A=[pause-9m,pause-2m), D=[pause-4m,pause-2m).
+// Thresholds and widen magnitude unchanged. Pending restore never expires.
+// No strategy/SMC freeze and no triage policy are applied here.
 const rolloverBeAppliedToday = new Set<string>();
-let rolloverBeDayKey = '';
-
+let rolloverJournalRecoveryReady = false;
+const rolloverMutationInFlight = new Set<string>();
+async function runNormalStopMutation(tradeId: string, trade: ActiveTrade, operation: () => Promise<unknown>): Promise<void> {
+    if (rolloverMutationInFlight.has(tradeId) || (trade as any).slAmendInFlight) return;
+    rolloverMutationInFlight.add(tradeId);
+    (trade as any).slAmendInFlight = true;
+    try { await operation(); }
+    finally {
+        (trade as any).slAmendInFlight = false;
+        rolloverMutationInFlight.delete(tradeId);
+    }
+}
+const ROLLOVER_D_WIDEN_PIPS = 20;
+interface RolloverPendingSafety {
+    orig: number | null; wide: number | null; tries: number; at: number; nextRetryAt?: number;
+    quarantineWarnAt?: number; journalId?: string;
+    positionId?: string; ticker?: string; direction?: 'BUY' | 'SELL';
+}
+const rolloverDWideMap = new Map<string, RolloverPendingSafety>();
 function rolloverPipSize(ticker: string): number {
-    const t = (ticker || '').toUpperCase();
-    if (t.includes('JPY')) return 0.01;
-    if (t.includes('XAU') || t.includes('GOLD')) return 0.1;
-    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return 1.0;
-    if (t.includes('BTC') || t.includes('ETH')) return 0; // crypto: se compara por % de precio
-    return 0.0001;
+    if (getRolloverAssetClass(ticker) === 'CRYPTO') return 0; // preserve percentage policy, not index substrings
+    return getRolloverSpreadReference(ticker, 1).pipSize;
 }
-
 function rolloverMinFloat(ticker: string, price: number): number {
-    const t = (ticker || '').toUpperCase();
+    const t = ticker.toUpperCase();
     const pip = rolloverPipSize(t);
-    if (pip === 0) return price * 0.005;             // crypto: 0.5%
-    if (pip >= 1) return 5 * pip;                    // índices: 5 puntos
-    if (pip === 0.1) return 10 * pip;                // metales: 10 pips ($1 en oro)
-    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 5 * pip; // oil: 5 centavos
-    return 2 * pip;                                  // forex: 2 pips
+    if (pip === 0) return price * 0.005;
+    if (pip >= 1) return 5 * pip;
+    if (pip === 0.1) return 10 * pip;
+    if (/OIL|XTI|WTI|BRENT/.test(t)) return 5 * pip;
+    return 2 * pip;
 }
-
 function rolloverBeBuffer(ticker: string): number {
-    const t = (ticker || '').toUpperCase();
-    const pip = rolloverPipSize(t);
+    const pip = rolloverPipSize(ticker);
     if (pip === 0) return 0;
-    if (pip >= 0.1) return 5 * pip;                  // índices/metales: buffer de 5 unidades
-    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 3 * pip;
-    return 1 * pip;                                  // forex/JPY: 1 pip sobre el entry
+    if (pip >= 0.1) return 5 * pip;
+    if (/OIL|XTI|WTI|BRENT/.test(ticker.toUpperCase())) return 3 * pip;
+    return pip;
 }
-
 function roundRolloverPrice(v: number, ticker: string): number {
     const pip = rolloverPipSize(ticker);
-    if (pip === 0) return Number(v.toFixed(1));
-    if (pip >= 0.1) return Number(v.toFixed(2));
-    if (pip === 0.01) return Number(v.toFixed(3));
-    return Number(v.toFixed(5));
+    return Number(v.toFixed(pip === 0 ? 1 : pip >= 0.1 ? 2 : pip === 0.01 ? 3 : 5));
 }
-
-async function applyRolloverProtection(nowMs: number): Promise<void> {
-    if (globalState.activeTrades.size === 0) return;
-    const d = new Date(nowMs);
-    const day = d.getUTCDay();
-    if (day === 0 || day === 6) return; // solo días hábiles
-    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (minOfDay < ROLLOVER_BE_START_MIN_UTC || minOfDay >= ROLLOVER_BE_END_MIN_UTC) return;
-
-    const dayKey = d.toISOString().slice(0, 10);
-    if (rolloverBeDayKey !== dayKey) {
-        rolloverBeDayKey = dayKey;
-        rolloverBeAppliedToday.clear();
-    }
-
-    for (const [tradeId, trade] of globalState.activeTrades) {
-        if (rolloverBeAppliedToday.has(tradeId)) continue;
-        if (!trade.ctraderPositionId || trade.isBacktest) continue; // sin posición real → nada que proteger
-
-        const rawCfg: any = globalState.assetSessionConfigs.get(trade.ticker);
-        if (rawCfg && rawCfg.rolloverBeEnabled === false) continue; // desactivado por activo
-
-        const state = globalState.localRadarStates.get(trade.ticker);
-        const px = state?.lastPrice;
-        if (!px || !Number.isFinite(px)) continue; // sin precio aún → próximo tick reintenta
-
-        const pip = rolloverPipSize(trade.ticker);
-        const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
-        if (floatDist < rolloverMinFloat(trade.ticker, px)) continue; // sin margen todavía
-
-        const buffer = rolloverBeBuffer(trade.ticker);
-        const bePrice = trade.direction === 'BUY' ? trade.entryPrice + buffer : trade.entryPrice - buffer;
-        const improves = trade.direction === 'BUY' ? bePrice > trade.slPrice : bePrice < trade.slPrice;
-        if (!improves) continue;
-
-        try {
-            const { modifyStopLoss } = await import('../services/ctrader.js');
-            const newSl = roundRolloverPrice(bePrice, trade.ticker);
-            const ok = await modifyStopLoss(trade.ctraderPositionId, newSl);
-            if (!ok) {
-                console.warn(`[ROLLOVER] ⚠️ modifyStopLoss falló para ${trade.ticker} #${tradeId} — reintento en el próximo tick`);
-                continue;
-            }
-            trade.slPrice = newSl;
-            rolloverBeAppliedToday.add(tradeId);
-            if (db) {
-                db.collection('active_trades').doc(trade.tradeId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
-                if (trade.journalId) {
-                    db.collection('trade_journal').doc(trade.journalId).update({ slPrice: newSl, rolloverBeApplied: true }).catch(() => {});
-                }
-            }
-            const floatPips = pip === 0 ? (floatDist / trade.entryPrice) * 100 : floatDist / pip;
-            const msg = `🛡️ <b>PROTECCIÓN ROLLOVER | ${trade.ticker} | ${trade.direction}</b>\n\n` +
-                `📈 Posición en verde (+${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'}) antes del cierre diario del broker (18:00 ARG).\n` +
-                `🛑 SL movido a Breakeven${buffer > 0 ? ' + buffer' : ''}: <b>${newSl}</b>\n` +
-                `ℹ️ El feed del broker muere 17:29-18:00 ARG y el spread se abre ~15-20 pips.\n\n` +
-                `⏰ ${new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' })} ARG`;
-            sendTelegramAlert(msg).catch(() => {});
-            console.log(`[ROLLOVER] 🛡️ ${trade.ticker} #${tradeId} ${trade.direction}: SL→BE ${newSl} (flotante +${floatPips.toFixed(1)}${pip === 0 ? '%' : ' pips'})`);
-        } catch (e: any) {
-            console.error(`[ROLLOVER] ❌ Error protegiendo ${trade.ticker} #${tradeId}:`, e.message);
-        }
-    }
-}
-
-// =========================================================
-// 🛡️ REGLA D (sep-2026, aprobada por Bon tras backtest)
-// A protege ganadoras (SL→BE). D cubre el resto: posiciones perdiendo/marginales.
-// 20:25-20:28 UTC: ensancha SL +20 pips (antes de que muera el feed a las 20:29).
-// 21:15-21:25 UTC: restaura el SL original (feed ya volvió, spread normalizado).
-// Medido: barrido de spread puro mató -$47 (07/09) y movimientos reales máx 11 pips en 7 días → +20 cubre.
-// Riesgo aceptado: si un movimiento REAL supera +20 pips en la ventana, se pierde hasta 20 pips más.
-// =========================================================
-const ROLLOVER_D_WIDEN_PIPS = 20;
-const rolloverDWideMap = new Map<string, { orig: number; wide: number; tries: number; at: number }>();
-
 function rolloverIsOtcFx(ticker: string): boolean {
-    const t = (ticker || '').toUpperCase();
-    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return false; // índices: break diario en otro horario
-    if (t.includes('BTC') || t.includes('ETH')) return false; // crypto: sin rollover diario
-    return true;
+    return !['INDICES', 'CRYPTO'].includes(getRolloverAssetClass(ticker));
+}
+function getRolloverLiveSnapshot(ticker: string, nowMs: number) {
+    const flow = tickFlow.getSpreadSnapshot(ticker, nowMs);
+    const quote = getLastBidAsk(ticker, nowMs);
+    if (!flow || !quote) return null;
+    const ts = Math.min(flow.ts, quote.ts);
+    return { ...flow, bid: quote.bid, ask: quote.ask, spread: Math.max(flow.spread, quote.ask - quote.bid), ts, ageMs: nowMs - ts };
+}
+// Journal-only records are safety obligations, NOT adopted positions or PnL evidence.
+const rolloverTriageRecords = new Map<string, ActiveTrade>();
+function usesExperimentalRollover(trade: ActiveTrade): boolean {
+    return trade.rolloverFill?.policy.profile === 'rollover_triage_v1'
+        || (!trade.rolloverFill && (globalState.assetSessionConfigs.get(trade.ticker) as any)?.rolloverPolicy?.profile === 'rollover_triage_v1');
+}
+function buildLiveRolloverContext(tradeId: string, trade: ActiveTrade, nowMs: number, currentSlPrice: number,
+    partial: import('../engine/RolloverTriagePolicy.js').RolloverTriageContext['partial']) {
+    const fill = trade.rolloverFill;
+    if (!fill || fill.positionId !== trade.ctraderPositionId || fill.ticker !== trade.ticker || fill.direction !== trade.direction) return null;
+    const instrument = getLiveExecutionInstrument(trade.ticker);
+    const valid = validateExecutionInstrument(instrument) && instrument.ticker === trade.ticker && instrument.source === 'broker_metadata';
+    const quote = getRolloverQuote(trade.ticker, nowMs);
+    const flow = tickFlow.getSpreadSnapshot(trade.ticker,nowMs);
+    const snapshot = quote && flow && flow.bid === quote.bid && flow.ask === quote.ask
+        && flow.ts === Math.min(quote.bidTimestampMs,quote.askTimestampMs) ? flow : null;
+    const reference = getRolloverSpreadReference(trade.ticker,fill.entryPrice);
+    const engine = (globalState.smcManager as any)?.getEngines?.().get(`${trade.ticker}:H1`);
+    const sourceOpen = engine?.lastProcessedTs;
+    const sourceClose = typeof sourceOpen === 'number' ? sourceOpen + 3600000 : NaN;
+    const raw = engine?.getLastRolloverObservation?.();
+    const trend = engine?.getState?.().simpleTrend;
+    const htf = Number.isFinite(sourceClose) && sourceClose <= nowMs && nowMs-sourceClose <= 3600000
+        && raw?.excluded === false && raw.candle?.timestamp === sourceOpen && ['Bullish','Bearish'].includes(trend)
+        ? {aligned:trend === (trade.direction === 'BUY' ? 'Bullish':'Bearish'),availableAtMs:sourceClose} : null;
+    const state = trade.rolloverTriageState ?? {pending:null,widenReference:null};
+    return {positionKey:fill.positionKey,context:{profile:fill.policy.profile,ticker:trade.ticker,tradeId,direction:fill.direction,nowMs,
+        entryPrice:fill.entryPrice,initialSlPrice:fill.initialSlPrice,initialRiskPrice:fill.initialRiskPrice,currentSlPrice,
+        quote,tickSize:valid ? instrument!.tickSize : NaN,minStopDistancePrice:valid ? instrument!.minStopDistance : NaN,
+        protectionEarned:trade.tp1Hit === true || (trade.direction === 'BUY' ? currentSlPrice >= fill.entryPrice : currentSlPrice <= fill.entryPrice),
+        // Historical fee estimates are NOT actual allocated remaining costs.
+        costs:null,partial,htf,peakSpread:fill.policy.peakSpread ?? null,pending:state.pending,widenReference:state.widenReference,
+        config:fill.policy.triage!,normalization:{snapshot,baseSpreadPrice:reference.baseSpreadPrice,pipSize:reference.pipSize}}};
+}
+async function runLiveRolloverTriage(tradeId: string, trade: ActiveTrade): Promise<import('../engine/RolloverTriageExecutor.js').RolloverTriageExecutionResult | undefined> {
+    const fill = trade.rolloverFill;
+    if (trade.isBacktest || !fill || fill.policy.profile !== 'rollover_triage_v1' || rolloverDWideMap.has(tradeId)
+        || !rolloverJournalRecoveryReady || rolloverMutationInFlight.has(tradeId) || (trade as any).slAmendInFlight) return;
+    rolloverTriageRecords.set(tradeId,trade);
+    rolloverMutationInFlight.add(tradeId);
+    try {
+        if (!trade.rolloverTriageDurable) await persistLiveRolloverRecord(tradeId,trade,undefined,'FILL');
+        const identity = {ticker:trade.ticker,tradeId,positionKey:fill.positionKey};
+        let actualSl = trade.slPrice, actualVolume = NaN;
+        let partial: import('../engine/RolloverTriagePolicy.js').RolloverTriageContext['partial'] = null;
+        let evidenceAt = NaN;
+        const acceptPosition = (p: any): boolean => {
+            const td = p?.tradeData;
+            const side = td?.tradeSide ?? td?.direction;
+            if (String(p?.positionId) !== fill.positionId || Number(td?.openTimestamp) !== fill.openedAtMs
+                || Number(td?.openPrice ?? p?.price) !== fill.entryPrice
+                || (side === 1 || side === 'BUY' ? 'BUY' : side === 2 || side === 'SELL' ? 'SELL':null) !== fill.direction) return false;
+            const stop = Number(p.stopLoss), volume = Number(td.volume);
+            if (!Number.isFinite(stop) || stop <= 0 || !Number.isFinite(volume) || volume <= 0) return false;
+            if (volume !== actualVolume) partial = null;
+            actualSl = stop; actualVolume = volume;
+            return true;
+        };
+        const readProtection = async (): Promise<import('../engine/RolloverTriageExecutor.js').RolloverProtectionReadback> => {
+            try {
+                const positions = await rolloverBroker.getOpenPositions(trade.ticker);
+                if (!Array.isArray(positions)) return {status:'UNAVAILABLE'};
+                const matches = positions.filter((p: any) => String(p?.positionId) === fill.positionId);
+                if (matches.length === 0) return {status:'CLOSED',identity};
+                if (matches.length !== 1 || !acceptPosition(matches[0])) return {status:'UNAVAILABLE'};
+                // Only a real complete entry-deal list matching current remaining volume proves NO partial.
+                // Unknown/partially closed positions retain null, never tp1Hit=false as fake confirmation.
+                const deals = await rolloverBroker.getDealsByPosition(fill.positionId);
+                const now = Date.now();
+                if (Array.isArray(deals) && deals.length > 0 && deals.every((d: any) => String(d.positionId) === fill.positionId
+                    && [2,3].includes(Number(d.dealStatus)) && !d.closePositionDetail
+                    && Number.isFinite(Number(d.executionTimestamp)) && Number(d.executionTimestamp) >= fill.openedAtMs && Number(d.executionTimestamp) <= now
+                    && Number.isFinite(Number(d.filledVolume)) && Number(d.filledVolume) > 0)
+                    && deals.reduce((sum: number,d: any) => sum+Number(d.filledVolume),0) === actualVolume) {
+                    partial = {tp1Confirmed:false,realizedNetCash:0}; evidenceAt = now;
+                } else partial = null;
+                return {status:'OPEN',identity,stopLossPrice:actualSl};
+            } catch { return {status:'UNAVAILABLE'}; }
+        };
+        const persist = async (write: import('../engine/RolloverTriageExecutor.js').RolloverExecutionWrite, phase:'INTENT'|'CONFIRMED'|'CLEAR') => {
+            await persistLiveRolloverRecord(tradeId,trade,write,phase);
+        };
+        const result = await runRolloverTriageExecution({identity,state:structuredClone(trade.rolloverTriageState ?? {pending:null,widenReference:null}),
+            nowMs:Date.now,getContext:now => buildLiveRolloverContext(tradeId,trade,now,actualSl,
+                Number.isFinite(evidenceAt) && now >= evidenceAt && now-evidenceAt <= 10000 ? partial:null),readProtection,
+            persistIntent:write => persist(write,'INTENT'),persistConfirmed:write => persist(write,'CONFIRMED'),clearPending:write => persist(write,'CLEAR'),
+            amendStopLoss:async (request,authorize) => await rolloverBroker.modifyStopLoss(fill.positionId,request.stopLossPrice,undefined,
+                (position?: any) => acceptPosition(position) && authorize()) ? 'ACKNOWLEDGED':'REJECTED',
+            closePosition:async (_request,authorize) => await rolloverBroker.closePosition(fill.positionId,
+                (position?: any) => acceptPosition(position) && authorize()) ? 'ACKNOWLEDGED':'REJECTED'});
+        if (result.status !== 'IN_FLIGHT') trade.rolloverTriageState = structuredClone(result.state);
+        if ((result.status === 'CONFIRMED' || result.status === 'RECONCILED') && result.protection.status === 'OPEN') trade.slPrice = result.protection.stopLossPrice;
+        if ((result.status === 'CONFIRMED' || result.status === 'RECONCILED') && result.protection.status === 'CLOSED') rolloverTriageRecords.delete(tradeId);
+        // Do not remove active position or synthesize result/PnL; deal reconciler owns closure accounting.
+        return result;
+    } finally { rolloverMutationInFlight.delete(tradeId); }
 }
 
-async function applyRolloverWiden(nowMs: number): Promise<void> {
-    if (globalState.activeTrades.size === 0) return;
-    const d = new Date(nowMs);
-    const day = d.getUTCDay();
-    if (day === 0 || day === 6) return; // solo días hábiles
-    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (minOfDay < 20 * 60 + 25 || minOfDay >= ROLLOVER_BE_END_MIN_UTC) return; // 20:25-20:28 UTC
-
+async function applyRolloverProtection(nowMs: number, onlyTicker?: string): Promise<void> {
+    if (!rolloverJournalRecoveryReady) return;
     for (const [tradeId, trade] of globalState.activeTrades) {
-        if (rolloverDWideMap.has(tradeId)) continue;
-        if (rolloverBeAppliedToday.has(tradeId)) continue; // A ya la protegió con BE
-        if (!trade.ctraderPositionId || trade.isBacktest) continue;
-        if (!rolloverIsOtcFx(trade.ticker)) continue;
-
-        const rawCfg: any = globalState.assetSessionConfigs.get(trade.ticker);
-        if (rawCfg && rawCfg.rolloverBeEnabled === false) continue; // misma llave que A
-
-        const state = globalState.localRadarStates.get(trade.ticker);
-        const px = state?.lastPrice;
-        if (!px || !Number.isFinite(px)) continue; // sin precio → próximo tick reintenta
-
-        const pip = rolloverPipSize(trade.ticker);
+        if (onlyTicker && trade.ticker !== onlyTicker) continue;
+        if (usesExperimentalRollover(trade)) continue;
+        const calendar = getRolloverCalendar(trade.ticker, nowMs);
+        const key = `${tradeId}:${calendar.periodKey}`;
+        if (!calendar.metadataAvailable || !calendar.periodKey || !calendar.protectionWindow || rolloverBeAppliedToday.has(key) || rolloverDWideMap.has(tradeId) || rolloverMutationInFlight.has(tradeId) || (trade as any).slAmendInFlight || !trade.ctraderPositionId || trade.isBacktest) continue;
+        if ((globalState.assetSessionConfigs.get(trade.ticker) as any)?.rolloverBeEnabled === false) continue;
+        const q = getLastBidAsk(trade.ticker, nowMs);
+        if (!q || nowMs < q.ts || nowMs - q.ts > 10000) continue;
+        const px = trade.direction === 'BUY' ? q.bid : q.ask;
         const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
-        if (floatDist >= rolloverMinFloat(trade.ticker, px)) continue; // A puede cubrirla → no ensanchar
-
-        const widen = ROLLOVER_D_WIDEN_PIPS * pip;
-        const wideSl = trade.direction === 'BUY' ? trade.slPrice - widen : trade.slPrice + widen;
-        const origSl = trade.slPrice;
-
+        if (floatDist < rolloverMinFloat(trade.ticker, px)) continue;
+        const buffer = rolloverBeBuffer(trade.ticker);
+        const newSl = roundRolloverPrice(trade.entryPrice + (trade.direction === 'BUY' ? buffer : -buffer), trade.ticker);
+        if (!(trade.direction === 'BUY' ? newSl > trade.slPrice && newSl < q.bid : newSl < trade.slPrice && newSl > q.ask)) continue;
+        rolloverMutationInFlight.add(tradeId);
         try {
-            const { modifyStopLoss } = await import('../services/ctrader.js');
-            const newSl = roundRolloverPrice(wideSl, trade.ticker);
-            const ok = await modifyStopLoss(trade.ctraderPositionId, newSl);
-            if (!ok) {
-                console.warn(`[ROLLOVER-D] ⚠️ widen falló para ${trade.ticker} #${tradeId} — reintento en el próximo tick`);
-                continue;
+            const broker = await import('../services/ctrader.js');
+            const protection = await broker.readPositionProtection(trade.ctraderPositionId);
+            if (!protection?.exists) continue;
+            if (protection.stopLoss !== null && (trade.direction === 'BUY' ? protection.stopLoss >= newSl : protection.stopLoss <= newSl)) {
+                trade.slPrice = protection.stopLoss;
+                continue; // Never weaken already equivalent/better broker protection.
             }
+            const actNow = Math.max(nowMs, Date.now());
+            const fresh = getLastBidAsk(trade.ticker, actNow);
+            if (!getRolloverCalendar(trade.ticker, actNow).protectionWindow || !fresh || actNow < fresh.ts || actNow - fresh.ts > 10000 || !(trade.direction === 'BUY' ? newSl < fresh.bid : newSl > fresh.ask)) continue;
+            const beforeAmend = () => {
+                const at = Math.max(nowMs, Date.now());
+                const phase = getRolloverCalendar(trade.ticker, at);
+                const quote = getLastBidAsk(trade.ticker, at);
+                return rolloverJournalRecoveryReady && phase.metadataAvailable && phase.protectionWindow && phase.periodKey === calendar.periodKey
+                    && !!quote && at >= quote.ts && at - quote.ts <= 10000
+                    && Number.isFinite(newSl) && newSl > 0
+                    && (trade.direction === 'BUY' ? newSl < quote.bid : newSl > quote.ask);
+            };
+            if (!await broker.modifyStopLoss(trade.ctraderPositionId, newSl, undefined, beforeAmend)) throw new Error('BE amend rejected/unverified');
             trade.slPrice = newSl;
-            rolloverDWideMap.set(tradeId, { orig: origSl, wide: newSl, tries: 0, at: nowMs });
-            if (db) {
-                db.collection('active_trades').doc(trade.tradeId).update({
-                    slPrice: newSl,
-                    rolloverDWidened: true,
-                    rolloverDSlOriginal: origSl,
-                    rolloverDSlWide: newSl,
-                    rolloverDWidenedAt: nowMs,
-                }).catch(() => {});
+            rolloverBeAppliedToday.add(key);
+            trade.rolloverBeApplied = true;
+            trade.rolloverBePeriodKey = calendar.periodKey;
+            await persistRolloverSafety(tradeId, { slPrice: newSl, rolloverBeApplied: true, rolloverBePeriodKey: calendar.periodKey }, trade.journalId);
+            await sendTelegramAlert(`🛡️ ROLLOVER A ${trade.ticker} #${tradeId}: SL→${newSl} [broker calendar]`);
+        } catch (e: any) { await alertRolloverFailure(`${trade.ticker} #${tradeId}: protection failed: ${e.message}`); }
+        finally { rolloverMutationInFlight.delete(tradeId); }
+    }
+}
+async function applyRolloverWiden(nowMs: number, onlyTicker?: string): Promise<void> {
+    if (!rolloverJournalRecoveryReady) return;
+    for (const [tradeId, trade] of globalState.activeTrades) {
+        if (onlyTicker && trade.ticker !== onlyTicker) continue;
+        if (usesExperimentalRollover(trade)) continue;
+        const calendar = getRolloverCalendar(trade.ticker, nowMs);
+        if (!calendar.metadataAvailable || !calendar.widenWindow || rolloverDWideMap.has(tradeId) || rolloverMutationInFlight.has(tradeId) || (trade as any).slAmendInFlight || rolloverBeAppliedToday.has(`${tradeId}:${calendar.periodKey}`) || !trade.ctraderPositionId || trade.isBacktest || !rolloverIsOtcFx(trade.ticker)) continue;
+        if ((globalState.assetSessionConfigs.get(trade.ticker) as any)?.rolloverBeEnabled === false) continue;
+        const q = getLastBidAsk(trade.ticker, nowMs);
+        if (!q || nowMs < q.ts || nowMs - q.ts > 10000) continue;
+        const px = trade.direction === 'BUY' ? q.bid : q.ask;
+        const floatDist = trade.direction === 'BUY' ? px - trade.entryPrice : trade.entryPrice - px;
+        if (floatDist >= rolloverMinFloat(trade.ticker, px)) continue;
+        rolloverMutationInFlight.add(tradeId);
+        try {
+            const broker = await import('../services/ctrader.js');
+            const protection = await broker.readPositionProtection(trade.ctraderPositionId);
+            if (!protection?.exists || protection.stopLoss === null) throw new Error('Cannot widen without original broker SL');
+            const orig = protection.stopLoss;
+            // D only relaxes losing protection, never BE/profit secured by any manager.
+            if (!Number.isFinite(orig) || orig <= 0 || (trade.direction === 'BUY' ? orig >= trade.entryPrice : orig <= trade.entryPrice)) continue;
+            // Do not override an independent protective manager with stale RAM state.
+            if (trade.direction === 'BUY' ? orig > trade.slPrice : orig < trade.slPrice) { trade.slPrice = orig; continue; }
+            const wide = roundRolloverPrice(orig + (trade.direction === 'BUY' ? -1 : 1) * ROLLOVER_D_WIDEN_PIPS * rolloverPipSize(trade.ticker), trade.ticker);
+            const pending = { orig, wide, tries: 0, at: nowMs, nextRetryAt: 0, positionId: trade.ctraderPositionId, ticker: trade.ticker, direction: trade.direction, journalId: trade.journalId };
+            rolloverDWideMap.set(tradeId, pending); // reserve before any yield/amend
+            await persistRolloverSafety(tradeId, { rolloverDWidened: true, rolloverDSlOriginal: orig, rolloverDSlWide: wide, rolloverDWidenedAt: nowMs, rolloverDRestoreTries: 0, rolloverDNextRetryAt: 0, rolloverDPositionId: trade.ctraderPositionId, rolloverDTicker: trade.ticker, rolloverDDirection: trade.direction }, trade.journalId);
+            const actNow = Math.max(nowMs, Date.now());
+            const fresh = getLastBidAsk(trade.ticker, actNow);
+            if (!getRolloverCalendar(trade.ticker, actNow).widenWindow || !fresh || actNow < fresh.ts || actNow - fresh.ts > 10000) continue;
+            // Persistence yielded: require the exact original broker protection again.
+            const confirmed = await broker.readPositionProtection(trade.ctraderPositionId);
+            if (!confirmed?.exists || confirmed.stopLoss !== orig) {
+                const improved = confirmed?.exists && confirmed.stopLoss !== null && Number.isFinite(confirmed.stopLoss) && (trade.direction === 'BUY' ? confirmed.stopLoss >= orig : confirmed.stopLoss <= orig);
+                if (improved) {
+                    trade.slPrice = confirmed!.stopLoss!;
+                    await persistRolloverSafety(tradeId, { rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null, slPrice: trade.slPrice }, trade.journalId);
+                    rolloverDWideMap.delete(tradeId);
+                }
+                continue; // Missing/worse readback retains recoverable intent, never widens stale SL.
             }
-            const floatPips = pip === 0 ? 0 : floatDist / pip;
-            const msg = `🛡️ <b>REGLA D (ROLLOVER) | ${trade.ticker} | ${trade.direction}</b>\n\n` +
-                `📉 Posición en rojo (${floatPips.toFixed(1)} pips) — SL ensanchado <b>+${ROLLOVER_D_WIDEN_PIPS} pips</b> para atravesar el cierre diario del broker.\n` +
-                `🛑 SL temporal: <b>${newSl}</b> (original: ${origSl})\n` +
-                `🔄 Se restaura automáticamente ~18:15 ARG, cuando el spread se normaliza.`;
-            sendTelegramAlert(msg).catch(() => {});
-            console.log(`[ROLLOVER-D] 🛡️ ${trade.ticker} #${tradeId} ${trade.direction}: SL ${origSl} → ${newSl} (widen +20 pips, se restaura 21:15-21:25 UTC)`);
-        } catch (e: any) {
-            console.error(`[ROLLOVER-D] ❌ Error ensanchando ${trade.ticker} #${tradeId}:`, e.message);
-        }
+            const sendNow = Math.max(nowMs, Date.now());
+            const sendQuote = getLastBidAsk(trade.ticker, sendNow);
+            if (!getRolloverCalendar(trade.ticker, sendNow).widenWindow || !sendQuote || sendNow < sendQuote.ts || sendNow - sendQuote.ts > 10000) continue;
+            const beforeAmend = () => {
+                const at = Math.max(nowMs, Date.now());
+                const phase = getRolloverCalendar(trade.ticker, at);
+                const quote = getLastBidAsk(trade.ticker, at);
+                return rolloverJournalRecoveryReady && phase.metadataAvailable && phase.widenWindow && phase.periodKey === calendar.periodKey
+                    && !!quote && at >= quote.ts && at - quote.ts <= 10000
+                    && Number.isFinite(wide) && wide > 0
+                    && (trade.direction === 'BUY' ? wide < quote.bid : wide > quote.ask);
+            };
+            if (!await broker.modifyStopLoss(trade.ctraderPositionId, wide, undefined, beforeAmend)) throw new Error('Widen rejected/unverified; original protection remains pending');
+            trade.slPrice = wide;
+            await persistRolloverSafety(tradeId, { slPrice: wide }, trade.journalId);
+            await sendTelegramAlert(`🛡️ ROLLOVER D ${trade.ticker} #${tradeId}: SL ${orig}→${wide}; restoration awaits fresh normalized spread`);
+        } catch (e: any) { await alertRolloverFailure(`${trade.ticker} #${tradeId}: widen failed: ${e.message}`); }
+        finally { rolloverMutationInFlight.delete(tradeId); }
     }
 }
 
-async function applyRolloverRestore(nowMs: number, force = false): Promise<void> {
-    if (rolloverDWideMap.size === 0) return;
-    const d = new Date(nowMs);
-    const minOfDay = d.getUTCHours() * 60 + d.getUTCMinutes();
-    if (!force && (minOfDay < 21 * 60 + 15 || minOfDay >= 21 * 60 + 25)) return; // 21:15-21:25 UTC
+/** Transaction + exact readback on active and the independent journal, never a buffered write. */
+async function persistLiveRolloverRecord(tradeId: string, trade: ActiveTrade,
+    write: import('../engine/RolloverTriageExecutor.js').RolloverExecutionWrite | undefined,
+    phase: 'FILL'|'INTENT'|'CONFIRMED'|'CLEAR'): Promise<void> {
+    if (!db || !trade.journalId || !trade.rolloverFill || trade.tradeId !== tradeId) throw new Error('Rollover durable identity unavailable');
+    const fill = trade.rolloverFill;
+    const identity = {ticker:trade.ticker,tradeId,positionKey:fill.positionKey};
+    if (write && (write.identity.ticker !== identity.ticker || write.identity.tradeId !== tradeId || write.identity.positionKey !== fill.positionKey)) throw new Error('Rollover write identity mismatch');
+    if (phase !== 'FILL' && phase !== 'INTENT' && !write?.protection) throw new Error('Rollover confirmation requires broker proof');
+    const fields = JSON.parse(JSON.stringify({tradeId,journalId:trade.journalId,ticker:trade.ticker,direction:fill.direction,ctraderPositionId:fill.positionId,
+        ...(write?.protection?.status === 'OPEN' ? {slPrice:write.protection.stopLossPrice} : phase === 'FILL' ? {slPrice:fill.initialSlPrice} : {}),
+        rolloverFill:fill,rolloverTriageIdentity:identity,
+        rolloverTriageState:write?.state ?? trade.rolloverTriageState ?? {pending:null,widenReference:null},
+        rolloverTriageTracked:write?.protection?.status !== 'CLOSED',rolloverTriageDurable:true,
+        rolloverTriagePhase:phase,rolloverTriageCommand:write?.proposal ?? null,
+        rolloverTriageExpectedSl:write?.expectedSlPrice ?? null,rolloverTriageProtection:write?.protection ?? null}));
+    const activeRef: import('firebase-admin/firestore').DocumentReference = db.collection('active_trades').doc(tradeId);
+    const journalRef: import('firebase-admin/firestore').DocumentReference = db.collection('trade_journal').doc(trade.journalId);
+    const closed = write?.protection?.status === 'CLOSED';
+    const validate = (data: any) => {
+        if ((data?.ticker && data.ticker !== trade.ticker) || (data?.direction && data.direction !== fill.direction)
+            || (data?.tradeId && data.tradeId !== tradeId)) throw new Error('Rollover stored trade mismatch');
+        if (data?.ctraderPositionId != null && String(data.ctraderPositionId) !== fill.positionId) throw new Error('Rollover stored position mismatch');
+        if (data?.rolloverFill && data.rolloverFill.positionKey !== fill.positionKey) throw new Error('Rollover stored incarnation mismatch');
+        if (data?.rolloverTriageIdentity && (data.rolloverTriageIdentity.tradeId !== tradeId || data.rolloverTriageIdentity.ticker !== trade.ticker || data.rolloverTriageIdentity.positionKey !== fill.positionKey)) throw new Error('Rollover stored owner mismatch');
+    };
+    await db.runTransaction(async (tx: import('firebase-admin/firestore').Transaction) => {
+        const active = await tx.get(activeRef), journal = await tx.get(journalRef);
+        if (!journal.exists || (!active.exists && !closed)) throw new Error('Rollover durable document missing');
+        if (active.exists) validate(active.data());
+        validate(journal.data());
+        if (active.exists) tx.update(activeRef, fields);
+        tx.update(journalRef, fields);
+    });
+    const [active,journal] = await Promise.all([activeRef.get(),journalRef.get()]);
+    // Firestore map ordering is not an equality contract.
+    const canonical = (v: any): string => JSON.stringify(v, (_key,value) => value && !Array.isArray(value) && typeof value === 'object'
+        ? Object.fromEntries(Object.keys(value).sort().map(k => [k,value[k]])) : value);
+    for (const [snap,mayBeAbsent] of [[active,closed],[journal,false]] as const) {
+        if (!snap.exists) { if (mayBeAbsent) continue; throw new Error('Rollover readback absent'); }
+        const data = snap.data(); validate(data);
+        for (const [key,value] of Object.entries(fields)) if (canonical(data?.[key]) !== canonical(value)) throw new Error(`Rollover readback mismatch: ${key}`);
+    }
+    Object.assign(trade, fields);
+}
 
+async function persistRolloverSafety(tradeId: string, fields: Record<string, unknown>, journalId?: string, confirmedClosed = false): Promise<void> {
+    if (!db) throw new Error('Rollover safety requires durable storage');
+    const active = globalState.activeTrades.get(tradeId);
+    journalId ??= active?.journalId ?? rolloverDWideMap.get(tradeId)?.journalId;
+    // Normal managers serialize the whole RAM trade: carry safety through those writes.
+    if (active && fields.rolloverDWidened === true) Object.assign(active, fields);
+    // Only explicit broker absence permits already-deleted documents. Never upsert a ghost.
+    const updateExisting = async (collection: string, id: string) => {
+        try { await db!.collection(collection).doc(id).update(fields); }
+        catch (e: any) {
+            if (!confirmedClosed || ![5, '5', 'not-found', 'NOT_FOUND'].includes(e.code)) throw e;
+        }
+    };
+    if (journalId) await updateExisting('trade_journal', journalId);
+    await updateExisting('active_trades', tradeId);
+    if (active) Object.assign(active, fields);
+}
+async function alertRolloverFailure(message: string): Promise<void> {
+    console.error(`[ROLLOVER-D] ${message}`);
+    try { await sendTelegramAlert(`⚠️ ROLLOVER-D: ${message}`); }
+    catch (e: any) { console.error('[ROLLOVER-D] Alert failed:', e.message); }
+}
+async function applyRolloverRestore(nowMs: number, force = false, onlyTicker?: string): Promise<void> {
+    // Retained API for boot callers, never bypasses evidence.
+    void force;
     for (const [tradeId, entry] of [...rolloverDWideMap]) {
         const trade = globalState.activeTrades.get(tradeId);
-        if (!trade) {
-            // Ya cerró (barrió el SL ensanchado o TP) → solo limpiar el registro
-            rolloverDWideMap.delete(tradeId);
-            if (db) db.collection('active_trades').doc(tradeId).update({ rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
-            continue;
-        }
-        if (trade.slPrice !== entry.wide) {
-            // Alguien lo movió en el medio (A→BE, TP1→midpoint, trail) → no restaurar
-            rolloverDWideMap.delete(tradeId);
-            if (db) db.collection('active_trades').doc(tradeId).update({ rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
-            console.log(`[ROLLOVER-D] ℹ️ ${trade.ticker} #${tradeId}: SL ya fue movido por otro gestor (${trade.slPrice}) — no se restaura.`);
-            continue;
-        }
-        if (entry.tries >= 3) {
-            console.warn(`[ROLLOVER-D] ⚠️ ${trade.ticker} #${tradeId}: 3 intentos de restauración fallidos — se limpia el registro, SL queda ensanchado (revisar manual).`);
-            rolloverDWideMap.delete(tradeId);
-            continue;
-        }
-        entry.tries++;
+        const positionId = trade?.ctraderPositionId ?? entry.positionId;
+        const ticker = trade?.ticker ?? entry.ticker;
+        const direction = trade?.direction ?? entry.direction;
+        if (onlyTicker && ticker !== onlyTicker) continue;
+        if (rolloverMutationInFlight.has(tradeId) || (trade as any)?.slAmendInFlight) continue;
+        if (!positionId || !ticker || !direction || nowMs < (entry.nextRetryAt ?? 0)) continue;
+        rolloverMutationInFlight.add(tradeId);
         try {
-            const { modifyStopLoss } = await import('../services/ctrader.js');
-            const ok = await modifyStopLoss(trade.ctraderPositionId!, entry.orig);
-            if (!ok) {
-                console.warn(`[ROLLOVER-D] ⚠️ restore falló para ${trade.ticker} #${tradeId} (intento ${entry.tries}/3) — reintento en el próximo tick`);
+            const broker = await import('../services/ctrader.js');
+            const protection = await broker.readPositionProtection(positionId);
+            if (!protection) throw new Error('Broker protection readback unavailable');
+            const protectedSl = protection.stopLoss;
+            const knownOriginal = entry.orig !== null && Number.isFinite(entry.orig) && entry.orig > 0;
+            const equivalent = knownOriginal && protectedSl !== null && Number.isFinite(protectedSl) && protectedSl > 0 && (direction === 'BUY' ? protectedSl >= entry.orig! : protectedSl <= entry.orig!);
+            if (!protection.exists || equivalent) {
+                if (trade && equivalent) trade.slPrice = protectedSl!;
+                await persistRolloverSafety(tradeId, { rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null, rolloverDRestored: protection.exists, rolloverDClosed: !protection.exists, ...(equivalent ? { slPrice: protectedSl } : {}) }, trade?.journalId ?? entry.journalId, !protection.exists);
+                rolloverDWideMap.delete(tradeId);
                 continue;
             }
-            trade.slPrice = entry.orig;
+            if (!knownOriginal || entry.wide === null) {
+                if (entry.quarantineWarnAt === undefined || nowMs - entry.quarantineWarnAt >= 15 * 60_000) {
+                    entry.quarantineWarnAt = nowMs;
+                    await alertRolloverFailure(`${ticker} #${tradeId}: invalid persisted rollover SL; quarantined, manual recovery required`);
+                }
+                continue; // No guessed restore/close; retain durable widened flag and block A/D.
+            }
+            const calendar = getRolloverCalendar(ticker, nowMs);
+            const snapshot = getRolloverLiveSnapshot(ticker, nowMs);
+            const { pipSize: pip, baseSpreadPrice: base } = getRolloverSpreadReference(ticker, trade?.entryPrice ?? snapshot?.bid ?? 1);
+            if (!calendar.metadataAvailable || !calendar.restoreEligible || !isSpreadNormalized(snapshot, nowMs, base, pip)) continue;
+            entry.tries++;
+            entry.nextRetryAt = nowMs + Math.min(15 * 60_000, 30_000 * 2 ** Math.min(entry.tries - 1, 5));
+            try { await persistRolloverSafety(tradeId, { rolloverDRestoreTries: entry.tries, rolloverDNextRetryAt: entry.nextRetryAt }); }
+            catch (e: any) { await alertRolloverFailure(`${ticker} #${tradeId}: retry persistence failed: ${e.message}`); }
+            // BUY SL executes on Bid; SELL on Ask. Never send invalid original SL.
+            const actNow = Math.max(nowMs, Date.now());
+            const fresh = getRolloverLiveSnapshot(ticker, actNow);
+            if (!getRolloverCalendar(ticker, actNow).restoreEligible || !isSpreadNormalized(fresh, actNow, base, pip)) continue;
+            const validOriginal = direction === 'BUY' ? entry.orig! < fresh!.bid : entry.orig! > fresh!.ask;
+            const beforeAmend = () => {
+                const at = Math.max(nowMs, Date.now());
+                const phase = getRolloverCalendar(ticker, at);
+                const quote = getRolloverLiveSnapshot(ticker, at);
+                return phase.metadataAvailable && phase.restoreEligible && isSpreadNormalized(quote, at, base, pip)
+                    && entry.orig !== null && Number.isFinite(entry.orig) && entry.orig > 0
+                    && (direction === 'BUY' ? entry.orig < quote!.bid : entry.orig > quote!.ask);
+            };
+            const ok = validOriginal ? await broker.modifyStopLoss(positionId, entry.orig!, undefined, beforeAmend) : await broker.closePosition(positionId);
+            if (!ok) throw new Error(validOriginal ? 'Restore rejected/unverified' : 'Full close rejected/unverified');
+            const verified = await broker.readPositionProtection(positionId);
+            if (!verified || (validOriginal ? verified.exists && (verified.stopLoss === null || (direction === 'BUY' ? verified.stopLoss < entry.orig! : verified.stopLoss > entry.orig!)) : verified.exists)) throw new Error('Final broker readback does not confirm safety');
+            if (trade && verified.exists) trade.slPrice = verified.stopLoss!;
+            await persistRolloverSafety(tradeId, { rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null, rolloverDRestored: verified.exists, rolloverDClosed: !verified.exists, ...(verified.exists ? { slPrice: verified.stopLoss } : {}) }, trade?.journalId ?? entry.journalId, !verified.exists);
             rolloverDWideMap.delete(tradeId);
-            if (db) {
-                db.collection('active_trades').doc(trade.tradeId).update({ slPrice: entry.orig, rolloverDWidened: false, rolloverDSlOriginal: null, rolloverDSlWide: null }).catch(() => {});
-                if (trade.journalId) {
-                    db.collection('trade_journal').doc(trade.journalId).update({ slPrice: entry.orig, rolloverDRestored: true }).catch(() => {});
+            console.log(`[ROLLOVER-D] ${ticker} #${tradeId}: protection verified in broker`);
+        } catch (e: any) {
+            if (!entry.nextRetryAt || entry.nextRetryAt <= nowMs) entry.nextRetryAt = nowMs + 30_000;
+            await alertRolloverFailure(`${ticker} #${tradeId}: ${e.message}; pending state retained (attempt ${entry.tries})`);
+        } finally { rolloverMutationInFlight.delete(tradeId); }
+    }
+}
+
+function canExpireOrphanTrade(tradeId: string, ageMs: number): boolean {
+    const trade = globalState.activeTrades.get(tradeId);
+    return ageMs > 7 * 24 * 60 * 60 * 1000 && !rolloverDWideMap.has(tradeId)
+        && !trade?.ctraderPositionId && !hasPendingExecutionIncident(trade as any ?? {})
+        && !rolloverTriageRecords.get(tradeId)?.rolloverTriageState?.pending;
+}
+function rehydrateLiveRolloverRecord(tradeId: string, data: any): void {
+    const fill = data.rolloverFill, identity = data.rolloverTriageIdentity;
+    if (!fill || fill.schema !== 1 || !identity || identity.tradeId !== tradeId || identity.ticker !== fill.ticker
+        || identity.positionKey !== fill.positionKey || fill.positionKey !== `${fill.positionId}:${fill.openedAtMs}`
+        || fill.positionId !== String(data.ctraderPositionId) || fill.ticker !== data.ticker || fill.direction !== data.direction
+        || ![fill.entryPrice,fill.initialSlPrice,fill.initialRiskPrice,fill.openedAtMs].every(v => Number.isFinite(v) && v > 0)
+        || Math.abs((fill.direction === 'BUY' ? 1:-1)*(fill.entryPrice-fill.initialSlPrice)-fill.initialRiskPrice) > 16*Number.EPSILON*Math.max(1,fill.entryPrice)) return;
+    if (fill.policy?.profile !== 'rollover_triage_v1' || data.rolloverTriageTracked !== true) return;
+    const active = globalState.activeTrades.get(tradeId);
+    if (active && String(active.ctraderPositionId) !== fill.positionId) return;
+    if (rolloverMutationInFlight.has(tradeId)) return;
+    const existing = rolloverTriageRecords.get(tradeId);
+    const record = existing ?? active ?? ({...data,tradeId} as ActiveTrade);
+    const prior = record.rolloverTriageState;
+    const journal = data.rolloverTriageState;
+    const recoveredState = {pending:prior?.pending ?? journal?.pending ?? null,
+        widenReference:prior?.widenReference ?? journal?.widenReference ?? null};
+    Object.assign(record,{rolloverFill:structuredClone(fill),rolloverTriageState:structuredClone(recoveredState),
+        rolloverTriageTracked:true,rolloverTriageDurable:data.rolloverTriageDurable === true,journalId:data.journalId ?? record.journalId});
+    rolloverTriageRecords.set(tradeId,record);
+}
+async function loadLiveRolloverJournalRecords(): Promise<void> {
+    if (!db) throw new Error('Rollover journal unavailable');
+    const snap = await db.collection('trade_journal').where('rolloverTriageTracked','==',true).get();
+    for (const doc of snap.docs) {
+        const data = doc.data();
+        if (data.rolloverTriageTracked !== true || data.mode === 'backtesting') continue;
+        const id = data.rolloverTriageIdentity?.tradeId;
+        if (typeof id === 'string' && id) rehydrateLiveRolloverRecord(id,{...data,journalId:doc.id});
+    }
+}
+function rehydrateRolloverPending(tradeId: string, data: any): void {
+    rehydrateLiveRolloverRecord(tradeId,data);
+    // A legacy boolean has no period evidence: never invent today's date on boot.
+    if (data.rolloverBeApplied === true && typeof data.rolloverBePeriodKey === 'string' && data.rolloverBePeriodKey.length > 0) {
+        rolloverBeAppliedToday.add(`${tradeId}:${data.rolloverBePeriodKey}`);
+    }
+    if (!data.rolloverDWidened) return;
+    const existing = rolloverDWideMap.get(tradeId);
+    if (existing) {
+        // Journal snapshots can be older than RAM retry/protection state. Merge identity only.
+        existing.journalId ??= data.journalId;
+        existing.positionId ??= data.rolloverDPositionId ?? data.ctraderPositionId;
+        existing.ticker ??= data.rolloverDTicker ?? data.ticker;
+        existing.direction ??= data.rolloverDDirection ?? data.direction;
+        return;
+    }
+    const orig = Number(data.rolloverDSlOriginal);
+    const wide = Number(data.rolloverDSlWide);
+    if (!(orig > 0 && wide > 0 && Number.isFinite(orig) && Number.isFinite(wide))) {
+        console.error(`[ROLLOVER-D] Invalid persisted original SL for #${tradeId}; manual recovery required`);
+    }
+    rolloverDWideMap.set(tradeId, { orig: orig > 0 && Number.isFinite(orig) ? orig : null, wide: wide > 0 && Number.isFinite(wide) ? wide : null, tries: Math.max(0, Number(data.rolloverDRestoreTries) || 0), at: Number(data.rolloverDWidenedAt) || 0, nextRetryAt: Math.max(0, Number(data.rolloverDNextRetryAt) || 0), positionId: data.rolloverDPositionId ?? data.ctraderPositionId, ticker: data.rolloverDTicker ?? data.ticker, direction: data.rolloverDDirection ?? data.direction, journalId: data.journalId });
+}
+let rolloverJournalRecoveryInFlight: Promise<boolean> | null = null;
+async function loadRolloverJournalPending(): Promise<boolean> {
+    if (rolloverJournalRecoveryInFlight) return rolloverJournalRecoveryInFlight;
+    rolloverJournalRecoveryReady = false;
+    rolloverJournalRecoveryInFlight = (async () => {
+        if (!db) return false;
+        try {
+            const snap = await db.collection('trade_journal').where('rolloverDWidened', '==', true).get();
+            for (const doc of snap.docs) {
+                const data = doc.data();
+                if (data.rolloverDWidened !== true || data.mode === 'backtesting') continue;
+                const positionId = data.rolloverDPositionId ?? data.ctraderPositionId;
+                const active = [...globalState.activeTrades.values()].find(t => positionId && String(t.ctraderPositionId) === String(positionId))
+                    ?? (data.tradeId ? globalState.activeTrades.get(data.tradeId) : undefined);
+                const tradeId = active?.tradeId ?? data.tradeId ?? doc.id;
+                // Restore safety tracking ONLY; journal status never proves a live trade.
+                rehydrateRolloverPending(tradeId, { ...data, journalId: doc.id });
+                const pending = rolloverDWideMap.get(tradeId)!;
+                if (active) {
+                    active.journalId ??= pending.journalId;
+                    active.ctraderPositionId ??= pending.positionId;
+                    active.ticker ??= pending.ticker!;
+                    active.direction ??= pending.direction!;
+                    Object.assign(active, Object.fromEntries(Object.entries(data).filter(([key]) => key.startsWith('rollover'))), {
+                        rolloverDWidened: true, rolloverDSlOriginal: pending.orig, rolloverDSlWide: pending.wide,
+                        rolloverDRestoreTries: pending.tries, rolloverDNextRetryAt: pending.nextRetryAt ?? 0,
+                        rolloverDWidenedAt: pending.at, rolloverDPositionId: pending.positionId,
+                        rolloverDTicker: pending.ticker, rolloverDDirection: pending.direction,
+                    });
                 }
             }
-            console.log(`[ROLLOVER-D] ✅ ${trade.ticker} #${tradeId}: SL restaurado ${entry.wide} → ${entry.orig} (rollover terminado)`);
+            await loadLiveRolloverJournalRecords();
+            rolloverJournalRecoveryReady = true;
+            return true;
         } catch (e: any) {
-            console.error(`[ROLLOVER-D] ❌ Error restaurando ${trade.ticker} #${tradeId}:`, e.message);
+            console.error('[ROLLOVER-D] Journal pending recovery unavailable:', e.message);
+            return false;
         }
-    }
+    })().finally(() => { rolloverJournalRecoveryInFlight = null; });
+    return rolloverJournalRecoveryInFlight;
+}
+let rolloverCycleInFlight: Promise<void> | null = null;
+function runRolloverCycle(nowMs: number): Promise<void> {
+    if (rolloverCycleInFlight) return rolloverCycleInFlight;
+    rolloverCycleInFlight = (async () => {
+        // Retry recovery without stalling known restores behind a slow journal read.
+        // The shared lookup keeps A/D fail-closed until it finishes successfully.
+        if (!rolloverJournalRecoveryReady) void loadRolloverJournalPending();
+        const tickers = new Set<string>();
+        for (const trade of globalState.activeTrades.values()) if (!trade.isBacktest) tickers.add(trade.ticker);
+        for (const entry of rolloverDWideMap.values()) if (entry.ticker) tickers.add(entry.ticker);
+        for (const entry of rolloverTriageRecords.values()) tickers.add(entry.ticker);
+        for (const ticker of tickers) {
+            const previous = globalState.tickerLocks.get(ticker) ?? Promise.resolve();
+            let release!: () => void;
+            const lock = new Promise<void>(resolve => { release = resolve; });
+            globalState.tickerLocks.set(ticker, lock);
+            try {
+                await previous;
+                // Re-evaluate wall clock after waiting (never act on a stale pre-pause instant).
+                const effectiveNow = Math.max(nowMs, Date.now());
+                const records = new Map(rolloverTriageRecords);
+                for (const [id,active] of globalState.activeTrades) if (active.rolloverFill || !records.has(id)) records.set(id,active);
+                for (const [tradeId,trade] of records) {
+                    if (trade.ticker === ticker && trade.rolloverFill?.policy.profile === 'rollover_triage_v1')
+                        try { await runLiveRolloverTriage(tradeId,trade); }
+                        catch (error: any) { console.error('[ROLLOVER] Triage safety retained:', error.message); }
+                }
+                await applyRolloverProtection(effectiveNow, ticker);
+                await applyRolloverWiden(effectiveNow, ticker);
+                await applyRolloverRestore(effectiveNow, false, ticker);
+            } finally {
+                release();
+                if (globalState.tickerLocks.get(ticker) === lock) globalState.tickerLocks.delete(ticker);
+            }
+        }
+    })().finally(() => { rolloverCycleInFlight = null; });
+    return rolloverCycleInFlight;
 }
 
 export function startWatchdog() {
@@ -3519,18 +4278,12 @@ export function startWatchdog() {
     setInterval(scheduleDailySummary, 5 * 60 * 1000);
     scheduleDailySummary();
 
-    // 🛡️ PROTECCIÓN ROLLOVER (sep-2026): 3 reglas en un solo tick de 30s.
-    // A: 20:20-20:28 UTC — ganadoras → SL a BE+buffer (barrió 4 SL por spread en 3 semanas, -$133).
-    // D: 20:25-20:28 UTC — perdedoras → SL ensanchado +20 pips (feed muere 20:29, spread ~15-20 pips).
-    // D: 21:15-21:25 UTC — restauración del SL original (feed vuelto, spread normalizado).
-    // Desactivar por activo: asset_configs → rolloverBeEnabled: false (controla A y D).
+    // Shared ticker locks coordinate rollover with ordinary position management.
+    // rolloverBeEnabled:false disables new A/D actions, never abandons pending restores.
     setInterval(() => {
-        const now = Date.now();
-        applyRolloverProtection(now).catch((e: any) => console.error('[ROLLOVER] ❌', e.message));
-        applyRolloverWiden(now).catch((e: any) => console.error('[ROLLOVER-D] ❌', e.message));
-        applyRolloverRestore(now).catch((e: any) => console.error('[ROLLOVER-D] ❌ restore:', e.message));
+        runRolloverCycle(Date.now()).catch((e: any) => console.error('[ROLLOVER] Cycle failed:', e.message));
     }, 30 * 1000);
-    console.log('[ROLLOVER] 🛡️ Protección Rollover ACTIVA: Regla A (SL→BE 20:20-20:28 UTC) + Regla D (widen +20 pips 20:25-20:28 UTC, restore 21:15-21:25 UTC).');
+    console.log('[ROLLOVER] Broker-calendar A/D recovery active; serialized, durable, fresh normalized spread required.');
 
     // 🆕 v7.9: helper "mercado FX cerrado" (tz del VPS = Europe/Berlin)
     const isFxMarketClosed = (d: Date): boolean => {
@@ -3561,7 +4314,7 @@ export function startWatchdog() {
             // Cierre por timeout: ELIMINADO SEGÚN SOLICITUD
 
             // Limpieza de trades huérfanos (7 días)
-            if (age > SEVEN_DAYS) {
+            if (canExpireOrphanTrade(id, age) && !(trade as any).rolloverDWidened) {
                 globalState.activeTrades.delete(id);
                 if (db && !trade.isBacktest) db.collection('active_trades').doc(id).delete().catch(() => { });
                 console.log(`[JOURNAL] 🧹 Trade ${id} expirado de RAM (7 días)`);
@@ -3605,30 +4358,105 @@ export function startWatchdog() {
  * 🆕 v7.2: Inyectar el ID de la posición de cTrader en la RAM
  * Esto permite que trading.ts pueda hacer cierres parciales y breakeven automáticamente
  */
-export function updateTradePositionId(tradeId: string, positionId: string) {
-    const trade = globalState.activeTrades.get(tradeId);
-    if (trade) {
-        trade.ctraderPositionId = positionId;
-        console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
-        // 🆕 FIX (ago-2026): persistir el posID a Firestore además de RAM.
-        // Antes solo se guardaba en RAM: tras un reinicio (pm2 max_memory_restart),
-        // el trade rehidratado quedaba SIN "gancho" → no podía mover SL ni cerrar
-        // parciales, pero seguía mandando notificaciones falsas (ej. BREAKEVEN).
-        import('./memory.js').then(({ db }) => {
-            if (db) db.collection('active_trades').doc(tradeId).update({ ctraderPositionId: positionId }).catch(() => { });
-        }).catch(() => { });
-    }
+/** RAM hold is installed before best-effort durable writes; never retry the broker order. */
+export function hasUnresolvedExecutionIncidents(): boolean {
+    return [...globalState.activeTrades.values()].some(t => hasPendingExecutionIncident(t as any));
 }
 
-// 🛡️ REGLA C (sep-2026): ventana de rollover del broker — entradas nuevas bloqueadas
-// 20:29-21:30 UTC (17:29-18:30 ARG), días hábiles (feed muerto 20:29-21:00 + pico de
-// spread ~19 pips + residuo). Backtest A/B 10 activos: ~neutro (+0.4R/8m) y evita el
-// incidente real 10-sep (GBPJPY entró en la reapertura, SL/TP rechazado, -30 pips).
-function isRolloverEntryWindow(nowMs: number): boolean {
-    const d = new Date(nowMs);
-    const dow = d.getUTCDay();
-    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
-    return dow >= 1 && dow <= 5 && mins >= 20 * 60 + 29 && mins <= 21 * 60 + 30;
+/** Shared delayed-approval/AUTO entry policy; latches and alerts remain in existing risk evaluators. */
+export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now()): Promise<string | null> {
+    // Synchronous policy is shared by AUTO and delayed manual approval, including
+    // a final read after ledger awaits: latches/settings may change during I/O.
+    const currentPolicy = (at: number): string | null => {
+        const cfg = getConfigForTicker(ticker, at);
+        if (!cfg.sessionEnabled) return 'BLOCKED_SESSION';
+        if (globalState.globalKillswitches?.['GLOBAL_SYSTEM'] || globalState.globalKillswitches?.[ticker]) return 'BLOCKED_KILLSWITCH';
+        if (hasUnresolvedExecutionIncidents()) return 'BLOCKED_EXECUTION_INCIDENT';
+        if (at < globalState.streakKillswitchUntil) return 'BLOCKED_RACHA';
+        if (at < globalState.vixKillswitchUntil) return 'BLOCKED_VIX';
+        if (tickFlow.isSpreadAnomalous(ticker)) return 'BLOCKED_SPREAD';
+        if ((cfg as any).rolloverEntryBlock !== false && isRolloverEntryWindow(ticker, at)) return 'BLOCKED_ROLLOVER';
+        return null;
+    };
+    const blocked = currentPolicy(nowMs);
+    if (blocked) return blocked;
+    if (await evaluateGlobalKillswitch(nowMs, globalState, false)) return 'BLOCKED_GLOBAL';
+    if (await evaluateAssetKillswitch(ticker, nowMs, globalState, false)) return 'BLOCKED_ASSET';
+    return currentPolicy(Date.now());
+}
+
+export async function retainExecutionIncident(tradeId: string, journalId: string | undefined, result: import('../services/ctrader.js').CTraderOrderResult | null | undefined): Promise<boolean> {
+    if (result && !result.success && !result.positionId && !result.executionUncertain) return false;
+    let trade = globalState.activeTrades.get(tradeId);
+    if (!trade) {
+        // A lost candidate is still an account-wide obligation, not permission to send another order.
+        trade = { tradeId, journalId, timestamp: Date.now(),
+            ...(result?.riskSnapshot ? { ticker: result.riskSnapshot.ticker, direction: result.riskSnapshot.direction } : {}) } as ActiveTrade;
+        globalState.activeTrades.set(tradeId, trade);
+    }
+    const fields: Record<string, any> = {
+        executionIncidentPending: true, closeAccountingPending: true,
+        executionUncertain: result?.executionUncertain === true || !result?.positionId,
+        ctraderStatus: 'EXECUTION_PENDING_RECONCILIATION', result: null, rMultiple: null,
+        ctraderError: result?.error ?? 'Execution/accounting outcome requires reconciliation',
+        ...(result?.positionId ? { ctraderPositionId: result.positionId } : {}),
+        ...(result?.executedPrice ? { ctraderExecutedPrice: result.executedPrice } : {}),
+        ...(result?.lots != null ? { ctraderLots: result.lots } : {}),
+        ...(Number.isFinite(result?.riskBudgetAccount) ? { riskBudgetAccount: result!.riskBudgetAccount } : {}),
+    };
+    if (trade) {
+        // Preserve established identity; conflicting evidence is an incident, not a new position.
+        if (trade.ctraderPositionId) fields.ctraderPositionId = trade.ctraderPositionId;
+        Object.assign(trade, fields);
+        freezeTradeRiskForTrade(trade, result?.riskSnapshot);
+        fields.riskAccountingStatus = trade.riskAccountingStatus ?? 'UNVERIFIED';
+        if (trade.riskSnapshot) { fields.riskSnapshot = trade.riskSnapshot; fields.accountCurrency = trade.accountCurrency; }
+    }
+    invalidateRiskCache();
+    if (db) {
+        const jid = journalId && !['ERR', 'N/A'].includes(journalId) ? journalId : trade?.journalId || tradeId;
+        for (const [collection, id] of [['active_trades', tradeId], ['trade_journal', jid]]) {
+            try { await db.collection(collection!).doc(id!).set(fields, { merge: true }); }
+            catch (error: any) { console.error(`[EXECUTION] Incident retained in RAM; ${collection}/${id} persistence failed:`, error?.message); }
+        }
+    }
+    return true;
+}
+
+export async function updateTradePositionId(tradeId: string, positionId: string, riskSnapshot?: TradeRiskSnapshot): Promise<void> {
+    const trade = globalState.activeTrades.get(tradeId);
+    if (!trade) throw new Error('Trade risk active identity unavailable');
+    if (trade.isBacktest) return;
+    if (trade.ctraderPositionId && trade.ctraderPositionId !== positionId) throw new Error('Trade risk position identity mismatch');
+    const establishedRisk = trade.riskAccountingStatus === 'VERIFIED' && !!trade.riskSnapshot;
+    trade.ctraderPositionId = positionId;
+    const verified = freezeTradeRiskForTrade(trade, riskSnapshot);
+    if (verified) {
+        const frozen = trade.riskSnapshot!;
+        trade.entryPrice = frozen.entryPrice;
+        Object.defineProperty(trade, 'initialSlPrice', { value: frozen.initialSlPrice, enumerable: true, writable: false, configurable: false });
+        trade.originalSlPrice = frozen.initialSlPrice;
+        // A repeated link must not undo an existing broker-managed/trailing stop.
+        if (!establishedRisk && !trade.tp1Hit && !trade.executionState) trade.slPrice = frozen.initialSlPrice;
+        Object.assign(trade, { riskAmountAccount: frozen.riskAmountAccount, riskAccountingProvenance: frozen.source });
+    }
+    const fields = { ctraderPositionId: positionId, riskAccountingStatus: trade.riskAccountingStatus ?? 'UNVERIFIED',
+        ...(verified ? { riskSnapshot: trade.riskSnapshot, accountCurrency: trade.accountCurrency,
+            entryPrice: trade.entryPrice, initialSlPrice: trade.initialSlPrice, originalSlPrice: trade.originalSlPrice, slPrice: trade.slPrice,
+            riskAmountAccount: trade.riskSnapshot!.riskAmountAccount, riskAccountingProvenance: trade.riskSnapshot!.source } : {}) };
+    // Await this boundary before management: failures remain executed-but-pending, never aborted.
+    const { db } = await import('./memory.js');
+    if (!db) throw new Error('Trade risk persistence unavailable');
+    await db.collection('active_trades').doc(tradeId).update(fields);
+    console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
+}
+
+// C: pause→reopen+30m minimum. Outside it, missing/stale/wide spread remains closed.
+// No cutoff auto-reopens entries; each attempt needs real bilateral quote evidence.
+function isRolloverEntryWindow(ticker: string, nowMs: number): boolean {
+    const snapshot = getRolloverLiveSnapshot(ticker, nowMs);
+    const reference = getRolloverSpreadReference(ticker, snapshot?.bid ?? 1);
+    return evaluateRolloverEntryGate(ticker, nowMs, snapshot, { live: true, ...reference }).blocked;
 }
 
 async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx: any) {
@@ -3664,6 +4492,22 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
         safeSet(state, { merge: true }).catch((err: any) => console.error(`[FIREBASE] Error guardando gatillo ${ticker}: ${err.message}`)); // Update status in UI immediately
 
         const config = getConfigForTicker(ticker, nowMs);
+        const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
+        const executionInstrument = executionPolicy.profile === 'microstructure_v1'
+            ? getLiveExecutionInstrument(ticker) ?? (config.executionInstrument?.source === 'explicit_model' ? config.executionInstrument : undefined) : undefined;
+        if (executionPolicy.profile === 'microstructure_v1') {
+            const q = getLastBidAsk(ticker, nowMs);
+            const setup = oteData.executionTf ? getExecutionSnapshot(state, oteData.executionTf, nowMs) : undefined;
+            if (!setup?.bar || !setup.closedBar || !(setup.atr14! > 0)
+                || ![oteData.entryPrice,Number(oteData.stopLoss),Number(oteData.tp1),Number(oteData.tp2)].every(v => Number.isFinite(v) && v > 0)
+                || !validateExecutionInstrument(executionInstrument) || executionInstrument.ticker !== ticker || !q || q.ts > nowMs || nowMs-q.ts > 10000
+                || !(q.bid > 0 && q.ask >= q.bid) || !store.dynamicBotConfig.autoTrading) {
+                state.lastGatillo.status = 'WAIT_DATA_EXECUTION_INSTRUMENT_QUOTE_OR_FILL_CALLBACK';
+                store.activeTrades.delete(oteData.tradeId);
+                return;
+            }
+
+        }
         if (!config.sessionEnabled) {
             console.log(`[RADAR] 🚫 Trading desactivado para ${ticker} en esta sesión (OTE bloqueado)`);
             state.lastGatillo.status = 'BLOCKED_SESSION';
@@ -3794,6 +4638,15 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             appendTimesfmAudit(tfmCfg.auditPath ?? 'logs/timesfm_audit.jsonl', tfmAudit);
         }
 
+        // Last target calculation follows any TimesFM request; legacy cap must not recap checked targets.
+        if (executionPolicy.targets && executionInstrument) {
+            const targets = computeExecutionTargets({ direction: oteData.direction, entryPrice: oteData.entryPrice, initialSlPrice: parseFloat(oteData.stopLoss),
+                regime: executionInstrument.regime, adr: getAdrPrice(ticker), structuralTp1Price: parseFloat(oteData.tp1), requestedTp2Price: parseFloat(oteData.tp2) });
+            if (!targets.valid) { state.lastGatillo.status = `WAIT_DATA_${targets.reason}`; store.activeTrades.delete(oteData.tradeId); return; }
+            oteData.tp1 = String(targets.tp1Price); oteData.tp2 = String(targets.tp2Price); oteData.executionTargetsChecked = true;
+            const candidate = store.activeTrades.get(oteData.tradeId);
+            if (candidate) { candidate.tp1Price = targets.tp1Price; candidate.tp2Price = targets.tp2Price; }
+        }
         let activeSessionId: string | undefined;
         if (isBacktest) {
             const { getCurrentSessionId } = await import('../services/backtesting.js');
@@ -4023,6 +4876,12 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             }
         }
 
+        const mlRegimeShadow = evaluateLiveRegimeShadow(ticker, state, oteData, nowMs, config);
+        if (mlRegimeShadow !== undefined) {
+            oteData.mlRegimeShadow = mlRegimeShadow;
+            if (state.lastGatillo) state.lastGatillo.mlRegimeShadow = mlRegimeShadow;
+        }
+
         // 🧠 ML GATE EXTENDIDO (16-sep-2026): audita TODOS los gatillos — directas incluidas.
         // - OTE: el veto real sigue en AlphaModel (paridad de motor intacta); acá solo se audita.
         // - DIRECTAS (isChochEntry): acá se audita Y se bloquea si el gate del activo está ON
@@ -4159,9 +5018,10 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
+                    initialSlPrice: store.activeTrades.get(oteData.tradeId)?.initialSlPrice ?? parseFloat(oteData.stopLoss),
                     isChochEntry: oteData.isChochEntry,
                     // 🧠 MACHINE LEARNING FEATURES (Fase 1)
                     hourOfDay: new Date(nowMs).getHours(),
@@ -4184,7 +5044,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
-                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : oteData.entryPrice * 1.5,
                     slPrice: parseFloat(oteData.stopLoss),
                     initialSlPrice: parseFloat(oteData.stopLoss), // 🛡️ SL estructural original (el PnL R se calcula contra este, no contra el SL vigente)
@@ -4202,14 +5062,23 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
             }
 
+            if (mlRegimeShadow !== undefined) {
+                activeTrade.mlRegimeShadow = mlRegimeShadow;
+                if (db && !isBacktest) void db.collection('active_trades').doc(oteData.tradeId).update({ mlRegimeShadow })
+                    .catch((e: any) => console.warn('[ML-REGIME-SHADOW] Active telemetry not persisted:', e?.message));
+            }
             if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
                 activeTrade.journalId = journalId;
+                if (mlRegimeShadow !== undefined && db && !isBacktest) void db.collection('trade_journal').doc(journalId).update({ mlRegimeShadow })
+                    .catch((e: any) => console.warn('[ML-REGIME-SHADOW] Journal telemetry not persisted:', e?.message));
                 // 💾 Actualizar el journalId en Firebase
                 if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => { });
             }
 
             // 🤖 cTrader: Send trade with confirmation buttons (semi-automatic mode)
             if (!isBacktest) {
+                let autoExecutionAttempted = false;
+                let autoExecutionResult: import('../services/ctrader.js').CTraderOrderResult | null | undefined;
                 try {
                     const { config: globalConfig } = await import('../config.js');
                     const { sendTradeConfirmation } = await import('../services/ctrader_confirmation.js');
@@ -4217,24 +5086,12 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
                     if (ctraderConfigured) {
                         const recheckKillswitchesBeforeExecution = async (): Promise<string | null> => {
-                            const nowLive = Date.now();
-                            const cfg = getConfigForTicker(ticker, nowLive);
-                            if (!cfg.sessionEnabled) return 'BLOCKED_SESSION';
-                            if (store.globalKillswitches['GLOBAL_SYSTEM'] || store.globalKillswitches[ticker]) return 'BLOCKED_KILLSWITCH';
-                            if (await evaluateGlobalKillswitch(nowLive, store, isBacktest)) return 'BLOCKED_GLOBAL';
-                            if (await evaluateAssetKillswitch(ticker, nowLive, store, isBacktest)) return 'BLOCKED_ASSET';
-                            if (nowLive < store.streakKillswitchUntil) return 'BLOCKED_RACHA';
-                            if (nowLive < store.vixKillswitchUntil) return 'BLOCKED_VIX';
-                            // 🌊 TickFlow: spread anómalo = probable noticia/iliquidez → no ejecutar
-                            if (tickFlow.isSpreadAnomalous(ticker)) return 'BLOCKED_SPREAD';
-                            // 🛡️ REGLA C (sep-2026): bloquear entradas en la ventana de rollover
-                            // 20:29-21:30 UTC (17:29-18:30 ARG). Flag por activo (default ON).
-                            if ((cfg as any).rolloverEntryBlock !== false && isRolloverEntryWindow(nowLive)) {
-                                console.log(`[ROLLOVER-C] 🛡️ Entrada ${ticker} bloqueada: ventana de rollover (17:29-18:30 ARG).`);
+                            const blocked = await recheckLiveExecutionRisk(ticker);
+                            if (blocked === 'BLOCKED_ROLLOVER') {
+                                console.log(`[ROLLOVER-C] Entry ${ticker} blocked: broker calendar / fresh normalized spread evidence.`);
                                 logBlockedSignal('ROLLOVER', oteData, nowMs);
-                                return 'BLOCKED_ROLLOVER';
                             }
-                            return null;
+                            return blocked;
                         };
 
                         const blockedBy = await recheckKillswitchesBeforeExecution();
@@ -4265,48 +5122,68 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             const { config: envConfig } = await import('../config.js');
                             console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
 
-                            const result = await executeMarketOrder({
+                            const rolloverFillPolicy = structuredClone(getConfigForTicker(ticker,Date.now()).rolloverPolicy);
+                            const requestedRiskPercent = envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
+                            (activeTrade as any).requestedRiskPercent = requestedRiskPercent;
+                            autoExecutionAttempted = true;
+                            const result = autoExecutionResult = await executeMarketOrder({
                                 ticker,
                                 direction: oteData.direction as 'BUY' | 'SELL',
                                 entryPrice: oteData.entryPrice,
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
                                 tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                                 tradeId: oteData.tradeId,
-                                riskPercent: envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now())), // 🆕 TimesFM F1: riesgo modulado + sizing fraccional por sesión (27-sep-2026)
+                                beforeExecution: recheckKillswitchesBeforeExecution,
+                                rolloverEntryBlock: getConfigForTicker(ticker, Date.now()).rolloverEntryBlock !== false,
+                                riskPercent: requestedRiskPercent, // Requested budget is audit context, never the actual filled denominator.
                             });
 
-                            if (result.success && result.positionId) {
+                            if (result?.success && result.positionId) {
+                                const executionFillAckMs = Date.now();
+                                const executionFillAckQuote = getLastBidAsk(ticker, executionFillAckMs);
+                                try {
+                                    await updateTradePositionId(oteData.tradeId, result.positionId, result.riskSnapshot);
+                                    const riskTrade = store.activeTrades.get(oteData.tradeId);
+                                    const frozenRisk = riskTrade?.riskAccountingStatus === 'VERIFIED' ? riskTrade.riskSnapshot : undefined;
+                                    const budgetFields = {
+                                        ...(Number.isFinite(result.riskBudgetAccount) ? { riskBudgetAccount: result.riskBudgetAccount } : {}),
+                                        ...(Number.isFinite((riskTrade as any)?.requestedRiskPercent) ? { requestedRiskPercent: (riskTrade as any).requestedRiskPercent } : {}),
+                                    };
+                                    if (riskTrade) Object.assign(riskTrade, budgetFields);
+                                    if (db && Object.keys(budgetFields).length) await db.collection('active_trades').doc(oteData.tradeId).update(budgetFields);
+                                    if (db && journalId && !isBacktest) await db.collection('trade_journal').doc(journalId).update({
+                                        ctraderPositionId: result.positionId, ctraderLots: result.lots,
+                                        ctraderExecutedPrice: result.executedPrice, entryPrice: result.executedPrice,
+                                        ctraderStatus: 'EXECUTED', ctraderDemo: globalConfig.CTRADER_DEMO, ...budgetFields,
+                                        riskAccountingStatus: riskTrade?.riskAccountingStatus ?? 'UNVERIFIED',
+                                        ...(frozenRisk ? { riskSnapshot: frozenRisk, accountCurrency: frozenRisk.currency } : {}),
+                                    });
+                                } catch (error: any) {
+                                    // Broker has filled: install RAM safety before any best-effort durable retry.
+                                    await retainExecutionIncident(oteData.tradeId, journalId, result);
+                                    console.error(`[SNIPER] EXECUTED posID ${result.positionId}; accounting persistence pending: ${error.message}`);
+                                    await sendTelegramAlert(`⚠️ ${ticker} ejecutado en cTrader (posID ${result.positionId}); persistencia de riesgo pendiente.`).catch(() => {});
+                                    return;
+                                }
                                 if (sarPendingClose) {
+                                    const alreadyPending = (sarPendingClose as any).closeAccountingPending;
+                                    (sarPendingClose as any).closeAccountingPending = true;
+                                    invalidateRiskCache();
                                     try {
-                                        if (sarPendingClose.ctraderPositionId) {
+                                        if (sarPendingClose.ctraderPositionId && !alreadyPending) {
                                             const ctrader = await import('../services/ctrader.js');
                                             await ctrader.closePosition(sarPendingClose.ctraderPositionId);
-                                            // 🛡️ 24-sep-2026: PnL REAL del cierre por reversión (antes solo
-                                            // 'REVERSAL' sin PnL → quedaba '—' para siempre en el Diario).
-                                            const jid = sarPendingClose.journalId;
-                                            const fin = await finalizeClosedPositionFromDeals(sarPendingClose.ctraderPositionId, sarPendingClose);
-                                            if (fin && jid && db && !isBacktest) {
-                                                db.collection('trade_journal').doc(jid).set(
-                                                    { result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reversalClosed: true, reconciled: true, closedAt: new Date().toISOString() },
-                                                    { merge: true }
-                                                ).catch(() => { });
-                                                console.log(`[SAR] ✅ #${jid} finalizado por reversión: ${fin.result} (pnl=$${fin.pnl.toFixed(2)}, ${fin.rMultiple}R)`);
-                                            } else if (jid) {
-                                                recordResult(jid, 'REVERSAL').catch(() => { });
-                                                console.warn(`[SAR] ⚠️ Sin deals tras cierre por reversión #${jid} — queda REVERSAL sin PnL.`);
-                                            }
                                         }
-                                        store.activeTrades.delete(sarPendingClose.tradeId);
-                                        if (db && !isBacktest) db.collection('active_trades').doc(sarPendingClose.tradeId).delete().catch(() => { });
                                     } catch (e) {
-                                        console.error('[SAR] Error cierre diferido automático:', e);
+                                        console.error('[SAR] Cierre incierto; se verifican deals antes de retirar gestión:', e);
                                     }
+                                    const sarAccountingReady = await completeLiveTradeClose(sarPendingClose, store, { reversalClosed: true, reconciled: true });
+                                    if (sarAccountingReady) console.log(`[SAR] ✅ #${sarPendingClose.tradeId}: contabilidad real durable.`);
                                 }
 
-                                updateTradePositionId(oteData.tradeId, result.positionId);
                                 // 🛡️ FIX (30-sep-2026): normalizar niveles del activeTrade con los del
                                 // OTE EJECUTADO. El trade pudo haber sido pre-creado por el radar con
                                 // otros niveles (caso real USOIL 30-sep: activeTrade entry 94.3346 vs
@@ -4314,33 +5191,65 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 // operaba contra niveles que el broker no tenía.
                                 const exTrade = store.activeTrades.get(oteData.tradeId);
                                 if (exTrade && !exTrade.isBacktest) {
+                                    if (executionPolicy.profile === 'microstructure_v1') {
+                                        const filledAtMs = executionFillAckMs;
+                                        const q = executionFillAckQuote;
+                                        const frozen = freezeExecutionFill(exTrade, { policy: executionPolicy, instrument: executionInstrument,
+                                            executedPrice: result.executedPrice, filledAtMs, lots: result.lots,
+                                            quote: q ? { bid: q.bid, ask: q.ask, timestampMs: q.ts, source: 'broker' } : undefined });
+                                        if (frozen) exTrade.mgmtOverrides = JSON.parse(JSON.stringify({
+                                            partialClosePct: exTrade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? .5,
+                                            slAfterTp1: exTrade.mgmtOverrides?.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint',
+                                            tp15BeEnabled: exTrade.mgmtOverrides?.tp15BeEnabled ?? config.tp15BeEnabled ?? true,
+                                            atrTrailEnabled: exTrade.mgmtOverrides?.atrTrailEnabled ?? config.atrTrailEnabled ?? true,
+                                            structuralTrailEnabled: exTrade.mgmtOverrides?.structuralTrailEnabled ?? config.structuralTrailEnabled ?? false,
+                                            minimal_roi: exTrade.mgmtOverrides?.minimal_roi ?? config.minimal_roi ?? {},
+                                        }));
+                                        (exTrade as any).executionFillUnverified = !frozen;
+                                        (exTrade as any).executionTf = oteData.executionTf ?? (oteData.tf === '5M' ? '5' : oteData.tf === '15M' ? '15' : oteData.tf);
+                                        if (db && frozen) {
+                                            const fields = JSON.parse(JSON.stringify({ executionPolicy: exTrade.executionPolicy, executionInstrument: exTrade.executionInstrument,
+                                                executionState: exTrade.executionState, executionLots: result.lots, initialSlPrice: exTrade.initialSlPrice,
+                                                executionTf: (exTrade as any).executionTf, mgmtOverrides: exTrade.mgmtOverrides, entryPrice: result.executedPrice }));
+                                            if (journalId) await db.collection('trade_journal').doc(journalId).update(fields);
+                                            await db.collection('active_trades').doc(oteData.tradeId).update(fields);
+                                        }
+                                    }
                                     exTrade.entryPrice = Number(result.executedPrice) || Number(exTrade.entryPrice);
-                                    exTrade.slPrice = parseFloat(oteData.stopLoss);
-                                    exTrade.initialSlPrice = parseFloat(oteData.stopLoss);
+                                    // updateTradePositionId normalized the verified opening stop before SAR; never undo broker/trailing protection here.
+                                    // initialSlPrice is immutable; do not rewrite it after execution.
                                     exTrade.tp1Price = parseFloat(oteData.tp1);
                                     exTrade.tp2Price = oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
-                                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                                         : exTrade.tp2Price;
                                     store.activeTrades.set(oteData.tradeId, exTrade);
-                                    if (db) db.collection('active_trades').doc(oteData.tradeId).set(exTrade).catch(() => { });
+                                    if (rolloverFillPolicy?.profile === 'rollover_triage_v1') {
+                                        // Only this acknowledged NEW fill can establish immutable rollover R/policy.
+                                        // Scoped broker lookup maps the actual symbol; no requested SL/entry fallback.
+                                        try {
+                                            const positions = await rolloverBroker.getOpenPositions(ticker);
+                                            const matches = Array.isArray(positions) ? positions.filter(p => String(p.positionId) === result.positionId) : [];
+                                            if (matches.length === 1 && captureRolloverVerifiedFill(exTrade,matches[0],rolloverFillPolicy,Date.now())) {
+                                                exTrade.journalId = journalId;
+                                                exTrade.rolloverTriageState = {pending:null,widenReference:null};
+                                                exTrade.rolloverTriageTracked = true;
+                                                rolloverTriageRecords.set(oteData.tradeId,exTrade);
+                                                await persistLiveRolloverRecord(oteData.tradeId,exTrade,undefined,'FILL');
+                                            }
+                                        } catch (error: any) {
+                                            exTrade.rolloverTriageDurable = false;
+                                            console.error('[ROLLOVER] Fill capture/storage unavailable; triage held:',error.message);
+                                        }
+                                    } else if (db) await db.collection('active_trades').doc(oteData.tradeId).set(exTrade);
                                     console.log(`[SNIPER] 🔄 Niveles del trade ${oteData.tradeId} normalizados al OTE ejecutado (entry ${result.executedPrice}, SL ${exTrade.slPrice}, TP1 ${exTrade.tp1Price}, TP2 ${exTrade.tp2Price}).`);
-                                }
-                                if (db && journalId) {
-                                    if (!isBacktest) db.collection('trade_journal').doc(journalId).update({
-                                        ctraderPositionId: result.positionId,
-                                        ctraderLots: result.lots,
-                                        ctraderExecutedPrice: result.executedPrice,
-                                        // 🆕 ago-2026: entryPrice = precio REAL del deal (corregido por
-                                        // confirmOrderFilled) → R del Diario exacto.
-                                        entryPrice: result.executedPrice,
-                                        ctraderStatus: 'EXECUTED',
-                                        ctraderDemo: globalConfig.CTRADER_DEMO,
-                                    }).catch(() => { });
                                 }
                                 const successMsg = `🚀 <b>AUTO-EJECUCIÓN EXITOSA</b>\n\n${msg}\n\n✅ <b>Ejecutado a:</b> ${result.executedPrice}\n🆔 <b>posID:</b> ${result.positionId}`;
                                 await sendTelegramAlert(successMsg);
+                            } else if (await retainExecutionIncident(oteData.tradeId, journalId, result)) {
+                                await sendTelegramAlert(`⚠️ ${ticker}: ejecución pendiente de reconciliación${result?.positionId ? ` (posID ${result.positionId})` : ''}. Sin reintento; nuevas entradas retenidas.`).catch(() => {});
                             } else {
-                                const errorMsg = `❌ <b>ERROR AUTO-EJECUCIÓN</b>\n\n${msg}\n\n⚠️ Error: ${result.error}`;
+                                const notice = buildExecutionNotice(result.error, 'AUTO');
+                                const errorMsg = `${notice.headingHtml}\n\n${msg}\n\n${notice.reasonHtml}`;
                                 await sendTelegramAlert(errorMsg);
                                 // 🛡️ FIX: la orden NO se ejecutó en cTrader (abortada por guardrail de volumen,
                                 // rechazo, etc). El trade ya quedó registrado en active_trades + journal ANTES
@@ -4372,7 +5281,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
                                 tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                                 points: oteData.points,
                                 grade: oteData.points >= 8 ? 'A+' : 'B',
@@ -4393,6 +5302,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                         console.log(`[SNIPER] ✅ Alerta FRANCOTIRADOR enviada (sin cTrader) para ${ticker}`);
                     }
                 } catch (teleErr: any) {
+                    if (autoExecutionAttempted) await retainExecutionIncident(oteData.tradeId, journalId, autoExecutionResult);
                     // Fallback to normal alert if confirmation system fails
                     console.error(`[SNIPER] ⚠️ Error en sistema de confirmación, enviando alerta normal:`, teleErr.message);
                     try { await sendTelegramAlert(msg); } catch { }

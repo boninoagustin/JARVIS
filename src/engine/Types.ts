@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import type { TradeRiskSnapshot, RiskAccountingStatus } from './TradeRisk.js';
+import type { RegimeContextInput, RegimePrediction } from './MLRegimeFeatures.js';
+import type { ExecutionObservation, ExecutionContextState, ExecutionMarketSnapshot, ExecutionPolicy, ExecutionPositionState, ExecutionInstrument, SmartRoutingDecision } from './ExecutionTypes.js';
 
 export interface RadarZoneWire {
     d?: 'BUY'|'SELL';
@@ -68,6 +71,9 @@ export interface ScoreState {
 }
 
 export interface ImpulseLeg {
+    executionDecision?: SmartRoutingDecision;
+    executionSnapshot?: ExecutionMarketSnapshot;
+    executionDecisionAtMs?: number;
     dir: 'BUY' | 'SELL';
     origin: number;
     extreme: number;
@@ -83,6 +89,11 @@ export interface ImpulseLeg {
 }
 
 export interface RadarState {
+  executionContext?: ExecutionContextState;
+  /** Latest accepted native source, consumed only by explicit rollover signal freeze. */
+  rolloverSignalObservation?: ExecutionObservation;
+  /** Explicit observed-as-of source bundle; missing native channels remain unavailable. */
+  mlRegimeObservations?: Partial<RegimeContextInput>;
   vwapTs?: Record<string, number>;
   biasTs?: Record<string, number>;
   // 🆕 sep-2026 reconstrucción bias HTF (backtest): closes por TF para derivar bias con SMA
@@ -141,6 +152,30 @@ export function extractMgmtOverrides(tfConfig: any): TradeMgmtOverrides | undefi
 }
 
 export interface ActiveTrade {
+    /** Immutable fill-side deposit-currency denominator; never rebuild from current stops/FX. */
+    readonly riskSnapshot?: TradeRiskSnapshot;
+    accountCurrency?: string;
+    riskAccountingStatus?: RiskAccountingStatus;
+    riskAmountAccount?: number;
+    riskBudgetAccount?: number;
+    riskAccountingProvenance?: 'broker_fill' | 'missing_fill_snapshot' | 'snapshot_mismatch' | 'unverified_account_currency';
+    /** Entry-only holds: never infer a no-fill rejection from these flags. */
+    executionIncidentPending?: boolean;
+    executionUncertain?: boolean;
+    closeAccountingPending?: boolean;
+    /** Exact broker fill evidence, never reconstructed from a mutable stop. */
+    rolloverFill?: {
+        schema: 1; positionId: string; positionKey: string; ticker: string; direction: 'BUY'|'SELL';
+        openedAtMs: number; capturedAtMs: number; entryPrice: number; initialSlPrice: number; initialRiskPrice: number;
+        policy: import('./RolloverRuntimeContext.js').RolloverRuntimePolicy;
+    };
+    rolloverTriageState?: import('./RolloverTriageExecutor.js').RolloverExecutionState;
+    rolloverTriageTracked?: boolean;
+    rolloverTriageDurable?: boolean;
+    mlRegimeShadow?: RegimePrediction;
+    executionPolicy?: ExecutionPolicy;
+    executionInstrument?: ExecutionInstrument;
+    executionState?: ExecutionPositionState;
     tradeId: string;
     journalId?: string;       
     ticker: string;
@@ -149,10 +184,15 @@ export interface ActiveTrade {
     tp1Price: number;         
     tp2Price: number;         
     slPrice: number;
+    /** Immutable structural SL captured only for new trades; historical unknown stays absent. */
+    readonly initialSlPrice?: number;
     originalSlPrice?: number;
     targetSlPrice?: number;
     targetSlPending?: boolean;
     targetSlRetries?: number;
+    /** Durable A latch uses the exact broker-calendar period, never a guessed boot date. */
+    rolloverBeApplied?: boolean;
+    rolloverBePeriodKey?: string;
     tp1Hit: boolean;          
     tp2Hit: boolean;          
     slHalfwayHit?: boolean;
@@ -222,6 +262,26 @@ export const SessionSchema = z.object({
 const nonNegativeNumber = z.coerce.number().refine(n => Number.isFinite(n), { message: 'Debe ser un número finito' });
 
 export const AssetSessionConfigSchema = z.object({
+    mlRegimeShadow: z.boolean().optional(),
+    rolloverPolicy: z.object({
+        profile: z.enum(['legacy','rollover_triage_v1']).optional(),
+        freezeSignals: z.boolean().optional(),
+        freezeBeforeReopenMs: z.number().finite().min(0).max(6 * 3600000).optional(),
+        freezeAfterReopenMs: z.number().finite().min(0).max(6 * 3600000).optional(),
+        triage: z.object({
+            maxExtraRiskR: z.number().finite().positive().max(0.30),
+            greenPeakMultiple: z.number().finite().positive(), greenMinR: z.number().finite().min(0),
+            structuralPeakMultiple: z.number().finite().positive(), beMinDistancePeakMultiple: z.number().finite().positive(),
+            severeLossR: z.number().finite().negative(), maxQuoteAgeMs: z.number().finite().positive().max(10000),
+        }).strict().optional(),
+        peakSpread: z.object({ price: z.number().finite().positive(), availableAtMs: z.number().int().nonnegative() }).strict().optional(),
+    }).strict().optional(),
+    executionPolicy: z.object({
+        profile: z.enum(['legacy_v1','microstructure_v1']).optional(),
+        smart: z.boolean().optional(), management: z.boolean().optional(),
+        trailing: z.boolean().optional(), targets: z.boolean().optional(),
+    }).strict().optional(),
+    executionInstrument: z.unknown().optional(),
     minPointsForBuy: nonNegativeNumber.optional(),
     minPointsForSell: nonNegativeNumber.optional(),
     slBufferPercent: nonNegativeNumber.optional(),
