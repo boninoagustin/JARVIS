@@ -21,26 +21,47 @@ fi
 ROSTER="${DETECTION_ROSTER:-AUDCAD AUDJPY EUROPE50 FRA40 JP225 NL25 USDJPY USOIL XAUUSD EURUSD GBPUSD GBPJPY NZDUSD GBPAUD}"
 TRIALS="${DETECTION_TRIALS:-80}"
 APPLIED=0
-SUMMARY="/tmp/detection_tune_$(date +%Y%m%d).log"
+
+# 📝 Log de la corrida (fix 02-nov-2026): SOLO se persisten las líneas con valor de auditoría.
+# Antes se hacía `tee -a` de TODO el stdout y cada corrida dejaba ~2.7 GB, de los cuales el
+# 99.9% era "[SMC-ENGINE] 🕯️ Nueva vela" del replay. Los trials crudos se siguen calculando
+# igual: simplemente se descartan al vuelo con grep (nunca llegan al disco).
+LOG_DIR="/opt/JARVIS/logs/periodic_opt"
+mkdir -p "$LOG_DIR"
+SUMMARY="$LOG_DIR/detection_tune_$(date +%Y%m%d).log"
+MAX_LOG_BYTES=$((20 * 1024 * 1024))   # techo de seguridad: 20 MB por corrida
+KEEP='^(=== |Cargadas:|TUNE [A-Z0-9]+:|CANDIDATO|ACTUAL|Δ|DECISI|TUNE_RESULT|HEALTH_|Pool de salud)'
+
+# Retención: 30 días de resúmenes y limpieza de los logs gigantes heredados de /tmp.
+find "$LOG_DIR" -maxdepth 1 -name 'detection_tune_*.log' -mtime +30 -delete 2>/dev/null
+find /tmp -maxdepth 1 -name 'detection_tune_*.log' -mtime +1 -delete 2>/dev/null
 
 for t in $ROSTER; do
-  echo "=== $(date +%H:%M:%S) TUNE $t ===" | tee -a "$SUMMARY"
+  echo "=== $(date +%H:%M:%S) TUNE $t ===" >> "$SUMMARY"
+  BEFORE=$(wc -l < "$SUMMARY")
   # Heap 2560: los trials no necesitan más (el pico real está en la generación del M5) y
   # evita el OOM que tumbó el sistema con heap 4096.
-  if NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" tune "$TRIALS" 2>/dev/null | tee -a "$SUMMARY" | grep -q "TUNE_RESULT: APPLIED"; then
-    APPLIED=$((APPLIED+1))
+  NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" tune "$TRIALS" 2>/dev/null \
+    | grep -aE "$KEEP" >> "$SUMMARY"
+  if tail -n +$((BEFORE + 1)) "$SUMMARY" | grep -q "TUNE_RESULT: APPLIED"; then
+    APPLIED=$((APPLIED + 1))
+  fi
+  # Techo de seguridad: si algo se descontrola, se conservan las últimas 2000 líneas.
+  if [ "$(stat -c %s "$SUMMARY" 2>/dev/null || echo 0)" -gt "$MAX_LOG_BYTES" ]; then
+    tail -n 2000 "$SUMMARY" > "$SUMMARY.tmp" && mv "$SUMMARY.tmp" "$SUMMARY"
+    echo "=== $(date +%H:%M:%S) AVISO: log recortado a las últimas 2000 líneas (superó 20 MB) ===" >> "$SUMMARY"
   fi
 done
 
-echo "=== $(date +%H:%M:%S) FIN tune semanal. Aplicados: $APPLIED ===" | tee -a "$SUMMARY"
+echo "=== $(date +%H:%M:%S) FIN tune semanal. Aplicados: $APPLIED ===" >> "$SUMMARY"
 if [ "$APPLIED" -gt 0 ]; then
-  echo "Reiniciando JARVIS para cargar los presets nuevos..." | tee -a "$SUMMARY"
-  pm2 restart JARVIS --update-env 2>&1 | tail -2 | tee -a "$SUMMARY"
+  echo "Reiniciando JARVIS para cargar los presets nuevos..." >> "$SUMMARY"
+  pm2 restart JARVIS --update-env 2>&1 | tail -2 >> "$SUMMARY"
   # Re-proteger tras el restart (pm2 no preserva oom_score_adj)
   NEWPID=$(pm2 pid JARVIS 2>/dev/null)
   [ -n "$NEWPID" ] && echo -1000 > "/proc/$NEWPID/oom_score_adj" 2>/dev/null
 fi
 
 # 🆕 oct-2026: refrescar la salud de TODO el pool (detection_health/) para el panel.
-echo "=== $(date +%H:%M:%S) HEALTH-ALL (pool completo) ===" | tee -a "$SUMMARY"
+echo "=== $(date +%H:%M:%S) HEALTH-ALL (pool completo) ===" >> "$SUMMARY"
 bash /opt/JARVIS/scripts/periodic_opt/run_detection_health.sh >> "$SUMMARY" 2>&1
