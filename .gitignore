@@ -37,3 +37,6 @@ radar_states_*.json
 venv/
 scripts/periodic_opt/reports/
 scripts/periodic_opt/opt_out/
+
+# 02-nov-2026: modelos ML rechazados por model_health.ts (auditoría en quarantine.json)
+scripts/hyperopt/models/quarantine/
