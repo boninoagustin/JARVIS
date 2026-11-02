@@ -122,7 +122,16 @@ async function evaluate(ticker: string) {
 
   const now = Math.min(Date.now(), dataEndMs(ticker) ?? Date.now());
   const registeredAt = t.registered_at_ms;
-  if (now - registeredAt < 7 * DAY) { console.log(`  ${ticker}: menos de 7 días de forward, se omite`); return; }
+  if (now <= registeredAt) {
+    const last = new Date(now).toISOString().slice(0, 10);
+    console.log(`  ${ticker}: sin datos forward todavía (el último dato es del ${last}, el registro del ${new Date(registeredAt).toISOString().slice(0, 10)}) — se reevalúa tras el próximo refresh del sábado`);
+    return;
+  }
+  if (now - registeredAt < 7 * DAY) {
+    const days = ((now - registeredAt) / DAY).toFixed(1);
+    console.log(`  ${ticker}: ${days} días de forward (< 7), se omite`);
+    return;
+  }
   const weeks = Math.floor((now - registeredAt) / (7 * DAY));
 
   fs.mkdirSync(path.join(WORK, ticker), { recursive: true });
