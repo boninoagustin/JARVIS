@@ -10,8 +10,8 @@
 //   - Tick Velocity: EWMA del tiempo entre llegadas + z-score normalizado por
 //     hora del día (Welford en 24 buckets UTC) — 10 ticks/s es pánico en Asia
 //     y ruido en NY, hay que medir contra la misma sesión.
-//   - Spread: EWMA + detector de anomalía (spread actual > k × EWMA) usado
-//     como kill-switch de micro-estructura (probable noticia).
+//   - Spread: EWMA limpia (sin rollover/outliers) + cotización bilateral fresca
+//     y detector de anomalía usado como kill-switch de micro-estructura.
 //   - Clasificador de sweeps: dado un nivel barrido, mira hacia atrás en el
 //     ring buffer y evalúa velocidad de ruptura, failure-to-progress
 //     (absorción) y time-to-reclaim para distinguir barrido institucional
@@ -20,16 +20,57 @@
 // Todo es O(1) por tick y sin GC pressure: los buffers se asignan una vez por
 // ticker y se reutilizan circularmente.
 
+import { isRolloverBaselineWindow, isRolloverSpreadWithinLimit } from './RolloverSpreadGate.js';
+
 const RING_CAPACITY = 8192;           // ~últimos minutos de ticks por ticker
 const MAX_LOOKBACK_MS = 120_000;      // ventana máxima del clasificador de sweeps
 const INTERARRIVAL_EWMA_ALPHA = 0.15; // suavizado de tick velocity
 const SPREAD_EWMA_ALPHA = 0.05;       // spread estructural (lento)
 const MIN_SPREAD_SAMPLES = 100;       // no disparar kill-switch sin historia
+const MAX_QUOTE_AGE_MS = 10_000;      // no reutilizar cotizaciones obsoletas
+const MAX_BASELINE_SPREAD_MULT = 1.65; // mismo límite de normalización que rollover gate
+
+export interface BootstrapSpreadConfig {
+    baseSpreadPrice: number;
+    pipSize: number;
+    /** Independent, previously clean reference; never the first live spread. */
+    cleanBaseline?: number;
+}
+
+function defaultBootstrapLimit(ticker: string): number {
+    // Pure FX fallback only, including suffixed test/broker aliases. Other asset
+    // classes require explicit price-unit config from the service (no universal
+    // raw-price cap, no DB/FrictionModel import into this pure module).
+    const fx = /^(USD|EUR|GBP|JPY|AUD|NZD|CAD|CHF|CNH|CNY|SGD|HKD|NOK|SEK|MXN|ZAR|TRY|PLN){2}(?:$|[-._])/;
+    if (!fx.test(ticker.toUpperCase())) return 0;
+    const pip = ticker.slice(3, 6).toUpperCase() === 'JPY' ? 0.01 : 0.0001;
+    return (0.1 + 0.8) * pip;
+}
 
 export interface TickVelocity {
     ticksPerSec: number;
     zScore: number;          // vs misma hora del día (UTC), Welford
     samples: number;
+}
+
+/** Observed tickflow/interarrival-ewma-z/utc-hour/v1 baseline, never legacy fallback. */
+export interface TickVelocitySnapshot extends TickVelocity {
+    observedAtMs: number;
+    availableAtMs: number;
+    baselineHourUtc: number;
+    /** Population variance m2/n of real inter-arrivals in this UTC-hour bucket, ms^2.
+     * Inherited samples is its actual interval count (>50), not a readiness default. */
+    baselineVarianceMs2: number;
+}
+
+export interface SpreadSnapshot {
+    bid: number;
+    ask: number;
+    ts: number;
+    ageMs: number;
+    samples: number;
+    spread: number;
+    baselineSpread: number | null;
 }
 
 export type SweepClass = 'INSTITUTIONAL' | 'RETAIL' | 'UNKNOWN';
@@ -56,9 +97,12 @@ interface TickerFlow {
     head: number;          // próxima posición de escritura
     count: number;         // ticks válidos (saturado en RING_CAPACITY)
     lastTs: number;
+    lastEventTs: number;   // incluye parciales: no resucitar una quote invalidada
     interArrivalEwma: number;   // ms entre ticks (EWMA)
     spreadEwma: number;         // spread estructural (EWMA)
     spreadSamples: number;
+    quote: { bid: number; ask: number; ts: number };
+    quoteValid: boolean;
     hourly: WelfordBucket[];    // Welford de inter-arrival por hora UTC (24)
 }
 
@@ -70,27 +114,50 @@ function createFlow(): TickerFlow {
         head: 0,
         count: 0,
         lastTs: 0,
+        lastEventTs: 0,
         interArrivalEwma: 0,
         spreadEwma: 0,
         spreadSamples: 0,
+        quote: { bid: NaN, ask: NaN, ts: 0 },
+        quoteValid: false,
         hourly: Array.from({ length: 24 }, () => ({ n: 0, mean: 0, m2: 0 })),
     };
 }
 
 class TickFlowEngine {
     private flows = new Map<string, TickerFlow>();
+    private bootstrapLimits = new Map<string, number>();
+    private normalizationFloors = new Map<string, number>();
+
+    /** Configure before quotes. All values are price units, normalized per asset. */
+    public configureBootstrapSpread(ticker: string, config: BootstrapSpreadConfig): void {
+        const { baseSpreadPrice, pipSize, cleanBaseline } = config;
+        if (!Number.isFinite(baseSpreadPrice) || baseSpreadPrice < 0
+            || !Number.isFinite(pipSize) || pipSize <= 0
+            || (cleanBaseline !== undefined && (!Number.isFinite(cleanBaseline) || cleanBaseline <= 0))) {
+            throw new Error('Invalid independent bootstrap spread reference');
+        }
+        const floor = baseSpreadPrice + 0.8 * pipSize;
+        this.normalizationFloors.set(ticker, floor);
+        this.bootstrapLimits.set(ticker, Math.max(floor, 1.65 * (cleanBaseline ?? 0)));
+    }
 
     /**
      * Registra un tick spot. Llamar una sola vez por tick (no por temporalidad).
-     * `ask` puede ser NaN si el broker no lo incluye en el SpotEvent.
+     * Un Bid válido sin Ask conserva analítica de ticks pero invalida la quote.
+     * Eventos atrasados o timestamps inválidos se ignoran completamente.
      */
-    public onTick(ticker: string, ts: number, bid: number, ask: number): void {
-        if (!Number.isFinite(bid) || bid <= 0) return;
+    public onTick(ticker: string, ts: number, bid: number, ask: number, options: { bidTick?: boolean; quoteTs?: number } = {}): void {
+        if (!Number.isFinite(ts) || ts <= 0 || !Number.isFinite(new Date(ts).getTime())) return;
         let f = this.flows.get(ticker);
+        if (f && ts < f.lastEventTs) return;
+        if (f) { f.quoteValid = false; f.lastEventTs = ts; }
+        if (!Number.isFinite(bid) || bid <= 0) return;
         if (!f) { f = createFlow(); this.flows.set(ticker, f); }
+        f.lastEventTs = ts;
 
         // Inter-arrival + velocidad (normalizada por hora del día)
-        if (f.lastTs > 0) {
+        if (options.bidTick !== false && f.lastTs > 0) {
             const dt = ts - f.lastTs;
             if (dt > 0 && dt < 60_000) { // ignorar gaps de desconexión
                 f.interArrivalEwma = f.interArrivalEwma === 0
@@ -104,30 +171,65 @@ class TickFlowEngine {
                 bucket.m2 += delta * (dt - bucket.mean);
             }
         }
-        f.lastTs = ts;
+        if (options.bidTick !== false) f.lastTs = ts;
 
-        // Spread estructural
-        if (Number.isFinite(ask) && ask > bid) {
+        // No aprender spreads extremos: un episodio prolongado no debe
+        // convertirse en la referencia contra la cual se mide a sí mismo.
+        const quoteTs = options.quoteTs ?? ts;
+        if (Number.isFinite(ask) && ask > bid && Number.isFinite(quoteTs)
+            && quoteTs > 0 && quoteTs <= ts && ts - quoteTs <= MAX_QUOTE_AGE_MS) {
             const spread = ask - bid;
-            f.spreadEwma = f.spreadEwma === 0
-                ? spread
-                : f.spreadEwma + SPREAD_EWMA_ALPHA * (spread - f.spreadEwma);
-            f.spreadSamples += 1;
+            f.quote.bid = bid;
+            f.quote.ask = ask;
+            f.quote.ts = quoteTs;
+            f.quoteValid = true;
+            // Until 100 accepted samples, a provisional EWMA is not evidence.
+            // Use only an independent bound so an anomalous first tick neither
+            // seeds a wide baseline nor permanently locks out later clean ticks.
+            const limit = f.spreadSamples < MIN_SPREAD_SAMPLES
+                ? (this.bootstrapLimits.get(ticker) ?? defaultBootstrapLimit(ticker))
+                : Math.max(MAX_BASELINE_SPREAD_MULT * f.spreadEwma,
+                    this.normalizationFloors.get(ticker) ?? defaultBootstrapLimit(ticker));
+            const clean = isRolloverSpreadWithinLimit(spread, limit, bid, ask);
+            if (clean
+                && !isRolloverBaselineWindow(ticker, ts)) {
+                f.spreadEwma = f.spreadEwma === 0
+                    ? spread
+                    : f.spreadEwma + SPREAD_EWMA_ALPHA * (spread - f.spreadEwma);
+                f.spreadSamples += 1;
+            }
         }
+
+        // Ask-only may complete a quote with a cached Bid, but is not a Bid
+        // observation for velocity, ring history or new sweep breaches.
+        if (options.bidTick === false) return;
 
         // Ring buffer
         f.ts[f.head] = ts;
         f.bid[f.head] = bid;
-        f.ask[f.head] = ask;
+        // Preservar ticks Bid reales para sweeps/velocidad, sin inventar Ask.
+        f.ask[f.head] = Number.isFinite(ask) && ask >= bid ? ask : NaN;
         f.head = (f.head + 1) % RING_CAPACITY;
         if (f.count < RING_CAPACITY) f.count += 1;
     }
 
-    /** Velocidad actual de ticks y su z-score contra la misma hora UTC. */
-    public getTickVelocity(ticker: string): TickVelocity | null {
+    /** Unknown broker time invalidates execution evidence, not Bid/history clocks. */
+    public invalidateQuote(ticker: string): void {
+        const f = this.flows.get(ticker);
+        if (f) f.quoteValid = false;
+    }
+
+    /** Inter-arrival z-score (fast ticks are negative), using the decision UTC hour. */
+    public getTickVelocity(ticker: string, nowMs?: number): TickVelocity | null {
         const f = this.flows.get(ticker);
         if (!f || f.interArrivalEwma === 0) return null;
-        const bucket = f.hourly[new Date().getUTCHours()];
+        const decisionMs = nowMs ?? Date.now();
+        // An in-memory aggregate cannot reconstruct history after it has consumed
+        // future observations. Keep the original one-argument contract unchanged.
+        if (nowMs !== undefined && (!Number.isFinite(nowMs)
+            || !Number.isFinite(new Date(decisionMs).getTime())
+            || decisionMs < f.lastEventTs)) return null;
+        const bucket = f.hourly[new Date(decisionMs).getUTCHours()];
         let z = 0;
         if (bucket.n > 50) {
             const sigma = Math.sqrt(bucket.m2 / bucket.n);
@@ -136,19 +238,44 @@ class TickFlowEngine {
         return { ticksPerSec: 1000 / f.interArrivalEwma, zScore: z, samples: bucket.n };
     }
 
-    /** Spread instantáneo (último tick con ask válido), o null si no hay datos. */
-    public getSpread(ticker: string): number | null {
+    /** Timestamped input for the opt-in regime extractor; missing/stale is unknown. */
+    public getTickVelocitySnapshot(ticker: string, nowMs: number, maxAgeMs = MAX_QUOTE_AGE_MS):
+        TickVelocitySnapshot | null {
         const f = this.flows.get(ticker);
-        if (!f || f.count === 0) return null;
-        for (let i = 1; i <= Math.min(f.count, 50); i++) {
-            const idx = (f.head - i + RING_CAPACITY) % RING_CAPACITY;
-            const ask = f.ask[idx];
-            if (Number.isFinite(ask) && ask > f.bid[idx]) return ask - f.bid[idx];
-        }
-        return null;
+        if (!f || !Number.isFinite(maxAgeMs) || maxAgeMs < 0
+            || !Number.isFinite(nowMs) || nowMs < f.lastEventTs
+            || nowMs - f.lastTs > maxAgeMs) return null;
+        const velocity = this.getTickVelocity(ticker, nowMs);
+        if (!velocity) return null;
+        const baselineHourUtc = new Date(nowMs).getUTCHours();
+        const bucket = f.hourly[baselineHourUtc];
+        const baselineVarianceMs2 = bucket.m2 / bucket.n;
+        if (bucket.n <= 50 || !Number.isFinite(baselineVarianceMs2) || baselineVarianceMs2 <= 0) return null;
+        return { ...velocity, observedAtMs: f.lastTs, availableAtMs: f.lastEventTs,
+            baselineHourUtc, baselineVarianceMs2 };
     }
 
-    /** Spread estructural (EWMA lento). Null si aún no hay historia. */
+    /** Quote bilateral positiva <=10s; baseline null hasta 100 muestras limpias. */
+    public getSpreadSnapshot(ticker: string, nowMs = Date.now()): SpreadSnapshot | null {
+        const f = this.flows.get(ticker);
+        if (!f || !f.quoteValid) return null;
+        const ageMs = nowMs - f.quote.ts;
+        if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > MAX_QUOTE_AGE_MS) return null;
+        return {
+            ...f.quote,
+            ageMs,
+            samples: f.spreadSamples,
+            spread: f.quote.ask - f.quote.bid,
+            baselineSpread: this.getStructuralSpread(ticker),
+        };
+    }
+
+    /** Spread bilateral fresco, o null si no hay evidencia ejecutable. */
+    public getSpread(ticker: string, nowMs = Date.now()): number | null {
+        return this.getSpreadSnapshot(ticker, nowMs)?.spread ?? null;
+    }
+
+    /** EWMA limpia persistente. Null antes de 100 muestras aceptadas. */
     public getStructuralSpread(ticker: string): number | null {
         const f = this.flows.get(ticker);
         if (!f || f.spreadSamples < MIN_SPREAD_SAMPLES) return null;
@@ -159,10 +286,10 @@ class TickFlowEngine {
      * Kill-switch de micro-estructura: spread actual anormalmente ancho
      * (probable noticia o iliquidez). Requiere historia suficiente.
      */
-    public isSpreadAnomalous(ticker: string, mult = 3): boolean {
+    public isSpreadAnomalous(ticker: string, mult = 3, nowMs = Date.now()): boolean {
         const f = this.flows.get(ticker);
         if (!f || f.spreadSamples < MIN_SPREAD_SAMPLES || f.spreadEwma <= 0) return false;
-        const current = this.getSpread(ticker);
+        const current = this.getSpread(ticker, nowMs);
         if (current === null) return false;
         return current > mult * f.spreadEwma;
     }

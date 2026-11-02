@@ -12,8 +12,26 @@ import { db } from '../db/memory.js';
 import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { z } from 'zod';
+import { computeTradeRiskR, createTradeRiskSnapshot, type TradeRiskSnapshot } from '../engine/TradeRisk.js';
 
 // ─── Interfaces ───
+
+// Validate persisted evidence, including the monetary denominator, before freezing
+// it again. Passthrough on the journal must not make risk evidence untyped.
+const TradeRiskSnapshotSchema = z.custom<TradeRiskSnapshot>(value =>
+    computeTradeRiskR(0, value as TradeRiskSnapshot) !== null, 'Invalid frozen broker risk'
+).transform(value => createTradeRiskSnapshot(value)!);
+const JournalCloseTimeSchema = z.union([
+    z.number().int().positive().max(8640000000000000),
+    z.string().refine(value => {
+        const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/);
+        if (!m || !Number.isFinite(Date.parse(value))) return false;
+        const date = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+        return date.getUTCMonth() + 1 === Number(m[2]) && date.getUTCDate() === Number(m[3]) &&
+            Number(m[4]) <= 23 && Number(m[5]) <= 59 && Number(m[6]) <= 59 &&
+            Number(m[7] ?? 0) <= 23 && Number(m[8] ?? 0) <= 59;
+    }, 'Expected an actual zoned ISO instant'),
+]);
 
 export const TradeRecordSchema = z.object({
     id: z.string(),
@@ -28,7 +46,15 @@ export const TradeRecordSchema = z.object({
     mixtureConsensus: z.string().optional(),
     timestamp: z.number(),
     date: z.string(),
-    result: z.enum(['WIN', 'LOSS', 'BREAKEVEN', 'PARTIAL_TP1', 'TIMEOUT', 'REVERSAL']).optional(),
+    result: z.enum(['WIN', 'LOSS', 'BREAKEVEN', 'PARTIAL_TP1', 'TIMEOUT', 'REVERSAL', 'SKIP']).nullable().optional(),
+    rMultiple: z.number().finite().nullable().optional(),
+    riskAmountAccount: z.number().finite().positive().nullable().optional(),
+    accountCurrency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
+    riskSnapshot: TradeRiskSnapshotSchema.optional(),
+    riskAccountingStatus: z.enum(['VERIFIED', 'UNVERIFIED', 'INVALID']).optional(),
+    riskAccountingProvenance: z.enum(['broker_fill', 'missing_fill_snapshot', 'snapshot_mismatch', 'unverified_account_currency']).optional(),
+    closedAt: JournalCloseTimeSchema.nullable().optional(),
+    closedAtSource: z.enum(['broker_execution', 'unknown']).optional(),
     pnl: z.number().optional(),
     durationMin: z.number().optional(),
     mode: z.enum(['live', 'backtesting']).optional(),
@@ -53,7 +79,13 @@ export const TradeRecordSchema = z.object({
     bias1H: z.enum(['ALIGNED', 'AGAINST', 'NEUTRAL']).optional(),
     vwapDistance: z.number().optional(),
     tf: z.string().optional()
-}).passthrough();
+}).passthrough().superRefine((record, context) => {
+    const s = record.riskSnapshot;
+    if (s && (s.ticker !== record.ticker || s.direction !== record.direction ||
+        (record.accountCurrency != null && s.currency !== record.accountCurrency))) {
+        context.addIssue({ code: 'custom', path: ['riskSnapshot'], message: 'Risk identity does not match journal' });
+    }
+});
 
 export type TradeRecord = z.infer<typeof TradeRecordSchema>;
 
@@ -169,7 +201,15 @@ export async function recordResult(
             return false;
         }
 
-        await docRef.update({ result, pnl: pnl || null, closedAt: Date.now() });
+        const existing = doc.data();
+        if (existing?.ctraderPositionId || existing?.ctraderStatus === 'EXECUTED' ||
+            existing?.executionIncidentPending || existing?.executionUncertain || existing?.closeAccountingPending) {
+            console.warn(`[JOURNAL] #${tradeId}: broker result requires complete deal accounting, not a manual percentage.`);
+            return false;
+        }
+        await docRef.update({ result, pnl: pnl ?? null, closedAt: Date.now(), closedAtSource: 'unknown',
+            rMultiple: null, riskAmountAccount: null, riskAccountingStatus: 'UNVERIFIED',
+            riskAccountingProvenance: 'missing_fill_snapshot' });
         try {
             const { invalidateRiskCache } = await import('../engine/PortfolioModel.js');
             invalidateRiskCache();

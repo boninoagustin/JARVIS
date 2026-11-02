@@ -7,7 +7,7 @@ export class PivotEngine {
     private history: OHLCV[] = [];
     private currentIndex: number = 0;
 
-    constructor(leftLen: number = 5, rightLen: number = 5) {
+    constructor(leftLen: number = 5, rightLen: number = 5, private options: { allowRightTies?: boolean } = {}) {
         this.leftLen = leftLen;
         this.rightLen = rightLen;
     }
@@ -45,9 +45,9 @@ export class PivotEngine {
                 if (current.high >= pivotCandle.high) isHigh = false;
                 if (current.low <= pivotCandle.low) isLow = false;
             } else {
-                // Right bars: current must be < pivot (so pivot is strictly > current)
-                if (current.high >= pivotCandle.high) isHigh = false;
-                if (current.low <= pivotCandle.low) isLow = false;
+                // Plateau representative: left remains strict; equality is allowed only to the right.
+                if (this.options.allowRightTies ? current.high > pivotCandle.high : current.high >= pivotCandle.high) isHigh = false;
+                if (this.options.allowRightTies ? current.low < pivotCandle.low : current.low <= pivotCandle.low) isLow = false;
             }
         }
 
@@ -60,6 +60,7 @@ export class PivotEngine {
             return {
                 index: this.currentIndex - this.rightLen - 1,
                 timestamp: pivotCandle.timestamp,
+                ...(this.options.allowRightTies ? { availableAt: candle.timestamp } : {}),
                 price: pivotCandle.high,
                 type: 'High',
                 isBroken: false,
@@ -74,6 +75,7 @@ export class PivotEngine {
             return {
                 index: this.currentIndex - this.rightLen - 1,
                 timestamp: pivotCandle.timestamp,
+                ...(this.options.allowRightTies ? { availableAt: candle.timestamp } : {}),
                 price: pivotCandle.low,
                 type: 'Low',
                 isBroken: false,

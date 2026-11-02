@@ -4,9 +4,44 @@
 import { OHLCV } from '../../db/market_data.js';
 export { OHLCV };
 
+import type { SignalProfile, SignalAblation, DirectionalImpulseConfig, SignalFvgConfig } from './signal_profiles.js';
+
 export type Direction = 'Bullish' | 'Bearish';
 
+/** Confirmed reversal availability, independent of the source/broken pivot time. */
+export interface ConfirmedCHoCH {
+    direction: Direction;
+    confirmed: true;
+    observedAt: number;
+    availableAt: number;
+}
+
+/** Immutable per-bar diagnostics; never substituted for legacy Z-VWAP/ML. */
+export interface DirectionalImpulseSnapshot {
+    readonly timestamp: number;
+    readonly sampleCount: number;
+    readonly ready: boolean;
+    readonly zUp: number;
+    readonly zDn: number;
+    readonly upSmooth: number;
+    readonly dnSmooth: number;
+    readonly atr: number;
+    readonly atrNormalizedRange: number;
+    readonly volumeRatio: number;
+    readonly priorVolumeMean: number | null;
+}
+
+export interface StructuralSignalMetadata {
+    breakTimestamp?: number;
+    availableAt?: number;
+    signalProfile?: SignalProfile;
+}
+
 export interface SMCPreset {
+    signal_profile?: SignalProfile;
+    signal_ablation?: Partial<SignalAblation>;
+    signal_impulse?: DirectionalImpulseConfig;
+    signal_fvg?: SignalFvgConfig;
     name: string;
     risk_level: number; // 1 (Ultra Cons) to 5 (Ultra Agre)
     asset_type: 'forex' | 'indices' | 'crypto';
@@ -46,11 +81,11 @@ export interface SMCPreset {
 }
 
 export interface SMCEvents {
-    EVENT_BOS: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean };
-    EVENT_CHOCH: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean };
+    EVENT_BOS: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean } & StructuralSignalMetadata;
+    EVENT_CHOCH: { direction: Direction; price: number; timestamp: number; crtOrigin?: boolean; isCoiled?: boolean; observedAt?: number; confirmed?: true } & StructuralSignalMetadata;
     EVENT_OB_CREATED: { ob: OrderBlock };
     EVENT_BREAKER_CREATED: { ob: OrderBlock };
-    EVENT_SWEEP: { direction: Direction; price: number; sweepType: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number };
+    EVENT_SWEEP: { direction: Direction; price: number; sweepType: 'CRT' | 'TL' | 'LIQ_GRAB' | 'RANGE'; timestamp: number; availableAt?: number; originTimestamp?: number; signalProfile?: SignalProfile };
     EVENT_IFVG_CREATED: { fvg: Imbalance };
     EVENT_DIVERGENCE: { direction: Direction; divergenceType: 'Regular' | 'Hidden'; timestamp: number; pivotTimestamp: number; divergence?: any };
     ZONE_TOUCHED: { direction: Direction; category: string; score: number; top: number; bottom: number };
@@ -60,6 +95,7 @@ export interface SMCEvents {
 export type SMCEvent = { [K in keyof SMCEvents]: { type: K } & SMCEvents[K] }[keyof SMCEvents];
 
 export interface Pivot {
+    availableAt?: number;
     index: number;
     timestamp: number;
     price: number;
@@ -90,6 +126,7 @@ export interface OrderBlock {
 }
 
 export interface Imbalance {
+    availableAt?: number;
     id: string;
     timestamp: number;
     direction: Direction;
@@ -102,6 +139,7 @@ export interface Imbalance {
 }
 
 export interface SMCState {
+    directionalImpulse?: DirectionalImpulseSnapshot | null;
     currentTrend: 'Bullish' | 'Bearish' | 'Neutral';
     simpleTrend?: 'Bullish' | 'Bearish' | 'Neutral';
     pivotsHigh: Pivot[];
@@ -113,6 +151,7 @@ export interface SMCState {
     // Market Structure
     lastBOS?: Pivot;
     lastCHoCH?: Pivot;
+    lastCHoCHEvent?: ConfirmedCHoCH;
     lastDivergence?: { direction: Direction; type: 'Regular' | 'Hidden'; timestamp: number; pivotTimestamp: number; price: number; top?: number; bottom?: number; score?: number; rsiDiff?: number; };
     lastSweep?: { direction: Direction; type: string; timestamp: number };
     

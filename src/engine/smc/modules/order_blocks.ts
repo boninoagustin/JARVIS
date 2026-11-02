@@ -1,4 +1,36 @@
-import { OHLCV, OrderBlock, SMCPreset } from '../types.js';
+import { OHLCV, OrderBlock, Imbalance, SMCPreset } from '../types.js';
+
+export interface ActiveFVGSnapshot {
+    zones: readonly Imbalance[];
+    observedAt: number;
+}
+
+/** Score-only adjacency: existing k=0..2 formation window plus closed-interval
+ * contact/overlap with the selected OB. No invented ATR distance bonus.
+ * Legacy availability is reconstructed from the actual third processed bar;
+ * explicit availability must not precede that bar or exceed this observation.
+ */
+export function hasActiveAdjacentFVG(history: readonly OHLCV[], obIdx: number, isBull: boolean,
+    top: number, bottom: number, snapshot: ActiveFVGSnapshot): boolean {
+    if (![top, bottom, snapshot.observedAt].every(Number.isFinite) || top <= bottom) return false;
+    for (let k = 0; k <= 2; k++) {
+        const older = history[obIdx + k], middle = history[obIdx + k + 1], newer = history[obIdx + k + 2];
+        if (!older || !middle || !newer) break;
+        if (![older.timestamp, middle.timestamp, newer.timestamp].every(Number.isFinite) ||
+            !(older.timestamp < middle.timestamp && middle.timestamp < newer.timestamp) || newer.timestamp > snapshot.observedAt) continue;
+        if (!(isBull ? newer.low > older.high : newer.high < older.low)) continue;
+        if (snapshot.zones.some(fvg => {
+            const availableAt = fvg.availableAt !== undefined ? fvg.availableAt : newer.timestamp;
+            return !fvg.mitigated && !fvg.is_ifvg && fvg.direction === (isBull ? 'Bullish' : 'Bearish') &&
+                fvg.timestamp === middle.timestamp && Number.isFinite(availableAt) &&
+                availableAt >= newer.timestamp && availableAt <= snapshot.observedAt &&
+                Number.isFinite(fvg.top) && Number.isFinite(fvg.bottom) && fvg.top > fvg.bottom &&
+                top >= fvg.bottom && bottom <= fvg.top;
+        })) return true;
+    }
+    return false;
+}
+
 export interface OBContext {
     vwapStatus?: 'OVER' | 'UNDER';
     currentTrend?: 'Bullish' | 'Bearish' | 'Neutral';
@@ -13,6 +45,7 @@ export interface OBContext {
     isLegacy?: boolean;
     isChoch?: boolean;
     hasFvgNear?: boolean;
+    activeFVGSnapshot?: ActiveFVGSnapshot; // Structural-only, supplied after native FVG lifecycle.
     htfAligned?: (isBull: boolean) => boolean;
 }
 
@@ -204,7 +237,12 @@ export class OrderBlockEngine {
         const avgVol = sumVol / Math.max(1, breakIdx - searchStart + 1);
 
         const isChoch = ev.type === 'EVENT_CHOCH';
-        const structContext = { ...context, isChoch };
+        const structContext = {
+            ...context, isChoch,
+            hasFvgNear: context?.activeFVGSnapshot
+                ? hasActiveAdjacentFVG(this.history, obCandleIdx, isBull, obTop, obBtm, context.activeFVGSnapshot)
+                : context?.hasFvgNear
+        };
         const score = this.calculateScore(obCandle, dispCandle, swp, isBull, avgVol, structContext);
         const category = isChoch ? 'CHoCH' : this.scoreToMedal(score);
 
@@ -352,11 +390,12 @@ export class OrderBlockEngine {
             }
         }
 
-        if (context?.htfTrend) {
-            // Se debe verificar cómo se evalúa htfAligned, o usar htfTrend directamente
-            if (isBull && context.htfTrend === 'Bullish') { score += 2; }
-            else if (!isBull && context.htfTrend === 'Bearish') { score += 2; }
-        }
+        // Prefer the caller's timeframe-aware alignment policy. Old direct callers
+        // without a callback keep their original htfTrend fallback (same +2).
+        const htfAligned = context?.htfAligned
+            ? context.htfAligned(isBull)
+            : context?.htfTrend === (isBull ? 'Bullish' : 'Bearish');
+        if (htfAligned) { score += 2; }
 
         if (context?.hasIFVGOverlap) {
             const obTop = isBull ? obCandle.high : Math.max(obCandle.open, obCandle.close);

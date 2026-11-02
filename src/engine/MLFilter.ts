@@ -9,6 +9,7 @@
  */
 
 import type { RadarState } from './Types.js';
+import { validateModel, LEGACY_FEATURE_NAMES, LEGACY_INFERENCE_PROFILE } from './MLModelValidation.js';
 
 // ── Tipos del modelo ──
 interface XGBoostTree {
@@ -204,29 +205,12 @@ export function setMLGateOverride(ticker: string, enabled: boolean): void {
  */
 export function loadModelFromJSON(json: string | object, ticker?: string): boolean {
   try {
-    const exported: MLModelExport = typeof json === 'string' ? JSON.parse(json) : json;
-    const meta = exported.meta;
-
-    const booster = exported.xgboost_model?.learner?.gradient_booster?.model;
-    const trees: XGBoostTree[] = [];
-    const collect = (obj: any) => {
-      if (!obj || typeof obj !== 'object') return;
-      if (Array.isArray(obj)) {
-        if (obj.length > 0 && typeof obj[0] === 'object' &&
-            (obj[0].split_indices !== undefined || obj[0].split !== undefined || obj[0].leaf !== undefined)) {
-          trees.push(...obj); return;
-        }
-        for (const item of obj) collect(item);
-        return;
-      }
-      if (obj.split_indices !== undefined || obj.split !== undefined || obj.leaf !== undefined) trees.push(obj);
-      for (const val of Object.values(obj)) collect(val);
-    };
-    collect(booster || exported.xgboost_model);
-    if (trees.length === 0) return false;
+    const { trees, meta } = validateModel(json, LEGACY_FEATURE_NAMES, LEGACY_INFERENCE_PROFILE);
     const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+    // Format/log before installing: validation or a throwing logger cannot poison the cache.
+    const message = `[MLFilter] ✅ ${ticker ? ticker.toUpperCase() : 'default'}: ${trees.length} trees, acc=${meta.accuracy.toFixed(3)}, f1=${meta.f1.toFixed(3)}`;
+    console.log(message);
     _models.set(key, { trees, meta });
-    console.log(`[MLFilter] ✅ ${ticker ? ticker.toUpperCase() : 'default'}: ${trees.length} trees, acc=${meta.accuracy.toFixed(3)}, f1=${meta.f1.toFixed(3)}`);
     return true;
   } catch (e: any) {
     console.error(`[MLFilter] ❌ Error: ${e.message}`);

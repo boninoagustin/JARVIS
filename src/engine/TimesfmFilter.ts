@@ -30,11 +30,18 @@ export interface TimesfmForecast {
     /** ts (ms) de la vela cuyo cierre originó el forecast (contexto = cierres ≤ ts) */
     ts: number;
     horizon: number;
-    point: number[];   // media por paso
+    point?: number[];   // media por paso; older caches may contain only quantiles
     q10: number[];
     q50: number[];
     q90: number[];
     model_version?: string;
+    ticker?: string;
+    tf?: number;
+    schema_version?: number;
+    timestamp_convention?: string;
+    contextCloseTimeMs?: number;
+    computedAt?: number;
+    availableAt?: number;
 }
 
 export interface TimesfmFilterConfig {
@@ -73,6 +80,12 @@ export interface TimesfmFilterConfig {
     tp2Dynamic?: 'off' | 'q90';
     /** Paso (index en el forecast) del q90 usado como TP2. Default 2 (30min en M15). */
     tp2Q90Step?: number;
+    /** Opt-in only: absent preserves legacy HTTP decisions. */
+    liveTransport?: 'legacy_http' | 'ram_shadow' | 'ram';
+    liveModelVersion?: string;
+    liveSchemaVersion?: number;
+    liveRetryMs?: number;
+    liveMaxAttempts?: number;
 }
 
 export const DEFAULT_TIMESFM_CONFIG: TimesfmFilterConfig = {
@@ -136,6 +149,7 @@ export function evaluateTimesfmFilter(
     const spreadAtr = (spreadSum / H) / atr;
 
     const delta = median - currentPrice;
+    if (!Number.isFinite(median) || !Number.isFinite(spreadAtr) || !Number.isFinite(delta)) return degradedTimesfmDecision('cálculo no finito');
     const eps = cfg.dirEpsAtr * atr;
     const forecastDir: 'BULL' | 'BEAR' | 'FLAT' = delta > eps ? 'BULL' : delta < -eps ? 'BEAR' : 'FLAT';
     const highConviction = spreadAtr <= cfg.spreadAtrHighConv;
@@ -195,6 +209,49 @@ export function appendTimesfmAudit(auditPath: string | undefined, rec: Record<st
     } catch { /* best-effort, nunca romper el flujo */ }
 }
 
+/** Real period map; never strip digits from H1/D1 or guess an unknown TF. */
+export function normalizeTimesfmTf(tf: string | number): number | null {
+    const map: Record<string, number> = { M1:1,M5:5,M15:15,M30:30,H1:60,H4:240,D1:1440,D:1440,W1:10080,W:10080 };
+    const token = String(tf).toUpperCase();
+    if (map[token]) return map[token];
+    if (!/^[1-9]\d*$/.test(token)) return null;
+    const n = Number(token);
+    return [1,5,15,30,60,240,1440,10080].includes(n) ? n : null;
+}
+
+/** Live transport guard; optional identity keeps old valid HTTP payloads compatible.
+ * Strict RAM consumers additionally require the explicit v2 close/availability envelope.
+ * Historical cache loaders deliberately do not apply this live identity contract. */
+export function validateTimesfmForecast(value: unknown, expected: {
+    ticker: string; tfMinutes: number; nowMs: number; maxAgeMs: number;
+    strict?: boolean; modelVersion?: string; schemaVersion?: number;
+}): string | null {
+    const f = value as TimesfmForecast & {computed_at?: number};
+    if (!Number.isSafeInteger(expected.nowMs) || normalizeTimesfmTf(expected.tfMinutes)!==expected.tfMinutes || !Number.isFinite(expected.maxAgeMs) || expected.maxAgeMs<0) return 'reloj/TF/edad inválido';
+    if (!f || typeof f !== 'object') return 'forecast ausente';
+    // Validate the legacy field without guessing or relabelling its ts convention.
+    if (f.computed_at !== undefined && (!Number.isSafeInteger(f.computed_at) || f.computed_at < f.ts || f.computed_at > expected.nowMs)) return 'computed_at inválido/futuro';
+    if (!Number.isSafeInteger(f.ts) || f.ts <= 0 || f.ts > expected.nowMs) return 'timestamp inválido/futuro';
+    if (expected.nowMs - f.ts > expected.maxAgeMs) return 'forecast stale';
+    if (!Number.isInteger(f.horizon) || f.horizon < 1 || f.horizon > 256) return 'horizon inválido';
+    const arrays = [f.q10, f.q50, f.q90];
+    if (arrays.some(a => !Array.isArray(a) || a.length !== f.horizon || !a.every(x => typeof x === 'number' && Number.isFinite(x)))) return 'cuantiles inválidos';
+    if (f.point !== undefined && (!Array.isArray(f.point) || f.point.length !== f.horizon || !f.point.every(Number.isFinite))) return 'point inválido';
+    for (let i=0;i<f.horizon;i++) if (f.q10[i]>f.q50[i] || f.q50[i]>f.q90[i]) return 'cuantiles cruzados';
+    if ((f.ticker !== undefined || expected.strict) && (typeof f.ticker !== 'string' || f.ticker.toLowerCase() !== expected.ticker.toLowerCase())) return 'ticker incorrecto';
+    if ((f.tf !== undefined || expected.strict) && normalizeTimesfmTf(f.tf!) !== expected.tfMinutes) return 'TF incorrecto';
+    if (expected.modelVersion !== undefined && f.model_version !== expected.modelVersion) return 'modelo incorrecto';
+    if (expected.strict || f.schema_version !== undefined) {
+        if (f.schema_version !== (expected.schemaVersion ?? 2) || f.timestamp_convention !== 'context_close_ms_v2') return 'schema/convenio incorrecto';
+        if (f.contextCloseTimeMs !== f.ts || f.ts % (expected.tfMinutes * 60000) !== 0 || !Number.isSafeInteger(f.computedAt) || !Number.isSafeInteger(f.availableAt) || f.computedAt! < f.ts || f.availableAt! < f.computedAt! || f.availableAt! > expected.nowMs) return 'disponibilidad inválida/futura';
+    }
+    return null;
+}
+
+export function degradedTimesfmDecision(reason: string): TimesfmDecision {
+    return { action:'APPROVE',riskMult:1,forecastDir:'FLAT',highConviction:false,spreadAtr:0,forecastMedian:0,reason:`DEGRADADO: ${reason} → filtro salteado`,degraded:true };
+}
+
 // ─── Cliente vivo ────────────────────────────────────────────────────────────
 
 /**
@@ -226,9 +283,9 @@ export async function fetchLiveTimesfmDecision(args: {
         return degrade(`bridge inalcanzable (${e?.name === 'TimeoutError' ? `timeout ${cfg.latencyBudgetMs}ms` : e?.message})`);
     }
 
-    if (!forecast?.q50?.length) return degrade('forecast vacío del bridge');
-    const ageMs = Date.now() - forecast.ts;
-    if (ageMs > cfg.maxForecastAgeMs) return degrade(`forecast stale (${Math.round(ageMs / 60000)}min > ${Math.round(cfg.maxForecastAgeMs / 60000)}min)`);
+    const invalid = validateTimesfmForecast(forecast, {ticker,tfMinutes,nowMs:Date.now(),maxAgeMs:cfg.maxForecastAgeMs});
+    if (invalid) return degrade(invalid);
+    if (!Number.isFinite(currentPrice) || !Number.isFinite(atr14) || atr14 <= 0 || !Number.isFinite(smcPoints)) return degrade('inputs inválidos');
 
     return evaluateTimesfmFilter(forecast, signalDir, currentPrice, atr14, smcPoints, cfg);
 }

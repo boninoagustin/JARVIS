@@ -15,7 +15,10 @@ import { bot } from '../bot/telegram.js';
 import { config } from '../config.js';
 import { executeMarketOrder, isCTraderReady, type CTraderOrderParams, type CTraderOrderResult } from './ctrader.js';
 import { db } from '../db/memory.js';
-import { updateTradePositionId, finalizeClosedPositionFromDeals } from '../db/trading.js';
+import { invalidateRiskCache } from '../engine/PortfolioModel.js';
+import { commitTradeCloseAccounting } from '../engine/TradeAccountingPersistence.js';
+import { buildExecutionNotice } from '../engine/ExecutionNotice.js';
+import { globalState, hasUnresolvedExecutionIncidents, recheckLiveExecutionRisk, retainExecutionIncident, updateTradePositionId, finalizeClosedPositionFromDeals } from '../db/trading.js';
 
 // ─── Pending Confirmations Store ───
 
@@ -238,39 +241,85 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
         tp1Price: pending.tp1Price,
         tp2Price: pending.tp2Price,
         tradeId: pending.tradeId,
+        beforeExecution: () => recheckLiveExecutionRisk(pending.ticker),
         riskPercent: config.CTRADER_RISK_PERCENT * (pending.riskMult ?? 1), // 🆕 TimesFM F1
     };
 
-    const result: CTraderOrderResult = await executeMarketOrder(orderParams);
+    if (hasUnresolvedExecutionIncidents()) {
+        await bot.api.sendMessage(chatId, '⚠️ Nuevas entradas retenidas: ejecución/contabilidad pendiente de reconciliación.').catch(() => {});
+        return;
+    }
+    // Approval may arrive after another position closes or policy changes. The
+    // user approves this candidate, not a bypass of current account/asset limits.
+    let riskBlock: string | null;
+    try { riskBlock = await recheckLiveExecutionRisk(pending.ticker); }
+    catch { riskBlock = 'risk-data-unavailable: manual approval recheck failed'; }
+    if (riskBlock) {
+        const candidate = globalState.activeTrades.get(tradeId);
+        if (!candidate?.ctraderPositionId && !candidate?.executionUncertain && !candidate?.executionIncidentPending) {
+            globalState.activeTrades.delete(tradeId);
+            if (db) {
+                await db.collection('active_trades').doc(tradeId).delete().catch(() => {});
+                if (pending.journalId) await db.collection('trade_journal').doc(pending.journalId).update({
+                    result: 'SKIP', ctraderStatus: 'ABORTED', skipReason: riskBlock,
+                }).catch(() => {});
+            }
+        }
+        await bot.api.sendMessage(chatId, `⚠️ Entrada no enviada: ${riskBlock}`).catch(() => {});
+        return;
+    }
+    let result: CTraderOrderResult | null;
+    try { result = await executeMarketOrder(orderParams); }
+    catch (error: any) { result = { success: false, executionUncertain: true, error: error?.message }; }
 
-    if (result.success) {
+    if (result?.success && result.positionId) {
+        // Persist the exact broker denominator before announcing success. Never turn a
+        // persistence failure after a fill into an EXECUTION_FAILED/aborted position.
+        const riskFields = result.riskSnapshot
+            ? { riskSnapshot: result.riskSnapshot, accountCurrency: result.riskSnapshot.currency, riskAccountingStatus: 'VERIFIED' }
+            : { riskAccountingStatus: 'UNVERIFIED' };
+        try {
+            await updateTradePositionId(tradeId, result.positionId, result.riskSnapshot);
+            if (!db) throw new Error('Contabilidad no disponible tras el fill');
+            const normPayload: Record<string, unknown> = {
+                ctraderPositionId: result.positionId,
+                ctraderLots: result.lots,
+                ctraderExecutedPrice: result.executedPrice,
+                entryPrice: Number(result.executedPrice) || pending.entryPrice,
+                slPrice: result.riskSnapshot?.initialSlPrice ?? pending.slPrice,
+                initialSlPrice: result.riskSnapshot?.initialSlPrice ?? pending.slPrice,
+                tp1Price: pending.tp1Price,
+                ...(Number.isFinite(result.riskBudgetAccount) ? { riskBudgetAccount: result.riskBudgetAccount } : {}),
+                ...riskFields,
+            };
+            if (pending.tp2Price !== undefined && pending.tp2Price !== null) normPayload.tp2Price = pending.tp2Price;
+            if (pending.journalId) await db.collection('trade_journal').doc(pending.journalId).update({
+                ...normPayload, ctraderStatus: 'EXECUTED', ctraderDemo: config.CTRADER_DEMO,
+            });
+            await db.collection('active_trades').doc(tradeId).update(normPayload);
+        } catch (error: any) {
+            await retainExecutionIncident(tradeId, pending.journalId, result);
+            console.error(`[CTRADER_CONFIRM] Posición ${result.positionId} ejecutada; contabilidad pendiente:`, error?.message);
+            await bot.api.sendMessage(chatId, `⚠️ Posición ${result.positionId} ejecutada en cTrader, pero no se pudo confirmar la persistencia de su riesgo. Requiere reconciliación; no se reintentó la orden.`).catch(() => {});
+            return;
+        }
         // Ejecución exitosa de la nueva posición. Si hay un SAR pendiente, cerrar la vieja ahora.
         if (pending.sarPendingClose) {
+            const old = pending.sarPendingClose;
+            await retainExecutionIncident(old.tradeId, old.journalId, { success: false, positionId: old.ctraderPositionId, executionUncertain: !old.ctraderPositionId, error: 'SAR close accounting pending' });
             try {
-                if (pending.sarPendingClose.ctraderPositionId) {
+                if (old.ctraderPositionId) {
                     const ctrader = await import('./ctrader.js');
-                    await ctrader.closePosition(pending.sarPendingClose.ctraderPositionId);
-                    // 🛡️ 24-sep-2026: PnL REAL del cierre por reversión (antes solo
-                    // 'REVERSAL' sin PnL → quedaba '—' para siempre en el Diario).
-                    const jid = pending.sarPendingClose.journalId;
-                    const fin = await finalizeClosedPositionFromDeals(pending.sarPendingClose.ctraderPositionId, pending.sarPendingClose);
-                    if (fin && jid && db) {
-                        db.collection('trade_journal').doc(jid).set(
-                            { result: fin.result, rMultiple: fin.rMultiple, ctrader_real_pnl: fin.pnl, balanceAfterUsd: fin.balanceAfterUsd, slHit: fin.slHit, reversalClosed: true, reconciled: true, closedAt: new Date().toISOString() },
-                            { merge: true }
-                        ).catch(() => {});
-                        console.log(`[SAR] ✅ #${jid} finalizado por reversión: ${fin.result} (pnl=$${fin.pnl.toFixed(2)}, ${fin.rMultiple}R)`);
-                    } else if (jid) {
-                        const { recordResult } = await import('./journal.js');
-                        recordResult(jid, 'REVERSAL').catch(() => {});
-                        console.warn(`[SAR] ⚠️ Sin deals tras cierre por reversión #${jid} — queda REVERSAL sin PnL.`);
+                    const closed = await ctrader.closePosition(old.ctraderPositionId);
+                    const fin = closed ? await finalizeClosedPositionFromDeals(old.ctraderPositionId, old) : null;
+                    if (fin && fin.closedAt && fin.closedAtSource === 'broker_execution' && db) {
+                        await commitTradeCloseAccounting(db, old.journalId || old.tradeId, fin, { reversalClosed: true });
+                        await db.collection('active_trades').doc(old.tradeId).delete();
+                        globalState.activeTrades.delete(old.tradeId);
                     }
                 }
-                const { globalState } = await import('../db/trading.js');
-                globalState.activeTrades.delete(pending.sarPendingClose.tradeId);
-                if (db) db.collection('active_trades').doc(pending.sarPendingClose.tradeId).delete().catch(() => {});
             } catch (e) {
-                console.error('[SAR] Error cierre diferido en confirmación manual:', e);
+                console.error('[SAR] Cierre/contabilidad pendiente en confirmación manual:', e);
             }
         }
 
@@ -290,49 +339,19 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
             await bot.api.sendMessage(chatId, successText, { parse_mode: 'HTML' });
         } catch {}
 
-        // Update Firestore journal & active_trades with cTrader position ID
-        if (db) {
-            if (pending.journalId) {
-                db.collection('trade_journal').doc(pending.journalId).update({
-                    ctraderPositionId: result.positionId,
-                    ctraderLots: result.lots,
-                    ctraderExecutedPrice: result.executedPrice,
-                    ctraderStatus: 'EXECUTED',
-                    ctraderDemo: config.CTRADER_DEMO,
-                }).catch(() => {});
-            }
-
-            // Also update active_trades
-            // 🛡️ FIX (30-sep-2026): normalizar niveles al OTE ejecutado (misma divergencia
-            // radar/OTE que en modo AUTO: el pre-trade del radar puede traer entry/SL/TP
-            // distintos de los que confirmó el usuario y ejecutó el broker).
-            const normPayload: Record<string, unknown> = {
-                ctraderPositionId: result.positionId,
-                ctraderLots: result.lots,
-                ctraderExecutedPrice: result.executedPrice,
-                entryPrice: Number(result.executedPrice) || pending.entryPrice,
-                slPrice: pending.slPrice,
-                initialSlPrice: pending.slPrice,
-                tp1Price: pending.tp1Price,
-            };
-            if (pending.tp2Price !== undefined && pending.tp2Price !== null) normPayload.tp2Price = pending.tp2Price;
-            db.collection('active_trades').doc(tradeId).update(normPayload).catch(() => {});
-        }
-
-        if (result.positionId) {
-            updateTradePositionId(tradeId, result.positionId);
-        }
-
         console.log(`[CTRADER_CONFIRM] 🎉 Trade ejecutado: ${pending.ticker} ${pending.direction} | ${result.lots} lotes @ ${result.executedPrice} | posID: ${result.positionId}`);
+    } else if (await retainExecutionIncident(tradeId, pending.journalId, result)) {
+        await bot.api.sendMessage(chatId, `⚠️ Ejecución pendiente de reconciliación${result?.positionId ? ` (posID ${result.positionId})` : ''}. No se reintentó la orden; nuevas entradas retenidas.`).catch(() => {});
     } else {
-        // Error — notify user
-        const errorText = `❌ <b>ERROR DE EJECUCIÓN</b>\n\n` +
-            `${result.error}\n\n` +
+        // Verified no-fill rejection only — notify user
+        const notice = buildExecutionNotice(result.error, 'MANUAL');
+        const errorText = `${notice.headingHtml}\n\n` +
+            `${notice.reasonHtml}\n\n` +
             `El trade fue registrado en el Journal pero NO se ejecutó en cTrader.`;
 
         try {
             await bot.api.editMessageReplyMarkup(chatId, messageId, {
-                reply_markup: { inline_keyboard: [[{ text: '❌ ERROR DE EJECUCIÓN', callback_data: 'noop' }]] }
+                reply_markup: { inline_keyboard: [[{ text: notice.buttonText, callback_data: 'noop' }]] }
             });
             
             await bot.api.sendMessage(chatId, errorText, { parse_mode: 'HTML' });
@@ -350,7 +369,6 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
 
         // 🛡️ FIX: limpiar el trade de active_trades (RAM + Firestore) para que el gestor
         // no lo marque LOSS por un trade que nunca se abrió en cTrader.
-        const { globalState } = await import('../db/trading.js');
         globalState.activeTrades.delete(tradeId);
         if (db) db.collection('active_trades').doc(tradeId).delete().catch(() => {});
 

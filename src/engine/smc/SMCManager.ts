@@ -1,9 +1,30 @@
 import { SMCEngine } from './SMCEngine.js';
+import {buildRolloverFreezeContext, type RolloverRuntimePolicy} from '../RolloverRuntimeContext.js';
 import { OHLCV } from './types.js';
 import { broadcastCandle, broadcastEvent, broadcastState } from '../../services/ws_server.js';
 import { loadOptimizedPreset } from './smc_config.js';
 class SMCManager {
     private engines: Map<string, SMCEngine> = new Map();
+    private rolloverPolicies = new Map<string, RolloverRuntimePolicy>();
+
+    /** Explicit runtime opt-in only; never reads Firestore or strategy presets. */
+    public configureRolloverPolicy(ticker: string, policy?: RolloverRuntimePolicy): void {
+        if (!policy || policy.profile !== 'rollover_triage_v1') this.rolloverPolicies.delete(ticker);
+        else this.rolloverPolicies.set(ticker, structuredClone(policy));
+    }
+    private periodMs(period: string): number {
+        return ({M5:300000,M15:900000,M30:1800000,H1:3600000,H4:14400000,D1:86400000,W1:604800000} as Record<string,number>)[period] ?? NaN;
+    }
+    private applyHTFContext(engine: SMCEngine, ticker: string, targetHTF: string, trend: string, bias: string): void {
+        const sources = [this.engines.get(`${ticker}:${targetHTF}`), this.engines.get(`${ticker}:W1`)];
+        const timestamps = sources.map(e => e?.lastProcessedTs);
+        const interval = timestamps.every(t => Number.isFinite(t)) ? {
+            startMs: Math.min(...timestamps as number[]),
+            endMs: Math.max(timestamps[0]! + this.periodMs(targetHTF), timestamps[1]! + this.periodMs('W1')),
+        } : undefined;
+        const freeze = buildRolloverFreezeContext(ticker, interval?.startMs ?? NaN, interval?.endMs ?? NaN, this.rolloverPolicies.get(ticker));
+        engine.setHTFContext(trend, bias, freeze, interval);
+    }
 
     constructor() {
         // 🆕 Marca de versión (sep-2026): confirma en el log que el proceso vivo carga
@@ -37,7 +58,7 @@ class SMCManager {
                 const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
                 const targetHTF = period === 'H1' ? 'D1' : period === 'M15' || period === 'M30' ? 'H4' : 'W1';
                 const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
-                engine.setHTFContext(htfTrend, wBias);
+                this.applyHTFContext(engine, ticker, targetHTF, htfTrend, wBias);
             }
             this.engines.set(key, engine);
         }
@@ -86,7 +107,8 @@ class SMCManager {
                 const lastTs = engine.lastProcessedTs;
                 const skipEngine = !isHistorical && lastTs !== undefined && prev.timestamp <= lastTs;
                 if (!skipEngine) {
-                    const events = engine.nextCandle(prev);
+                    const freeze = buildRolloverFreezeContext(ticker, prev.timestamp, prev.timestamp + this.periodMs(period), this.rolloverPolicies.get(ticker));
+                    const events = engine.nextCandle(prev, freeze);
                     // 🔍 DIAGNÓSTICO: loguear eventos generados por el engine
                     if (!isHistorical && events.length > 0) {
                         const types = [...new Set(events.map((e: any) => e.type))];
@@ -139,7 +161,7 @@ class SMCManager {
                     const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
                     const targetHTF = tf === 'H1' ? 'D1' : tf === 'M15' || tf === 'M30' ? 'H4' : 'W1';
                     const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
-                    targetEngine.setHTFContext(htfTrend, wBias);
+                    this.applyHTFContext(targetEngine, ticker, targetHTF, htfTrend, wBias);
                 }
             }
         }
