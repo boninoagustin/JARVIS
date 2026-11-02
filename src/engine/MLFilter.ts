@@ -172,6 +172,9 @@ export function predict(
   }
 
   const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+  // 02-nov-2026: si el modelo propio fue rechazado por el piso de evidencia, NO usar el
+  // DEFAULT (es de otro activo): se cae a la heurística legacy, que es el fallback sano.
+  if (t && ML_REJECTED.has(t)) return null;
   const model = _models.get(key) ?? _models.get(DEFAULT_KEY);
   if (!model) return { probability: 1.0, approved: true, threshold: 0.65, features: vec };
 
@@ -191,6 +194,11 @@ export function isMLActive(): boolean { return _models.size > 0; }
 // el gate libremente (paridad intacta).
 const ML_EXCLUDED_TICKERS = new Set(['USOIL']);
 const ML_GATE_OVERRIDES = new Map<string, boolean>();
+// 🛡️ 02-nov-2026: piso de evidencia al cargar modelos (ver loadModelFromJSON) y set de
+// tickers cuyo modelo fue rechazado, para que NO caigan al modelo DEFAULT de otro activo.
+const MIN_MODEL_ACCURACY = 0.55;
+const MIN_MODEL_TRAIN_SAMPLES = 50;
+const ML_REJECTED = new Set<string>();
 
 /** Override runtime del gate ML por ticker (true = gate ON, false = OFF → fallback heurístico).
  *  Lo usa SOLO el bot en vivo al cargar asset_configs. Sin override → lista estática. */
@@ -207,6 +215,22 @@ export function loadModelFromJSON(json: string | object, ticker?: string): boole
   try {
     const { trees, meta } = validateModel(json, LEGACY_FEATURE_NAMES, LEGACY_INFERENCE_PROFILE);
     const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+    // 🛡️ 02-nov-2026: piso de evidencia. GBPJPY estaba cargado con acc=0.250 y
+    // train_samples=28 (peor que el azar). Un modelo así no aporta señal y, si el activo
+    // tiene el gate prendido, filtra al voleo. Se rechaza al cargar y se marca el ticker
+    // para que NO caiga al modelo DEFAULT (que pertenece a otro activo).
+    const accuracy = Number((meta as any)?.accuracy);
+    const trainSamples = Number((meta as any)?.train_samples);
+    if (!Number.isFinite(accuracy) || accuracy < MIN_MODEL_ACCURACY) {
+      console.error(`[MLFilter] ⛔ ${ticker ? key : 'default'}: accuracy=${Number.isFinite(accuracy) ? accuracy.toFixed(3) : '?'} < ${MIN_MODEL_ACCURACY} → NO se carga`);
+      if (ticker) ML_REJECTED.add(key);
+      return false;
+    }
+    if (Number.isFinite(trainSamples) && trainSamples < MIN_MODEL_TRAIN_SAMPLES) {
+      console.error(`[MLFilter] ⛔ ${ticker ? key : 'default'}: train_samples=${trainSamples} < ${MIN_MODEL_TRAIN_SAMPLES} → NO se carga`);
+      if (ticker) ML_REJECTED.add(key);
+      return false;
+    }
     // Format/log before installing: validation or a throwing logger cannot poison the cache.
     const message = `[MLFilter] ✅ ${ticker ? ticker.toUpperCase() : 'default'}: ${trees.length} trees, acc=${meta.accuracy.toFixed(3)}, f1=${meta.f1.toFixed(3)}`;
     console.log(message);

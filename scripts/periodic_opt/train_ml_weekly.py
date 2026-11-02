@@ -27,8 +27,16 @@ import train_ml_model as trainer
 
 MODELS_DIR = trainer.MODELS_DIR
 TRAINER = REPO / "scripts" / "train_ml_model.py"
+# 02-nov-2026: piso de evidencia para promover un modelo (mismo criterio que la
+# cuarentena de scripts/ops/model_health.ts y que MLFilter.loadModelFromJSON).
+MIN_TRAIN_SAMPLES = 50
+MIN_PROMOTION_ACCURACY = 0.55
 TICKERS_ALL = ["EURUSD", "GBPUSD", "AUDCAD", "US500", "XAUUSD",
-               "USDJPY", "USDCAD", "NZDUSD", "USOIL", "BTCUSD"]
+               "USDJPY", "USDCAD", "NZDUSD", "USOIL", "BTCUSD",
+               # 02-nov-2026: los dos activos con más muestra del pool (XPDUSD n=33 y
+               # CHFJPY n=30 de validación) no tenían modelo propio. Si no llegan a
+               # MIN_TRAIN_SAMPLES el candidato queda en HOLD_SAMPLE, sin efecto.
+               "XPDUSD", "CHFJPY"]
 MIN_NEW_TRADES = 15
 
 
@@ -84,6 +92,15 @@ def promote_candidate(*, candidate_path: Path, target: Path, ticker: str,
         raise trainer.ProtocolError("candidate artifact differs from approved digest")
     trainer.validate_export(candidate)
     meta = candidate.get("meta", {})
+    # 02-nov-2026: piso de evidencia antes de promover. GBPJPY se promovió con
+    # train_samples=28 y accuracy=0.250 (peor que el azar). No es un error del ciclo:
+    # se devuelve un estado no-promovido y el candidato queda en HOLD.
+    train_samples = meta.get("train_samples")
+    accuracy = meta.get("accuracy")
+    if not (isinstance(train_samples, int) and train_samples >= MIN_TRAIN_SAMPLES):
+        return f"HOLD_SAMPLE (train_samples={train_samples} < {MIN_TRAIN_SAMPLES})"
+    if not (isinstance(accuracy, (int, float)) and accuracy >= MIN_PROMOTION_ACCURACY):
+        return f"HOLD_ACCURACY (accuracy={accuracy} < {MIN_PROMOTION_ACCURACY})"
     manifest = trainer.validate_manifest(meta.get("evaluation_manifest"), ticker)
     schema = dict(version=1, names=trainer.FEATURE_NAMES, n_features=12, type="finite_numeric", order="runtime")
     proof = meta.get("dataset_provenance", {})

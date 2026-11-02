@@ -127,6 +127,11 @@ export function loadOptimizedPreset(ticker: string, period: string, basePresetNa
                 if (!data.SignalProfile || typeof data.SignalProfile !== 'object' || Array.isArray(data.SignalProfile)) throw new Error('Invalid SignalProfile');
                 Object.assign(basePreset,applySMCSignalOverrides(basePreset,data.SignalProfile));
             }
+            // 02-nov-2026: un preset presente pero vacío/sin bloques aplicables (p. ej. `{}`
+            // escrito por un tune que no aplicó nada) deja al activo con el preset base sin
+            // avisar. Se conserva el fallback, pero queda el rastro en el log.
+            const appliedAny = Object.keys(data).some(k => k === 'Detection' || k === 'SignalProfile' || k === 'Risk' || /^(M5|M15|H1|H4|D1)$/.test(k));
+            if (!appliedAny) console.warn(`[SMC_CONFIG] ⚠️ ${ticker} ${period}: preset sin parámetros aplicables (${path.basename(presetPath)}) → usando preset base ${basePresetName}`);
         }
     } catch (e) {
         if (options.presetFile || options.signalOverrides || signalBlockSeen) throw e;

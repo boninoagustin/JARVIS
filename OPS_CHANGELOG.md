@@ -44,10 +44,23 @@ pero acá queda el qué y el por qué). Todo es reversible.
   `autoregister` → `evaluate` → `promote` → `model_health`, todos con `-` (un fallo
   no tumba el ciclo).
 
-## 6. Qué NO se tocó
+## 6. Integridad de modelos y presets (02-nov, código)
 
-- `train_ml_weekly.py` y `MLFilter.ts` (guard de modelos): pendiente.
-- Push del backup: pendiente de decisión.
+- `MLFilter.loadModelFromJSON`: **piso de evidencia** — no carga modelos con
+  `accuracy < 0.55` o `train_samples < 50`; el ticker rechazado se marca para **no**
+  caer al modelo DEFAULT (que es de otro activo) y usa la heurística.
+- `train_ml_weekly.promote_candidate`: mismo piso antes de promover (devuelve
+  `HOLD_SAMPLE` / `HOLD_ACCURACY`, no es un error del ciclo).
+- `smc_config.loadOptimizedPreset`: avisa cuando un preset existe pero no tiene
+  parámetros aplicables (caso `{}` de USTECH100/XPTUSD). Esos dos archivos se
+  eliminaron: sin archivo, el motor usa el preset base (mismo comportamiento).
+- Roster de entrenamiento: se agregaron XPDUSD y CHFJPY (los de más muestra).
+
+## 7. Qué NO se tocó
+
+- Push del backup a origin (el repo es público): pendiente de decisión.
+- Modelos propios para el resto de los activos: no hay muestra suficiente (mismo
+  techo que el optimizador).
 
 ## 7. Incidente del 02-nov 23:55 → 03-nov 00:00 (CLI de pm2 roto, sin downtime del bot)
 
