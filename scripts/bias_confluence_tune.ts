@@ -7,10 +7,9 @@
 // Uso: npx tsx scripts/bias_confluence_tune.ts <TICKER>
 import fs from 'fs';
 import path from 'path';
-const admin = (await import('firebase-admin')).default;
-const sa = JSON.parse(fs.readFileSync('/opt/JARVIS/service-account.json', 'utf8'));
-if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
-const db = admin.firestore();
+import {parseSelectionArgs, readAssetSnapshot, selectionEntries, selectionReplayOptions, selectionManifest, readSelectionConfig, completedSelectionTrades, loadSelectionLogs, saveSelection} from './periodic_opt/selection_context.js';
+const selection = parseSelectionArgs();
+const manifest = selectionManifest(selection);
 
 const { runBacktest, prepareEntries } = await import('../jarvis-os/src/services/backtestEngine.ts');
 
@@ -44,17 +43,8 @@ function buildTrigger(fb: any, entryPercent?: number): any {
 }
 
 function loadLogs(): Map<string, string[]> {
-  const dir = path.join('/opt/JARVIS', 'logs', ticker.toLowerCase(), 'history_exported');
-  const logs = new Map<string, string[]>();
-  if (!fs.existsSync(dir)) return logs;
-  for (const tf of TFS) {
-    const f = path.join(dir, `pine-logs-SMC Master_${tf}.csv`);
-    if (!fs.existsSync(f)) continue;
-    logs.set(tf, fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim().length > 0));
-  }
-  return logs;
+  return loadSelectionLogs(selection);
 }
-
 // Métricas COMPLETAS — espejo de computeMetrics del hyperopt worker
 function computeMetrics(trades: any[]) {
   const n = trades.length;
@@ -101,8 +91,7 @@ function objective(m: any, minTrades = 30, ddPenalty = 0.5, samplePenalty = 0.25
 }
 
 (async () => {
-  const snap = await db.collection('asset_configs').doc(ticker).get();
-  const fb = snap.exists ? snap.data() || {} : {};
+  const fb = await readAssetSnapshot(selection);
   if (fb.enabled === false) {
     console.log(JSON.stringify({ ticker, status: 'DISABLED', reason: 'asset_configs.enabled=false' }));
     process.exit(0);
@@ -112,7 +101,8 @@ function objective(m: any, minTrades = 30, ddPenalty = 0.5, samplePenalty = 0.25
     console.log(JSON.stringify({ ticker, status: 'NO_CSVS' }));
     process.exit(0);
   }
-  const prepared = await prepareEntries(logs);
+  const prepared = selectionEntries(await prepareEntries(logs), manifest, selection);
+  const replayOptions = selectionReplayOptions(selection, manifest);
   const sessions: any = {};
   for (const [sess, sc] of Object.entries(fb.sessions || {})) {
     const c: any = sc || {};
@@ -127,23 +117,14 @@ function objective(m: any, minTrades = 30, ddPenalty = 0.5, samplePenalty = 0.25
       oteBos5m: buildTrigger(c.oteBos5m, 62),
     };
   }
-  const baseConfig: any = {
-    ticker,
-    minBuyPoints: fb.minPointsForBuy ?? 4,
-    minSellPoints: fb.minPointsForSell ?? 4,
-    oteEntryPercent: fb.oteEntryPercent ?? 50,
-    entryTrigger: fb.entryTrigger ?? 'SMART',
-    sessions,
-    sessionFilter: ['LONDON', 'NY', 'ASIA', 'OFF'],
-    minimal_roi: fb.minimal_roi ?? { "0": 0.01, "30": 0.003, "60": 0 },
-  };
+  const baseConfig: any = readSelectionConfig(selection, fb);
 
   const results: any[] = [];
   for (const v of VARIANTS) {
     const config = { ...baseConfig, biasConfluence: v.bc };
     try {
-      const res = runBacktest(logs, config, undefined, prepared);
-      const m = computeMetrics(res.trades);
+      const res = runBacktest(logs, config, undefined, prepared, replayOptions);
+      const m = computeMetrics(completedSelectionTrades(res.trades, manifest, prepared));
       const obj = objective(m);
       results.push({ variant: v.name, bc: v.bc, metrics: { ...m, profit_factor: m.profit_factor === Infinity ? null : +m.profit_factor.toFixed(2), net_pnl_r: +m.net_pnl_r.toFixed(2), max_drawdown_r: +m.max_drawdown_r.toFixed(2), win_rate: +(m.win_rate * 100).toFixed(1), expectancy: +m.expectancy.toFixed(3) }, objective: +obj.toFixed(3) });
     } catch (e: any) {
@@ -168,6 +149,9 @@ function objective(m: any, minTrades = 30, ddPenalty = 0.5, samplePenalty = 0.25
     margin = +(best.objective - baseline.objective).toFixed(3);
   }
   const out: any = { ticker, status, recommended: recommended ? { bc: recommended.bc, metrics: recommended.metrics, objective: recommended.objective, margin_vs_baseline: margin } : null, baseline_variant: baseline ? { metrics: baseline.metrics, objective: baseline.objective } : null, variants: results, note: 'PROPUESTA — no aplica. Aplicación manual (regla de oro: el optimizador propone, nunca aplica).' };
+  out.selection_partition = 'train';
+  out.evaluation_manifest = manifest;
+  saveSelection(selection, out);
   console.log(JSON.stringify(out));
   process.exit(0);
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });

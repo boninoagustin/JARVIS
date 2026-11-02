@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { AssetSessionConfigSchema } from '../../src/engine/Types.js';
+assert.equal(AssetSessionConfigSchema.safeParse({mlRegimeShadow:'false'}).success,false,'shadow must be explicit boolean, not truthy string');
+assert.equal(AssetSessionConfigSchema.safeParse({rolloverPolicy:{profile:'not-a-profile'}}).success,false);
+assert.equal(AssetSessionConfigSchema.safeParse({rolloverPolicy:{freezeSignals:true,freezeBeforeReopenMs:-1}}).success,false);
+const triage={maxExtraRiskR:.3,greenPeakMultiple:1.25,greenMinR:.85,structuralPeakMultiple:1.35,beMinDistancePeakMultiple:1.15,severeLossR:-.8,maxQuoteAgeMs:10000};
+assert.equal(AssetSessionConfigSchema.safeParse({rolloverPolicy:{profile:'rollover_triage_v1',triage:{...triage,maxExtraRiskR:.31}}}).success,false,'nominal risk cap cannot be relaxed by config');
+const good=AssetSessionConfigSchema.parse({mlRegimeShadow:true,rolloverPolicy:{profile:'rollover_triage_v1',freezeSignals:true,triage,peakSpread:{price:.0018,availableAtMs:1000}}});assert.equal(good.mlRegimeShadow,true);
+const legacy=AssetSessionConfigSchema.parse({enabled:true});assert.equal(legacy.rolloverPolicy,undefined);assert.equal(legacy.mlRegimeShadow,undefined);
+console.log('FINAL_EXPERIMENTAL_SCHEMA: PASS');

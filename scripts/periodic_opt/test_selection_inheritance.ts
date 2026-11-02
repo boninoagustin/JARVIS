@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {parseSelectionArgs, readSelectionConfig, isolateTriggerConfig, completedSelectionTrades, loadSelectionLogs} from './selection_context.js';
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'selector-contract-synthetic-'));
+try {
+  const file=path.join(tmp,'base.json');
+  fs.writeFileSync(path.join(tmp,'M5.csv'), 'Fecha,Mensaje\n2026-01-01T00:00:00Z,"PING_PRICE | TF: 5 | Precio: 1.10 | TS: 100"\n');
+  const logs=loadSelectionLogs({ticker:'EURUSD',logsDir:tmp});
+  assert.deepEqual([...logs.keys()],['5']);
+  assert.deepEqual(logs.get('5'),['PING_PRICE | TF: 5 | Precio: 1.10 | TS: 100']);
+  const base:any={ticker:'EURUSD', entryTrigger:'OTE', minBuyPoints:7, minSellPoints:8, tp1StructuralMinRR:2.4, partialClosePct:0.2, maxDailyLossR:0, spreadPips:0.4, mlGate:{enabled:false}, sessions:{NY:{maxBuyLosses:2,choch5m:{enabled:true,entryPercent:61,tp1StructuralMinRR:2.7}},ALL:{choch5m:{partialClosePct:0.3}}}};
+  fs.writeFileSync(file,JSON.stringify(base));
+  const args=parseSelectionArgs(['EURUSD','--evaluation-manifest','/fixture/manifest.json','--config-file','/fixture/asset.json','--backtest-config-file',file,'--dry-run']);
+  assert.equal(args.backtestConfigFile,file);
+  const cfg=readSelectionConfig(args,{minPointsForBuy:4});
+  assert.deepEqual(cfg,base, 'frozen worker config must override defaults and asset mapping');
+  const isolated=isolateTriggerConfig(cfg,'NY','choch5m',{minScore:9});
+  assert.equal(isolated.sessions.NY.choch5m.partialClosePct, undefined, 'engine local management must not inherit dead ALL management');
+  for (const key of ['entryTrigger','minBuyPoints','minSellPoints','tp1StructuralMinRR','partialClosePct','maxDailyLossR','spreadPips','mlGate']) assert.deepEqual(isolated[key],base[key],key);
+  assert.equal(isolated.sessions.NY.maxBuyLosses,2);
+  assert.equal(isolated.sessions.NY.choch5m.tp1StructuralMinRR,2.7);
+  assert.equal(isolated.sessions.NY.choch5m.entryPercent,61);
+  assert.equal(isolated.sessions.NY.choch5m.minScore,9);
+  assert.equal(isolated.sessions.LONDON.choch5m.enabled,false);
+  assert.equal(isolated.sessions.NY.bos5m.enabled,false);
+  assert.deepEqual(base.sessions.NY.choch5m,{enabled:true,entryPercent:61,tp1StructuralMinRR:2.7});
+  const manifest:any={version:1,ticker:'EURUSD',from_ms:100,train_end_ms:200,validation_end_ms:300,test_end_ms:300,test_independence:'unverified'};
+  const closed={timestamp:100,closeTimestamp:150,result:'WIN',rMultiple:1};
+  assert.deepEqual(completedSelectionTrades([closed,{...closed,closeTimestamp:199},{...closed,closeTimestamp:201}],manifest,[{ts:100},{ts:199}]),[closed]);
+  console.log('PASS synthetic selector contract: exact inherited config, isolated sessions, censored terminal labels');
+} finally {fs.rmSync(tmp,{recursive:true,force:true});}

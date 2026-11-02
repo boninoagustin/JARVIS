@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {AssetSessionConfigSchema} from '../../src/engine/Types.js';
+import * as caps from '../../src/engine/tp2Cap.js';
+assert.equal(AssetSessionConfigSchema.safeParse({executionPolicy:{profile:'made_up'}}).success,false,'unknown execution profile must not silently become a different strategy');
+assert.equal(AssetSessionConfigSchema.safeParse({executionPolicy:{profile:'microstructure_v1',smart:'yes'}}).success,false);
+for(const profile of ['legacy_v1','microstructure_v1'])assert.equal(AssetSessionConfigSchema.safeParse({executionPolicy:{profile,smart:true},enabled:true}).success,true);
+assert.equal(AssetSessionConfigSchema.safeParse({enabled:true,unrelatedLegacyField:7}).success,true);
+console.log('PASS execution config profile/ablation validation, legacy passthrough preserved');
+assert.equal(typeof (caps as any).getAdrPrice,'function');
+assert.ok((caps as any).getAdrPrice('EURUSD')>0);
+assert.equal((caps as any).getAdrPrice('unknown'),undefined);
+assert.equal((caps as any).getAdrPrice('eurusd'),(caps as any).getAdrPrice('EURUSD'));
+console.log('PASS static ADR read-only accessor without changing legacy cap');

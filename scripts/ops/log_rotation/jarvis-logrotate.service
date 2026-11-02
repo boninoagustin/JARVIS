@@ -1,0 +1,13 @@
+[Unit]
+Description=JARVIS diagnostic log rotation and 30-day retention
+After=network.target
+
+[Service]
+Type=oneshot
+Environment=PM2_HOME=/root/.pm2
+Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/sbin/logrotate --state /var/lib/logrotate/jarvis-pm2.status /etc/jarvis/pm2-logrotate.conf
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=256M
+TimeoutStartSec=20min

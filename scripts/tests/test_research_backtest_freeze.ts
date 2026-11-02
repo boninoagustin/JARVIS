@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {parseCSV,runBacktest} from '../../jarvis-os/src/services/backtestEngine';
+import {registerRolloverSchedule} from '../../src/engine/RolloverSpreadGate';
+const t=Date.parse('2026-07-14T15:00:00Z');
+const cfg:any={ticker:'EURUSD',minBuyPoints:1,minSellPoints:1,oteEntryPercent:70,entryTrigger:'CHOCH'};
+const line=(at:number,text:string)=>text+' | TS: '+at;
+const entries=parseCSV([line(t-1,'PING_PRICE | TF: 5 | Precio: 1.1'),line(t+1,'EVENTO_CHOCH | TF: 5 | BUY | ORIGIN: 1.099 | Precio: 1.1'),line(t+60000,'PING_PRICE | TF: 5 | Precio: 1.09 | High: 1.1 | Low: 1.09')].join('\n')).lines;
+const policy={profile:'rollover_triage_v1',freezeSignals:true};
+const unknown=runBacktest(new Map(),{...cfg,rolloverPolicy:policy},undefined,entries);
+assert.equal(unknown.trades.length,0,'unknown metadata holds signal creation in actual BT caller');
+// Registered session whose reopen overlaps second bar, NOT the opening signal.
+registerRolloverSchedule('EURUSD',{scheduleTimeZone:'UTC',schedule:[{startSecond:1,endSecond:2*86400+15*3600+30},{startSecond:2*86400+15*3600+60,endSecond:6*86400}]});
+const riskEntries=parseCSV([line(t-600000,'PING_PRICE | TF: 5 | Precio: 1.1'),line(t-599999,'EVENTO_CHOCH | TF: 5 | BUY | ORIGIN: 1.099 | Precio: 1.1'),line(t+60000,'PING_PRICE | TF: 5 | Precio: 1.09 | High: 1.1 | Low: 1.09'),line(t+900000,'PING_PRICE | TF: 5 | Precio: 1.1')].join('\n')).lines;
+const risk=runBacktest(new Map(),{...cfg,rolloverPolicy:policy},undefined,riskEntries);
+assert.equal(risk.trades.length,1);assert.equal(risk.trades[0].closeTimestamp,t+60000,'risk exits remain operative during full-bar freeze');
+const cleanPings=Array.from({length:14},(_,i)=>line(t-(24-i)*300000,'PING_PRICE | TF: 5 | Precio: 100 | High: 100.1 | Low: 99.9'));
+cleanPings.push(line(t+60000,'PING_PRICE | TF: 5 | Precio: 999 | High: 1000 | Low: 998'),line(t+1200000,'PING_PRICE | TF: 5 | Precio: 100 | High: 100.1 | Low: 99.9'),line(t+1260000,'PING_PRICE | TF: 5 | Precio: 100 | High: 100.1 | Low: 99.9'));
+const replay=runBacktest(new Map(),{...cfg,rolloverPolicy:policy},undefined,parseCSV(cleanPings.join('\n')).lines,{warmupStartMs:t-7200000,evaluationStartMs:t+1260000,evaluationEndMs:t+1320000,statePolicy:'context-only-reset-execution-v1',minContextObservations:{'5':1}});
+const atr=(replay.replayDiagnostics!.boundarySnapshot!.state as any).atr14;
+assert.ok(Math.abs(atr-.2)<1e-8,'first post-freeze ATR uses previous ACCEPTED close, never raw frozen shock: '+atr);
+console.log('PASS actual BT missing metadata HOLD, frozen raw exits, clean-stream ATR gap reference');

@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import ts from 'typescript';
+import { z } from 'zod';
+import * as risk from '../../src/engine/TradeRisk.js';
+const src=fs.readFileSync('src/services/journal.ts','utf8');
+const ast=ts.createSourceFile('journal.ts',src,ts.ScriptTarget.Latest,true);
+const declarations=ast.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>ts.isIdentifier(d.name)&&['TradeRecordSchema','TradeRiskSnapshotSchema','JournalCloseTimeSchema'].includes(d.name.text)));
+const api:any={};vm.runInNewContext(ts.transpileModule(declarations.map(n=>n.getText(ast)).join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,{exports:api,z,...risk});
+const base={id:'T1',ticker:'EURUSD',direction:'BUY',grade:'A+',points:8,events:[],macroContext:{},timestamp:1000,date:'2026-10-21'};
+const snapshot=risk.createTradeRiskSnapshot({ticker:'EURUSD',direction:'BUY',currency:'EUR',entryPrice:1.1,initialSlPrice:1.09,filledVolumeCents:10000,quoteToAccountRate:.9,capturedAtMs:1000})!;
+for(const fields of [{result:null,rMultiple:null,riskAmountAccount:null,accountCurrency:null,closedAt:null},{riskSnapshot:snapshot,accountCurrency:'EUR',riskAccountingStatus:'VERIFIED',riskAccountingProvenance:'broker_fill',closedAt:'2026-10-21T14:00:00Z',closedAtSource:'broker_execution'},{closedAt:1000,riskAccountingStatus:'UNVERIFIED'}, {result:'SKIP',ctraderStatus:'ABORTED'}]) assert.equal(api.TradeRecordSchema.safeParse({...base,...fields}).success,true,JSON.stringify(fields));
+for(const fields of [{riskAccountingStatus:'CERTIFIED'},{accountCurrency:'euro'},{rMultiple:'1.2'},{rMultiple:Infinity},{riskAmountAccount:-1},{closedAt:'yesterday'},{closedAt:'2026-02-30T14:00:00Z'},{closedAtSource:'wall_clock'},{riskAccountingProvenance:'guessed'},{riskSnapshot:{...snapshot,riskAmountAccount:1}},{riskSnapshot:{...snapshot,filledVolumeCents:1.2}},{riskSnapshot:{...snapshot,source:'estimated'}},{riskSnapshot:{...snapshot,initialSlPrice:1.2}},{riskSnapshot:{...snapshot,ticker:'GBPUSD'}}]) assert.equal(api.TradeRecordSchema.safeParse({...base,...fields}).success,false,'must reject '+JSON.stringify(fields));
+const parsed=api.TradeRecordSchema.parse({...base,riskSnapshot:snapshot});assert.equal(Object.isFrozen(parsed.riskSnapshot),true,'persisted risk evidence is immutable after schema parse');
+assert.equal(api.TradeRecordSchema.parse({...base,legacyNote:'keep'}).legacyNote,'keep','legacy passthrough retained');
+console.log('PASS journal risk schema: typed immutable consistent fill evidence, finite nullable money/R, statuses, ISO/epoch/provenance, legacy compatibility');

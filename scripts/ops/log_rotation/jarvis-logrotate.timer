@@ -1,0 +1,11 @@
+[Unit]
+Description=Check JARVIS diagnostic logs every ten minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/10:00
+RandomizedDelaySec=30
+Persistent=true
+Unit=jarvis-logrotate.service
+
+[Install]
+WantedBy=timers.target

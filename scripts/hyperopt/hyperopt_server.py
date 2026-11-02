@@ -5,7 +5,9 @@ Inspirado en freqtrade/optimize/hyperopt.py:
 - El espacio de búsqueda se define vía suggest_float / suggest_int / suggest_categorical.
 - TPE sampler (default) construye un modelo probabilístico sobre las trials previas.
 - Las trials se persisten en SQLite (storage) para reanudar estudios entre corridas.
-- El objetivo se MINIMIZA por convención de Optuna, por eso negamos el score.
+- El objetivo se MAXIMIZA sobre Train; Validation no decide el ganador y Test solo se evalúa al final.
+- Cada escenario tiene un namespace SHA-256; nunca reusa scores de estudios legacy.
+- El export publica la configuración efectiva y métricas de una re-evaluación final.
 
 Uso:
     python scripts/hyperopt/hyperopt_server.py \
@@ -17,6 +19,9 @@ Uso:
 
 from __future__ import annotations
 import argparse
+import copy
+import hashlib
+import inspect
 import json
 import os
 import select
@@ -27,7 +32,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from evaluation_protocol import load_evaluation_manifest
+from objective_adapter import (canonicalize_result, objective_policy,
+                               assert_scoring_snapshot, posthoc_shadow_comparison)
 import optuna
+from wfa_adapter import (canonicalize_window, assert_snapshot as assert_wfa_snapshot,
+                         window_bounds, validate_replay_model)
 from optuna.samplers import TPESampler
 
 # -----------------------------------------------------------------------------
@@ -124,57 +134,49 @@ def suggest_params(trial: optuna.Trial) -> Dict[str, Any]:
     return params
 
 
-def _ml_gate_block(ticker: str) -> Optional[Dict[str, Any]]:
-    """ML F3 (sep-2026): bloque mlGate para el backtest — walk-forward por mtime del modelo."""
-    models_dir = Path(__file__).resolve().parent / "models"
-    ml_model_p = models_dir / f"ml_model_{ticker}.json"
-    if not ml_model_p.exists():
-        return None
-    try:
-        return {
-            "enabled": True,
-            "modelPath": str(ml_model_p),
-            "trainedAt": int(ml_model_p.stat().st_mtime * 1000),
-        }
-    except OSError:
-        return None
-
-
 def build_backtest_config(ticker: str, params: Dict[str, Any],
                           timesfm_cache: Optional[Path] = None,
-                          current_sessions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Convierte los hiperparámetros en un BacktestConfig completo.
-    Los triggers activos se mantienen en un subset conservador (los 4 que
-    smc_bruteforcer.ts considera activos por default).
+                          current_sessions: Optional[Dict[str, Any]] = None,
+                          current_timesfm: Optional[Dict[str, Any]] = None,
+                          current_ml_gate_enabled: Optional[bool] = None,
+                          base_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build the unchanged 34-dimensional candidate over an immutable snapshot.
 
-    F4 (07-sep-2026): si `timesfm_cache` apunta a un JSONL de forecasts
-    precomputados existente, el backtest corre CON el filtro TimesFM activo y
-    minScoreToOverrideReject (sorteado) tiene efecto real en las métricas.
-    Sin cache → filtro OFF (comportamiento histórico, con warning): un cache
-    ausente haría que TODAS las decisiones fueran DEGRADADO→APPROVE y el umbral
-    se optimizaría sobre ruido.
+    Without a sessions snapshot, keep the legacy four 5m trigger defaults.
+    With a snapshot, preserve all triggers and enabled states exactly. Optional
+    current_timesfm preserves live filter settings and enabled state; an enabled
+    snapshot requires a historical cache. Without it, cache presence retains
+    the legacy on/off behavior. ML temporal availability is resolved by worker.
     """
+    base = copy.deepcopy(base_config) if base_config is not None else {}
+    if not isinstance(base, dict) or (base_config is not None and base.get('ticker') != ticker):
+        raise ValueError('base-config must be a BacktestConfig object with matching ticker')
+    if 'mlGateEnabled' in base and type(base['mlGateEnabled']) is not bool:
+        raise ValueError('base-config mlGateEnabled must be a boolean')
+    if current_ml_gate_enabled is None:
+        current_ml_gate_enabled = base.get('mlGateEnabled', False)
+    if type(current_ml_gate_enabled) is not bool:
+        raise ValueError("mlGateEnabled must be a boolean")
+    if base_config is not None:
+        # A supplied effective snapshot is authoritative for every unsearched field.
+        # Conflicting permission snapshots are an error, never a silent gate change.
+        if base.get('mlGateEnabled', False) != current_ml_gate_enabled:
+            raise ValueError('base-config and current-sessions ML permission mismatch')
+        if current_sessions is None:
+            current_sessions = base.get('sessions', {})
+        if current_timesfm is None:
+            current_timesfm = base.get('timesfm', {'enabled': False})
+        if timesfm_cache is None and isinstance(base.get('timesfm'), dict):
+            timesfm_cache = base['timesfm'].get('cachePath')
     # 🛡️ solo-5M (sep-2026): el hyperopt DEBE evaluar sobre gatillos 5m.
     # Antes usaba 15m → las propuestas semanales prendían 15m en producción
     # (evidencia A/B 8 meses: solo-5M +490R vs solo-15M −193R).
     active_triggers = ["choch5m", "bos5m", "oteChoch5m", "oteBos5m"]
     sessions: Dict[str, Any] = {}
-    if current_sessions:
-        # 🛡️ sep-2026 (paridad de umbrales): partir de las sesiones VIGENTES del vivo
-        # (per-gatillo minScore/slBuff/tp2/mgmt/entryPercent que escribe per_trigger_tune)
-        # y solo forzar enabled en los 4 gatillos 5m. Los fallbacks globales del hyperopt
-        # actúan encima (raíz). Así las trials miden SOBRE lo que el vivo aplica.
-        for sess in SESSIONS:
-            src = current_sessions.get(sess) or {}
-            sess_cfg: Dict[str, Any] = {}
-            for t, cfg in src.items():
-                if isinstance(cfg, dict):
-                    sess_cfg[t] = dict(cfg)
-            for t in active_triggers:
-                base = sess_cfg.get(t) if isinstance(sess_cfg.get(t), dict) else {}
-                sess_cfg[t] = {**base, "enabled": True}
-            sessions[sess] = sess_cfg
+    if current_sessions is not None:
+        # Snapshot parity: never turn disabled triggers on, invent sessions, or
+        # mutate the caller's overlay. An explicit empty snapshot stays empty.
+        sessions = copy.deepcopy(current_sessions)
     else:
         for sess in SESSIONS:
             sess_cfg: Dict[str, Any] = {}
@@ -198,25 +200,33 @@ def build_backtest_config(ticker: str, params: Dict[str, Any],
     # Réplica del bloque de producción (asset_configs.timesfm: counterMult=1,
     # lowConvictionMult=1 → filtro en modo "rechazo puro") + el umbral sorteado.
     # maxForecastAgeMs/bridgeUrl no aplican en backtest (usa cachePath).
-    timesfm_block: Optional[Dict[str, Any]] = None
-    if timesfm_cache and Path(timesfm_cache).exists():
+    timesfm_block: Dict[str, Any]
+    cache = Path(timesfm_cache).resolve() if timesfm_cache else None
+    if current_timesfm is not None:
+        timesfm_block = copy.deepcopy(current_timesfm)
+        enabled = timesfm_block.get("enabled", False)
+        if type(enabled) is not bool:
+            raise ValueError("timesfm.enabled must be a boolean")
+        timesfm_block["enabled"] = enabled
+        if enabled and (cache is None or not cache.is_file()):
+            raise ValueError("enabled TimesFM snapshot requires an existing forecasts cache")
+        # Live bridge paths do not identify a historical cache; only the
+        # explicit/resolved replay cache may be used here.
+        if base_config is None or enabled:
+            timesfm_block.pop("cachePath", None)
+        if enabled:
+            timesfm_block["cachePath"] = str(cache)
+            timesfm_block["minScoreToOverrideReject"] = params["minScoreToOverrideReject"]
+    elif cache and cache.is_file():
         timesfm_block = {
-            "enabled": True,
-            "horizon": 12,
-            "alignedMult": 1.0,
-            "counterMult": 1.0,
-            "lowConvictionMult": 1.0,
-            "flatMult": 0.6,
-            "spreadAtrHighConv": 5.3,
-            "dirEpsAtr": 0.05,
-            "rejectEnabled": True,
+            "enabled": True, "horizon": 12, "alignedMult": 1.0,
+            "counterMult": 1.0, "lowConvictionMult": 1.0, "flatMult": 0.6,
+            "spreadAtrHighConv": 5.3, "dirEpsAtr": 0.05, "rejectEnabled": True,
             "minScoreToOverrideReject": params["minScoreToOverrideReject"],
-            "cachePath": str(timesfm_cache),
+            "cachePath": str(cache),
         }
     else:
-        print(f"[hyperopt] ⚠ {ticker}: sin cache de forecasts TimesFM en {timesfm_cache} → "
-              f"filtro OFF en las trials (minScoreToOverrideReject sorteado pero sin efecto).",
-              file=sys.stderr, flush=True)
+        timesfm_block = {"enabled": False}
 
     config: Dict[str, Any] = {
         "ticker": ticker,
@@ -245,13 +255,28 @@ def build_backtest_config(ticker: str, params: Dict[str, Any],
         # 🔧 FIX: smc_overrides eliminado — el backtest no lo leía (params SMC los tunnea el bruteforcer)
         # F3-etapa1: minimal_roi ahora viene del espacio (preset elegido), antes fijo
         "minimal_roi": ROI_PRESETS[params["minimal_roi"]],
-        # 🛡️ ML F3 (sep-2026): gate ML idéntico al vivo dentro de las trials (walk-forward).
-        # trainedAt = mtime del modelo → el modelo de la semana pasada evalúa la semana nueva.
-        # Sin modelo para el ticker → None (gate OFF, comportamiento legacy).
-        "mlGate": _ml_gate_block(ticker),
+        # Live permission is explicit; metadata alone must never opt a scenario in.
+        "mlGateEnabled": current_ml_gate_enabled,
+        "mlGate": None,
     }
     if timesfm_block:
         config["timesfm"] = timesfm_block
+    if base_config is not None:
+        # Only the existing 34 dimensions may override the supplied production
+        # engine snapshot. In particular entryTrigger, costs, safety flags and
+        # every trigger's management remain untouched.
+        for key in ('minBuyPoints','minSellPoints','minRR','slBufferPercent','fixedRR',
+                    'oteEntryPercent','vwapPts','tp1StructuralMinRR','minimal_roi'):
+            base[key] = copy.deepcopy(config[key])
+        weights = base.setdefault('zoneWeights', {})
+        for family, values in config['zoneWeights'].items():
+            weights.setdefault(family, {}).update(values)
+        base['sessions'] = sessions
+        base['timesfm'] = timesfm_block
+        base['mlGateEnabled'] = current_ml_gate_enabled
+        # Keep an already-resolved gate exactly, including explicit OFF.
+        base.setdefault('mlGate', None)
+        return base
     return config
 
 
@@ -292,7 +317,7 @@ class HyperoptWorker:
         msg_id = self._next_id
         self._next_id += 1
         payload = {"id": msg_id, "method": method, "params": params or {}}
-        self.proc.stdin.write(json.dumps(payload) + "\n")
+        self.proc.stdin.write(json.dumps(payload, allow_nan=False) + "\n")
         self.proc.stdin.flush()
 
         # Leer respuesta (línea por línea hasta matchear id) con timeout por trial
@@ -322,11 +347,46 @@ class HyperoptWorker:
                     raise RuntimeError(f"worker error: {resp['error']}")
                 return resp["result"]
 
-    def init(self, ticker: str, log_dir: str) -> dict:
-        return self._send("init", {"ticker": ticker, "log_dir": log_dir})
+    def init(self, ticker: str, log_dir: str,
+             evaluation_manifest: str | dict | None = None,
+             timesfm_cache: Optional[Path] = None, wfa_plan: dict | None = None) -> dict:
+        self._wfa_init = None
+        params = {"ticker": ticker, "log_dir": log_dir}
+        if wfa_plan is not None:
+            from wfa_protocol import validate_wfa_plan
+            wfa_plan = validate_wfa_plan(wfa_plan)
+            if wfa_plan['ticker'] != ticker or evaluation_manifest is not None:
+                raise ValueError('WFA plan ticker/manifest mismatch')
+            params['wfa_plan'] = wfa_plan
+        if evaluation_manifest is not None:
+            params["evaluation_manifest"] = evaluation_manifest
+        if timesfm_cache is not None:
+            params["timesfm_cache"] = str(timesfm_cache)
+        result = self._send("init", params)
+        if wfa_plan is not None:
+            if result.get('wfa_plan') != wfa_plan or result['provenance'].get('wfa_plan') != wfa_plan:
+                raise ValueError('worker init did not sign WFA plan')
+            assert_wfa_snapshot(result['provenance'])
+            self._wfa_init = copy.deepcopy(result)
+        return result
+
+    def evaluate_window(self, config: dict, plan: dict, fold_id: int, role: str,
+                        replay_model: dict | None = None) -> dict:
+        if getattr(self, '_wfa_init', None) is None or self._wfa_init.get('wfa_plan') != plan:
+            raise ValueError('WFA plan must match initialized snapshot')
+        fold, _, _ = window_bounds(plan, fold_id, role)
+        validate_replay_model(replay_model, plan, fold, role)
+        assert_wfa_snapshot(self._wfa_init['provenance'])
+        result = self._send('evaluate_window', dict(config=config, plan=plan, fold_id=fold_id,
+                                                   role=role, replay_model=replay_model))
+        return canonicalize_window(result, plan, fold_id, role, init_info=self._wfa_init,
+                                   replay_model=replay_model, requested_config=config)
 
     def evaluate(self, config: dict) -> dict:
-        return self._send("evaluate", {"config": config})
+        return canonicalize_result(self._send("evaluate", {"config": config}))
+
+    def evaluate_final(self, config: dict) -> dict:
+        return canonicalize_result(self._send("evaluate_final", {"config": config}))
 
     def ping(self) -> dict:
         return self._send("ping")
@@ -342,130 +402,170 @@ class HyperoptWorker:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait(timeout=5)
+        self._stderr_thread.join(timeout=2)
+        for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            if stream is not None:
+                stream.close()
 
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
+def _fingerprint(value: Any) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _file_hash(path: str | Path) -> dict:
+    file = Path(path).resolve()
+    return {"path": str(file), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+
+
 def run_optimization(args: argparse.Namespace) -> int:
-    # Storage SQLite para persistir el estudio entre corridas
-    storage_url = f"sqlite:///{args.storage}"
-    sampler = TPESampler(
-        n_startup_trials=args.n_startup,
-        n_ei_candidates=24,
-        multivariate=True,   # capturar correlaciones entre parámetros
-        seed=args.seed,
-    )
-
-    study = optuna.create_study(
-        study_name=args.study_name,
-        storage=storage_url,
-        sampler=sampler,
-        direction="maximize",   # ya manejamos el signo en la función objetivo
-        load_if_exists=True,
-    )
-
-    # Iniciar worker TS
-    tsx_bin = "tsx"
-    npx_bin = "npx"
-    print(f"[hyperopt] iniciando worker TS...", file=sys.stderr)
-    worker = HyperoptWorker(tsx_bin=tsx_bin, npx_bin=npx_bin, cwd=REPO_ROOT)
+    """Resume only the exact scenario; publish a fresh final replay, never trial attrs."""
+    worker = HyperoptWorker(tsx_bin="tsx", npx_bin="npx", cwd=REPO_ROOT)
     try:
-        init_info = worker.init(args.ticker, args.log_dir)
-        print(f"[hyperopt] worker init OK: {init_info}", file=sys.stderr)
-    except Exception as e:
-        worker.close()
-        print(f"[hyperopt] FATAL: {e}", file=sys.stderr)
-        return 1
+        init_info = worker.init(args.ticker, args.log_dir,
+                                getattr(args, "evaluation_manifest", None), args.timesfm_cache)
+        assert_scoring_snapshot(init_info['provenance'])
+        overlay_file = getattr(args, "current_sessions_file", None)
+        overlay_files = [getattr(args, "current_sessions_file_hash", None) or _file_hash(overlay_file)] if overlay_file else []
+        base_file = getattr(args, "base_config_file", None)
+        base_files = [getattr(args, "base_config_file_hash", None) or _file_hash(base_file)] if base_file else []
+        base_config = getattr(args, "base_config", None)
+        scenario = {
+            "version": 1, "ticker": args.ticker,
+            "worker_evaluation_fingerprint": init_info["evaluation_fingerprint"],
+            "worker_provenance": init_info["provenance"],
+            "evaluation_manifest": init_info["evaluation_manifest"],
+            "builder_source": inspect.getsource(build_backtest_config),
+            "search_space_source": inspect.getsource(suggest_params),
+            "roi_presets": ROI_PRESETS,
+            "current_sessions": args.current_sessions,
+            "current_timesfm": getattr(args, "current_timesfm", None),
+            "current_ml_gate_enabled": getattr(args, "current_ml_gate_enabled", False),
+            "overlay_files": overlay_files,
+            "base_config": base_config,
+            "base_config_fingerprint": _fingerprint(base_config),
+            "base_config_files": base_files,
+            "server_files": [_file_hash(__file__), _file_hash(Path(__file__).with_name("run_hyperopt.py"))],
+            "sampler": {"name": "TPESampler", "seed": args.seed,
+                        "n_startup_trials": args.n_startup, "n_ei_candidates": 24,
+                        "multivariate": True, "optuna_version": optuna.__version__},
+            "python_version": sys.version,
+            "objective": {"partition": "train", "direction": "maximize",
+                          "implementation": "scripts/hyperopt/metrics.py",
+                          "policy": objective_policy(), "shadow_consumed_by_sampler": False},
+        }
+        fingerprint = _fingerprint(scenario)
+        study_name = f"{args.study_name}__{fingerprint}"
+        sampler = TPESampler(n_startup_trials=args.n_startup, n_ei_candidates=24,
+                             multivariate=True, seed=args.seed)
+        study = optuna.create_study(study_name=study_name, storage=f"sqlite:///{args.storage}",
+                                    sampler=sampler, direction="maximize", load_if_exists=True)
+        existing = study.user_attrs.get("evaluation_fingerprint")
+        if existing != fingerprint and (existing is not None or study.trials):
+            raise RuntimeError("study provenance missing or mismatched; refusing historical metrics")
+        study.set_user_attr("evaluation_fingerprint", fingerprint)
+        study.set_user_attr("requested_study_name", args.study_name)
+        study.set_user_attr("evaluation_manifest", init_info["evaluation_manifest"])
+        study.set_user_attr("provenance", scenario)
+        trials_before = len(study.trials)
+        t_start = time.monotonic()
+        print(f"[hyperopt] estudio '{study_name}' | trials previas: {trials_before}", file=sys.stderr)
 
-    completed_before = len(study.trials)
-    print(f"[hyperopt] estudio '{args.study_name}' | trials previas: {completed_before}", file=sys.stderr)
-    print(f"[hyperopt] objetivo: {args.n_trials} trials nuevos (smoke={args.smoke_test})", file=sys.stderr)
+        def check_snapshot() -> None:
+            for file in scenario["server_files"] + overlay_files + base_files:
+                if _file_hash(file["path"]) != file:
+                    raise RuntimeError(f"scenario snapshot changed: {file['path']}")
 
-    target_n = 5 if args.smoke_test else args.n_trials
-    t_start = time.time()
+        def check_result(result: dict) -> None:
+            if result["evaluation_fingerprint"] != init_info["evaluation_fingerprint"]:
+                raise RuntimeError("worker evaluation provenance changed within scenario")
+            if result["evaluation_manifest"] != init_info["evaluation_manifest"]:
+                raise RuntimeError("worker evaluation manifest changed within scenario")
 
-    def objective(trial: optuna.Trial) -> float:
-        params = suggest_params(trial)
-        config = build_backtest_config(args.ticker, params, timesfm_cache=args.timesfm_cache,
-                                       current_sessions=args.current_sessions)
-        t0 = time.time()
-        try:
+        def objective(trial: optuna.Trial) -> float:
+            check_snapshot()
+            params = suggest_params(trial)
+            config = build_backtest_config(args.ticker, params, timesfm_cache=args.timesfm_cache,
+                current_sessions=args.current_sessions,
+                current_timesfm=getattr(args, "current_timesfm", None),
+                current_ml_gate_enabled=getattr(args, "current_ml_gate_enabled", None),
+                base_config=base_config)
+            t0 = time.monotonic()
             res = worker.evaluate(config)
-        except Exception as e:
-            print(f"[hyperopt] trial {trial.number} ERROR: {e}", file=sys.stderr)
-            # Devolvemos un valor pésimo pero finito (Optuna no maneja inf bien en TPE)
-            return -100.0
-        dt_ms = (time.time() - t0) * 1000
+            check_snapshot()
+            check_result(res)
+            if any(k in res for k in ('metrics_test','test_r','test_trades','metrics_test_canonical')):
+                raise RuntimeError("optimization evaluate unexpectedly exposed Test")
+            for key in ("effective_config", "config_fingerprint", "evaluation_fingerprint",
+                        "metrics_train", "metrics_validation", "validation_r", "ml_provenance",
+                        "objective_version", "objective_shadow", "shadow_consumed_by_sampler"):
+                trial.set_user_attr(key, res[key])
+            metrics = res["metrics_train"]
+            trial.set_user_attr("metrics", metrics)
+            trial.set_user_attr("metrics_oos", res["metrics_validation"])
+            for key in ("trade_count", "profit_factor", "max_drawdown_r", "win_rate"):
+                trial.set_user_attr(key, metrics[key])
+            trial.set_user_attr("eval_ms", (time.monotonic() - t0) * 1000)
+            print(f"[trial {trial.number}] obj={res['objective']:+.4f} | n={metrics['trade_count']}",
+                  file=sys.stderr)
+            return res["objective"]
 
-        metrics = res["metrics"]
-        obj = res["objective"]
-
-        # Reportar atributos del trial para inspección posterior
-        trial.set_user_attr("metrics", metrics)
-        trial.set_user_attr("trade_count", metrics["trade_count"])
-        trial.set_user_attr("profit_factor", metrics["profit_factor"])
-        trial.set_user_attr("max_drawdown_r", metrics["max_drawdown_r"])
-        trial.set_user_attr("win_rate", metrics["win_rate"])
-        trial.set_user_attr("eval_ms", dt_ms)
-        if res.get("metrics_oos"):
-            trial.set_user_attr("metrics_oos", res["metrics_oos"])
-
-        # Optuna MAXIMIZA → devolvemos obj tal cual
-        # (en Freqtrade loss_objective se MINIMIZA y devuelve el negativo)
-        oos = res.get("metrics_oos")
-        oos_str = f" | OOS_PF={oos['profit_factor']:.2f}" if oos else ""
-        print(
-            f"[trial {trial.number:>4}] obj={obj:+.4f} | "
-            f"PF={metrics['profit_factor']:.2f} | DD={metrics['max_drawdown_r']:.2f}R | "
-            f"WR={metrics['win_rate']*100:5.1f}% | n={metrics['trade_count']:>3} | "
-            f"{dt_ms:>6.0f}ms{oos_str}",
-            file=sys.stderr,
-        )
-        return obj
-
-    try:
-        study.optimize(objective, n_trials=target_n, show_progress_bar=False)
-    except KeyboardInterrupt:
-        print("\n[hyperopt] interrumpido por usuario, guardando estudio...", file=sys.stderr)
+        # Failures are FAILED trials, never synthetic complete scores that can win.
+        try:
+            study.optimize(objective, n_trials=5 if args.smoke_test else args.n_trials,
+                           show_progress_bar=False)
+        except KeyboardInterrupt:
+            print("[hyperopt] interrumpido; re-evaluando ganador completo", file=sys.stderr)
+        complete = study.get_trials(states=(optuna.trial.TrialState.COMPLETE,))
+        if not complete:
+            raise RuntimeError("no completed trials; no candidate exported")
+        best = study.best_trial
+        check_snapshot()
+        final = worker.evaluate_final(best.user_attrs["effective_config"])
+        check_snapshot()
+        check_result(final)
+        if (final["config_fingerprint"] != best.user_attrs["config_fingerprint"] or
+                final["effective_config"] != best.user_attrs["effective_config"]):
+            raise RuntimeError("final replay changed the winning effective config")
+        output = {
+            "study_name": study_name, "requested_study_name": args.study_name,
+            "ticker": args.ticker, "n_trials": len(study.trials),
+            "new_trials": len(study.trials) - trials_before,
+            "completed_trials": len(complete),
+            "elapsed_seconds": time.monotonic() - t_start,
+            "evaluation_manifest": init_info["evaluation_manifest"],
+            "evaluation_fingerprint": fingerprint,
+            "worker_evaluation_fingerprint": final["evaluation_fingerprint"],
+            "provenance": scenario, "config_fingerprint": final["config_fingerprint"],
+            "best_value": final["objective"], "best_trial_value": best.value,
+            "best_trial_number": best.number, "best_params": best.params,
+            "best_config": final["effective_config"],
+            "best_metrics": final["metrics_train"],
+            "best_metrics_train": final["metrics_train"],
+            "best_metrics_validation": final["metrics_validation"],
+            "best_metrics_oos": final["metrics_validation"],
+            "best_metrics_test": final["metrics_test"],
+            "best_validation_r": final["validation_r"],
+            "best_oos_r": final["validation_r"], "best_test_r": final["test_r"],
+            "ml_provenance": final["ml_provenance"], "final_evaluation": final,
+            "objective_version": final['objective_version'],
+            "objective_comparison": posthoc_shadow_comparison(complete,
+                legacy_best_number=best.number, total_trials=len(study.trials)),
+        }
+        out_path = Path(args.output)
+        out_path.write_text(json.dumps(output, indent=2, allow_nan=False))
+        print(f"[hyperopt] resultados re-evaluados en {out_path}", file=sys.stderr)
+        return 0
+    except Exception as exc:
+        print(f"[hyperopt] FATAL: {exc}", file=sys.stderr)
+        return 1
     finally:
         worker.close()
-
-    elapsed = time.time() - t_start
-    n_completed = len(study.trials) - completed_before
-
-    print(f"\n[hyperopt] ══════════════════════════════════════════", file=sys.stderr)
-    print(f"[hyperopt] ✅ {n_completed} trials en {elapsed:.1f}s ({elapsed/max(1,n_completed):.2f}s/trial)", file=sys.stderr)
-    print(f"[hyperopt] 📊 mejor valor: {study.best_value:+.4f}", file=sys.stderr)
-    print(f"[hyperopt] 🎯 mejores parámetros:", file=sys.stderr)
-    for k, v in study.best_params.items():
-        print(f"             {k:>22} = {v}", file=sys.stderr)
-    if study.best_trial:
-        m = study.best_trial.user_attrs.get("metrics")
-        print(f"[hyperopt] 📈 métricas del mejor trial:", file=sys.stderr)
-        print(f"             trades={m['trade_count']}  WR={m['win_rate']*100:.1f}%  "
-              f"PF={m['profit_factor']:.2f}  MaxDD={m['max_drawdown_r']:.2f}R  "
-              f"Sharpe={m['sharpe_simple']:.2f}  Exp={m['expectancy']:+.3f}", file=sys.stderr)
-
-    # Output JSON estructurado para que load_best_params.py lo consuma
-    output = {
-        "study_name": args.study_name,
-        "ticker": args.ticker,
-        "n_trials": len(study.trials),
-        "new_trials": n_completed,
-        "elapsed_seconds": elapsed,
-        "best_value": study.best_value,
-        "best_params": study.best_params,
-        "best_metrics": study.best_trial.user_attrs.get("metrics") if study.best_trial else None,
-        "best_metrics_oos": study.best_trial.user_attrs.get("metrics_oos") if study.best_trial else None,
-        "best_config": build_backtest_config(args.ticker, study.best_params,
-                                             timesfm_cache=args.timesfm_cache,
-                                             current_sessions=args.current_sessions) if study.best_trial else None,
-    }
-    out_path = Path(args.output)
-    out_path.write_text(json.dumps(output, indent=2))
-    print(f"[hyperopt] 💾 resultados en {out_path}", file=sys.stderr)
-    return 0
 
 
 def main() -> int:
@@ -482,17 +582,63 @@ def main() -> int:
     p.add_argument("--timesfm-cache", default=None,
                    help="JSONL de forecasts TimesFM precomputados (activa el filtro en las trials). "
                         "Default: logs/<ticker>/forecasts/forecasts_m5.jsonl si existe.")
+    p.add_argument("--evaluation-manifest", default=None,
+                   help="Version 1 temporal evaluation manifest JSON; default elapsed 70/30, empty Test")
+    p.add_argument("--base-config", default=None,
+                   help="Immutable effective production BacktestConfig JSON; preserve every unsearched field")
     p.add_argument("--current-sessions", default=None,
-                   help="JSON con {ticker, sessions} vigentes del vivo (paridad de umbrales per-gatillo)")
+                   help="JSON snapshot {ticker, sessions, timesfm?, mlGateEnabled?}; missing ML permission is OFF")
     args = p.parse_args()
 
-    if args.current_sessions:
+    args.base_config_file = args.base_config
+    args.base_config_file_hash = None
+    args.base_config = None
+    if args.base_config_file:
         try:
-            args.current_sessions = json.loads(Path(args.current_sessions).read_text()).get("sessions")
-        except Exception as e:
-            print(f"[hyperopt] ⚠ no se pudo cargar current-sessions ({e}) — se corre sin overlay", file=sys.stderr)
-            args.current_sessions = None
+            file = Path(args.base_config_file).resolve()
+            raw = file.read_bytes()
+            args.base_config = json.loads(raw)
+            if not isinstance(args.base_config, dict) or args.base_config.get("ticker") != args.ticker:
+                raise ValueError("base-config must be a BacktestConfig object with matching ticker")
+            if "mlGateEnabled" in args.base_config and type(args.base_config["mlGateEnabled"]) is not bool:
+                raise ValueError("base-config mlGateEnabled must be a boolean")
+            args.base_config_file_hash = {"path":str(file),"sha256":hashlib.sha256(raw).hexdigest()}
+        except (OSError, ValueError) as exc:
+            p.error(str(exc))
 
+    args.current_sessions_file = args.current_sessions
+    args.current_sessions_file_hash = None
+    args.current_timesfm = None
+    args.current_ml_gate_enabled = args.base_config.get("mlGateEnabled", False) if args.base_config is not None else False
+    if args.current_sessions_file:
+        try:
+            file = Path(args.current_sessions_file).resolve()
+            raw = file.read_bytes()
+            snapshot = json.loads(raw)
+            if not isinstance(snapshot, dict) or snapshot.get("ticker") != args.ticker:
+                raise ValueError("current-sessions ticker mismatch")
+            if not isinstance(snapshot.get("sessions"), dict):
+                raise ValueError("current-sessions requires a sessions object")
+            if any(not isinstance(session, dict) for session in snapshot["sessions"].values()):
+                raise ValueError("each current-sessions session must be an object")
+            args.current_sessions = snapshot["sessions"]
+            args.current_timesfm = snapshot.get("timesfm")
+            args.current_ml_gate_enabled = snapshot.get("mlGateEnabled", False)
+            if type(args.current_ml_gate_enabled) is not bool:
+                raise ValueError("current-sessions mlGateEnabled must be a boolean")
+            if args.current_timesfm is not None and not isinstance(args.current_timesfm, dict):
+                raise ValueError("current-sessions timesfm must be an object")
+            args.current_sessions_file_hash = {"path": str(file), "sha256": hashlib.sha256(raw).hexdigest()}
+        except (OSError, ValueError) as exc:
+            p.error(str(exc))
+    if args.evaluation_manifest:
+        try:
+            load_evaluation_manifest(args.evaluation_manifest, args.ticker)
+        except (OSError, ValueError) as exc:
+            p.error(str(exc))
+
+    if not args.timesfm_cache and args.base_config is not None:
+        args.timesfm_cache = (args.base_config.get("timesfm") or {}).get("cachePath")
     if not args.timesfm_cache:
         default_cache = REPO_ROOT / "logs" / args.ticker.lower() / "forecasts" / "forecasts_m5.jsonl"
         args.timesfm_cache = default_cache if default_cache.exists() else None

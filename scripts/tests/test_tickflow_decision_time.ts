@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { tickFlow } from '../../src/engine/TickFlow.js';
+const api:any=tickFlow;
+const hourMs=3600000;
+const start=Math.floor(Date.now()/hourMs)*hourMs-hourMs+60000;
+let last=start;
+for(let i=0;i<120;i++){last+=i%2?110:90;tickFlow.onTick('EURUSD-DECISION-TIME',last,1,NaN);}
+const decision=last+2;
+const velocity=api.getTickVelocity('EURUSD-DECISION-TIME',decision);
+assert.ok(velocity&&velocity.samples>100,'explicit decision time must select historical UTC bucket, not wall clock');
+assert.equal(api.getTickVelocity('EURUSD-DECISION-TIME',last-1),null,'cannot reconstruct a past velocity from future-mutated state');
+assert.equal(api.getTickVelocity('EURUSD-DECISION-TIME',NaN),null,'invalid decision time is not evidence');
+assert.equal(api.getTickVelocity('EURUSD-DECISION-TIME',null),null,'explicit null is not an omitted decision time');
+assert.equal(typeof api.getTickVelocitySnapshot,'function','missing timestamped causal adapter');
+const snap=api.getTickVelocitySnapshot('EURUSD-DECISION-TIME',decision);
+assert.ok(snap&&snap.samples>100);assert.equal(snap.observedAtMs,last);assert.equal(snap.availableAtMs,last);
+assert.equal(snap.baselineHourUtc,new Date(decision).getUTCHours());
+assert.equal(api.getTickVelocitySnapshot('EURUSD-DECISION-TIME',last+10001),null,'stale velocity must not look neutral');
+assert.equal(api.getTickVelocitySnapshot('EURUSD-DECISION-TIME',decision,-1),null);
+assert.equal(api.getTickVelocitySnapshot('NOT-SEEN',decision),null);
+const legacy=api.getTickVelocity('EURUSD-DECISION-TIME');assert.ok(legacy);assert.equal(legacy.samples,0,'one-argument getter retains existing wall-clock semantics');
+console.log('TICKFLOW_DECISION_TIME: PASS');

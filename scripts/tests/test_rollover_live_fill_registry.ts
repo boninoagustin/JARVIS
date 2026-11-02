@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';import ts from 'typescript';import vm from 'node:vm';
+const text=fs.readFileSync('src/db/trading.ts','utf8'),ast=ts.createSourceFile('trading.ts',text,ts.ScriptTarget.Latest,true);
+const fn=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='handleVerifiedRolloverFill');assert.ok(fn,'shared confirmed-fill handler missing (manual and auto)');
+let reads=0,writes=0,optin=false;const policy={profile:'rollover_triage_v1'};const trade:any={tradeId:'T1',journalId:'J1',ticker:'EURUSD',direction:'BUY'};
+const capture=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='captureRolloverVerifiedFill')!;
+const code=ts.transpileModule(capture.getText(ast)+'\n'+fn!.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+const api=vm.runInNewContext(code+'\n({handleVerifiedRolloverFill})',{exports:{},structuredClone,globalState:{activeTrades:new Map([['T1',trade]])},rolloverTriageRecords:new Map(),getConfigForTicker:()=>({rolloverPolicy:optin?policy:undefined}),persistLiveRolloverRecord:async()=>{writes++;},console});
+const event={tradeId:'T1',ticker:'EURUSD',positionId:'42',nowMs:200,readPosition:async()=>{reads++;return {positionId:42,price:100,stopLoss:90,tradeData:{tradeSide:1,volume:100,openTimestamp:123}};}};
+await api.handleVerifiedRolloverFill(event);assert.equal(reads,0,'legacy has no extra broker/storage IO');optin=true;await api.handleVerifiedRolloverFill(event);assert.equal(reads,1);assert.equal(writes,1);assert.equal(trade.rolloverFill.initialRiskPrice,10);await api.handleVerifiedRolloverFill(event);assert.equal(writes,1,'never recapture an immutable fill');
+const service=fs.readFileSync('src/services/ctrader.ts','utf8');assert.ok(service.includes('await notifyRolloverVerifiedFill('),'all confirmed order callers must notify before returning success');assert.ok(text.includes('setRolloverLiveFillObserver(handleVerifiedRolloverFill)'),'shared registry handler is not installed');
+console.log('ROLLOVER_LIVE_SHARED_FILL: PASS');

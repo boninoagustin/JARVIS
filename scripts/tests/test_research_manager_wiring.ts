@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';import vm from 'node:vm';import ts from 'typescript';
+import {SMCEngine} from '../../src/engine/smc/SMCEngine';
+import {buildRolloverFreezeContext} from '../../src/engine/RolloverRuntimeContext';
+// External preset boundary is a literal fixture: no active files or services are read.
+const loadOptimizedPreset=()=>({name:'wiring-fixture',risk_level:3,asset_type:'forex',override_choch:true,require_displacement:false,require_fvg_after_ob:false,strict_breaker:false,strict_sweep:false,confirm_close:true,min_score:0,choch_require_sweep:false,choch_require_momentum:false,valid_bos_displacement:false});
+const text=fs.readFileSync('src/engine/smc/SMCManager.ts','utf8');
+const ast=ts.createSourceFile('manager.ts',text,ts.ScriptTarget.Latest,true);
+const node=ast.statements.find(ts.isClassDeclaration)!;
+const code=ts.transpileModule(node.getText(ast)+'\nSMCManager;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+const broadcasts:any[]=[];
+const Manager=vm.runInNewContext(code,{SMCEngine,buildRolloverFreezeContext,loadOptimizedPreset,structuredClone,console,broadcastEvent:(...x:any[])=>broadcasts.push(['event',...x]),broadcastState:(...x:any[])=>broadcasts.push(['state',...x]),broadcastCandle:(...x:any[])=>broadcasts.push(['candle',...x])});
+const m=new Manager();assert.equal(typeof m.configureRolloverPolicy,'function','explicit ticker API before engine/listener');
+const t=Date.parse('2026-07-14T20:00:00Z');
+const b=(timestamp:number)=>({timestamp,open:100,high:101,low:99,close:100,volume:10});
+const raw:any[]=[];m.addListener((key:any,c:any,events:any)=>raw.push({key,c,events}));
+m.configureRolloverPolicy('NO_REGISTERED_SCHEDULE',{profile:'rollover_triage_v1',freezeSignals:true});
+m.processLiveCandles('NO_REGISTERED_SCHEDULE','M5',[b(t),b(t+300000)]);
+const engine=m.getEngine('NO_REGISTERED_SCHEDULE','M5');
+assert.equal(engine.lastProcessedTs,undefined,'unknown metadata holds actual structural engine');
+assert.equal(raw.length,1,'raw listener still receives closed candle with no events');assert.equal(raw[0].events.length,0);
+assert.ok(broadcasts.some(x=>x[0]==='candle'),'raw candle broadcast continues');
+m.processLiveCandles('LEGACY','M5',[b(t),b(t+300000)]);
+assert.equal(m.getEngine('LEGACY','M5').lastProcessedTs,t,'ticker scoped default legacy');
+console.log('PASS AST actual manager, no services imported; explicit freeze/raw/default scoped');

@@ -11,6 +11,8 @@ import { runBacktest, prepareEntries } from '../../jarvis-os/src/services/backte
 import { BacktestConfig } from '../../jarvis-os/src/services/backtestTypes.js';
 import { loadOptimizedPreset } from '../../src/engine/smc/smc_config.js';
 import { parse as parseCsv } from 'csv-parse/sync';
+import { assertLegacyDetectionSearch,rejectLegacyDetectionProfileFlags } from '../smc_export_context.js';
+rejectLegacyDetectionProfileFlags(process.argv.slice(2));
 
 const TICKER = (process.argv[2] || 'EURUSD').toUpperCase();
 const N_TRIALS = parseInt(process.argv[3] || '120', 10);
@@ -67,6 +69,8 @@ const BASE_PRESET: Record<string, string> = { '5': 'Forex - 3. Balanceado', '15'
 function buildPresetForTf(params: Record<string, any> | null, tfKey: string): SMCPreset {
   const period = tfKey === '5' ? 'M5' : tfKey === '15' ? 'M15' : tfKey === '60' ? 'H1' : tfKey === '240' ? 'H4' : 'D1';
   const base = loadOptimizedPreset(TICKER, period, BASE_PRESET[tfKey]) as any;
+  assertLegacyDetectionSearch(base);
+  if (params) assertLegacyDetectionSearch(params);
   const preset: any = { ...base };
   if (params) {
     for (const [k, v] of Object.entries(params)) preset[k] = v;

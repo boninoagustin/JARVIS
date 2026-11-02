@@ -6,6 +6,10 @@
 import * as adminModule from "firebase-admin";
 const admin: any = (adminModule as any).default ?? adminModule;
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import path from 'node:path';
+import {parseSelectionArgs, selectionManifest, saveSelection} from './selection_context.js';
+const selection = parseSelectionArgs();
+const manifest = selectionManifest(selection);
 
 const WINDOW_DAYS = 84;   // 12 semanas
 const MIN_N = 8;          // mínimo de muestra por celda
@@ -24,13 +28,23 @@ function sessionFromTs(ts: number): string {
 }
 
 async function main() {
-    const key = JSON.parse(readFileSync("/opt/JARVIS/firebase-key.json", "utf8"));
-    if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(key) });
-    const db = admin.firestore();
-
-    const since = Date.now() - WINDOW_DAYS * 24 * 3600 * 1000;
-    const snap = await db.collection("trade_journal").get();
-    const trades = snap.docs.map((d: any) => d.data()).filter((t: any) =>
+    const idx = process.argv.indexOf('--trades-file');
+    let journal: any[];
+    if (idx >= 0) journal = JSON.parse(readFileSync(process.argv[idx+1], 'utf8'));
+    else {
+        if (selection.configFile && !process.argv.includes('--allow-journal-read')) throw new Error('offline sizing requires --trades-file; asset snapshot is not a journal');
+        const key = JSON.parse(readFileSync('/opt/JARVIS/firebase-key.json', 'utf8'));
+        if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(key) });
+        journal = (await admin.firestore().collection('trade_journal').get()).docs.map((d: any) => d.data());
+    }
+    const since = Math.max(manifest.from_ms, manifest.train_end_ms - WINDOW_DAYS * 24 * 3600 * 1000);
+    const trades = journal.filter((t: any) =>
+        String(t.ticker ?? '').toUpperCase() === selection.ticker
+        && Number(t.timestamp ?? t.closedAt ?? 0) < manifest.train_end_ms
+        && Number.isSafeInteger(Number(t.closeTimestamp ?? t.closedAt))
+        && Number(t.closeTimestamp ?? t.closedAt) >= Number(t.timestamp ?? t.closedAt)
+        && Number(t.closeTimestamp ?? t.closedAt) < manifest.train_end_ms
+        &&
         t.mode !== "backtesting"
         && (t.result === "WIN" || t.result === "LOSS")
         && typeof t.rMultiple === "number" && isFinite(t.rMultiple) && t.rMultiple !== 0
@@ -69,6 +83,8 @@ async function main() {
     const wSeq = seq.map(t => +(t.r * (factors[t.sess] ?? 1)).toFixed(3));
 
     const out = {
+        ticker: selection.ticker, selection_partition: 'train', evaluation_manifest: manifest, apply_eligible:false,
+        note: 'bot_config sizing is not representable in an asset candidate; pending no-apply',
         generatedAt: new Date().toISOString(),
         windowDays: WINDOW_DAYS,
         n: trades.length,
@@ -81,13 +97,13 @@ async function main() {
         cells,
         factors,
     };
-    mkdirSync("/opt/JARVIS/scripts/periodic_opt/reports", { recursive: true });
-    mkdirSync("/opt/JARVIS/scripts/periodic_opt/opt_out", { recursive: true });
-    writeFileSync("/opt/JARVIS/scripts/periodic_opt/reports/sizing_proposal.json", JSON.stringify(out, null, 2));
-    writeFileSync("/opt/JARVIS/scripts/periodic_opt/opt_out/sizing_mc_base.json",
-        JSON.stringify(baseSeq.map((r, i) => ({ rMultiple: r, timestamp: i }))));
-    writeFileSync("/opt/JARVIS/scripts/periodic_opt/opt_out/sizing_mc_weighted.json",
-        JSON.stringify(wSeq.map((r, i) => ({ rMultiple: r, timestamp: i }))));
+    // Account sizing is a separate non-certified proposal, never an asset fallback.
+    const output = selection.save ?? '/opt/JARVIS/scripts/periodic_opt/reports/sizing_proposal.json';
+    const dir = path.dirname(path.resolve(output));
+    mkdirSync(dir, {recursive:true});
+    writeFileSync(path.join(dir, `${selection.ticker}_sizing_mc_base.json`), JSON.stringify(baseSeq.map(r=>({rMultiple:r}))));
+    writeFileSync(path.join(dir, `${selection.ticker}_sizing_mc_weighted.json`), JSON.stringify(wSeq.map(r=>({rMultiple:r}))));
+    saveSelection({...selection, save:output}, out);
     console.log(JSON.stringify(out));
     process.exit(0);
 }

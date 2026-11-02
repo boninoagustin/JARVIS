@@ -12,11 +12,11 @@ import fs from 'fs';
 import path from 'path';
 import { runBacktest, prepareEntries } from '/opt/JARVIS/jarvis-os/src/services/backtestEngine.js';
 import admin from 'firebase-admin';
+import {parseSelectionArgs, readAssetSnapshot, selectionEntries, selectionReplayOptions, selectionManifest, readSelectionConfig, completedSelectionTrades, loadSelectionLogs, saveSelection} from './periodic_opt/selection_context.js';
 
-const sa = JSON.parse(fs.readFileSync('/opt/JARVIS/service-account.json', 'utf8'));
-if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
-const db = admin.firestore();
-db.settings({ ignoreUndefinedProperties: true });
+const selection = parseSelectionArgs();
+const manifest = selectionManifest(selection);
+if (selection.configFile && !selection.dryRun) throw new Error('config-file requires --dry-run');
 
 const LOGS_ROOT = '/opt/JARVIS/logs';
 const tfNum = { 'M5': '5', 'M15': '15', 'H1': '60', 'H4': '240', 'D1': 'D' };
@@ -33,18 +33,8 @@ const MTD = [0, 4, 6, 8, 10];                 // maxTradesPerDay
 const TDDR = [0, 2, 3, 4, 5];                 // trailingDrawdownR
 
 function loadLogs(ticker: string, tfs: string[]) {
-  const dir = path.join(LOGS_ROOT, ticker.toLowerCase(), 'history_exported');
-  const logs = new Map<string, string[]>();
-  for (const tf of tfs) {
-    const cands = [path.join(dir, `pine-logs-SMC Master_${tf}.csv`), path.join(dir, `pine-logs-SMC Master_${tf.toUpperCase()}.csv`)];
-    const alt = tfNum[tf];
-    const all = alt ? cands.concat([path.join(dir, `pine-logs-SMC Master_${alt}.csv`)]) : cands;
-    const f = all.find(c => fs.existsSync(c));
-    if (f) logs.set(tf, fs.readFileSync(f, 'utf8').split('\n').filter(l => l.trim().length > 0));
-  }
-  return logs;
+  return loadSelectionLogs(selection);
 }
-
 // Día de trading igual que el motor (anclado 17:00 ART — convención FX).
 function tradingDay(ts: number): string {
   return new Date(ts - 3 * 3600e3 - 17 * 3600e3).toISOString().split('T')[0];
@@ -79,17 +69,14 @@ const ASSETS = arg === 'all'
   : arg.split(',').map(s => s.trim().toUpperCase());
 
 for (const ticker of ASSETS) {
-  const current = (await db.doc(`asset_configs/${ticker}`).get()).data() || {};
+  const current = await readAssetSnapshot(selection);
   const logs = loadLogs(ticker, ['M5', 'M15', 'H1', 'H4', 'D1']);
   if (logs.size === 0) { console.log(`=== ${ticker} === SIN LOGS → skip`); continue; }
-  const prepared = await prepareEntries(logs);
-  const base = {
-    ticker, entryTrigger: 'SMART', minBuyPoints: 4, minSellPoints: 4,
-    slBufferPercent: current.slBufferPercent ?? 0.1, fixedRR: current.fixedRR ?? 2.0, oteEntryPercent: current.oteEntryPercent ?? 50,
-    sessions: current.sessions || {}, spreadPips: 0.1, commissionPerLot: 3.0, tp1StructuralMinRR: 1.2,
-  } as any;
+  const prepared = selectionEntries(await prepareEntries(logs), manifest, selection);
+  const replayOptions = selectionReplayOptions(selection, manifest);
+  const base: any = readSelectionConfig(selection, current);
 
-  const baseM = metrics(runBacktest(logs, { ...base }, undefined, prepared).trades);
+  const baseM = metrics(completedSelectionTrades(runBacktest(logs, { ...base }, undefined, prepared, replayOptions).trades, manifest, prepared));
 
   // ── Etapa 1: DLR × MCL ──
   // 🛡️ Desempate prop-safe: mejoras reales exigen superar el score por EPS; entre
@@ -99,7 +86,7 @@ for (const ticker of ASSETS) {
   for (const dlr of DLR) {
     for (const mcl of MCL) {
       const cfg = { ...base, maxDailyLossR: dlr || undefined, maxConsecutiveLosses: mcl || undefined };
-      const mm = metrics(runBacktest(logs, cfg, undefined, prepared).trades);
+      const mm = metrics(completedSelectionTrades(runBacktest(logs, cfg, undefined, prepared, replayOptions).trades, manifest, prepared));
       if (mm.worstDay < -PROP_MAX_DAY_LOSS_R) continue; // 🛡️ viola el límite prop → descartar
       if (!best) { best = { dlr, mcl, ...mm }; continue; }
       const better = mm.score > best.score + EPS;
@@ -120,7 +107,7 @@ for (const ticker of ASSETS) {
         maxTradesPerDay: mtd || undefined,
         trailingDrawdownR: tddr || undefined,
       };
-      const mm = metrics(runBacktest(logs, cfg, undefined, prepared).trades);
+      const mm = metrics(completedSelectionTrades(runBacktest(logs, cfg, undefined, prepared, replayOptions).trades, manifest, prepared));
       if (mm.worstDay < -PROP_MAX_DAY_LOSS_R) continue; // 🛡️ viola el límite prop → descartar
       if (!best2) { best2 = { mtd, tddr, ...mm }; continue; }
       const better = mm.score > best2.score + EPS;
@@ -135,7 +122,7 @@ for (const ticker of ASSETS) {
   if (process.argv.includes('--dry-run')) {
     console.log(`[DRY-RUN] killswitch_tune ${ticker}: NO escribe a Firestore (congelado). maxDLR=${best.dlr} maxCL=${best.mcl} maxTPD=${best2.mtd} maxTDD=${best2.tddr}`);
   } else {
-    await db.doc(`asset_configs/${ticker}`).set(
+    await admin.firestore().doc(`asset_configs/${ticker}`).set(
       {
         maxDailyLossR: best.dlr,
         maxConsecutiveLosses: best.mcl,
@@ -149,6 +136,9 @@ for (const ticker of ASSETS) {
   }
 
   console.log(`=== ${ticker} ===`);
+  const proposal = {ticker, selection_partition:'train', evaluation_manifest:manifest, maxDailyLossR:best.dlr, maxConsecutiveLosses:best.mcl, maxTradesPerDay:best2.mtd, trailingDrawdownR:best2.tddr, score:best2.score};
+  saveSelection(selection, proposal);
+  console.log(JSON.stringify(proposal));
   console.log(`  base            : ${fmt(baseM)}`);
   console.log(`  BEST maxDLR=${best.dlr} maxCL=${best.mcl} : ${fmt(best)}  (score=${best.score.toFixed(2)})`);
   console.log(`  BEST2 maxTPD=${best2.mtd} maxTDD=${best2.tddr} : ${fmt(best2)}  (score=${best2.score.toFixed(2)})`);

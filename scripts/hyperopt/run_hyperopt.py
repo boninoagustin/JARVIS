@@ -49,9 +49,11 @@ def resolve_log_dir(ticker: str) -> Path:
 def main() -> int:
     p = argparse.ArgumentParser(description="JARVIS Hyperopt CLI")
     p.add_argument("ticker", help="Ticker (ej. EURUSD, XAUUSD, USOIL)")
+    p.add_argument("--log-dir", default=None, help="Explicit historical CSV directory (no automatic discovery)")
+    p.add_argument("--base-config", default=None, help="Immutable effective production BacktestConfig JSON")
     p.add_argument("--n-trials", type=int, default=200)
     p.add_argument("--n-startup", type=int, default=20)
-    p.add_argument("--study-name", default=None, help="Default: jarvis_<ticker>_<n_trials>")
+    p.add_argument("--study-name", default=None, help="Default: jarvis_<ticker>_eng4 (server adds scenario SHA-256)")
     p.add_argument("--storage", default=None, help="Default: scripts/hyperopt/jarvis_hyperopt_study.db")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", default=None, help="Default: optimized_preset_<ticker>_hyperopt.json")
@@ -59,6 +61,8 @@ def main() -> int:
                    help="5 trials para validar pipeline end-to-end sin gastar compute")
     p.add_argument("--timesfm-cache", default=None,
                    help="JSONL de forecasts TimesFM precomputados → trials CON filtro (F4)")
+    p.add_argument("--evaluation-manifest", default=None,
+                   help="Version 1 temporal evaluation manifest JSON (forwarded unchanged)")
     p.add_argument("--current-sessions", default=None,
                    help="JSON overlay de sesiones vigentes del vivo (dueño-único, sep-2026)")
     args = p.parse_args()
@@ -70,7 +74,9 @@ def main() -> int:
         return 1
 
     try:
-        log_dir = resolve_log_dir(args.ticker)
+        log_dir = Path(args.log_dir).resolve() if args.log_dir else resolve_log_dir(args.ticker)
+        if not log_dir.is_dir():
+            raise FileNotFoundError(f"log-dir is not a directory: {log_dir}")
     except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
@@ -97,8 +103,12 @@ def main() -> int:
         cmd.append("--smoke-test")
     if args.timesfm_cache:
         cmd += ["--timesfm-cache", args.timesfm_cache]
+    if args.evaluation_manifest:
+        cmd += ["--evaluation-manifest", args.evaluation_manifest]
     if args.current_sessions:
         cmd += ["--current-sessions", args.current_sessions]
+    if args.base_config:
+        cmd += ["--base-config", args.base_config]
 
     print(f"→ log_dir: {log_dir}", file=sys.stderr)
     print(f"→ study_name: {study_name}", file=sys.stderr)
