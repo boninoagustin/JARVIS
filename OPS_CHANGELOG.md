@@ -48,3 +48,22 @@ pero acá queda el qué y el por qué). Todo es reversible.
 
 - `train_ml_weekly.py` y `MLFilter.ts` (guard de modelos): pendiente.
 - Push del backup: pendiente de decisión.
+
+## 7. Incidente del 02-nov 23:55 → 03-nov 00:00 (CLI de pm2 roto, sin downtime del bot)
+
+**Qué pasó**: al crear un wrapper de auditoría en `/usr/local/bin/pm2` con `cat >`,
+se escribió **a través del symlink** (`/usr/local/bin/pm2 → /root/.nvm/.../bin/pm2 →
+../lib/node_modules/pm2/bin/pm2`), sobrescribiendo el CLI real con el wrapper. El
+wrapper hacía `exec .../bin/pm2`, que ya era el wrapper → **recursión infinita**.
+Todos los comandos `pm2` se colgaban (incluido `pm2 list`, `pm2 pid`, y el watchdog).
+
+**Impacto**: ninguno sobre el bot — los procesos siguieron corriendo (uptime 13 h,
+restarts 10 sin cambios). El daemon (God) estaba sano; solo el CLI quedó inutilizable.
+
+**Fix**: se restauró `node_modules/pm2/bin/pm2` desde `npm pack pm2@7.0.3` (misma
+versión que el daemon). Verificado con `pm2 list` (3 apps online).
+
+**Lección**: antes de escribir un archivo con `>`, verificar que no sea symlink
+(`ls -l`). Los wrappers van en un **nombre nuevo**: ahora existe `/usr/local/bin/pm2-audit`,
+que loguea `user/uid/tty/ppid/args` en el journal (`journalctl -t pm2-audit`) y
+ejecuta el pm2 real. Usar `pm2-audit restart JARVIS` para dejar rastro.
