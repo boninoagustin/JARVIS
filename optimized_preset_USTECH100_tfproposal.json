@@ -1,0 +1,57 @@
+{
+  "ticker": "USTECH100",
+  "generatedAt": "2026-11-01T01:48:41.239Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 89,
+      "wins": 31,
+      "wr": 0.34831460674157305,
+      "pf": 0.7920645215162242,
+      "exp": -0.13550864176472177,
+      "maxDD": 24.06024196952187,
+      "maxAbsR": 1.4999992994484816
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 109,
+      "wins": 43,
+      "wr": 0.3944954128440367,
+      "pf": 0.9630976703912487,
+      "exp": -0.022344550087990078,
+      "maxDD": 26.500071356728164,
+      "maxAbsR": 1.4999992994484816
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 1288
+}

@@ -1,0 +1,57 @@
+{
+  "ticker": "XPTUSD",
+  "generatedAt": "2026-11-01T02:10:58.997Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 68,
+      "wins": 40,
+      "wr": 0.5882352941176471,
+      "pf": 1.9418767226527895,
+      "exp": 0.3462813092307885,
+      "maxDD": 4.000039027553626,
+      "maxAbsR": 1.5025576947174548
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 8,
+        "wick_pct": 0.3,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 8,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 54,
+      "wins": 43,
+      "wr": 0.7962962962962963,
+      "pf": 5.9420747222401,
+      "exp": 0.8272280548339975,
+      "maxDD": 4.0000304099751105,
+      "maxAbsR": 1.5025576947174548
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 1296
+}
