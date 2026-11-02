@@ -56,7 +56,7 @@ for (const f of files) {
   if (train === null || train < MIN_TRAIN_SAMPLES) { verdict = 'CUARENTENA'; why = `train_samples=${train ?? '?'} < ${MIN_TRAIN_SAMPLES}`; }
   else if (test === null || test < MIN_TEST_SAMPLES) { verdict = 'CUARENTENA'; why = `test_samples=${test ?? '?'} < ${MIN_TEST_SAMPLES}`; }
   else if (acc === null || acc < MIN_ACCURACY) { verdict = 'CUARENTENA'; why = `accuracy=${acc ?? '?'} < ${MIN_ACCURACY}`; }
-  else if (acc < WEAK_ACCURACY) { verdict = 'DÉBIL'; why = `accuracy=${acc} < ${WEAK_ACCURACY} (se conserva) `; }
+  else if (acc < WEAK_ACCURACY) { verdict = 'DÉBIL'; why = `accuracy=${acc} < ${WEAK_ACCURACY} (queda para research; el bot vivo no lo carga: piso MLFilter 0.55)`; }
   rows.push({ file: f, ticker, acc, f1, train, test, gate: assets.get(ticker)?.mlGateEnabled === true, verdict, why });
 }
 
