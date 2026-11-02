@@ -965,9 +965,21 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         direction,
         slPrice,
         tp1Price,
-        tp2Price,
+        tp2Price: tp2PriceIn,
         riskPercent = config.CTRADER_RISK_PERCENT
     } = params;
+
+    // 🛡️ 02-nov-2026: el cap de TP2 (1.5R / 0.5×ADR) puede dejarlo ANTES de TP1 y la orden
+    // se abortaba con BLOCKED_TARGETS (16 casos en 30 días: XAUUSD tp1=3986.7/tp2=4004.6,
+    // AUDCAD tp1=0.98156/tp2=0.98234). La validación es correcta; el insumo no.
+    // Si TP2 no está estrictamente más allá de TP1, se envía la orden con un solo objetivo
+    // (TP1) y el gestor de salida sigue manejando trail/BE.
+    let tp2Price = tp2PriceIn;
+    const dirSign = direction === 'BUY' ? 1 : -1;
+    if (tp2Price !== undefined && tp2Price !== null && !(dirSign * (Number(tp2Price) - Number(tp1Price)) > 0)) {
+        console.warn(`[CTRADER-TARGETS] ${ticker}: TP2 ${tp2Price} no está más allá de TP1 ${tp1Price} (cap 1.5R/ADR) → se envía solo TP1`);
+        tp2Price = undefined;
+    }
 
     // Ensure connection
     if (!isCTraderReady()) {
