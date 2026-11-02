@@ -77,6 +77,8 @@ export function getVerifiedAccountCurrency(): string | null { return executionAc
 const executionSymbolMetadata = new Map<string, any>();
 const executionAssetNames = new Map<number, string>();
 const executionExitCosts = new Map<string, {commissionPerLot:number;currency:string;slippagePrice:number;timestampMs:number}>();
+// 🆕 02-nov-2026: throttle del aviso de lote mínimo (1 vez cada 6h por activo).
+const sizingWarnAt = new Map<string, number>();
 function cacheExecutionSymbol(ticker: string, info: any): void {
     if (!info || !Number.isFinite(info.symbolId)) return;
     const light=ctClient?.symbols?.idToSymbol?.get(Number(info.symbolId));
@@ -1188,7 +1190,24 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             if (!commission) return 'BLOCKED_COST: known commission cannot be converted safely';
             const sized = sizeOrderVolume({equity:accountInfo.equity,riskPercent,
                 worstEntry,sl:formattedSl,rate,meta:info,commission});
-            if (sized.ok === false) return sized.error;
+            if (sized.ok === false) {
+                // 🆕 02-nov-2026: BLOCKED_MIN_VOLUME era un skip silencioso. Se loguea (1 vez
+                // cada 6h por activo) cuánto riesgo exigiría el lote mínimo, para poder decidir
+                // entre subir el riesgo del activo o deshabilitarlo.
+                if (sized.error.startsWith('BLOCKED_MIN_VOLUME')) {
+                    const warnKey = ticker.toUpperCase();
+                    const lastWarn = sizingWarnAt.get(warnKey) ?? 0;
+                    if (now - lastWarn > 6 * 3600e3) {
+                        sizingWarnAt.set(warnKey, now);
+                        const perCent = Math.abs(worstEntry - formattedSl) / 100 * rate;
+                        const minCost = info.minVolume * (perCent + 2 * (commission.perCentAccount ?? 0));
+                        const budget = accountInfo.equity * Math.min(riskPercent, 3) / 100;
+                        const needPct = accountInfo.equity > 0 ? (minCost / accountInfo.equity) * 100 : NaN;
+                        console.warn(`[SIZING] ⚠️ ${ticker}: el lote mínimo (${info.minVolume} = ${(info.minVolume / info.lotSize).toFixed(2)} lote) cuesta ~${minCost.toFixed(2)} ${accountCurrency} vs presupuesto ${budget.toFixed(2)} (riesgo ${riskPercent}%, SL ${Math.abs(worstEntry - formattedSl).toFixed(5)}) → exigiría ~${Number.isFinite(needPct) ? needPct.toFixed(2) : '?'}% de riesgo`);
+                    }
+                }
+                return sized.error;
+            }
             quoteToAccountRate=rate;
             riskBudgetAccount=sized.budget;
             correctVolumeCents=sized.volume;
