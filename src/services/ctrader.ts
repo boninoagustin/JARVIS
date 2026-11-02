@@ -79,6 +79,8 @@ const executionAssetNames = new Map<number, string>();
 const executionExitCosts = new Map<string, {commissionPerLot:number;currency:string;slippagePrice:number;timestampMs:number}>();
 // 🆕 02-nov-2026: throttle del aviso de lote mínimo (1 vez cada 6h por activo).
 const sizingWarnAt = new Map<string, number>();
+// 🆕 02-nov-2026: throttle del aviso de ventana de rollover (1 por activo por hora).
+const rolloverWarnAt = new Map<string, number>();
 function cacheExecutionSymbol(ticker: string, info: any): void {
     if (!info || !Number.isFinite(info.symbolId)) return;
     const light=ctClient?.symbols?.idToSymbol?.get(Number(info.symbolId));
@@ -1167,7 +1169,20 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 const flow = tickFlow.getSpreadSnapshot(ticker, now);
                 const snapshot = flow ? { ...flow, bid: live.bid, ask: live.ask, spread: Math.max(flow.spread, spread), ts: Math.min(flow.ts, live.ts) } : null;
                 const reference = getRolloverSpreadReference(ticker, live.bid);
-                if (evaluateRolloverEntryGate(ticker, now, snapshot, { live: true, ...reference }).blocked) return 'BLOCKED_ROLLOVER';
+                const rollGate = evaluateRolloverEntryGate(ticker, now, snapshot, { live: true, ...reference });
+                if (rollGate.blocked) {
+                    // 🆕 02-nov-2026: BLOCKED_ROLLOVER era opaco (35 bloqueos/45d repartidos en
+                    // horas muy distintas). Se loguea 1 vez por activo y por hora la ventana real
+                    // del bróker, para poder auditar si la pausa calculada tiene sentido.
+                    const warnKey = `ROLLOVER:${ticker.toUpperCase()}:${now - (now % 3600e3)}`;
+                    if (!rolloverWarnAt.has(warnKey)) {
+                        rolloverWarnAt.set(warnKey, now);
+                        const c = rollGate.calendar;
+                        const fmt = (ms: number | null) => (ms == null ? '?' : new Date(ms).toISOString().slice(11, 16) + 'Z');
+                        console.warn(`[ROLLOVER] ${ticker}: ${rollGate.reason} · pausa ${fmt(c.pauseStartMs)}→${fmt(c.reopenMs)} · motivo=${rollGate.reason} · metadata=${c.metadataAvailable ? 'ok' : 'FALTA'} · tz=${c.scheduleTimeZone ?? '?'}`);
+                    }
+                    return 'BLOCKED_ROLLOVER';
+                }
             }
             arrivalPrice = direction === 'BUY' ? live.ask : live.bid;
             const levelBlock = validateOrderLevels(direction, arrivalPrice, formattedSl, roundTo(tp1Price, digits), tp2Price === undefined ? undefined : roundTo(tp2Price, digits), params.minimumRR);
