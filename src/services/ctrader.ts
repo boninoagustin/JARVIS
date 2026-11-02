@@ -708,6 +708,69 @@ export async function syncScannerRoster(tickers: string[]): Promise<void> {
         scannerProcessed.add(asset);
     }
     console.log(`[CTRADER] ✅ Roster dinámico completo: ${scannerProcessed.size} activos con streams.`);
+    try { await ensureConversionInstruments([...scannerRoster]); } catch (e: any) { console.warn(`[CTRADER] ⚠️ conversión: ${e.message}`); }
+}
+
+// 🆕 02-nov-2026: conversión de la moneda de cotización a la moneda de la cuenta.
+// `lossConversionRate` exige una cotización FRESCA (≤10s) del par QC→AC, pero esos pares
+// no se operan, así que no estaban suscriptos y el dispatch abortaba con
+// BLOCKED_CONVERSION (24 casos en 30 días: AUDNZD, JP225, XAGUSD...).
+// Se resuelve el par, se cachea su metadata y se suscribe el spot una sola vez.
+const CONVERSION_SUBSCRIBED = new Set<string>();
+function symbolIdByName(name: string): number | null {
+    const map = (ctClient as any)?.symbols?.idToSymbol;
+    if (!map || typeof map.values !== 'function') return null;
+    const norm = (v: any) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const target = norm(name);
+    for (const sym of map.values()) {
+        if (norm(sym?.symbolName) === target) return Number(sym?.symbolId) || null;
+    }
+    return null;
+}
+
+let CONVERSION_QUOTE_CHECK_SCHEDULED = false;
+export async function ensureConversionInstruments(tickers: string[]): Promise<void> {
+    if (!ctClient || !accountCurrency || !executionAccountCurrencyVerified) return;
+    const quotes = new Set<string>();
+    for (const t of tickers) {
+        const meta = executionSymbolMetadata.get(t.toUpperCase());
+        const qc = meta ? executionAssetNames.get(meta.quoteAssetId) : undefined;
+        if (qc && qc !== accountCurrency) quotes.add(qc);
+    }
+    for (const qc of quotes) {
+        let resolved = false;
+        for (const name of [`${qc}${accountCurrency}`, `${accountCurrency}${qc}`]) {
+            if (CONVERSION_SUBSCRIBED.has(name)) { resolved = true; break; }
+            const id = symbolIdByName(name);
+            if (!id) continue;
+            try {
+                const info = await getSymbolInfo(name);
+                if (!info?.symbolId) continue;
+                if (!subscribedSpots.has(Number(info.symbolId))) {
+                    await ctClient.raw.market.subscribeSpots([Number(info.symbolId)], true);
+                    subscribedSpots.add(Number(info.symbolId));
+                }
+                // Sin este mapeo el handler de SpotEvent (2131) descarta el tick y
+                // getLastBidAsk(name) nunca tiene quote → conversión igual bloqueada.
+                symbolToTicker.set(Number(info.symbolId), name);
+                CONVERSION_SUBSCRIBED.add(name);
+                console.log(`[CTRADER] 💱 conversión suscripta: ${name} (${qc}→${accountCurrency})`);
+                resolved = true;
+                break;
+            } catch (e: any) {
+                console.warn(`[CTRADER] ⚠️ conversión ${name} no disponible: ${e.message}`);
+            }
+        }
+        if (!resolved) console.warn(`[CTRADER] ⚠️ sin par de conversión ${qc}→${accountCurrency}: las entradas en ${qc} van a quedar BLOCKED_CONVERSION`);
+    }
+    if (!CONVERSION_QUOTE_CHECK_SCHEDULED && CONVERSION_SUBSCRIBED.size > 0) {
+        CONVERSION_QUOTE_CHECK_SCHEDULED = true;
+        setTimeout(() => {
+            const missing = [...CONVERSION_SUBSCRIBED].filter(n => !getLastBidAsk(n, Date.now()));
+            if (missing.length) console.warn(`[CTRADER] ⚠️ conversión sin quote fresco a los 20s: ${missing.join(', ')}`);
+            else console.log(`[CTRADER] 💱 conversión OK con quote fresco: ${[...CONVERSION_SUBSCRIBED].join(', ')}`);
+        }, 20000);
+    }
 }
 
 export async function initializeScanner() {
@@ -747,6 +810,7 @@ export async function initializeScanner() {
     }
     
     console.log(`[CTRADER] ✅ Escáner SMC Global inicializado. (${successCount}/${assets.length * timeframes.length} streams activos)`);
+    try { await ensureConversionInstruments(assets); } catch (e: any) { console.warn(`[CTRADER] ⚠️ conversión: ${e.message}`); }
 }
 
 /**
