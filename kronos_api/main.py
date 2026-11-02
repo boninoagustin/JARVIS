@@ -255,11 +255,12 @@ async def backtest_export_csv(ticker: str, tfs: str = "M5,M15,H1,H4,D1"):
         tf = tf.strip()
         try:
             result = subprocess.run(
-                ["npx", "tsx", script, ticker, tf],
+                ["npx", "tsx", script, ticker, "--timeframes", tf],
                 capture_output=True, text=True, timeout=300,
                 cwd=JARVIS_DIR, env=env
             )
-            results[tf] = {"ok": result.returncode == 0, "output": result.stdout[-200:] if result.stdout else ""}
+            output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout or "")
+            results[tf] = {"ok": result.returncode == 0, "output": output[-200:]}
         except subprocess.TimeoutExpired:
             results[tf] = {"ok": False, "error": "timeout"}
         except Exception as e:

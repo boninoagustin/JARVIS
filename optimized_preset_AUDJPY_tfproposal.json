@@ -1,62 +1,62 @@
 {
   "ticker": "AUDJPY",
-  "generatedAt": "2026-10-11T06:08:34.616Z",
+  "generatedAt": "2026-10-24T23:25:24.998Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {
       "15": {
-        "pivot_len": 3,
-        "wick_pct": 0.3,
+        "pivot_len": 21,
+        "wick_pct": 0.2,
         "div_len": 2,
-        "z_window": 14
+        "z_window": 100
       },
       "60": {
-        "pivot_len": 3,
-        "wick_pct": 0.1,
-        "div_len": 5,
-        "z_window": 14
+        "pivot_len": 21,
+        "wick_pct": 0.2,
+        "div_len": 2,
+        "z_window": 100
       },
       "240": {
-        "pivot_len": 8,
-        "wick_pct": 0.1,
+        "pivot_len": 21,
+        "wick_pct": 0.2,
         "div_len": 2,
-        "z_window": 14
+        "z_window": 100
       },
       "D": {
-        "pivot_len": 3,
-        "wick_pct": 0.1,
+        "pivot_len": 21,
+        "wick_pct": 0.2,
         "div_len": 2,
-        "z_window": 14
+        "z_window": 100
       }
     },
     "metrics": {
-      "trades": 110,
-      "wins": 79,
-      "wr": 0.7181818181818181,
-      "pf": 2.929009565990025,
-      "exp": 0.5614206556293014,
-      "maxDD": 3.6080131317374295,
-      "maxAbsR": 2.588794505426619
+      "trades": 26,
+      "wins": 18,
+      "wr": 0.6923076923076923,
+      "pf": 2.452086398614081,
+      "exp": 0.4852803677190763,
+      "maxDD": 2.2476456876458064,
+      "maxAbsR": 2.0292924528303695
     }
   },
   "proposal": {
     "blocks": {
       "15": {
         "pivot_len": 3,
-        "wick_pct": 0.3,
+        "wick_pct": 0.1,
         "div_len": 2,
         "z_window": 14
       },
       "60": {
-        "pivot_len": 8,
-        "wick_pct": 0.3,
+        "pivot_len": 3,
+        "wick_pct": 0.1,
         "div_len": 2,
         "z_window": 14
       },
       "240": {
-        "pivot_len": 8,
+        "pivot_len": 3,
         "wick_pct": 0.1,
-        "div_len": 5,
+        "div_len": 2,
         "z_window": 14
       },
       "D": {
@@ -67,16 +67,16 @@
       }
     },
     "metrics": {
-      "trades": 110,
-      "wins": 84,
-      "wr": 0.7636363636363637,
-      "pf": 3.4761730415985874,
-      "exp": 0.6214235615544869,
-      "maxDD": 3.2587074030553396,
-      "maxAbsR": 2.588794505426619
+      "trades": 26,
+      "wins": 18,
+      "wr": 0.6923076923076923,
+      "pf": 2.452086398614081,
+      "exp": 0.4852803677190763,
+      "maxDD": 2.2476456876458064,
+      "maxAbsR": 2.0292924528303695
     }
   },
-  "verdict": "RECOMMEND",
-  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
-  "elapsedSec": 1559
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 1752
 }

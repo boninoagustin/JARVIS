@@ -1,8 +1,16 @@
 // Tipos para el motor de backtesting standalone
+import type { ExecutionPolicyInput, ExecutionPolicy, ExecutionInstrument, ExecutionPositionState, ExecutionObservation } from '../../../src/engine/ExecutionTypes';
 import type { RadarZone, RadarState, ImpulseLeg, ScoreState } from '../../../src/engine/Types';
 export type { RadarZone, RadarState, ImpulseLeg, ScoreState };
 
 export interface BacktestTrade {
+  rolloverInitialRiskPrice?: number;
+  rolloverTriage?: Array<{nowMs:number;execution:'PROPOSAL_ONLY';proposal:import('../../../src/engine/RolloverTriagePolicy').RolloverTriageProposal}>;
+  mlRegimeShadow?: import('../../../src/engine/MLRegimeFeatures').RegimePrediction;
+  executionPolicy?: ExecutionPolicy;
+  executionInstrument?: ExecutionInstrument;
+  executionState?: ExecutionPositionState;
+  initialSlPrice?: number;
   id: string; timestamp: number; direction: 'BUY' | 'SELL';
   entryPrice: number; tp1Price: number; tp2Price: number; slPrice: number;
   originalSlPrice?: number;
@@ -57,6 +65,14 @@ export interface SessionConfig {
 }
 
 export interface BacktestConfig {
+  rolloverPolicy?: import('../../../src/engine/RolloverRuntimeContext').RolloverRuntimePolicy;
+  mlRegimeShadow?: boolean;
+  /** Archived bilateral evidence only. Key ticker:tradeId:nowMs; never modeled midpoint quotes. */
+  rolloverTriageContexts?: Record<string, import('../../../src/engine/RolloverTriagePolicy').RolloverTriageContext>;
+  /** Explicit observed-as-of sidecar keyed ticker:tf:direction:decisionMs. Never inferred from CSV defaults. */
+  mlRegimeContexts?: Record<string, import('../../../src/engine/MLRegimeFeatures').RegimeContextInput>;
+  executionPolicy?: ExecutionPolicyInput;
+  executionInstrument?: ExecutionInstrument;
   ticker: string;
   minBuyPoints: number;
   minSellPoints: number;
@@ -102,14 +118,17 @@ export interface BacktestConfig {
 }
 
 export interface BacktestResult {
+  researchReport?: {schema:1;applyEligible:false;profitabilityEvidence:false;rolloverProfile:string;mlRegimeShadow:boolean;triageExecution:'PROPOSAL_ONLY_NO_BILATERAL_EXECUTION_MODEL';configSha256:string};
   trades: BacktestTrade[]; totalEvents: number; processedEvents: number;
   startDate: string; endDate: string;
   /** 🛡️ ML F3 (sep-2026): rechazos del gate ML walk-forward (0 si mlGate off) */
   mlRejected?: number;
   mlGateEnabled?: boolean;
+  replayDiagnostics?: import('./replayWindow').ReplayDiagnostics;
 }
 
 export interface ParsedAlert {
+  executionObservation?: ExecutionObservation;
   prefix: string;
   eventTf: string;
   readableTf: string;
