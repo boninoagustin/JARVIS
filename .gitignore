@@ -40,3 +40,6 @@ scripts/periodic_opt/opt_out/
 
 # 02-nov-2026: modelos ML rechazados por model_health.ts (auditoría en quarantine.json)
 scripts/hyperopt/models/quarantine/
+
+# 02-nov-2026: artefactos de auditoría generados (JSON de 35 MB c/u)
+audit_results/
