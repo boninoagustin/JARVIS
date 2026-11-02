@@ -51,6 +51,7 @@ if (tests.size === 0) { console.log('sin tests prospectivos'); process.exit(0); 
 
 let appliedCount = 0;
 let wouldApply = 0;
+const notes: string[] = [];
 for (const doc of tests.docs) {
   const t = doc.data() as any;
   const ticker = doc.id;
@@ -136,7 +137,24 @@ for (const doc of tests.docs) {
     promotion: { applied_at: at, previous_fingerprint: beforeFp, applied_fingerprint: fp(exactWrite), prev_path: prevPath, prodOosRef: ev.production.expectancy },
   }, { merge: true });
   appliedCount++;
+  notes.push(`• ${ticker}: Δ ${delta >= 0 ? '+' : ''}${delta.toFixed(2)} R/t forward (n cand ${ev.candidate?.n}/prod ${ev.production?.n})`);
   console.log(`  ✅ ${ticker}: aplicado (backup ${path.basename(prevPath)}) y registrado para rollback automático`);
+}
+
+// Un cambio aplicado sin aviso sería una sorpresa: se notifica por Telegram, corto y legible.
+if (appliedCount > 0) {
+  try {
+    const env = fs.readFileSync(path.join(REPO, '.env'), 'utf8');
+    const token = /TELEGRAM_BOT_TOKEN="([^"]+)"/.exec(env)?.[1];
+    const chat = /TELEGRAM_ALLOWED_USER_IDS="([^"]+)"/.exec(env)?.[1] || '1348898450';
+    if (token) {
+      const text = `✅ JARVIS — cambio aplicado por test prospectivo\n${notes.join('\n')}\n🛡 Backup guardado; el rollback automático lo vigila la próxima semana.`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ chat_id: chat, text }).toString(),
+      }).catch(() => undefined);
+    }
+  } catch { /* la notificación nunca debe impedir la aplicación */ }
 }
 
 console.log(`\n${APPLY ? 'aplicados' : '[dry-run] aplicables'}: ${APPLY ? appliedCount : wouldApply}`);
