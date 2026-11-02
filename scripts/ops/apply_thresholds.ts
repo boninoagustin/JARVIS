@@ -12,6 +12,10 @@
  *   n <  20  → +0.15 R/t (3× más exigente: compensa la falta de muestra)
  *
  * No reemplaza al Montecarlo ni al resto de los gates: se suma a ellos.
+ * Consumido por `scripts/periodic_opt/weekly_candidate_safety.ts` (checkWeeklyCandidate,
+ * el gate del rollout del sábado). Ese archivo vive en el árbol de trabajo sin commitear
+ * (feature de rollout semanal en progreso): si se reescribe, hay que re-conectar
+ * `evaluateGain(...)` o el umbral por muestra deja de aplicarse.
  * Autotest: npx tsx scripts/ops/apply_thresholds.ts --self-test
  */
 

@@ -8,6 +8,7 @@
  *
  * Regla de cuarentena (conservadora, no toca modelos con datos suficientes):
  *   - train_samples < 50            → no hay evidencia para confiar en el modelo
+ *   - test_samples  < 20            → la métrica de accuracy no es medible
  *   - accuracy < 0.50               → sistemáticamente equivocado
  * Se marcan como "débil" (sin cuarentena) los de accuracy < 0.55.
  *
@@ -28,6 +29,7 @@ const QUAR_DIR = path.join(MODELS_DIR, 'quarantine');
 const APPLY = process.argv.includes('--apply');
 
 const MIN_TRAIN_SAMPLES = 50;
+const MIN_TEST_SAMPLES = 20;
 const MIN_ACCURACY = 0.50;
 const WEAK_ACCURACY = 0.55;
 
@@ -52,6 +54,7 @@ for (const f of files) {
   const test = Number.isInteger(meta.test_samples) ? meta.test_samples : null;
   let verdict = 'OK'; let why = '';
   if (train === null || train < MIN_TRAIN_SAMPLES) { verdict = 'CUARENTENA'; why = `train_samples=${train ?? '?'} < ${MIN_TRAIN_SAMPLES}`; }
+  else if (test === null || test < MIN_TEST_SAMPLES) { verdict = 'CUARENTENA'; why = `test_samples=${test ?? '?'} < ${MIN_TEST_SAMPLES}`; }
   else if (acc === null || acc < MIN_ACCURACY) { verdict = 'CUARENTENA'; why = `accuracy=${acc ?? '?'} < ${MIN_ACCURACY}`; }
   else if (acc < WEAK_ACCURACY) { verdict = 'DÉBIL'; why = `accuracy=${acc} < ${WEAK_ACCURACY} (se conserva) `; }
   rows.push({ file: f, ticker, acc, f1, train, test, gate: assets.get(ticker)?.mlGateEnabled === true, verdict, why });
