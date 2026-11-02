@@ -555,6 +555,11 @@ function clearSubscriptionState(): void {
     subscribedSpots.clear();
     subscribedTrendbars.clear();
     scannerProcessed.clear();
+    // 🛡️ 02-nov-2026: sin esto, tras una reconexión las suscripciones de conversión
+    // se caen (subscribedSpots se limpia) pero el set seguía marcándolas como hechas
+    // → no se re-suscribían y BLOCKED_CONVERSION volvía para todos los QC≠AC.
+    CONVERSION_SUBSCRIBED.clear();
+    CONVERSION_QUOTE_CHECK_SCHEDULED = false;
 }
 
 // 🆕 Fase 1: listener de ticks spot para el SMCBridge (PING de precio nativo).
