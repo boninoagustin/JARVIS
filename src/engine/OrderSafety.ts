@@ -129,10 +129,15 @@ export async function authorizedBrokerRequest(connection:any,payloadType:number,
     const initial=validate();if(initial) throw blocked(initial);
     // Atomic admission: this exact SDK would otherwise queue or set a timer.
     // Unknown dispatcher shape is not authorization to perform a live write.
-    if (!Number.isInteger(connection.inFlightRequests)||connection.inFlightRequests<0
-        || !Array.isArray(connection.requestQueue)||!Number.isFinite(connection.lastRequestSentAt)
-        || (!options.allowQueue && (connection.inFlightRequests>=5||connection.requestQueue.length!==0||Date.now()-connection.lastRequestSentAt<50))
-        || typeof connection.send!=='function'||typeof connection.request!=='function') throw blocked('BLOCKED_DISPATCH: broker write would queue or SDK dispatcher is unverified');
+    // 02-nov-2026: mensajes separados — "unverified" es estructural (no reintentar),
+    // "would queue" es transitorio (carrera de 50ms con las lecturas de mercado) y el
+    // caller lo reintenta un par de veces sin haber enviado nada.
+    const shapeKnown = Number.isInteger(connection.inFlightRequests)&&connection.inFlightRequests>=0
+        && Array.isArray(connection.requestQueue)&&Number.isFinite(connection.lastRequestSentAt)
+        && typeof connection.send==='function'&&typeof connection.request==='function';
+    if (!shapeKnown) throw blocked('BLOCKED_DISPATCH: SDK dispatcher is unverified');
+    if (!options.allowQueue && (connection.inFlightRequests>=5||connection.requestQueue.length!==0||Date.now()-connection.lastRequestSentAt<50))
+        throw blocked('BLOCKED_DISPATCH: broker write would queue');
     let guards=brokerDispatchGuards.get(connection);
     if (!guards) {
         guards=new WeakMap();brokerDispatchGuards.set(connection,guards);

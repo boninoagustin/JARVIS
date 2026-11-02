@@ -1280,7 +1280,12 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                         ? 'BLOCKED_DISPATCH: execution authorization changed' : null;
                 })} as any,parseInt(config.CTRADER_ACCOUNT_ID,10)||0);
                 brokerRequestStarted=true;
-                const ev: any = await trading.marketRangeOrder({
+                // 🆕 02-nov-2026: la admisión atómica del SDK rechaza (brokerNotSubmitted) si
+                // otra request salió hace <50ms o la cola no está vacía — carrera con las
+                // lecturas de mercado: 14 entradas perdidas en 30d. Nada se envió en ese caso,
+                // así que se reintenta hasta 2 veces; la validación de quote/level se repite
+                // atómicamente dentro de authorizedBrokerRequest antes de cada intento.
+                const orderParams = {
                     symbolId: info.symbolId,
                     tradeSide: direction === 'BUY' ? 1 : 2, // TradeSide.BUY=1, SELL=2
                     volume: correctVolumeCents, // centavos de moneda base (protocolo cTrader)
@@ -1289,7 +1294,19 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     stopLoss: formattedSl,
                     ...(formattedTp !== undefined ? { takeProfit: formattedTp } : {}),
                     label: params.tradeId,
-                });
+                };
+                let ev: any;
+                for (let attempt = 0; ; attempt++) {
+                    try {
+                        ev = await trading.marketRangeOrder(orderParams);
+                        break;
+                    } catch (dispatchErr: any) {
+                        const transient = dispatchErr?.brokerNotSubmitted === true && /would queue/.test(String(dispatchErr?.message ?? ''));
+                        if (!transient || attempt >= 2) throw dispatchErr;
+                        console.warn(`[CTRADER-DISPATCH] ${ticker}: dispatcher ocupado, reintento ${attempt + 1}/2 en ${120 + attempt * 80}ms`);
+                        await new Promise((r) => setTimeout(r, 120 + attempt * 80));
+                    }
+                }
 
                 // A rejected remainder can carry an already-filled position.
                 // Capture its identity before inspecting any rejection fields.
