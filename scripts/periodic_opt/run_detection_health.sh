@@ -22,8 +22,17 @@ for d in logs/*/history; do
 done
 echo "Pool de salud:$(echo "$POOL" | tr ' ' '\n' | sort | tr '\n' ' ')"
 
+ERRLOG="/tmp/detection_health_errors.log"
 for t in $POOL; do
   echo "=== $(date +%H:%M:%S) HEALTH $t ==="
-  NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" health 0 2>/dev/null | grep -a "HEALTH_"
+  # 03-nov-2026: el stderr iba a /dev/null y un OOM por activo (AUDCAD) quedaba
+  # invisible: el panel mostraba SIN_DATOS sin explicación. Ahora se guarda por activo
+  # y, si no hubo HEALTH_, queda un HEALTH_FAIL en el resumen.
+  OUT=$(NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" health 0 2>>"$ERRLOG")
+  echo "$OUT" | grep -a "HEALTH_"
+  if ! echo "$OUT" | grep -qa "HEALTH_"; then
+    echo "HEALTH_FAIL $t (sin resultado; ver $ERRLOG)"
+    echo "--- $t $(date +%H:%M:%S) ---" >> "$ERRLOG"
+  fi
 done
 echo "=== $(date +%H:%M:%S) FIN health-all ==="
