@@ -12,6 +12,8 @@ import { useToast } from './Toast';
 interface HealthDoc {
   ticker: string;
   baselineR: number | null;
+  avgR?: number | null;
+  baselineStatus?: string;
   trades: number | null;
   status: string;
   bestR: number | null;
@@ -57,10 +59,30 @@ export default function AssetHealthPanel() {
     return unsub;
   }, []);
 
+  // 03-nov-2026: tabla ordenable. Default: baseline R de mayor a menor.
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'baselineR', dir: -1 });
+  const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === -1 ? 1 : -1 } : { key, dir: -1 }));
   const rows = useMemo(() => {
     const tickers = new Set<string>([...Object.keys(health), ...Object.keys(cfgs).filter(t => t !== 'GLOBAL')]);
-    return [...tickers].sort().map((t) => ({ ticker: t, h: health[t], c: cfgs[t] }));
-  }, [health, cfgs]);
+    const arr = [...tickers].map((t) => ({ ticker: t, h: health[t], c: cfgs[t] }));
+    const onVal = (c?: AssetCfg) => (c?.enabled === true && !(c?.disabledReason && c.disabledReason.trim() !== '') ? 1 : 0);
+    const val = (r: { ticker: string; h?: HealthDoc; c?: AssetCfg }) => {
+      switch (sort.key) {
+        case 'ticker': return r.ticker;
+        case 'on': return onVal(r.c);
+        case 'status': return r.h?.status ?? 'SIN_DATOS';
+        case 'bestR': return r.h?.bestR ?? -9999;
+        case 'avgR': return r.h?.avgR ?? -9999;
+        case 'trades': return r.h?.trades ?? -1;
+        default: return r.h?.baselineR ?? -9999;
+      }
+    };
+    return arr.sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (typeof va === 'string' || typeof vb === 'string') return sort.dir * String(va).localeCompare(String(vb));
+      return sort.dir * ((va as number) - (vb as number));
+    });
+  }, [health, cfgs, sort]);
 
   const isOn = (c?: AssetCfg) => c?.enabled === true && !(c.disabledReason && c.disabledReason.trim() !== '');
 
@@ -142,14 +164,14 @@ export default function AssetHealthPanel() {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
-            <th style={{ padding: '8px' }}>Activo</th>
-            <th style={{ padding: '8px' }}>Operando</th>
-            <th style={{ padding: '8px' }}>Salud</th>
-            <th style={{ padding: '8px' }}>Baseline (R)</th>
-            <th style={{ padding: '8px' }}>Mejor tras optimizar (R)</th>
-            <th style={{ padding: '8px' }}>R/tr</th>
-            <th style={{ padding: '8px' }}>Trades</th>
-            <th style={{ padding: '8px' }}>Acciones</th>
+            {([['ticker', 'Activo'], ['on', 'Operando'], ['status', 'Salud'], ['baselineR', 'Baseline (R)'],
+              ['bestR', 'Mejor tras optimizar (R)'], ['avgR', 'R/tr'], ['trades', 'Trades'], ['actions', 'Acciones']] as const).map(([key, label]) => (
+              <th key={key} onClick={() => key !== 'actions' && toggleSort(key)}
+                title={key === 'actions' ? undefined : 'Clic para ordenar'}
+                style={{ padding: '8px', cursor: key === 'actions' ? 'default' : 'pointer', userSelect: 'none' }}>
+                {label}{sort.key === key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
