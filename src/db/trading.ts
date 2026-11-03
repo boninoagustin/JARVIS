@@ -5186,6 +5186,25 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     if (ctraderConfigured) {
                         const recheckKillswitchesBeforeExecution = async (): Promise<string | null> => {
                             const blocked = await recheckLiveExecutionRisk(ticker);
+                            // 🛡️ 03-nov-2026: tope de riesgo AGREGADO. Suma el riesgo pedido de las
+                            // posiciones abiertas (excluyendo esta) + el de esta entrada. Con 3% por
+                            // activo, sin esto tres correlacionados abiertos = 9% en la misma dirección.
+                            {
+                                const cfgRisk = Number((getConfigForTicker(ticker, Date.now()) as any).riskPercent);
+                                const riskBaseAgg = Number.isFinite(cfgRisk) && cfgRisk > 0 ? Math.min(cfgRisk, 3) : envConfig.CTRADER_RISK_PERCENT;
+                                const thisRisk = riskBaseAgg * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
+                                const aggCap = Number(envConfig.CTRADER_MAX_AGGREGATE_RISK_PCT);
+                                let openRisk = 0;
+                                for (const [tid, tr] of store.activeTrades) {
+                                    if (tid === oteData.tradeId) continue;
+                                    const r = Number((tr as any)?.requestedRiskPercent);
+                                    if (Number.isFinite(r) && r > 0) openRisk += r;
+                                }
+                                if (Number.isFinite(aggCap) && aggCap > 0 && openRisk + thisRisk > aggCap + 1e-9) {
+                                    console.log(`[RISK-CAP] ⛔ ${ticker}: riesgo agregado ${(openRisk + thisRisk).toFixed(2)}% > tope ${aggCap}% (abiertas ${openRisk.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
+                                    return 'BLOCKED_AGGREGATE_RISK';
+                                }
+                            }
                             if (blocked === 'BLOCKED_ROLLOVER') {
                                 console.log(`[ROLLOVER-C] Entry ${ticker} blocked: broker calendar / fresh normalized spread evidence.`);
                                 logBlockedSignal('ROLLOVER', oteData, nowMs);

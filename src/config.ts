@@ -27,6 +27,9 @@ export const config = {
   CTRADER_ACCOUNT_ID: process.env.CTRADER_ACCOUNT_ID || '',
   CTRADER_DEMO: (process.env.CTRADER_DEMO || 'true').toLowerCase() === 'true',
   CTRADER_RISK_PERCENT: parseFloat(process.env.CTRADER_RISK_PERCENT || '1'),
+  // 03-nov-2026: tope de riesgo AGREGADO (suma del riesgo pedido de las posiciones abiertas).
+  // Tope total, no correlación-aware (eso queda para v2). 9% = hasta 3 trades al 3%.
+  CTRADER_MAX_AGGREGATE_RISK_PCT: parseFloat(process.env.CTRADER_MAX_AGGREGATE_RISK_PCT || '9'),
   CTRADER_MAX_POSITIONS: parseInt(process.env.CTRADER_MAX_POSITIONS || '3', 10),
   // Kronos AI + enjambre multi-IA: solo anotación del journal (no gatea). Sin backtest → OFF por defecto.
   KRONOS_AI_ENABLED: (process.env.KRONOS_AI_ENABLED || 'false') === 'true',
