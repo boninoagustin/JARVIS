@@ -59,6 +59,32 @@ export default function AssetHealthPanel() {
     return unsub;
   }, []);
 
+  // 03-nov-2026: propuestas de riesgo (risk_allocator, semanal). Sólo se muestran; aplicar es 1 click.
+  const [props, setProps] = useState<Record<string, any>>({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'risk_proposals'), (snap) => {
+      const m: Record<string, any> = {};
+      snap.forEach((d) => { if (d.id !== '_SUMMARY') m[d.id] = d.data(); });
+      setProps(m);
+    }, () => { });
+    return unsub;
+  }, []);
+
+  const applyRisk = async (ticker: string, pct: number) => {
+    if (!confirm(`¿Aplicar riesgo ${pct.toFixed(2)}% a ${ticker}? El bot lo toma en caliente (listener de Firestore).`)) return;
+    try {
+      await setDoc(doc(db, 'asset_configs', ticker), {
+        riskPercent: pct,
+        riskPercentUpdatedAt: new Date().toISOString(),
+        riskPercentUpdatedBy: 'panel:risk_allocator',
+      }, { merge: true });
+      await setDoc(doc(db, 'risk_proposals', ticker), { applied: true, appliedAt: new Date().toISOString() }, { merge: true });
+      toast(`✅ ${ticker}: riesgo ${pct.toFixed(2)}% aplicado.`, 'success');
+    } catch (e: any) {
+      toast(`Error aplicando riesgo: ${e.message}`, 'error');
+    }
+  };
+
   // 03-nov-2026: tabla ordenable. Default: baseline R de mayor a menor.
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'baselineR', dir: -1 });
   const toggleSort = (key: string) => setSort((s) => (s.key === key ? { key, dir: s.dir === -1 ? 1 : -1 } : { key, dir: -1 }));
@@ -74,6 +100,7 @@ export default function AssetHealthPanel() {
         case 'bestR': return r.h?.bestR ?? -9999;
         case 'avgR': return r.h?.avgR ?? -9999;
         case 'trades': return r.h?.trades ?? -1;
+        case 'riskProp': return props[r.ticker]?.proposalPct ?? -1;
         default: return r.h?.baselineR ?? -9999;
       }
     };
@@ -82,7 +109,7 @@ export default function AssetHealthPanel() {
       if (typeof va === 'string' || typeof vb === 'string') return sort.dir * String(va).localeCompare(String(vb));
       return sort.dir * ((va as number) - (vb as number));
     });
-  }, [health, cfgs, sort]);
+  }, [health, cfgs, sort, props]);
 
   const isOn = (c?: AssetCfg) => c?.enabled === true && !(c.disabledReason && c.disabledReason.trim() !== '');
 
@@ -165,7 +192,7 @@ export default function AssetHealthPanel() {
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
             {([['ticker', 'Activo'], ['on', 'Operando'], ['status', 'Salud'], ['baselineR', 'Baseline (R)'],
-              ['bestR', 'Mejor tras optimizar (R)'], ['avgR', 'R/tr'], ['trades', 'Trades'], ['actions', 'Acciones']] as const).map(([key, label]) => (
+              ['bestR', 'Mejor tras optimizar (R)'], ['avgR', 'R/tr'], ['riskProp', 'Riesgo'], ['trades', 'Trades'], ['actions', 'Acciones']] as const).map(([key, label]) => (
               <th key={key} onClick={() => key !== 'actions' && toggleSort(key)}
                 title={key === 'actions' ? undefined : 'Clic para ordenar'}
                 style={{ padding: '8px', cursor: key === 'actions' ? 'default' : 'pointer', userSelect: 'none' }}>
@@ -195,6 +222,24 @@ export default function AssetHealthPanel() {
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.baselineR ?? '—'}</td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.bestR ?? '—'}</td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)', color: (h?.avgR ?? 0) < 0 ? '#ef4444' : '#22c55e' }}>{h?.avgR != null ? h.avgR.toFixed(3) : '—'}</td>
+                <td style={{ padding: '8px', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                  {(() => {
+                    const pr = props[ticker];
+                    if (!pr) return '—';
+                    const color = pr.verdict === 'SUBIR' ? '#22c55e' : pr.verdict === 'BAJAR' ? '#eab308' : pr.verdict === 'NO_OPERAR' ? '#ef4444' : '#888';
+                    return (
+                      <>
+                        <span style={{ color }} title={`${pr.verdict} · ${pr.note || ''}`}>
+                          {(Number(pr.currentPct) ?? 0).toFixed(2)}% → {(Number(pr.proposalPct) ?? 0).toFixed(2)}%
+                        </span>
+                        {(pr.verdict === 'SUBIR' || pr.verdict === 'BAJAR') && !pr.applied && (
+                          <button className="btn" style={{ marginLeft: 6, padding: '2px 6px', fontSize: '0.72rem' }}
+                            onClick={() => applyRisk(ticker, Number(pr.proposalPct))}>Aplicar</button>
+                        )}
+                      </>
+                    );
+                  })()}
+                </td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
                 <td style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                   {statusOf(h) === 'OPTIMIZANDO' && (
