@@ -80,3 +80,24 @@ versión que el daemon). Verificado con `pm2 list` (3 apps online).
 (`ls -l`). Los wrappers van en un **nombre nuevo**: ahora existe `/usr/local/bin/pm2-audit`,
 que loguea `user/uid/tty/ppid/args` en el journal (`journalctl -t pm2-audit`) y
 ejecuta el pm2 real. Usar `pm2-audit restart JARVIS` para dejar rastro.
+
+## 8. Cambio de cuenta — 03-nov-2026 (demo USD nueva)
+
+- **Cuenta**: `traderLogin 5954670` → `ctidTraderAccountId **49413826**` (ojo: la API usa el
+  ctidTraderAccountId, no el número de login). Demo Spotware, **USD, $5.000, 1:100**.
+- `.env`: `CTRADER_ACCOUNT_ID=49413826`, `CTRADER_ACCESS_TOKEN=<nuevo>`, `CTRADER_DEMO=true`.
+  Backup del anterior en `.env.bak-20261103-switch`.
+- ⚠️ **`CTRADER_REFRESH_TOKEN` quedó vacío a propósito**: el refresh viejo renueva un token
+  que cubre SOLO la cuenta anterior (verificado con `getAccountsByToken`), así que habilitarlo
+  habría pisado el token nuevo. El access token vence ~03-dic-2026: antes de esa fecha hay que
+  sacar el refresh token de la nueva autorización para reactivar la renovación automática.
+- **Archivo de datos de la cuenta vieja** (`account_reset.ts --archive --date 20261103`):
+  trade_journal 182, execution_metrics 257, trigger_telemetry 65, opt_reports 34,
+  detection_health 46, ml_gate_evals 28, corr_gate_evals 19, exits_gate_evals 13,
+  timesfm_gate_evals 12, rollover_evals 3, optimization_rollouts 3, autotune_reports 2,
+  ghost_positions 2, prospective_tests 2, detection_diagnostics 1, health_check 1 →
+  `<coleccion>_archive_20261103`. `auto_state` reiniciado (sin aplicaciones heredadas).
+  Se conservaron `asset_configs`, `app_settings`, `firebase_config`, `system`.
+- **Backup previo**: `backups/firestore_export_20261103/` (22 colecciones, 811 documentos).
+- Verificación post-switch: `Modo: DEMO`, `Moneda de la cuenta detectada: USD`,
+  conversiones suscriptas USDCAD/USDJPY/EURUSD/NZDUSD/AUDUSD, `account_state` = 5000 USD.

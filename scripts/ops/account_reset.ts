@@ -70,20 +70,41 @@ async function archiveCollections() {
     if (existing.data().count > 0) { console.log(`  ${col}: ${dstName} ya existe con ${existing.data().count} docs → se omite`); continue; }
     console.log(`  ${col}: ${snap.size} docs → ${dstName}${YES ? '' : ' [dry-run]'}`);
     if (!YES) continue;
-    let batch = db.batch(); let n = 0;
-    for (const doc of snap.docs) {
-      batch.set(dst.doc(doc.id), doc.data());
-      if (++n % 400 === 0) { await batch.commit(); batch = db.batch(); }
+    // 03-nov-2026: Firestore rechaza commits grandes ("Transaction too big") con
+    // documentos pesados (trigger_telemetry). Chunks de 50 y, si igual falla, uno por uno.
+    // Además reanuda: si el doc ya está en el destino, no se reescribe.
+    const chunk = 5; // opt_reports tiene docs de ~743 KB: 5×743 KB ≈ 3.7 MB (límite 10 MB)
+    for (let i = 0; i < snap.docs.length; i += chunk) {
+      const slice = snap.docs.slice(i, i + chunk);
+      const pending = [] as any[];
+      for (const doc of slice) {
+        const exists = await dst.doc(doc.id).get();
+        if (!exists.exists) pending.push(doc);
+      }
+      if (pending.length === 0) continue;
+      try {
+        const b = db.batch();
+        for (const doc of pending) b.set(dst.doc(doc.id), doc.data());
+        await b.commit();
+      } catch (e: any) {
+        console.warn(`    … commit de ${pending.length} falló (${String(e.message).slice(0, 60)}), reintento 1×1`);
+        for (const doc of pending) await dst.doc(doc.id).set(doc.data());
+      }
     }
-    await batch.commit();
     const copied = (await dst.count().get()).data().count;
     if (copied !== snap.size) throw new Error(`${col}: copiados ${copied} != ${snap.size}, no se borra el original`);
-    let del = db.batch(); let m = 0;
-    for (const doc of snap.docs) {
-      del.delete(doc.ref);
-      if (++m % 400 === 0) { await del.commit(); del = db.batch(); }
+    const delChunk = 5; // los borrados grandes también cuentan contra el límite de 10 MB
+    for (let i = 0; i < snap.docs.length; i += delChunk) {
+      const slice = snap.docs.slice(i, i + delChunk);
+      try {
+        const b = db.batch();
+        for (const doc of slice) b.delete(doc.ref);
+        await b.commit();
+      } catch (e: any) {
+        console.warn(`    … borrado de ${slice.length} falló (${String(e.message).slice(0, 50)}), 1×1`);
+        for (const doc of slice) await doc.ref.delete();
+      }
     }
-    await del.commit();
     const left = (await src.count().get()).data().count;
     if (left !== 0) throw new Error(`${col}: quedaron ${left} docs sin borrar`);
     console.log(`    ✅ ${col}: ${copied} archivados y original vacío`);
