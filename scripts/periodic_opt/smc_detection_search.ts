@@ -369,6 +369,17 @@ async function main() {
   if (process.argv[3] === 'tune') {
     const N = parseInt(process.argv[4] || '80', 10);
     const APPLY_TEST_GAIN = 1.0, APPLY_TRAIN_GAIN = 5.0, APPLY_TEST_TOL = 1.0, MIN_OOS_TRADES = 8;
+    // 🛡️ 03-nov-2026: marcar OPTIMIZANDO acá y no en el endpoint de KRONOS — ese entorno no
+    // tiene firebase_admin ("No module named 'firebase_admin'"), así que el doc nunca se
+    // marcaba, el panel volvía a mostrar el botón y se podía lanzar el tune dos veces.
+    try {
+      const adminModule = await import('firebase-admin');
+      const admin: any = (adminModule as any).default ?? adminModule;
+      const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
+      if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
+      await admin.firestore().collection('detection_health').doc(TICKER).set(
+        { status: 'OPTIMIZANDO', optimizingAt: new Date().toISOString(), tuneDecision: null }, { merge: true });
+    } catch (e) { console.warn('no se pudo marcar OPTIMIZANDO:', e); }
     // Split dinámico: train = 70% del rango disponible del ticker
     const allTs = candlesByTf['15'].map(c => c.timestamp);
     const minTs = Math.min(...allTs), maxTs = Math.max(...allTs);
