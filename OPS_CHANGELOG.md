@@ -102,3 +102,15 @@ ejecuta el pm2 real. Usar `pm2-audit restart JARVIS` para dejar rastro.
 - **Backup previo**: `backups/firestore_export_20261103/` (22 colecciones, 811 documentos).
 - Verificación post-switch: `Modo: DEMO`, `Moneda de la cuenta detectada: USD`,
   conversiones suscriptas USDCAD/USDJPY/EURUSD/NZDUSD/AUDUSD, `account_state` = 5000 USD.
+
+## 9. Auditoría post-trade — 03-nov-2026
+
+- `scripts/ops/trade_audit.ts` + `jarvis-trade-audit.timer` (cada 5 min). Avisa por Telegram
+  **sólo si hay desvío**; si todo está bien, no manda nada.
+- Por trade compara: presupuesto (`riskBudgetAccount`) vs `equity × requestedRiskPercent`
+  (desvío > 5%), riesgo real congelado (`riskAmountAccount`) vs presupuesto (> 5%),
+  riesgo real > 3,5% del equity, `riskAccountingStatus` ≠ VERIFIED, y slippage > 3 pips.
+- Idempotente por `tradeId` (estado en `system/trade_audit`, poda a 500). Cubre trades
+  abiertos y cerrados de las últimas 24 h (el journal conserva el riesgo).
+- Verificado: autotest OK (caso sano y caso con 160% de desvío + slippage) y service
+  corriendo con `Result=success`.
