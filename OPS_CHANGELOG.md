@@ -114,3 +114,17 @@ ejecuta el pm2 real. Usar `pm2-audit restart JARVIS` para dejar rastro.
   abiertos y cerrados de las últimas 24 h (el journal conserva el riesgo).
 - Verificado: autotest OK (caso sano y caso con 160% de desvío + slippage) y service
   corriendo con `Result=success`.
+
+## 10. Falso positivo de la auditoría (JP225) — 03-nov-2026
+
+Primer trade de la cuenta nueva: JP225 BUY, riesgo real 13,71 vs presupuesto 50 (−73%).
+**No era un bug**: el bróker topa JP225 en `maxVolume = 10 lotes` por orden (lotSize 100),
+y con SL de 216,4 pts y cotización en JPY eso son ~13,7 USD. Para arriesgar 50 hacían
+falta ~36 lotes: imposible en una sola orden.
+
+- `scripts/ops/symbol_caps.json`: topes por símbolo capturados del bróker
+  (refrescables con `scripts/ops/symbol_caps_refresh.ts`).
+- `trade_audit.ts` ahora distingue "sub-riesgo por tope del bróker" (no alerta) de un
+  desvío real; sigue alertando por sobre-riesgo, slippage y contabilidad no verificada.
+- Consecuencia estructural: JP225 nunca podrá arriesgar más de ~14 USD por orden en este
+  bróker, sin importar el riesgo configurado.

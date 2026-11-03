@@ -1,0 +1,138 @@
+{
+  "updatedAt": "2026-11-03T02:18:19.179Z",
+  "source": "cTrader getSymbolInfo",
+  "symbols": {
+    "AUDCAD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "AUDJPY": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "AUDNZD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "CHFJPY": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "EUROPE50": {
+      "minVolume": 100,
+      "maxVolume": 7500,
+      "stepVolume": 100,
+      "lotSize": 100
+    },
+    "EURUSD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "FRA40": {
+      "minVolume": 100,
+      "maxVolume": 5000,
+      "stepVolume": 100,
+      "lotSize": 100
+    },
+    "GBPAUD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "GBPUSD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "JP225": {
+      "minVolume": 10,
+      "maxVolume": 1000,
+      "stepVolume": 10,
+      "lotSize": 100
+    },
+    "NL25": {
+      "minVolume": 100,
+      "maxVolume": 50000,
+      "stepVolume": 100,
+      "lotSize": 100
+    },
+    "NZDUSD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "USDCAD": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "USDJPY": {
+      "minVolume": 100000,
+      "maxVolume": 1000000000,
+      "stepVolume": 100000,
+      "lotSize": 10000000
+    },
+    "USOIL": {
+      "minVolume": 1000,
+      "maxVolume": 10000000,
+      "stepVolume": 1000,
+      "lotSize": 10000
+    },
+    "USTECH100": {
+      "minVolume": 100,
+      "maxVolume": 7500,
+      "stepVolume": 100,
+      "lotSize": 100
+    },
+    "XAGUSD": {
+      "minVolume": 5000,
+      "maxVolume": 50000000,
+      "stepVolume": 5000,
+      "lotSize": 500000
+    },
+    "XAUUSD": {
+      "minVolume": 100,
+      "maxVolume": 1000000,
+      "stepVolume": 100,
+      "lotSize": 10000
+    },
+    "XBRUSD": {
+      "minVolume": 1000,
+      "maxVolume": 10000000,
+      "stepVolume": 1000,
+      "lotSize": 10000
+    },
+    "XPDUSD": {
+      "minVolume": 100,
+      "maxVolume": 1000000,
+      "stepVolume": 100,
+      "lotSize": 10000
+    },
+    "XPTUSD": {
+      "minVolume": 100,
+      "maxVolume": 1000000,
+      "stepVolume": 100,
+      "lotSize": 10000
+    },
+    "NATGAS": {
+      "minVolume": 10000,
+      "maxVolume": 100000000,
+      "stepVolume": 10000,
+      "lotSize": 1000000
+    }
+  }
+}
