@@ -4461,6 +4461,28 @@ export function hasUnresolvedExecutionIncidents(): boolean {
 }
 
 /** Shared delayed-approval/AUTO entry policy; latches and alerts remain in existing risk evaluators. */
+/**
+ * 03-nov-2026: cluster de correlación para el tope de riesgo (v2). No es una matriz de
+ * correlación fina: agrupa por driver común (leg USD, metales, índices por región, energía).
+ * Sirve para no apilar 9% en la misma apuesta (3 FX majors al dólar).
+ */
+export function riskClusterOf(ticker: string): string {
+    const t = String(ticker || '').toUpperCase();
+    if (/^[A-Z]{6}$/.test(t)) return t.includes('USD') ? 'FX_USD' : 'FX_CROSS';
+    if (/^(XAU|XAG|XPT|XPD)/.test(t)) return 'METALS';
+    if (/^(XTI|XBR|USOIL|NATGAS|NGAS)/.test(t)) return 'ENERGY';
+    if (/^(BTC|ETH)/.test(t)) return 'CRYPTO';
+    if (/^(US500|US30|USTECH100|US100|NAS100)/.test(t)) return 'US_INDICES';
+    if (/^(JP225|JAPAN225)/.test(t)) return 'ASIA_INDICES';
+    if (/^(GER40|FRA40|NL25|EUROPE50|UK100|ITALY40|SPAIN35|AUSTRALIA200)/.test(t)) return 'EU_INDICES';
+    return 'OTHER';
+}
+/** Topes por cluster (% del equity). El tope total sigue en CTRADER_MAX_AGGREGATE_RISK_PCT. */
+export const CLUSTER_RISK_CAPS: Record<string, number> = {
+    FX_USD: 6, FX_CROSS: 4, METALS: 4, ENERGY: 3, CRYPTO: 2,
+    US_INDICES: 4, EU_INDICES: 4, ASIA_INDICES: 4, OTHER: 2,
+};
+
 export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now()): Promise<string | null> {
     // Synchronous policy is shared by AUTO and delayed manual approval, including
     // a final read after ledger awaits: latches/settings may change during I/O.
@@ -5203,6 +5225,22 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 if (Number.isFinite(aggCap) && aggCap > 0 && openRisk + thisRisk > aggCap + 1e-9) {
                                     console.log(`[RISK-CAP] ⛔ ${ticker}: riesgo agregado ${(openRisk + thisRisk).toFixed(2)}% > tope ${aggCap}% (abiertas ${openRisk.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
                                     return 'BLOCKED_AGGREGATE_RISK';
+                                }
+                                // v2: tope por cluster de correlación (no apilar todo en la misma apuesta)
+                                const thisCluster = riskClusterOf(ticker);
+                                const openByCluster: Record<string, number> = {};
+                                for (const [tid, tr] of store.activeTrades) {
+                                    if (tid === oteData.tradeId) continue;
+                                    const r = Number((tr as any)?.requestedRiskPercent);
+                                    if (!(Number.isFinite(r) && r > 0)) continue;
+                                    const c = riskClusterOf(String((tr as any)?.ticker ?? ''));
+                                    openByCluster[c] = (openByCluster[c] ?? 0) + r;
+                                }
+                                const clusterCap = CLUSTER_RISK_CAPS[thisCluster] ?? 4;
+                                const clusterOpen = openByCluster[thisCluster] ?? 0;
+                                if (clusterOpen + thisRisk > clusterCap + 1e-9) {
+                                    console.log(`[RISK-CLUSTER] ⛔ ${ticker} (${thisCluster}): cluster ${(clusterOpen + thisRisk).toFixed(2)}% > tope ${clusterCap}% (abiertas ${clusterOpen.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
+                                    return 'BLOCKED_CLUSTER_RISK';
                                 }
                             }
                             if (blocked === 'BLOCKED_ROLLOVER') {
