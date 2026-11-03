@@ -292,6 +292,15 @@ async function main() {
   // Escribe el resultado a Firestore detection_health/{ticker}.
   if (process.argv[3] === 'health') {
     const N = parseInt(process.argv[4] || '0', 10);
+    // 🛡️ 03-nov-2026: el baseline se evaluaba sobre TODA la historia; con >150k velas M5
+    // el proceso moría por OOM (AUDCAD 190k, BTCUSD 232k, EURUSD/GBPJPY/JP225/NZDUSD/
+    // USDCAD/USDJPY/XAUUSD 160-195k). Se acota a ~7 meses por TF: el panel muestra el
+    // baseline de esa ventana (suficiente para el semáforo OK/REVISAR).
+    const HEALTH_LIMITS: Record<string, number> = { '5': 45000, '15': 15000, '60': 4000, '240': 1500, 'D1': 300 };
+    for (const tf of Object.keys(candlesByTf)) {
+      const lim = HEALTH_LIMITS[tf];
+      if (lim && candlesByTf[tf].length > lim) candlesByTf[tf] = candlesByTf[tf].slice(-lim);
+    }
     const allTs = candlesByTf['15'].map(c => c.timestamp);
     const minTs = Math.min(...allTs), maxTs = Math.max(...allTs);
     const splitTs = Math.round(minTs + 0.7 * (maxTs - minTs));
