@@ -25,7 +25,7 @@ const REPO = '/opt/JARVIS';
 const STATE_COLL = 'system';
 const STATE_DOC = 'trade_audit';
 const BUDGET_DEV = 0.05;      // 5% entre presupuesto y equity×risk%
-const RISK_DEV = 0.05;        // 5% entre riesgo real y presupuesto
+const RISK_DEV = 0.10;        // 10% entre riesgo real y presupuesto (redondeo a lote mínimo)
 const HARD_CAP_PCT = 3.5;     // techo duro 3% + 0.5 de tolerancia
 const SLIP_PIPS = 3;
 

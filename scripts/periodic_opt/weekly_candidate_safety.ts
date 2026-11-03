@@ -67,12 +67,9 @@ export function checkWeeklyCandidate(report: any, current: any, nowMs = Date.now
     if (!integrity.ok) return integrity;
     const next=report.final_asset_config;
     if (!AssetSessionConfigSchema.safeParse(next).success) return no('configuración inválida para el esquema del motor vivo');
-    // 02-nov-2026: se quitó 'riskPercent' de esta lista. Es un campo fantasma: no está
-    // en AssetSessionConfigSchema, el panel no lo muestra y el sizing NO lo lee
-    // (usa CTRADER_RISK_PERCENT × riskMult × factor de sesión). Tenerlo acá bloqueaba
-    // reportes por comparar un campo inerte. Si algún día se cablea el riesgo por
-    // activo, hay que volver a agregarlo (y usarlo en el dispatch).
-    for (const key of ['enabled','disabledReason','entryTrigger','autoTrading','maxSmartRiskPercent','executionPolicy','executionInstrument','rolloverPolicy','mlGateEnabled','correlationFilter']) {
+    // 03-nov-2026: 'riskPercent' vuelve a la lista: ahora SÍ se usa (override de riesgo
+    // por activo en el dispatch, acotado al 3%). El optimizador no debe tocarlo.
+    for (const key of ['enabled','disabledReason','entryTrigger','autoTrading','maxSmartRiskPercent','riskPercent','executionPolicy','executionInstrument','rolloverPolicy','mlGateEnabled','correlationFilter']) {
       if (assetFingerprint(current[key]??null)!==assetFingerprint(next[key]??null)) return no(`control operativo no optimizable: ${key}`);
     }
     const p=report.proposal_validation,b=report.production_validation;

@@ -1297,6 +1297,10 @@ if (db) {
                     riderTf: data.riderTf,
                     autoTrading: data.autoTrading,
                     maxSmartRiskPercent: data.maxSmartRiskPercent,
+                    // 03-nov-2026: riesgo POR ACTIVO (override del global). Sin esta línea el
+                    // campo existía en Firestore pero nunca llegaba al dispatch (el listener
+                    // no copiaba keys fuera de la lista explícita).
+                    riskPercent: Number((data as any).riskPercent),
                     rolloverPolicy: (data as any).rolloverPolicy,
                     mlRegimeShadow: (data as any).mlRegimeShadow,
                     timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
@@ -5218,7 +5222,16 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
 
                             const rolloverFillPolicy = structuredClone(getConfigForTicker(ticker,Date.now()).rolloverPolicy);
-                            const requestedRiskPercent = envConfig.CTRADER_RISK_PERCENT * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
+                            // 03-nov-2026: override de riesgo por activo (asset_configs.riskPercent),
+                            // acotado al techo duro 3% que aplica sizeOrderVolume.
+                            const assetRiskCfg = Number((getConfigForTicker(ticker, Date.now()) as any).riskPercent);
+                            const riskBase = Number.isFinite(assetRiskCfg) && assetRiskCfg > 0
+                                ? Math.min(assetRiskCfg, 3)
+                                : envConfig.CTRADER_RISK_PERCENT;
+                            if (riskBase !== envConfig.CTRADER_RISK_PERCENT) {
+                                console.log(`[RISK] ${ticker}: riesgo por activo ${riskBase}% (global ${envConfig.CTRADER_RISK_PERCENT}%)`);
+                            }
+                            const requestedRiskPercent = riskBase * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
                             (activeTrade as any).requestedRiskPercent = requestedRiskPercent;
                             autoExecutionAttempted = true;
                             const result = autoExecutionResult = await executeMarketOrder({
