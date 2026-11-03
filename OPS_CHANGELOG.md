@@ -87,10 +87,11 @@ ejecuta el pm2 real. Usar `pm2-audit restart JARVIS` para dejar rastro.
   ctidTraderAccountId, no el número de login). Demo Spotware, **USD, $5.000, 1:100**.
 - `.env`: `CTRADER_ACCOUNT_ID=49413826`, `CTRADER_ACCESS_TOKEN=<nuevo>`, `CTRADER_DEMO=true`.
   Backup del anterior en `.env.bak-20261103-switch`.
-- ⚠️ **`CTRADER_REFRESH_TOKEN` quedó vacío a propósito**: el refresh viejo renueva un token
-  que cubre SOLO la cuenta anterior (verificado con `getAccountsByToken`), así que habilitarlo
-  habría pisado el token nuevo. El access token vence ~03-dic-2026: antes de esa fecha hay que
-  sacar el refresh token de la nueva autorización para reactivar la renovación automática.
+- **Refresh token**: el viejo se dejó vacío al principio porque renovaba un token que cubre
+  SOLO la cuenta anterior (verificado con `getAccountsByToken`). El mismo día se cargó el
+  refresh de la nueva autorización (cubre 49413826) y se restauró la renovación automática.
+  ⚠️ El refresh **rota** en cada uso: el par vigente es el último escrito en `.env`
+  (backups: `.env.bak-20261103-switch`, `.env.bak-20261103-refresh`).
 - **Archivo de datos de la cuenta vieja** (`account_reset.ts --archive --date 20261103`):
   trade_journal 182, execution_metrics 257, trigger_telemetry 65, opt_reports 34,
   detection_health 46, ml_gate_evals 28, corr_gate_evals 19, exits_gate_evals 13,
