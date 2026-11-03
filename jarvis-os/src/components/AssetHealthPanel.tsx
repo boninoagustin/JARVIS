@@ -191,11 +191,18 @@ export default function AssetHealthPanel() {
                   {showActivate && (
                     <button className="btn btn-primary" onClick={() => activate(ticker)}>🟢 Activar</button>
                   )}
-                  {on && (
+                  {/* 03-nov-2026: "Apagar" sólo se destaca cuando el activo NO está bien
+                      (CANDIDATO_APAGAR = recomendación; REVISAR = opción sensata). En un activo
+                      OK/OPTIMIZABLE queda como link discreto: es una acción, no un consejo. */}
+                  {on && (statusOf(h) === 'CANDIDATO_APAGAR' || statusOf(h) === 'REVISAR') && (
                     <button className="btn" onClick={() => deactivate(ticker)} title="Deshabilitar el activo en vivo (reversible)">🛑 Apagar</button>
                   )}
                   {on && (statusOf(h) === 'OK' || statusOf(h) === 'OPTIMIZABLE') && (
-                    <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>✓ Calibrado</span>
+                    <>
+                      <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>✓ Calibrado</span>
+                      <a onClick={() => deactivate(ticker)} title="Deshabilitar (reversible) — sólo si querés sacarlo del pool activo"
+                        style={{ fontSize: '0.72rem', color: '#888', cursor: 'pointer', textDecoration: 'underline' }}>deshabilitar</a>
+                    </>
                   )}
                 </td>
               </tr>
