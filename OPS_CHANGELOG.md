@@ -128,3 +128,19 @@ falta ~36 lotes: imposible en una sola orden.
   desvío real; sigue alertando por sobre-riesgo, slippage y contabilidad no verificada.
 - Consecuencia estructural: JP225 nunca podrá arriesgar más de ~14 USD por orden en este
   bróker, sin importar el riesgo configurado.
+
+## 11. Salud de activos: el veredicto del tune se borraba — 03-nov-2026
+
+El panel está diseñado para mostrar `OPTIMIZABLE` / `CANDIDATO_APAGAR` después de
+optimizar, pero el endpoint `/api/detection/optimize` corre `health 0` **después** del
+tune y esa escritura ponía `status: OK|REVISAR` y `bestR: null`, borrando el veredicto.
+Resultado: nunca se veía la recomendación.
+
+- `smc_detection_search.ts`: el baseline ahora va en `baselineStatus` y el veredicto del
+  tune en `status`; `health 0` **no pisa** `status` si ya hay un `bestR` (verificado con
+  un doc sintético: bestR 7.5 / OPTIMIZABLE sobrevivió al health 0).
+- El tune escribe `CANDIDATO_APAGAR` cuando el OOS no mejora (antes decía `REVISAR`) y
+  agrega `tuneStatus` + `tunedAt`.
+- `AssetHealthPanel`: el botón "Optimizar" ahora aparece también para activos **que están
+  operando** en REVISAR (con confirmación, porque si aplica reinicia el bot), y la fila
+  muestra "baseline: X" cuando el estado accionable difiere del baseline.

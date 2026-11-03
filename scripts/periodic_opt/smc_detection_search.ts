@@ -305,10 +305,13 @@ async function main() {
     const minTs = Math.min(...allTs), maxTs = Math.max(...allTs);
     const splitTs = Math.round(minTs + 0.7 * (maxTs - minTs));
     const base = await evaluate(null, candlesByTf, config, 0, 0); // período completo
+    // 03-nov-2026: `health 0` corre DESPUÉS del tune (endpoint del panel) y antes
+    // borraba bestR/status, así que el panel nunca mostraba OPTIMIZABLE/APAGAR.
+    // Ahora el baseline va en `baselineStatus` y el veredicto del tune en `status`.
+    const baselineStatus = base.totalR > 1.0 ? 'OK' : 'REVISAR';
     const out: any = {
       ticker: TICKER, baselineR: Number(base.totalR.toFixed(2)), trades: base.trades,
-      status: base.totalR > 1.0 ? 'OK' : 'REVISAR',
-      bestR: null, bestParams: null, evaluatedAt: new Date().toISOString(),
+      baselineStatus, status: baselineStatus, evaluatedAt: new Date().toISOString(),
     };
     if (N > 0) {
       const rng = mulberry32(42);
@@ -332,7 +335,12 @@ async function main() {
       const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
       if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
       const db = admin.firestore();
-      await db.collection('detection_health').doc(TICKER).set(out, { merge: true });
+      const ref = db.collection('detection_health').doc(TICKER);
+      if (N === 0) {
+        const cur = (await ref.get()).data() || {};
+        if (Number.isFinite(cur.bestR)) delete out.status; // veredicto del tune manda
+      }
+      await ref.set(out, { merge: true });
       console.log('HEALTH_SAVED');
     } catch (e) {
       console.log('HEALTH_FIRESTORE_SKIP: ' + String((e as Error).message).slice(0, 100));
@@ -430,12 +438,14 @@ async function main() {
       const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
       if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
       const db = admin.firestore();
-      const st = candOos.totalR > 0 ? 'OPTIMIZABLE' : 'REVISAR';
+      const st = candOos.totalR > 0 ? 'OPTIMIZABLE' : 'CANDIDATO_APAGAR';
       await db.collection('detection_health').doc(TICKER).set({
         ticker: TICKER,
         baselineR: Number(actOos.totalR.toFixed(2)),
         trades: candOos.trades,
         status: st,
+        tuneStatus: st,
+        tunedAt: new Date().toISOString(),
         bestR: Number(candOos.totalR.toFixed(2)),
         bestParams: p,
         bestOosTrades: candOos.trades,

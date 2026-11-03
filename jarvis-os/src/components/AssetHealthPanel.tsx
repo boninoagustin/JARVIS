@@ -153,7 +153,12 @@ export default function AssetHealthPanel() {
                 <td style={{ padding: '8px' }}>
                   {on ? <span style={{ color: '#22c55e' }}>✅ ON</span> : <span style={{ color: '#ef4444' }} title={reason}>❌ OFF</span>}
                 </td>
-                <td style={{ padding: '8px', color: st?.color ?? '#888' }}>{st?.label ?? '… sin datos'}</td>
+                <td style={{ padding: '8px', color: st?.color ?? '#888' }}>
+                  {st?.label ?? '… sin datos'}
+                  {h?.baselineStatus && h.baselineStatus !== h.status && (
+                    <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary, #888)' }}>baseline: {h.baselineStatus}</span>
+                  )}
+                </td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.baselineR ?? '—'}</td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.bestR ?? '—'}</td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
@@ -161,8 +166,13 @@ export default function AssetHealthPanel() {
                   {statusOf(h) === 'OPTIMIZANDO' && (
                     <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>⏳ En proceso...</span>
                   )}
-                  {!on && statusOf(h) === 'REVISAR' && (
-                    <button className="btn" disabled={!!optimizing[ticker]} onClick={() => launchOptimize(ticker)}>
+                  {(statusOf(h) === 'REVISAR' || statusOf(h) === 'CANDIDATO_APAGAR') && (
+                    <button className="btn" disabled={!!optimizing[ticker]} onClick={() => {
+                      // 03-nov-2026: también se puede optimizar un activo QUE ESTÁ OPERANDO
+                      // (antes el botón sólo aparecía para los apagados). Si aplica, reinicia el bot.
+                      if (on && !confirm(`${ticker} está OPERANDO. Optimizar corre 60 trials (~10-30 min) y, si mejora, aplica el preset y reinicia el bot. ¿Seguir?`)) return;
+                      launchOptimize(ticker);
+                    }}>
                       {optimizing[ticker] ? '⚙️ Lanzando…' : '⚙️ Optimizar'}
                     </button>
                   )}
