@@ -20,6 +20,8 @@ interface HealthDoc {
   bestParams: Record<string, any> | null;
   bestOosTrades?: number;
   evaluatedAt?: string;
+  optimizingAt?: string | null;
+  tunedAt?: string | null;
 }
 
 interface AssetCfg {
@@ -177,6 +179,33 @@ export default function AssetHealthPanel() {
   };
 
   const statusOf = (h?: HealthDoc) => h?.status ?? 'SIN_DATOS';
+  const ago = (iso?: string | null) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    return m < 1 ? 'ahora' : m < 60 ? `hace ${m}m` : `hace ${Math.floor(m / 60)}h`;
+  };
+  // 03-nov-2026: si el job muere, el doc queda en OPTIMIZANDO para siempre → botón de rescate.
+  const resetOptimizing = async (ticker: string) => {
+    if (!confirm(`¿Reiniciar el estado de ${ticker}? El proceso puede seguir corriendo en el VPS (revisá /tmp/detection_opt_${ticker}.log).`)) return;
+    try {
+      await setDoc(doc(db, 'detection_health', ticker), { status: health[ticker]?.baselineStatus ?? 'REVISAR', optimizingAt: null }, { merge: true });
+      toast(`Estado de ${ticker} reiniciado.`, 'success');
+    } catch (e: any) {
+      toast(`Error: ${e.message}`, 'error');
+    }
+  };
+
+  // El "Lanzando…" local dura hasta que Firestore confirma OPTIMIZANDO (evita el parpadeo del botón).
+  useEffect(() => {
+    setOptimizing((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const t of Object.keys(prev)) {
+        if (prev[t] && health[t]?.status === 'OPTIMIZANDO') { next[t] = false; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [health]);
 
   return (
     <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto' }}>
@@ -185,7 +214,7 @@ export default function AssetHealthPanel() {
         <button onClick={launchHealthAll} className="btn btn-primary">📊 Evaluar todo el pool</button>
       </div>
       <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-        Estado medido con el motor real: baseline del preset actual sobre la historia completa. 🔧 REVISAR = pierde y
+        Estado medido con el motor real: baseline del preset actual sobre las últimas ~45k velas M5 (≈4-5 meses). 🔧 REVISAR = pierde y
         vale la pena optimizar · 🚫 APAGAR = pierde y ninguna configuración lo arregla (problema de scoring/gestión).
       </p>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
@@ -242,19 +271,43 @@ export default function AssetHealthPanel() {
                 </td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
                 <td style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  {statusOf(h) === 'OPTIMIZANDO' && (
-                    <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>⏳ En proceso...</span>
-                  )}
-                  {(statusOf(h) === 'REVISAR' || statusOf(h) === 'CANDIDATO_APAGAR') && (
-                    <button className="btn" disabled={!!optimizing[ticker]} onClick={() => {
-                      // 03-nov-2026: también se puede optimizar un activo QUE ESTÁ OPERANDO
-                      // (antes el botón sólo aparecía para los apagados). Si aplica, reinicia el bot.
-                      if (on && !confirm(`${ticker} está OPERANDO. Optimizar corre 60 trials (~10-30 min) y, si mejora, aplica el preset y reinicia el bot. ¿Seguir?`)) return;
-                      launchOptimize(ticker);
-                    }}>
-                      {optimizing[ticker] ? '⚙️ Lanzando…' : '⚙️ Optimizar'}
-                    </button>
-                  )}
+                  {(() => {
+                    const st = statusOf(h);
+                    const since = h?.optimizingAt ? new Date(h.optimizingAt) : null;
+                    const stuck = since ? Date.now() - since.getTime() > 45 * 60 * 1000 : false;
+                    // 03-nov-2026: mientras el server diga OPTIMIZANDO NO se muestra el botón
+                    // (antes reaparecía al instante porque el POST vuelve enseguida y no se
+                    // sabía si estaba corriendo).
+                    if (st === 'OPTIMIZANDO') {
+                      return (
+                        <>
+                          <span style={{ color: stuck ? '#eab308' : '#38bdf8', fontSize: '0.85rem' }}>
+                            {stuck ? '⚠️ Estancado' : '⏳ Optimizando…'}{since ? ` desde ${since.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                          </span>
+                          {stuck && (
+                            <button className="btn" style={{ padding: '2px 6px', fontSize: '0.72rem' }} onClick={() => resetOptimizing(ticker)}>Reiniciar estado</button>
+                          )}
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        {(st === 'REVISAR' || st === 'CANDIDATO_APAGAR') && (
+                          <button className="btn" disabled={!!optimizing[ticker]} onClick={() => {
+                            if (on && !confirm(`${ticker} está OPERANDO. Optimizar corre 60 trials (~10-30 min) y, si mejora, aplica el preset y reinicia el bot. ¿Seguir?`)) return;
+                            launchOptimize(ticker);
+                          }}>
+                            {optimizing[ticker] ? '⏳ Lanzando…' : '⚙️ Optimizar'}
+                          </button>
+                        )}
+                        {h?.tunedAt && (
+                          <span title={`Última optimización: ${new Date(h.tunedAt).toLocaleString('es-AR')}`} style={{ fontSize: '0.7rem', color: '#888' }}>
+                            últ.: {ago(h.tunedAt)}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
                   {showActivate && (
                     <button className="btn btn-primary" onClick={() => activate(ticker)}>🟢 Activar</button>
                   )}
