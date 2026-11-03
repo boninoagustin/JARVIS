@@ -104,16 +104,26 @@ export default function AssetHealthPanel() {
       } catch (err) {
         console.warn('No se pudo auto-promover a active_tickers:', err);
       }
-      const hDoc = health[ticker];
-      if (hDoc && hDoc.bestR !== null) {
-        await setDoc(doc(db, 'detection_health', ticker), {
-          status: 'OK',
-          baselineR: hDoc.bestR,
-        }, { merge: true });
-      }
+      // 03-nov-2026: activar NO debe reescribir detection_health — antes ponía status 'OK'
+      // y borraba el veredicto del tune (OPTIMIZABLE / CANDIDATO_APAGAR).
       toast(`✅ ${ticker} activado. El bot lo toma en caliente (listener de Firestore).`, 'success');
     } catch (e: any) {
       toast(`Error activando: ${e.message}`, 'error');
+    }
+  };
+
+  // 03-nov-2026: faltaba el botón para apagar. Escribe disabledReason para que sea una
+  // decisión del operador explícita (el rollout y el auto-disable la respetan).
+  const deactivate = async (ticker: string) => {
+    if (!confirm(`¿Apagar ${ticker}? Deja de operar en vivo (reversible). El optimizador semanal lo sigue evaluando.`)) return;
+    try {
+      await setDoc(doc(db, 'asset_configs', ticker), {
+        enabled: false,
+        disabledReason: `desactivado desde Salud de Activos (${new Date().toISOString().slice(0, 10)})`,
+      }, { merge: true });
+      toast(`🛑 ${ticker} apagado.`, 'success');
+    } catch (e: any) {
+      toast(`Error apagando: ${e.message}`, 'error');
     }
   };
 
@@ -180,6 +190,9 @@ export default function AssetHealthPanel() {
                   )}
                   {showActivate && (
                     <button className="btn btn-primary" onClick={() => activate(ticker)}>🟢 Activar</button>
+                  )}
+                  {on && (
+                    <button className="btn" onClick={() => deactivate(ticker)} title="Deshabilitar el activo en vivo (reversible)">🛑 Apagar</button>
                   )}
                   {on && (statusOf(h) === 'OK' || statusOf(h) === 'OPTIMIZABLE') && (
                     <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>✓ Calibrado</span>
