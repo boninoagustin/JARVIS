@@ -137,6 +137,7 @@ export default function AssetHealthPanel() {
             <th style={{ padding: '8px' }}>Salud</th>
             <th style={{ padding: '8px' }}>Baseline (R)</th>
             <th style={{ padding: '8px' }}>Mejor tras optimizar (R)</th>
+            <th style={{ padding: '8px' }}>R/tr</th>
             <th style={{ padding: '8px' }}>Trades</th>
             <th style={{ padding: '8px' }}>Acciones</th>
           </tr>
@@ -161,6 +162,7 @@ export default function AssetHealthPanel() {
                 </td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.baselineR ?? '—'}</td>
                 <td style={{ padding: '8px', fontFamily: 'var(--font-mono)' }}>{h?.bestR ?? '—'}</td>
+                <td style={{ padding: '8px', fontFamily: 'var(--font-mono)', color: (h?.avgR ?? 0) < 0 ? '#ef4444' : '#22c55e' }}>{h?.avgR != null ? h.avgR.toFixed(3) : '—'}</td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
                 <td style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                   {statusOf(h) === 'OPTIMIZANDO' && (

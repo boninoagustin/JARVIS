@@ -311,6 +311,8 @@ async function main() {
     const baselineStatus = base.totalR > 1.0 ? 'OK' : 'REVISAR';
     const out: any = {
       ticker: TICKER, baselineR: Number(base.totalR.toFixed(2)), trades: base.trades,
+      // 03-nov-2026: el R total escala con la cantidad de trades; R/trade es lo comparable.
+      avgR: base.trades > 0 ? Number((base.totalR / base.trades).toFixed(4)) : null,
       baselineStatus, status: baselineStatus, evaluatedAt: new Date().toISOString(),
     };
     if (N > 0) {
