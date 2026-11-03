@@ -408,6 +408,28 @@ async function main() {
         ? `muestra OOS insuficiente (cand ${candOos.trades}t / act ${actOos.trades}t < ${MIN_OOS_TRADES})`
         : 'no supera umbrales (OOS +' + APPLY_TEST_GAIN + 'R con train ≥ -1R, o train +' + APPLY_TRAIN_GAIN + 'R con OOS ≥ -' + APPLY_TEST_TOL + 'R)';
       console.log(`DECISIÓN: NO aplicar (${why})`);
+      // 03-nov-2026: registrar la corrida aunque no aplique. Antes no quedaba rastro y el
+      // panel parecía no haber hecho nada (el botón volvía a REVISAR sin explicación).
+      try {
+        const adminModule = await import('firebase-admin');
+        const admin: any = (adminModule as any).default ?? adminModule;
+        const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
+        if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
+        await admin.firestore().collection('detection_health').doc(TICKER).set({
+          tuneDecision: 'NOT_APPLIED',
+          tunedAt: new Date().toISOString(),
+          lastTune: {
+            trials: N_TRIALS,
+            candTrainR: Number(best!.totalR.toFixed(2)),
+            candOosR: Number(candOos.totalR.toFixed(2)),
+            candOosTrades: candOos.trades,
+            actTrainR: Number(actual.totalR.toFixed(2)),
+            actOosR: Number(actOos.totalR.toFixed(2)),
+            actOosTrades: actOos.trades,
+            reason: why,
+          },
+        }, { merge: true });
+      } catch (e) { console.warn('no se pudo registrar la corrida:', e); }
       process.exit(0);
     }
     // Aplicar: escribir bloques M15/H1/H4/D1 (pivot/wick/div/z) + sección Detection (13 params).
@@ -441,13 +463,24 @@ async function main() {
       if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
       const db = admin.firestore();
       const st = candOos.totalR > 0 ? 'OPTIMIZABLE' : 'CANDIDATO_APAGAR';
+      // (apply: tuneDecision/lastTune se escriben abajo, en el mismo set)
       await db.collection('detection_health').doc(TICKER).set({
         ticker: TICKER,
         baselineR: Number(actOos.totalR.toFixed(2)),
         trades: candOos.trades,
         status: st,
         tuneStatus: st,
+        tuneDecision: 'APPLIED',
         tunedAt: new Date().toISOString(),
+        lastTune: {
+          trials: N_TRIALS,
+          candTrainR: Number(best!.totalR.toFixed(2)),
+          candOosR: Number(candOos.totalR.toFixed(2)),
+          candOosTrades: candOos.trades,
+          actTrainR: Number(actual.totalR.toFixed(2)),
+          actOosR: Number(actOos.totalR.toFixed(2)),
+          actOosTrades: actOos.trades,
+        },
         bestR: Number(candOos.totalR.toFixed(2)),
         bestParams: p,
         bestOosTrades: candOos.trades,

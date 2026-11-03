@@ -22,6 +22,8 @@ interface HealthDoc {
   evaluatedAt?: string;
   optimizingAt?: string | null;
   tunedAt?: string | null;
+  tuneDecision?: string | null;
+  lastTune?: any;
 }
 
 interface AssetCfg {
@@ -301,8 +303,15 @@ export default function AssetHealthPanel() {
                           </button>
                         )}
                         {h?.tunedAt && (
-                          <span title={`Última optimización: ${new Date(h.tunedAt).toLocaleString('es-AR')}`} style={{ fontSize: '0.7rem', color: '#888' }}>
-                            últ.: {ago(h.tunedAt)}
+                          <span
+                            title={(() => {
+                              const t = h.lastTune;
+                              const head = `Última optimización: ${new Date(h.tunedAt).toLocaleString('es-AR')}`;
+                              if (!t) return head;
+                              return `${head}\nCandidato: train ${t.candTrainR}R → OOS ${t.candOosR}R (${t.candOosTrades}t)\nActual:    train ${t.actTrainR}R → OOS ${t.actOosR}R (${t.actOosTrades}t)${t.reason ? `\n${t.reason}` : ''}`;
+                            })()}
+                            style={{ fontSize: '0.7rem', color: h.tuneDecision === 'APPLIED' ? '#22c55e' : '#eab308' }}>
+                            últ.: {ago(h.tunedAt)} · {h.tuneDecision === 'APPLIED' ? 'aplicó' : 'no aplicó'}
                           </span>
                         )}
                       </>
