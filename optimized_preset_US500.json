@@ -1,36 +1,75 @@
 {
-    "M15": {
-        "pivot_len": 5,
-        "wick_pct": 0.1,
-        "div_len": 5,
-        "z_window": 14
-    },
-    "H1": {
-        "pivot_len": 13,
-        "wick_pct": 0.5,
-        "div_len": 3,
-        "z_window": 14
-    },
-    "H4": {
-        "pivot_len": 3,
-        "wick_pct": 0.1,
-        "div_len": 3,
-        "z_window": 14
-    },
-    "D1": {
-        "pivot_len": 3,
-        "wick_pct": 0.1,
-        "div_len": 2,
-        "z_window": 14
-    },
-    "Risk": {
-        "slBufferPercent": 0,
-        "fixedRR": 1.5,
-        "minRR": 3
-    },
-    "Metrics": {
-        "PnL_R": "17.86",
-        "Trades": 187,
-        "WinRate": "69.52%"
+  "M15": {
+    "pivot_len": 21,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "H1": {
+    "pivot_len": 21,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "H4": {
+    "pivot_len": 21,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "D1": {
+    "pivot_len": 21,
+    "wick_pct": 0.1,
+    "div_len": 2,
+    "z_window": 14
+  },
+  "Risk": {
+    "slBufferPercent": 0,
+    "fixedRR": 1.5,
+    "minRR": 3
+  },
+  "Metrics": {
+    "PnL_R": "17.86",
+    "Trades": 187,
+    "WinRate": "69.52%"
+  },
+  "Detection": {
+    "pivot_len": 21,
+    "min_sweep_wick_pct": 0.1,
+    "div_pivot_len": 2,
+    "z_score_window": 14,
+    "require_displacement": true,
+    "require_fvg_after_ob": true,
+    "strict_breaker": true,
+    "strict_sweep": false,
+    "confirm_close": false,
+    "min_ob_body_pct": 0.3,
+    "use_body_for_ob": true,
+    "fvg_min_atr": 0.3,
+    "wick_invalidates_ob": true
+  },
+  "DetectionMeta": {
+    "source": "detection_tune",
+    "appliedAt": "2026-11-03T05:11:47.329Z",
+    "trainR": -1.99,
+    "oosR": -4.06,
+    "prevTrainR": -35.89,
+    "prevOosR": -15.08,
+    "candidatesTested": 60,
+    "params": {
+      "pivot_len": 21,
+      "min_sweep_wick_pct": 0.1,
+      "div_pivot_len": 2,
+      "z_score_window": 14,
+      "require_displacement": true,
+      "require_fvg_after_ob": true,
+      "strict_breaker": true,
+      "strict_sweep": false,
+      "confirm_close": false,
+      "min_ob_body_pct": 0.3,
+      "use_body_for_ob": true,
+      "fvg_min_atr": 0.3,
+      "wick_invalidates_ob": true
     }
+  }
 }

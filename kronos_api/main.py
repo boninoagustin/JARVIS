@@ -408,14 +408,9 @@ async def detection_optimize(ticker: str):
     except Exception as fe:
         print(f"[KRONOS] Warning marcando status OPTIMIZANDO: {fe}")
 
-    cmd = (
-        f'cd {JARVIS_DIR} && flock /tmp/detection_tune.lock '
-        f'npx tsx scripts/periodic_opt/smc_detection_search.ts {ticker} tune 60 '
-        f'2>/dev/null | grep -a "TUNE_RESULT"; '
-        f'NODE_OPTIONS="--max-old-space-size=2560" npx tsx '
-        f'scripts/periodic_opt/smc_detection_search.ts {ticker} health 0 '
-        f'2>/dev/null | grep -a "HEALTH_"'
-    )
+    # 03-nov-2026: la lógica vive en scripts/ops/optimize_ticker.sh (NODE_OPTIONS para el
+    # tune, stderr a log, reinicio del bot si aplica y refresco de salud).
+    cmd = f"bash {JARVIS_DIR}/scripts/ops/optimize_ticker.sh {ticker}"
     try:
         subprocess.Popen(
             ["/bin/bash", "-c", cmd],

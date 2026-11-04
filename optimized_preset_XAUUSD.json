@@ -1,47 +1,86 @@
 {
-    "M15": {
-        "pivot_len": 3,
-        "wick_pct": 0.3,
-        "div_len": 2,
-        "z_window": 14
-    },
-    "H1": {
-        "pivot_len": 8,
-        "wick_pct": 0.1,
-        "div_len": 2,
-        "z_window": 14
-    },
-    "H4": {
-        "pivot_len": 8,
-        "wick_pct": 0.1,
-        "div_len": 2,
-        "z_window": 14
-    },
-    "D1": {
-        "pivot_len": 3,
-        "wick_pct": 0.1,
-        "div_len": 2,
-        "z_window": 14
-    },
-    "Risk": {
-        "slBufferPercent": 0.01186342911739453,
-        "fixedRR": 4.467223099934127,
-        "minRR": 1.9407780292683745,
-        "oteEntryPercent": 50
-    },
-    "Scoring": {
-        "minBuyPoints": 6,
-        "minSellPoints": 4
-    },
-    "Meta": {
-        "objective_value": 3.6924490422501264,
-        "trade_count": 38,
-        "profit_factor": 15.451045692033436,
-        "max_drawdown_r": 1.6228394424368275,
-        "win_rate": 0.8157894736842105,
-        "oos_profit_factor": 5.348163355816014,
-        "n_trials": 400,
-        "study_name": "jarvis_XAUUSD_weekly12",
-        "source": "hyperopt"
+  "M15": {
+    "pivot_len": 8,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 50
+  },
+  "H1": {
+    "pivot_len": 8,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 50
+  },
+  "H4": {
+    "pivot_len": 8,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 50
+  },
+  "D1": {
+    "pivot_len": 8,
+    "wick_pct": 0.2,
+    "div_len": 2,
+    "z_window": 50
+  },
+  "Risk": {
+    "slBufferPercent": 0.01186342911739453,
+    "fixedRR": 4.467223099934127,
+    "minRR": 1.9407780292683745,
+    "oteEntryPercent": 50
+  },
+  "Scoring": {
+    "minBuyPoints": 6,
+    "minSellPoints": 4
+  },
+  "Meta": {
+    "objective_value": 3.6924490422501264,
+    "trade_count": 38,
+    "profit_factor": 15.451045692033436,
+    "max_drawdown_r": 1.6228394424368275,
+    "win_rate": 0.8157894736842105,
+    "oos_profit_factor": 5.348163355816014,
+    "n_trials": 400,
+    "study_name": "jarvis_XAUUSD_weekly12",
+    "source": "hyperopt"
+  },
+  "Detection": {
+    "pivot_len": 8,
+    "min_sweep_wick_pct": 0.2,
+    "div_pivot_len": 2,
+    "z_score_window": 50,
+    "require_displacement": true,
+    "require_fvg_after_ob": false,
+    "strict_breaker": false,
+    "strict_sweep": true,
+    "confirm_close": true,
+    "min_ob_body_pct": 0.3,
+    "use_body_for_ob": true,
+    "fvg_min_atr": 0.5,
+    "wick_invalidates_ob": true
+  },
+  "DetectionMeta": {
+    "source": "detection_tune",
+    "appliedAt": "2026-11-03T12:12:02.936Z",
+    "trainR": 15.73,
+    "oosR": 5.01,
+    "prevTrainR": 10.02,
+    "prevOosR": 5.71,
+    "candidatesTested": 60,
+    "params": {
+      "pivot_len": 8,
+      "min_sweep_wick_pct": 0.2,
+      "div_pivot_len": 2,
+      "z_score_window": 50,
+      "require_displacement": true,
+      "require_fvg_after_ob": false,
+      "strict_breaker": false,
+      "strict_sweep": true,
+      "confirm_close": true,
+      "min_ob_body_pct": 0.3,
+      "use_body_for_ob": true,
+      "fvg_min_atr": 0.5,
+      "wick_invalidates_ob": true
     }
+  }
 }
