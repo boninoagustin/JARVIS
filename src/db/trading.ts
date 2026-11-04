@@ -4546,6 +4546,15 @@ export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now(
 
 export async function retainExecutionIncident(tradeId: string, journalId: string | undefined, result: import('../services/ctrader.js').CTraderOrderResult | null | undefined): Promise<boolean> {
     if (result && !result.success && !result.positionId && !result.executionUncertain) return false;
+    // 🛡️ 04-nov-2026: un RECHAZO EXPLÍCITO del broker no es un resultado incierto aunque el
+    // evento traiga positionId (300802673 / XAUUSD): el deal vino con filledVolume 0 y
+    // "no se abrió posición". Retenerlo bloqueaba todas las entradas hasta que el reconcile
+    // lo resolvía. Con rechazo explícito se limpia como SKIP/ABORTED al instante.
+    const rejectionText = String((result as any)?.error ?? '');
+    if (result && !result.success && /rechazada por el broker|INTERNALLY_REJECTED|deal no se llenó|no se abrió posición/i.test(rejectionText)) {
+        console.warn(`[EXEC] rechazo explícito del broker — sin incidente: ${rejectionText.slice(0, 140)}`);
+        return false;
+    }
     let trade = globalState.activeTrades.get(tradeId);
     if (!trade) {
         // A lost candidate is still an account-wide obligation, not permission to send another order.
