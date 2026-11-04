@@ -398,6 +398,28 @@ export const getLastPingTime = () => globalState.lastPingTime;
 let lastReconcileTs = 0;
 
 // Broker-verified close: full volume, deduped deals, per-deal money scale and immutable opening risk.
+/**
+ * 04-nov-2026: ¿el historial de la posición muestra SOLO intentos rechazados?
+ * Caso real (XAUUSD #XXK2WX / posID 300802673): el broker rechazó la orden
+ * (dealStatus 5, filledVolume 0) pero el bot la había dejado en
+ * EXECUTION_PENDING_RECONCILIATION con executionIncidentPending → bloqueaba TODAS las
+ * entradas por BLOCKED_EXECUTION_INCIDENT y el fantasma quedaba para siempre.
+ * Sin fill no hay posición ni PnL que fabricar: se finaliza como REJECTED.
+ */
+async function brokerDealsAreRejectedOnly(positionId: string): Promise<boolean> {
+    try {
+        const broker = await import('../services/ctrader.js');
+        const deals = await broker.getDealsByPosition(positionId);
+        if (!Array.isArray(deals) || deals.length === 0) return false;
+        return deals.every((d: any) => d
+            && Number(d.filledVolume) === 0
+            && !d.closePositionDetail
+            && [4, 5, 6, 7].includes(Number(d.dealStatus)));
+    } catch {
+        return false;
+    }
+}
+
 async function resolveClosedFromDeals(positionId: string, trade: any): Promise<ClosedTradeAccounting | null> {
     try {
         const broker = await import('../services/ctrader.js');
@@ -540,6 +562,24 @@ export async function reconcileCTraderPositions(): Promise<void> {
             invalidateRiskCache();
             const resolved = await resolveClosedFromDeals(trade.ctraderPositionId!, trade);
             if (!resolved) {
+                // 🛡️ 04-nov-2026: si el broker sólo reporta rechazos (sin fill) no hay
+                // posición ni PnL: se finaliza como REJECTED y se limpia el incidente
+                // (antes quedaba pendiente para siempre y bloqueaba todas las entradas).
+                if (await brokerDealsAreRejectedOnly(trade.ctraderPositionId!)) {
+                    const jidRej = trade.journalId;
+                    console.warn(`[RECONCILE] 🚫 posID ${trade.ctraderPositionId}: la orden fue RECHAZADA por el broker (sin fill) — se finaliza como REJECTED, sin PnL.`);
+                    if (db && jidRej) {
+                        await db.collection('trade_journal').doc(jidRej).update({
+                            result: 'SKIP', ctraderStatus: 'REJECTED', skipReason: 'orden rechazada por el broker (historial sin fill, volumen 0)',
+                            executionIncidentPending: false, closeAccountingPending: false, executionUncertain: false,
+                            closedAt: new Date().toISOString(),
+                        }).catch(() => { });
+                    }
+                    if (db) await db.collection('active_trades').doc(trade.tradeId).delete().catch(() => { });
+                    globalState.activeTrades.delete(trade.tradeId);
+                    invalidateRiskCache();
+                    continue;
+                }
                 console.warn(`[RECONCILE] ⚠️ Historial incompleto para posID ${trade.ctraderPositionId} — se conserva pendiente, sin fabricar resultado.`);
                 continue;
             }
