@@ -1528,6 +1528,9 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
  * consultando los resultados cerrados del día de hoy en 'trade_journal'.
  * Retorna true si hay un bloqueo activo (cuenta deshabilitada temporalmente para operar hoy).
  */
+// 05-nov-2026: dataHold bloqueaba TODO sin avisar (28 h sin operar). Throttle de aviso.
+let lastHeldAlertTs = 0;
+
 async function evaluateGlobalKillswitch(nowMs: number, store: any, isBacktest: boolean = false): Promise<boolean> {
     if (isBacktest) return false;
     const currentSession = getCurrentSession(nowMs);
@@ -1545,6 +1548,24 @@ async function evaluateGlobalKillswitch(nowMs: number, store: any, isBacktest: b
 
             sendTelegramAlert(warningMsg).catch(() => { });
             console.log(`[KILLSWITCH GLOBAL] ⛔ Cuenta bloqueada. Causa: ${res.killReason}`);
+        } else if (res.riskDataStatus === 'held' && Date.now() - lastHeldAlertTs > 60 * 60 * 1000) {
+            // 🛡️ dataHold NO tiene killUntilMs: bloquea en silencio (ni log ni Telegram).
+            // Se avisa 1 vez por hora y se deja contador para el digest semanal.
+            lastHeldAlertTs = Date.now();
+            console.log(`[RISK-HELD] ⛔ Entradas retenidas por datos de riesgo no verificados: ${res.killReason}`);
+            sendTelegramAlert(
+                `⛔ <b>[ENTRADAS RETENIDAS]</b>\n\n` +
+                `📋 <b>Causa:</b> ${res.killReason}\n` +
+                `🚫 Ninguna entrada nueva se ejecutará hasta resolverlo (el resto del bot sigue vivo).\n\n` +
+                `💡 <i>Revisar trade_journal por trades sin accounting verificado / incidentes de ejecución.</i>`
+            ).catch(() => { });
+            try {
+                if (db) {
+                    const ref = db.collection('system').doc('risk_health');
+                    const cur = (await ref.get()).data()?.heldCount ?? 0;
+                    await ref.set({ heldCount: cur + 1, heldLastAt: new Date().toISOString(), heldLastReason: res.killReason }, { merge: true });
+                }
+            } catch { /* contador best-effort */ }
         }
         return true;
     }

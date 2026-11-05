@@ -129,6 +129,11 @@ for (const d of week.docs) {
 }
 const decided = win + loss;
 const wr = decided ? `${Math.round((win / decided) * 100)}%` : '—';
+// 05-nov-2026: bloqueos silenciosos por datos de riesgo no verificados (dataHold).
+const rh = (await db.collection('system').doc('risk_health').get()).data() || {};
+if (rh.heldCount) {
+  lines.push(`⛔ Entradas retenidas (datos no verificados): ${rh.heldCount} evento(s) · último ${fmtAgo(Date.parse(rh.heldLastAt))} — ${String(rh.heldLastReason || '').slice(0, 80)}`);
+}
 lines.push(`📈 Semana: ${week.size} señales · ${exec} ejecutadas · ${win}W/${loss}L (WR ${wr}) · ${skip} skip`);
 const topSkip = Object.entries(skips).sort((a, b) => b[1] - a[1]).slice(0, 2);
 if (topSkip.length) lines.push(`   ↳ skips: ${topSkip.map(([k, v]) => `${k} (${v})`).join(' · ')}`);
