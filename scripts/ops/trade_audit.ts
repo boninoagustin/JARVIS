@@ -48,7 +48,7 @@ const sa = JSON.parse(fs.readFileSync(path.join(REPO, 'firebase-key.json'), 'utf
 if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
 const db = admin.firestore();
 
-function verdict(t: any, equity: number, slip: number | null, capped = false): { ok: boolean; issues: string[]; detail: string } {
+function verdict(t: any, equity: number, slip: number | null, capped = false, lots: number | null = null): { ok: boolean; issues: string[]; detail: string } {
   const issues: string[] = [];
   const requested = Number(t.requestedRiskPercent);
   const budget = Number(t.riskBudgetAccount);
@@ -61,9 +61,15 @@ function verdict(t: any, equity: number, slip: number | null, capped = false): {
   }
   if (Number.isFinite(budget) && budget > 0 && Number.isFinite(actual)) {
     const dev = (actual - budget) / budget;
-    const under = dev < 0;
-    // Si la orden llegó al máximo del bróker, el sub-riesgo es estructural (no un desvío).
-    if (Math.abs(dev) > RISK_DEV && !(capped && under)) {
+    // 05-nov-2026: el riesgo POR DEBAJO del presupuesto es lo normal y seguro — el sizing
+    // reserva la comisión por cent y redondea al step de volumen (NL25: -42% con 5 lotes).
+    // Sólo alertamos por sobre-riesgo, o por sub-riesgo EXTREMO (<50%) que no esté
+    // explicado por el cap del bróker ni por el lote mínimo.
+    const cap = CAPS[String(t.ticker || '').toUpperCase()];
+    const minLots = cap && cap.lotSize > 0 ? cap.minVolume / cap.lotSize : null;
+    const atMin = Number.isFinite(lots) && minLots !== null && (lots as number) <= minLots * 1.01;
+    const suspiciousUnder = dev < -0.5 && !capped && !atMin;
+    if (dev > RISK_DEV || suspiciousUnder) {
       issues.push(`riesgo real ${actual.toFixed(2)} vs presupuesto ${budget.toFixed(2)} (${(dev * 100).toFixed(0)}%)`);
     }
   }
@@ -126,7 +132,9 @@ const open = await db.collection('active_trades').get();
 const candidates: Array<{ key: string; docId: string; t: any }> = [];
 for (const d of open.docs) {
   const t = d.data() as any;
-  const key = String(t.tradeId ?? d.id);
+  // 05-nov-2026: clave por posición — un trade pending re-creado con otro id (PFEOQU→8NP5UN)
+  // generaba dos auditorías del mismo trade y dos alertas.
+  const key = t.ctraderPositionId ? `pos:${t.ctraderPositionId}` : `t:${t.tradeId ?? d.id}`;
   candidates.push({ key, docId: d.id, t });
 }
 const since24 = Date.now() - 24 * 3600e3;
@@ -134,7 +142,7 @@ const journal = await db.collection('trade_journal').where('timestamp', '>=', si
 for (const j of journal.docs) {
   const t = j.data() as any;
   if (!Number.isFinite(Number(t.riskAmountAccount))) continue;
-  const key = String(t.id ?? t.tradeId ?? j.id);
+  const key = t.ctraderPositionId ? `pos:${t.ctraderPositionId}` : `t:${t.id ?? t.tradeId ?? j.id}`;
   if (candidates.some((c) => c.key === key)) continue;
   candidates.push({ key, docId: j.id, t });
 }
@@ -147,7 +155,7 @@ for (const { key, docId, t } of fresh) {
   const slip = Number.isFinite(slipByTrade[key]) ? slipByTrade[key] : (Number.isFinite(slipByTrade[t.tradeId]) ? slipByTrade[t.tradeId] : null);
   const lots = Number.isFinite(lotsByTrade[key]) ? lotsByTrade[key] : (Number.isFinite(lotsByTrade[t.tradeId]) ? lotsByTrade[t.tradeId] : null);
   const capped = cappedByBroker(t.ticker, lots);
-  const v = verdict(t, equity, slip, capped);
+  const v = verdict(t, equity, slip, capped, lots);
   console.log(`  ${key} ${t.ticker} ${t.direction}: ${v.ok ? 'OK' : 'DESVÍO'} · ${v.detail}`);
   if (!v.ok) alerts.push(`• ${t.ticker} ${t.direction} (${key})\n  ${v.issues.join('\n  ')}\n  ${v.detail}`);
   audited[key] = { at: Date.now(), ok: v.ok, issues: v.issues, docId };
