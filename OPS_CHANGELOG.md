@@ -219,3 +219,28 @@ Nuevo esquema (server CET, ART = CET-4):
   `OnSuccess=` (systemd 255) al terminar el paso anterior. Sin solapamiento ni esperas.
 - Trade-off: si el ciclo falla o se cuelga, la cadena no corre esa semana. El digest
   monitorea los tres jobs (se agregó Health + propuestas a la lista).
+
+## 14. Auditoría externa (05-nov) — Lote 1 corregido
+
+Auditoría independiente sobre HEAD 8666c71. Verificado cada hallazgo contra el código vivo.
+
+- **H02 (mi bug)**: `retainExecutionIncident` decidía "rechazo terminal" con una regex sobre
+  el texto, ANTES de mirar `executionUncertain`; un resultado incierto podía degradarse a
+  "sin incidente" y el caller borraba la identidad del trade. Ahora exige evidencia
+  ESTRUCTURADA del productor: `filledVolumeCents === 0` y `executionUncertain !== true`.
+  El productor marca el rechazo con `brokerRejection` (ctrader.ts) y se propaga en los dos
+  caminos (catch general y FILL_SAFETY con cierre de emergencia verificado).
+- **H10 (mi bug)**: una corrida `NOT_APPLIED` no cerraba el estado `OPTIMIZANDO` y el health
+  lo preservaba si había `bestR`. Ahora el tune escribe el estado de cierre y el health sólo
+  preserva el veredicto cuando `tuneDecision === 'APPLIED'`.
+- **H01**: la aprobación manual usaba el riesgo global, ignoraba el override por activo y no
+  persistía `requestedRiskPercent`; los caps agregado/cluster sólo se aplicaban en AUTO.
+  Ahora `effectiveRiskPercentFor()` es la única fuente de riesgo y los caps viven en
+  `recheckLiveExecutionRisk(ticker, now, { extraRiskPercent, excludeTradeId })`, usado por
+  AUTO y manual. Además el cap usa el riesgo configurado como fallback cuando un trade
+  abierto no guardó el suyo (antes contaba 0 → subconteo).
+- **H05**: `.env`, `firebase-key.json`, `service-account.json` y backups del entorno estaban
+  en 0644 → ahora 0600.
+
+Pendiente (Lote 2/3): H03 (MCL train-only), B4 (auto-disable es código muerto), D1 (scout
+sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12.

@@ -340,7 +340,9 @@ async function main() {
       const ref = db.collection('detection_health').doc(TICKER);
       if (N === 0) {
         const cur = (await ref.get()).data() || {};
-        if (Number.isFinite(cur.bestR)) delete out.status; // veredicto del tune manda
+        // H10: preservar el veredicto sólo si el tune aplicó; si la última corrida fue
+        // NOT_APPLIED, el health debe cerrar el estado (p.ej. OPTIMIZANDO colgado).
+        if (Number.isFinite(cur.bestR) && cur.tuneDecision === 'APPLIED') delete out.status;
       }
       await ref.set(out, { merge: true });
       console.log('HEALTH_SAVED');
@@ -426,8 +428,16 @@ async function main() {
         const admin: any = (adminModule as any).default ?? adminModule;
         const sa = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'service-account.json'), 'utf8'));
         if (admin.apps?.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
-        await admin.firestore().collection('detection_health').doc(TICKER).set({
+        // H10 (auditoría 2026-11-05): una corrida rechazada debe CERRAR el estado
+        // OPTIMIZANDO; antes el panel podía quedar "optimizando" para siempre.
+        const refTune = admin.firestore().collection('detection_health').doc(TICKER);
+        const curTune = (await refTune.get()).data() || {};
+        const fallbackStatus = curTune.status && curTune.status !== 'OPTIMIZANDO'
+          ? curTune.status
+          : (curTune.baselineStatus ?? 'REVISAR');
+        await refTune.set({
           tuneDecision: 'NOT_APPLIED',
+          status: fallbackStatus,
           tunedAt: new Date().toISOString(),
           lastTune: {
             trials: N_TRIALS,

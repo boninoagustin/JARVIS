@@ -18,7 +18,7 @@ import { db } from '../db/memory.js';
 import { invalidateRiskCache } from '../engine/PortfolioModel.js';
 import { commitTradeCloseAccounting } from '../engine/TradeAccountingPersistence.js';
 import { buildExecutionNotice } from '../engine/ExecutionNotice.js';
-import { globalState, hasUnresolvedExecutionIncidents, recheckLiveExecutionRisk, retainExecutionIncident, updateTradePositionId, finalizeClosedPositionFromDeals } from '../db/trading.js';
+import { globalState, hasUnresolvedExecutionIncidents, recheckLiveExecutionRisk, retainExecutionIncident, updateTradePositionId, finalizeClosedPositionFromDeals, effectiveRiskPercentFor } from '../db/trading.js';
 
 // ─── Pending Confirmations Store ───
 
@@ -110,7 +110,7 @@ export async function sendTradeConfirmation(data: {
 
     // Build confirmation message with execution details
     const riskMult = data.riskMult ?? 1;
-    const riskPercent = config.CTRADER_RISK_PERCENT * riskMult;
+    const riskPercent = effectiveRiskPercentFor(data.ticker, riskMult);
     const slDistPercent = (Math.abs(data.entryPrice - data.slPrice) / data.entryPrice * 100).toFixed(3);
     const timesfmNote = riskMult < 1 ? ` (×${riskMult} TimesFM)` : '';
     
@@ -233,6 +233,7 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
     } catch {}
 
     // Execute the trade
+    const requestedRiskPercent = effectiveRiskPercentFor(pending.ticker, pending.riskMult);
     const orderParams: CTraderOrderParams = {
         ticker: pending.ticker,
         direction: pending.direction,
@@ -241,8 +242,11 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
         tp1Price: pending.tp1Price,
         tp2Price: pending.tp2Price,
         tradeId: pending.tradeId,
-        beforeExecution: () => recheckLiveExecutionRisk(pending.ticker),
-        riskPercent: config.CTRADER_RISK_PERCENT * (pending.riskMult ?? 1), // 🆕 TimesFM F1
+        // H01 (auditoría 2026-11-05): mismo riesgo efectivo y mismos caps que AUTO.
+        beforeExecution: () => recheckLiveExecutionRisk(pending.ticker, Date.now(), {
+            extraRiskPercent: requestedRiskPercent, excludeTradeId: tradeId,
+        }),
+        riskPercent: requestedRiskPercent,
     };
 
     if (hasUnresolvedExecutionIncidents()) {
@@ -252,7 +256,7 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
     // Approval may arrive after another position closes or policy changes. The
     // user approves this candidate, not a bypass of current account/asset limits.
     let riskBlock: string | null;
-    try { riskBlock = await recheckLiveExecutionRisk(pending.ticker); }
+    try { riskBlock = await recheckLiveExecutionRisk(pending.ticker, Date.now(), { extraRiskPercent: requestedRiskPercent, excludeTradeId: tradeId }); }
     catch { riskBlock = 'risk-data-unavailable: manual approval recheck failed'; }
     if (riskBlock) {
         const candidate = globalState.activeTrades.get(tradeId);
@@ -290,6 +294,7 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
                 initialSlPrice: result.riskSnapshot?.initialSlPrice ?? pending.slPrice,
                 tp1Price: pending.tp1Price,
                 ...(Number.isFinite(result.riskBudgetAccount) ? { riskBudgetAccount: result.riskBudgetAccount } : {}),
+                requestedRiskPercent, // H01: el presupuesto pedido queda persistido también en manual
                 ...riskFields,
             };
             if (pending.tp2Price !== undefined && pending.tp2Price !== null) normPayload.tp2Price = pending.tp2Price;

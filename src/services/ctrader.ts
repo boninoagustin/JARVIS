@@ -1378,7 +1378,10 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
             const rejDetail = fillConfirm.deal
                 ? (fillConfirm.deal.errorDescription ?? fillConfirm.deal.errorCode ?? fillConfirm.deal.rejectReason ?? `deal=${JSON.stringify(fillConfirm.deal).slice(0, 200)}`)
                 : 'sin detalle del deal';
-            throw new Error(`Orden rechazada por el broker (${fillConfirm.dealStatusName} | ${rejDetail}): el deal no se llenó. No se abrió posición.`);
+            // H02 (auditoría 2026-11-05): marcador ESTRUCTURADO de rechazo terminal (sin fill).
+            const rej = new Error(`Orden rechazada por el broker (${fillConfirm.dealStatusName} | ${rejDetail}): el deal no se llenó. No se abrió posición.`);
+            (rej as any).brokerRejection = { filledVolumeCents: 0, dealStatusName: fillConfirm.dealStatusName };
+            throw rej;
         }
         // 🆕 ago-2026: corregir el precio de ejecución con el deal REAL del broker. El evento
         // inmediato de la orden puede reportar el precio del radar (ej. USOIL: bot creía 83.1312,
@@ -1512,7 +1515,11 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                         console.error('[CTRADER] ❌ No se pudo enviar alerta Telegram de ghost position:', tgErr.message);
                     }
                 }
+                const rejectionMarked = (amendErr as any)?.brokerRejection != null
+                    || /no se abrió posición/i.test(String(amendErr?.message ?? ''));
                 return {success:false,positionId,executionUncertain:!emergencyClosed||pendingOrderUnresolved,
+                    // Evidencia de "sin fill" sólo si el cierre de emergencia quedó verificado.
+                    ...(rejectionMarked && emergencyClosed && !pendingOrderUnresolved ? { filledVolumeCents: 0 } : {}),
                     error:`FILL_SAFETY: ${amendErr.message}. ${emergencyClosed&&!pendingOrderUnresolved?'Position closed [broker verified]':'POSITION OR REMAINDER MAY REMAIN OPEN — manual reconciliation required; do not retry'}`};
         }
 
@@ -1564,7 +1571,9 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
         };
     } catch (err: any) {
         console.error(`[CTRADER] ❌ Error ejecutando orden ${direction} ${ticker}:`, err.message);
-        return { success: false, error: err.message };
+        // H02: propagar evidencia estructurada de rechazo (volumen 0) si el productor la adjuntó.
+        return { success: false, error: err.message,
+            ...((err as any)?.brokerRejection ? { filledVolumeCents: 0, executionUncertain: false } : {}) };
     }
 }
 

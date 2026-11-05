@@ -4551,7 +4551,55 @@ export const CLUSTER_RISK_CAPS: Record<string, number> = {
     US_INDICES: 4, EU_INDICES: 4, ASIA_INDICES: 4, OTHER: 2,
 };
 
-export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now()): Promise<string | null> {
+/**
+ * H01 (auditoría 2026-11-05): riesgo efectivo (%) de una entrada — override por activo
+ * (cap duro 3), multiplicador de señal y factor de sesión. Única fuente para AUTO y para
+ * la aprobación manual (antes la manual usaba el global y eludía los caps).
+ */
+export function effectiveRiskPercentFor(ticker: string, riskMult: number | undefined, nowMs = Date.now()): number {
+    const cfgRisk = Number((getConfigForTicker(ticker, nowMs) as any).riskPercent);
+    const base = Number.isFinite(cfgRisk) && cfgRisk > 0 ? Math.min(cfgRisk, 3) : envConfig.CTRADER_RISK_PERCENT;
+    if (base !== envConfig.CTRADER_RISK_PERCENT) {
+        console.log(`[RISK] ${ticker}: riesgo por activo ${base}% (global ${envConfig.CTRADER_RISK_PERCENT}%)`);
+    }
+    return base * (riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(nowMs));
+}
+
+/**
+ * H01/M2: topes de exposición agregada y por cluster, aplicables a CUALQUIER admisión.
+ * Si un trade abierto no guardó su riesgo (adoptado/legacy), se usa el riesgo configurado
+ * del activo como aproximación conservadora (antes se contaba 0).
+ */
+function portfolioCapBlock(ticker: string, thisRisk: number, excludeTradeId?: string): string | null {
+    const aggCap = Number(envConfig.CTRADER_MAX_AGGREGATE_RISK_PCT);
+    let openRisk = 0;
+    const byCluster: Record<string, number> = {};
+    for (const [tid, tr] of globalState.activeTrades) {
+        if (tid === excludeTradeId) continue;
+        const stored = Number((tr as any)?.requestedRiskPercent);
+        const tTicker = String((tr as any)?.ticker ?? '');
+        const eff = Number.isFinite(stored) && stored > 0
+            ? stored
+            : (Number((getConfigForTicker(tTicker, Date.now()) as any).riskPercent) || Number(envConfig.CTRADER_RISK_PERCENT));
+        openRisk += eff;
+        const c = riskClusterOf(tTicker);
+        byCluster[c] = (byCluster[c] ?? 0) + eff;
+    }
+    if (Number.isFinite(aggCap) && aggCap > 0 && openRisk + thisRisk > aggCap + 1e-9) {
+        console.log(`[RISK-CAP] ⛔ ${ticker}: riesgo agregado ${(openRisk + thisRisk).toFixed(2)}% > tope ${aggCap}% (abiertas ${openRisk.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
+        return 'BLOCKED_AGGREGATE_RISK';
+    }
+    const cluster = riskClusterOf(ticker);
+    const clusterCap = CLUSTER_RISK_CAPS[cluster] ?? 4;
+    const openCluster = byCluster[cluster] ?? 0;
+    if (openCluster + thisRisk > clusterCap + 1e-9) {
+        console.log(`[RISK-CLUSTER] ⛔ ${ticker} (${cluster}): cluster ${(openCluster + thisRisk).toFixed(2)}% > tope ${clusterCap}% (abiertas ${openCluster.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
+        return 'BLOCKED_CLUSTER_RISK';
+    }
+    return null;
+}
+
+export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now(), opts: { extraRiskPercent?: number; excludeTradeId?: string } = {}): Promise<string | null> {
     // Synchronous policy is shared by AUTO and delayed manual approval, including
     // a final read after ledger awaits: latches/settings may change during I/O.
     const currentPolicy = (at: number): string | null => {
@@ -4569,18 +4617,24 @@ export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now(
     if (blocked) return blocked;
     if (await evaluateGlobalKillswitch(nowMs, globalState, false)) return 'BLOCKED_GLOBAL';
     if (await evaluateAssetKillswitch(ticker, nowMs, globalState, false)) return 'BLOCKED_ASSET';
+    // H01: topes de exposición para TODAS las admisiones (AUTO y aprobación manual).
+    if (Number.isFinite(opts.extraRiskPercent)) {
+        const capBlock = portfolioCapBlock(ticker, Number(opts.extraRiskPercent), opts.excludeTradeId);
+        if (capBlock) return capBlock;
+    }
     return currentPolicy(Date.now());
 }
 
 export async function retainExecutionIncident(tradeId: string, journalId: string | undefined, result: import('../services/ctrader.js').CTraderOrderResult | null | undefined): Promise<boolean> {
     if (result && !result.success && !result.positionId && !result.executionUncertain) return false;
-    // 🛡️ 04-nov-2026: un RECHAZO EXPLÍCITO del broker no es un resultado incierto aunque el
-    // evento traiga positionId (300802673 / XAUUSD): el deal vino con filledVolume 0 y
-    // "no se abrió posición". Retenerlo bloqueaba todas las entradas hasta que el reconcile
-    // lo resolvía. Con rechazo explícito se limpia como SKIP/ABORTED al instante.
-    const rejectionText = String((result as any)?.error ?? '');
-    if (result && !result.success && /rechazada por el broker|INTERNALLY_REJECTED|deal no se llenó|no se abrió posición/i.test(rejectionText)) {
-        console.warn(`[EXEC] rechazo explícito del broker — sin incidente: ${rejectionText.slice(0, 140)}`);
+    // H02 (auditoría 2026-11-05): un rechazo terminal se concluye SÓLO con evidencia
+    // ESTRUCTURADA del productor (filledVolumeCents === 0 y el resultado no es incierto).
+    // Antes una regex sobre el mensaje podía degradar una ejecución INCIERTA a "sin
+    // incidente" y el caller borraba la identidad del trade.
+    const explicitNoFill = !!result && !result.success && result.executionUncertain !== true
+        && Number(result.filledVolumeCents) === 0;
+    if (explicitNoFill) {
+        console.warn('[EXEC] rechazo terminal sin fill (evidencia estructurada: filledVolumeCents=0, executionUncertain=false)');
         return false;
     }
     let trade = globalState.activeTrades.get(tradeId);
@@ -5284,42 +5338,12 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
                     if (ctraderConfigured) {
                         const recheckKillswitchesBeforeExecution = async (): Promise<string | null> => {
-                            const blocked = await recheckLiveExecutionRisk(ticker);
-                            // 🛡️ 03-nov-2026: tope de riesgo AGREGADO. Suma el riesgo pedido de las
-                            // posiciones abiertas (excluyendo esta) + el de esta entrada. Con 3% por
-                            // activo, sin esto tres correlacionados abiertos = 9% en la misma dirección.
-                            {
-                                const cfgRisk = Number((getConfigForTicker(ticker, Date.now()) as any).riskPercent);
-                                const riskBaseAgg = Number.isFinite(cfgRisk) && cfgRisk > 0 ? Math.min(cfgRisk, 3) : envConfig.CTRADER_RISK_PERCENT;
-                                const thisRisk = riskBaseAgg * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
-                                const aggCap = Number(envConfig.CTRADER_MAX_AGGREGATE_RISK_PCT);
-                                let openRisk = 0;
-                                for (const [tid, tr] of store.activeTrades) {
-                                    if (tid === oteData.tradeId) continue;
-                                    const r = Number((tr as any)?.requestedRiskPercent);
-                                    if (Number.isFinite(r) && r > 0) openRisk += r;
-                                }
-                                if (Number.isFinite(aggCap) && aggCap > 0 && openRisk + thisRisk > aggCap + 1e-9) {
-                                    console.log(`[RISK-CAP] ⛔ ${ticker}: riesgo agregado ${(openRisk + thisRisk).toFixed(2)}% > tope ${aggCap}% (abiertas ${openRisk.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
-                                    return 'BLOCKED_AGGREGATE_RISK';
-                                }
-                                // v2: tope por cluster de correlación (no apilar todo en la misma apuesta)
-                                const thisCluster = riskClusterOf(ticker);
-                                const openByCluster: Record<string, number> = {};
-                                for (const [tid, tr] of store.activeTrades) {
-                                    if (tid === oteData.tradeId) continue;
-                                    const r = Number((tr as any)?.requestedRiskPercent);
-                                    if (!(Number.isFinite(r) && r > 0)) continue;
-                                    const c = riskClusterOf(String((tr as any)?.ticker ?? ''));
-                                    openByCluster[c] = (openByCluster[c] ?? 0) + r;
-                                }
-                                const clusterCap = CLUSTER_RISK_CAPS[thisCluster] ?? 4;
-                                const clusterOpen = openByCluster[thisCluster] ?? 0;
-                                if (clusterOpen + thisRisk > clusterCap + 1e-9) {
-                                    console.log(`[RISK-CLUSTER] ⛔ ${ticker} (${thisCluster}): cluster ${(clusterOpen + thisRisk).toFixed(2)}% > tope ${clusterCap}% (abiertas ${clusterOpen.toFixed(2)}% + nueva ${thisRisk.toFixed(2)}%)`);
-                                    return 'BLOCKED_CLUSTER_RISK';
-                                }
-                            }
+                            // H01 (auditoría 2026-11-05): una sola fuente de riesgo y de caps para
+                            // AUTO y aprobación manual (los caps viven en recheckLiveExecutionRisk).
+                            const blocked = await recheckLiveExecutionRisk(ticker, Date.now(), {
+                                extraRiskPercent: effectiveRiskPercentFor(ticker, oteData.riskMult),
+                                excludeTradeId: oteData.tradeId,
+                            });
                             if (blocked === 'BLOCKED_ROLLOVER') {
                                 console.log(`[ROLLOVER-C] Entry ${ticker} blocked: broker calendar / fresh normalized spread evidence.`);
                                 logBlockedSignal('ROLLOVER', oteData, nowMs);
@@ -5356,16 +5380,8 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             console.log(`[SNIPER] 🤖 Modo AUTO activado. Ejecutando ${ticker} inmediatamente...`);
 
                             const rolloverFillPolicy = structuredClone(getConfigForTicker(ticker,Date.now()).rolloverPolicy);
-                            // 03-nov-2026: override de riesgo por activo (asset_configs.riskPercent),
-                            // acotado al techo duro 3% que aplica sizeOrderVolume.
-                            const assetRiskCfg = Number((getConfigForTicker(ticker, Date.now()) as any).riskPercent);
-                            const riskBase = Number.isFinite(assetRiskCfg) && assetRiskCfg > 0
-                                ? Math.min(assetRiskCfg, 3)
-                                : envConfig.CTRADER_RISK_PERCENT;
-                            if (riskBase !== envConfig.CTRADER_RISK_PERCENT) {
-                                console.log(`[RISK] ${ticker}: riesgo por activo ${riskBase}% (global ${envConfig.CTRADER_RISK_PERCENT}%)`);
-                            }
-                            const requestedRiskPercent = riskBase * (oteData.riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(Date.now()));
+                            // H01: riesgo efectivo por una única fuente (compartida con la manual).
+                            const requestedRiskPercent = effectiveRiskPercentFor(ticker, oteData.riskMult);
                             (activeTrade as any).requestedRiskPercent = requestedRiskPercent;
                             autoExecutionAttempted = true;
                             const result = autoExecutionResult = await executeMarketOrder({
