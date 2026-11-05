@@ -127,11 +127,24 @@ for (const doc of health.docs) {
   });
 }
 
-// TRADE: mejores por cluster
-const candidates = rows.filter((r) => r.mu >= MIN_MU_TRADE && r.n >= MIN_N && r.feasible)
-  .sort((a, b) => b.score - a.score);
+// 05-nov-2026: overrides del operador. Si marcó un activo como TRADE (y sigue habilitado),
+// la propuesta lo respeta y no lo "advierte" cada semana.
 const clusterCount: Record<string, number> = {};
 let tradeCount = 0;
+for (const r of rows) {
+  const ov = (cfgMap.get(r.ticker) || {}).rosterOverride;
+  if (ov?.verdict === 'TRADE' && r.enabled) {
+    r.verdict = 'TRADE';
+    r.reason = `override del operador${ov.reason ? ': ' + String(ov.reason).slice(0, 60) : ''}`;
+    // Un override NO consume cupo de cluster: es una decisión del operador por encima de la
+    // propuesta y no debe desplazar a un activo con mejor edge (evitó que USDJPY sacara a NZDUSD).
+    tradeCount++;
+  }
+}
+
+// TRADE: mejores por cluster
+const candidates = rows.filter((r) => r.verdict !== 'TRADE' && r.mu >= MIN_MU_TRADE && r.n >= MIN_N && r.feasible)
+  .sort((a, b) => b.score - a.score);
 for (const r of candidates) {
   if (tradeCount >= MAX_TRADE) break;
   if ((clusterCount[r.cluster] ?? 0) >= MAX_PER_CLUSTER) continue;
