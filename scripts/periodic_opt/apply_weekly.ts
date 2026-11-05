@@ -100,7 +100,6 @@ async function main() {
   const autoSnap = await AUTO_STATE_REF.get();
   const autoState: any = autoSnap.exists ? (autoSnap.data() || {}) : {};
   const stApplied: Record<string, { at: number; prodOosRef: number; metric?: string; applied_asset_fingerprint?: string; prev_path?: string }> = autoState.applied || {};
-  const stFailing: Record<string, { weeks: number; lastTs: number; period?: number; validation_end_ms?: number }> = autoState.failing || {};
 
   // 🛡️ Rollback AUTOMÁTICO (decisión de Bon 27-sep): si un cambio auto-aplicado la semana
   // anterior cae >0.10R/t de producción OOS esta semana (y no sale RECOMMEND), revertir
@@ -195,49 +194,10 @@ async function main() {
     skipped.push('loser-triggers: archivo auxiliar no aplicado después del gate; usar candidato final certificado');
   }
 
-  // 🆕 27-sep-2026 (decisión de Bon): auto-DESACTIVACIÓN — HOLD_MC + producción OOS<0 dos
-  // semanas seguidas → enabled=false con disabledReason (reversible desde el panel).
-  for (const f of fs.readdirSync(REPORTS_DIR).filter(x => /^[A-Z][A-Z0-9]*\.json$/.test(x))) {
-    const rep = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf8'));
-    const t = rep.ticker;
-    if (!t || !fresh(rep)) continue;
-    const docRef = db.doc(`asset_configs/${t}`);
-    const docSnap = await docRef.get();
-    const current = docSnap.exists ? (docSnap.data() as any) : {};
-    if (current.enabled === false) { delete stFailing[t]; continue; } // ya apagado (manual o auto)
-    if (manuallyRetired(current)) { skipped.push(`${t}: retiro manual — auto-disable retenido`); continue; }
-    const prodOos = Number(rep.production_oos?.expectancy);
-    const productionMc = rep.production_montecarlo?.survival;
-    // A failed proposal does not prove that the production strategy failed.
-    const paired = rep.production_asset_fingerprint === assetFingerprint(current);
-    const failing = paired && Number.isFinite(productionMc) && productionMc >= 0 && productionMc < MC_MIN_SURVIVAL && Number.isFinite(prodOos) && prodOos < 0;
-    if (!failing) { delete stFailing[t]; continue; }
-    const period = Math.floor((rep.timestamp - Date.UTC(1970, 0, 5)) / 604800000);
-    const validationEnd = rep.evaluation_manifest?.validation_end_ms;
-    const previous = stFailing[t];
-    if (!Number.isSafeInteger(validationEnd) || validationEnd > rep.timestamp) { skipped.push(`${t}: período de datos no verificable`); continue; }
-    if (previous && (previous.period === period || (previous.validation_end_ms !== undefined && validationEnd <= previous.validation_end_ms))) {
-      skipped.push(`${t}: reporte/período ya contado o datos no avanzaron`); continue;
-    }
-    const weeks = previous?.period === period - 1 ? previous.weeks + 1 : 1;
-    if (weeks >= 2) {
-      if (!DRY_RUN) {
-        const committed = await guardedAssetWrite(db, docRef, assetFingerprint(current), {
-          ...current,
-          enabled: false,
-          disabledReason: `auto-disable: HOLD_MC ${weeks} semanas seguidas con producción OOS negativa`,
-          updatedAt: new Date().toISOString(),
-          updatedBy: 'apply_weekly_auto',
-        });
-        if (!committed) { skipped.push(`${t}: auto-disable cancelado por cambio concurrente`); continue; }
-      }
-      applied.push(`auto-disable: ${t} (HOLD_MC ×${weeks}, prod OOS ${prodOos.toFixed(1)}R)`);
-      delete stFailing[t];
-    } else {
-      stFailing[t] = { weeks, lastTs: rep.timestamp, period, validation_end_ms: validationEnd };
-      skipped.push(`${t}: HOLD_MC con OOS<0 (semana ${weeks}/2 hacia auto-disable)`);
-    }
-  }
+  // B4 (auditoría 2026-11-05): el auto-disable legacy se eliminó. Era INALCANZABLE: este
+  // main() delega en weekly_rollout y retorna antes de llegar acá desde el refactor de
+  // rollout. El apagado por evidencia ahora es una PROPUESTA (scripts/ops/shutdown_proposal.ts)
+  // y la decisión es del operador.
 
   // Sizing remains a proposal until account-level prospective certification exists.
   if (fs.existsSync(path.join(REPORTS_DIR, 'sizing_proposal.json'))) {
@@ -246,7 +206,7 @@ async function main() {
 
   // 🆕 27-sep-2026: persistir estado de auto-gestión (rollback + failing) — solo en modo real
   if (!DRY_RUN) {
-    await AUTO_STATE_REF.set({ applied: stApplied, failing: stFailing, updatedAt: new Date().toISOString() });
+    await AUTO_STATE_REF.set({ applied: stApplied, failing: autoState.failing || {}, updatedAt: new Date().toISOString() });
   }
 
   console.log(DRY_RUN ? '=== APPLY WEEKLY (DRY-RUN) ===' : '=== APPLY WEEKLY (AUTO) ===');

@@ -62,6 +62,5 @@ if [ "$APPLIED" -gt 0 ]; then
   [ -n "$NEWPID" ] && echo -1000 > "/proc/$NEWPID/oom_score_adj" 2>/dev/null
 fi
 
-# 🆕 oct-2026: refrescar la salud de TODO el pool (detection_health/) para el panel.
-echo "=== $(date +%H:%M:%S) HEALTH-ALL (pool completo) ===" >> "$SUMMARY"
-bash /opt/JARVIS/scripts/periodic_opt/run_detection_health.sh >> "$SUMMARY" 2>&1
+# D1 (auditoría 2026-11-05): el health-all se movió a la cadena (OnSuccess del tune →
+# jarvis-health-weekly, que además corre las propuestas). Antes se ejecutaba DOS veces.

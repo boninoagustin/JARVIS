@@ -244,3 +244,16 @@ Auditoría independiente sobre HEAD 8666c71. Verificado cada hallazgo contra el 
 
 Pendiente (Lote 2/3): H03 (MCL train-only), B4 (auto-disable es código muerto), D1 (scout
 sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12.
+
+### 14b. Auditoría externa — Lote 2 (05-nov)
+
+- **H03**: `mcl_sync.ts` ya no aplica solo en el ciclo (el sweep es TRAIN-ONLY). El ciclo
+  corre `--write` y publica `mcl_proposals/*`; aplicar es una acción manual (`--apply`),
+  ahora transaccional (antes get/update podía dejar la sesión a medias).
+- **B4**: se eliminó el bloque legacy de auto-disable de `apply_weekly.ts`. Era
+  **inalcanzable** desde el refactor de rollout (main() delega y retorna antes). El apagado
+  por evidencia queda como propuesta (`shutdown_proposal.ts`) y decisión del operador.
+- **D1**: el ciclo arranca por `OnSuccess` cuando termina el Asset Scout (antes el scout
+  tenía 8 h de timeout y podía solaparse); el timer del ciclo queda como red de seguridad.
+  Se quitó el health-all duplicado del runner del tune (la cadena ya lo corre con propuestas).
+- Digest: línea "🔧 MCL propuesto (sweep train-only): N valores" en lugar de "desactualizado".

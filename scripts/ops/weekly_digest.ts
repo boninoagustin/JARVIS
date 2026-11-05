@@ -148,28 +148,15 @@ try {
 } catch { /* best-effort */ }
 if (rosterLine) lines.push(rosterLine);
 
-// 05-nov-2026: parámetros MCL (maxBuyLosses/maxSellLosses) que el sweep backtesteó y el
-// vivo no aplicó (el pipeline sólo los aplica si el candidato completo pasa el gate).
-let mclStale = 0;
+// H03 (auditoría 2026-11-05): el MCL ya no se aplica solo; el ciclo publica propuestas.
+let mclLine = '';
 try {
-  const OPT_OUT = path.join(REPO, 'scripts/periodic_opt/opt_out');
-  const files = fs.readdirSync(OPT_OUT).filter((f) => f.startsWith('directional_mcl_') && f.endsWith('.json'));
-  const cfgs = await db.collection('asset_configs').get();
-  const byT = new Map(cfgs.docs.map((d) => [d.id, d.data() as any]));
-  for (const f of files) {
-    const ticker = f.replace('directional_mcl_', '').replace('.json', '');
-    const cfg = byT.get(ticker);
-    if (!cfg || cfg.enabled !== true || String(cfg.disabledReason || '').trim()) continue;
-    const rep = JSON.parse(fs.readFileSync(path.join(OPT_OUT, f), 'utf8'));
-    for (const [dot, want] of Object.entries<any>(rep.updates || {})) {
-      const parts = String(dot).split('.');
-      if (parts.length !== 3 || parts[0] !== 'sessions') continue;
-      const live = cfg.sessions?.[parts[1]]?.[parts[2]];
-      if (Number(live) !== Number(want)) mclStale++;
-    }
+  const mclSum = (await db.collection('mcl_proposals').doc('_SUMMARY').get()).data() as any;
+  if (mclSum?.count) {
+    mclLine = `🔧 MCL propuesto (sweep train-only): ${mclSum.count} valores en ${(mclSum.tickers || []).length} activos · ${fmtAgo(Date.parse(mclSum.generatedAt))} — aplicar a mano con mcl_sync.ts --apply`;
   }
 } catch { /* best-effort */ }
-if (mclStale) lines.push(`🔧 MCL desactualizado vs sweep: ${mclStale} valor(es) — correr scripts/ops/mcl_sync.ts --apply`);
+if (mclLine) lines.push(mclLine);
 
 // 05-nov-2026: bloqueos silenciosos por datos de riesgo no verificados (dataHold).
 const rh = (await db.collection('system').doc('risk_health').get()).data() || {};
