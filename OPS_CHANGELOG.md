@@ -200,3 +200,22 @@ en la siguiente propuesta de roster.
 🐞 Fix colateral: run_detection_health.sh y run_detection_tune.sh tenían
 PATH=/home/bon/.nvm/versions/node/v24.18.0/bin (no existe en este host) → el health semanal
 habría corrido con el node del sistema. Corregido a /root/.nvm/versions/node/v24.19.0/bin.
+
+## 13. Organización del finde: pipeline encadenado tras el cierre — 06-nov-2026
+
+El cierre del mercado es **19:00 ART** (17:00 NY = 22:00 UTC = 23:00 CET), no 18:00. Los
+horarios previos (scout 23:00 ART, ciclo 02:00 ART, tune domingo, health lunes) dejaban el
+trabajo repartido y el health caía el lunes.
+
+Nuevo esquema (server CET, ART = CET-4):
+
+  Vie 23:15 CET (19:15 ART)  Asset Scout
+  Vie 23:45 CET (19:45 ART)  Ciclo semanal (→ ~20 h)
+  OnSuccess → Tune detección (→ ~10 h, timeout 18 h)
+  OnSuccess → Health + propuestas (roster/riesgo/apagado)
+  Lun 08:00 CET (04:00 ART)  Digest (queda como reporte final)
+
+- Los timers de detection-tune y health-weekly se desactivaron: ahora se disparan con
+  `OnSuccess=` (systemd 255) al terminar el paso anterior. Sin solapamiento ni esperas.
+- Trade-off: si el ciclo falla o se cuelga, la cadena no corre esa semana. El digest
+  monitorea los tres jobs (se agregó Health + propuestas a la lista).

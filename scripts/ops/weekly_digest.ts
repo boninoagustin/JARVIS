@@ -24,6 +24,7 @@ const UNITS: Array<[string, string]> = [
   ['jarvis-detection-tune.service', 'Tune detección'],
   ['jarvis-asset-scout.service', 'Asset scout'],
   ['jarvis-timesfm-bridge.service', 'TimesFM bridge'],
+  ['jarvis-health-weekly.service', 'Health + propuestas'],
 ];
 
 function sh(cmd: string, args: string[]): string {
