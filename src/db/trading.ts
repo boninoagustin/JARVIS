@@ -572,6 +572,11 @@ export async function reconcileCTraderPositions(): Promise<void> {
                         await db.collection('trade_journal').doc(jidRej).update({
                             result: 'SKIP', ctraderStatus: 'REJECTED', skipReason: 'orden rechazada por el broker (historial sin fill, volumen 0)',
                             executionIncidentPending: false, closeAccountingPending: false, executionUncertain: false,
+                            // 05-nov-2026: sin fill NO hay posición. Si queda ctraderPositionId +
+                            // riskAccountingStatus UNVERIFIED, hasPendingExecutionIncident() lo sigue
+                            // contando como incidente y evaluateGlobalRisk devuelve dataHold →
+                            // killswitch global silencioso que bloquea TODAS las entradas.
+                            ctraderPositionId: null, riskAccountingStatus: 'REJECTED',
                             closedAt: new Date().toISOString(),
                         }).catch(() => { });
                     }
@@ -5479,6 +5484,9 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                             ctraderStatus: 'ABORTED',
                                             skipReason: `Ejecución abortada en cTrader: ${result.error}`,
                                             ctraderError: result.error ?? null,
+                                            // sin fill no hay posición: no dejar un positionId que
+                                            // hasPendingExecutionIncident() interpreta como incidente
+                                            ctraderPositionId: null, riskAccountingStatus: 'ABORTED',
                                         }).catch(() => { });
                                     }
                                 }
