@@ -274,6 +274,9 @@ export default function AssetHealthPanel() {
                     if (!on && rp.verdict === 'WATCH') {
                       return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#38bdf8' }}>👁 WATCH</span>;
                     }
+                    if (!on && rp.verdict === 'PARKED') {
+                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8' }}>🅿️ PARKED (health semanal)</span>;
+                    }
                     if (!on && rp.verdict === 'TRADE') {
                       return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#22c55e' }}>🟢 roster TRADE</span>;
                     }

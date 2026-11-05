@@ -2,7 +2,7 @@
 # Tune semanal de detección SMC por activo (dueño de los bloques TF del preset, ex-bruteforcer).
 # Modo tune: búsqueda sobre train 70% + OOS del candidato vs actual + regla conservadora.
 # Reinicia JARVIS solo si algún activo se aplicó (los engines cachean el preset al crearse).
-export PATH="/home/bon/.nvm/versions/node/v24.18.0/bin:$PATH"
+export PATH="/root/.nvm/versions/node/v24.19.0/bin:$PATH"
 cd /opt/JARVIS
 
 # 🛡️ Anti-duplicados: si ya hay una corrida de detección, ESPERAR a que termine (flock bloqueante).

@@ -182,3 +182,21 @@ primaria; el journal viejo NO se usa para clasificar.
 
 Resultado 05-nov: 9 TRADE · 23 WATCH · 15 OFF (active_tickers = 32). El ciclo del sábado
 pasa a ~21 h (de 28 disponibles).
+
+### 12c. PARKED + health semanal + OFF con evidencia viva (05-nov-2026)
+
+Criterio de Bon: apagar de verdad exige evidencia VIVA, no sólo un backtest con la historia
+vieja. Se agrega el estado PARKED y se separa "medir" (barato) de "optimizar" (caro):
+
+- TRADE (9)  → operan + ciclo caro.
+- WATCH (23) → no operan + ciclo caro (backtest semanal).
+- PARKED (15)→ no operan, FUERA del ciclo caro, pero con health semanal (se siguen midiendo).
+- OFF (0)    → sólo si μ ≤ -0.10 con n≥50 Y vivo con n≥20 y R/tr<0.
+
+Medición semanal de todos (nuevo): `jarvis-health-weekly.timer` (domingo 03:00, ~45 min,
+47 activos) corre run_detection_health.sh. Un PARKED que mejora su baseline pasa a WATCH
+en la siguiente propuesta de roster.
+
+🐞 Fix colateral: run_detection_health.sh y run_detection_tune.sh tenían
+PATH=/home/bon/.nvm/versions/node/v24.18.0/bin (no existe en este host) → el health semanal
+habría corrido con el node del sistema. Corregido a /root/.nvm/versions/node/v24.19.0/bin.

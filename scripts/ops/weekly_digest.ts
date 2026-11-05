@@ -133,7 +133,7 @@ const wr = decided ? `${Math.round((win / decided) * 100)}%` : '—';
 let rosterLine = '';
 try {
   const rosterDocs = await db.collection('roster_proposals').get();
-  const rv: Record<string, number> = { TRADE: 0, WATCH: 0, OFF: 0 };
+  const rv: Record<string, number> = { TRADE: 0, WATCH: 0, PARKED: 0, OFF: 0 };
   const fuera: string[] = [];
   for (const d of rosterDocs.docs) {
     if (d.id === '_SUMMARY') continue;
@@ -141,8 +141,8 @@ try {
     if (rv[x.verdict] !== undefined) rv[x.verdict]++;
     if (x.verdict !== 'TRADE' && x.enabledAtGeneration === true) fuera.push(d.id);
   }
-  if (rv.TRADE + rv.WATCH + rv.OFF > 0) {
-    rosterLine = `🎯 Roster: ${rv.TRADE} TRADE · ${rv.WATCH} WATCH · ${rv.OFF} OFF${fuera.length ? ` · operando fuera de roster: ${fuera.length} (${fuera.slice(0, 6).join(', ')}${fuera.length > 6 ? '…' : ''})` : ''}`;
+  if (rv.TRADE + rv.WATCH + rv.PARKED + rv.OFF > 0) {
+    rosterLine = `🎯 Roster: ${rv.TRADE} TRADE · ${rv.WATCH} WATCH · ${rv.PARKED} PARKED · ${rv.OFF} OFF${fuera.length ? ` · operando fuera de roster: ${fuera.length} (${fuera.slice(0, 6).join(', ')}${fuera.length > 6 ? '…' : ''})` : ''}`;
   }
 } catch { /* best-effort */ }
 if (rosterLine) lines.push(rosterLine);

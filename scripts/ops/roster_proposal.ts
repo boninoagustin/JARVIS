@@ -37,8 +37,9 @@ const MIN_N = 30;
 const MAX_PER_CLUSTER = 2;
 const MAX_TRADE = 10;
 const WATCH_MIN_MU = 0.02;
-const OFF_MU = 0.10;   // mu ≤ -0.10 para apagar de verdad
-const OFF_MIN_N = 50;  // y al menos 50 trades de backtest
+const OFF_MU = 0.10;     // mu ≤ -0.10 para apagar de verdad
+const OFF_MIN_N = 50;    // y al menos 50 trades de backtest
+const OFF_LIVE_N = 20;   // y al menos 20 trades vivos (evidencia propia, no la vieja)
 
 const FX: Record<string, number> = { USD: 1, EUR: 1.08, JPY: 0.0063, GBP: 1.33, AUD: 0.66, NZD: 0.60, CAD: 0.72, CHF: 1.12 };
 function quoteCurrency(t: string): string | undefined {
@@ -164,8 +165,16 @@ for (const r of rows) {
   // OFF sólo con evidencia FUERTE: ede negativo claro (mu ≤ -0.10) y muestra suficiente (n≥50).
   // Todo lo demás con mu ≤ 0 queda en WATCH: se sigue midiendo (costo 0 en capital) por si
   // el engine/preset nuevos lo cambian.
-  if (r.mu <= -OFF_MU && r.n >= OFF_MIN_N) { r.verdict = 'OFF'; r.reason = `edge claramente negativo (${r.mu.toFixed(3)} ≤ ${-OFF_MU}) en ${r.n} trades`; continue; }
-  if (r.mu <= 0) { r.verdict = 'WATCH'; r.reason = `edge negativo leve (${r.mu.toFixed(3)}) — se sigue midiendo`; continue; }
+  // 05-nov-2026 (criterio de Bon): apagar de verdad exige evidencia VIVA. Un backtest
+  // negativo con la historia vieja no alcanza: PARKED = fuera del ciclo caro pero con health
+  // semanal (se sigue midiendo barato). OFF sólo si el vivo también confirma.
+  if (r.mu <= -OFF_MU && r.n >= OFF_MIN_N) {
+    const liveConfirms = r.liveN >= OFF_LIVE_N && (r.liveAvgR ?? 0) < 0;
+    if (liveConfirms) { r.verdict = 'OFF'; r.reason = `backtest y vivo negativos (${r.mu.toFixed(3)} R/tr, vivo ${r.liveAvgR!.toFixed(3)} en ${r.liveN})`; }
+    else { r.verdict = 'PARKED'; r.reason = `backtest negativo (${r.mu.toFixed(3)}) sin evidencia viva (${r.liveN}/${OFF_LIVE_N}) — health semanal`; }
+    continue;
+  }
+  if (r.mu <= 0) { r.verdict = 'WATCH'; r.reason = `edge negativo leve (${r.mu.toFixed(3)}) — se sigue midiendo en el ciclo`; continue; }
   if (r.n < MIN_N) { r.verdict = 'WATCH'; r.reason = `muestra insuficiente (${r.n}/${MIN_N} trades backtest)`; continue; }
   if (r.mu >= MIN_MU_TRADE) { r.verdict = 'WATCH'; r.reason = `buen edge pero cluster ${r.cluster} lleno`; continue; }
   // Todo lo que no sea negativo fuerte se sigue midiendo: plano y fino → WATCH.
@@ -176,17 +185,17 @@ for (const r of rows) {
 }
 
 const byVerdict = (v: string) => rows.filter((r) => r.verdict === v);
-const RO = { TRADE: byVerdict('TRADE'), WATCH: byVerdict('WATCH'), OFF: byVerdict('OFF') };
+const RO = { TRADE: byVerdict('TRADE'), WATCH: byVerdict('WATCH'), PARKED: byVerdict('PARKED'), OFF: byVerdict('OFF') };
 
 console.log(`equity ${equity.toFixed(0)} ${acCurrency} · mu = R/tr backtest · score = mu×√n · clusters: máx ${MAX_PER_CLUSTER}\n`);
 console.log('estado  activo        cluster        mu      n   vivo(n)  R/tr vivo   motivo');
-for (const v of ['TRADE', 'WATCH', 'OFF'] as const) {
-  const icon = v === 'TRADE' ? '🟢' : v === 'WATCH' ? '👁 ' : '⚪';
+for (const v of ['TRADE', 'WATCH', 'PARKED', 'OFF'] as const) {
+  const icon = v === 'TRADE' ? '🟢' : v === 'WATCH' ? '👁 ' : v === 'PARKED' ? '🅿️ ' : '⚪';
   for (const r of RO[v].sort((a, b) => b.score - a.score)) {
     console.log(`${icon} ${r.verdict === 'TRADE' ? 'TRADE' : r.verdict.padEnd(5)} ${r.ticker.padEnd(12)} ${r.cluster.padEnd(13)} ${r.mu.toFixed(3).padStart(6)} ${String(r.n).padStart(4)} ${String(r.liveN).padStart(8)}  ${(r.liveAvgR === null ? '—' : r.liveAvgR.toFixed(3)).padStart(8)}   ${r.reason}`);
   }
 }
-console.log(`\nTRADE ${RO.TRADE.length} · WATCH ${RO.WATCH.length} · OFF ${RO.OFF.length}`);
+console.log(`\nTRADE ${RO.TRADE.length} · WATCH ${RO.WATCH.length} · PARKED ${RO.PARKED.length} · OFF ${RO.OFF.length}`);
 
 if (WRITE) {
   const at = new Date().toISOString();
@@ -201,7 +210,8 @@ if (WRITE) {
   }
   await db.collection('roster_proposals').doc('_SUMMARY').set({
     generatedAt: at, equity,
-    trade: RO.TRADE.map((r) => r.ticker), watch: RO.WATCH.map((r) => r.ticker), off: RO.OFF.map((r) => r.ticker),
+    trade: RO.TRADE.map((r) => r.ticker), watch: RO.WATCH.map((r) => r.ticker),
+    parked: RO.PARKED.map((r) => r.ticker), off: RO.OFF.map((r) => r.ticker),
     maxPerCluster: MAX_PER_CLUSTER, maxTrade: MAX_TRADE,
   }, { merge: true });
   console.log(`\n✅ ${rows.length} propuestas publicadas en roster_proposals/`);
@@ -234,7 +244,7 @@ if (APPLY) {
   await db.collection('optimization_config').doc('active_tickers').set({
     tickers: list, source: 'roster_proposal', updatedAt: at,
   }, { merge: true });
-  const onButNotTrade = rows.filter((r) => r.enabled && r.verdict !== 'TRADE');
+  const onButNotTrade = rows.filter((r) => r.enabled && r.verdict !== 'TRADE' && r.verdict !== 'PARKED');
   if (onButNotTrade.length) {
     console.log(`\n⚠️  Operando hoy pero la propuesta NO los pondría a operar (decisión tuya): ${onButNotTrade.map((r) => `${r.ticker}(${r.verdict})`).join(', ')}`);
   }

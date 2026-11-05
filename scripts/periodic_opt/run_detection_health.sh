@@ -2,7 +2,7 @@
 # Health de detección de TODO el pool (todos los tickers con history/): evalúa el baseline
 # actual de cada uno y escribe Firestore detection_health/{ticker} (lo lee el panel).
 # Sin búsqueda (rápido, ~30-60s/ticker) — la optimización va a demanda vía el panel/Kronos.
-export PATH="/home/bon/.nvm/versions/node/v24.18.0/bin:$PATH"
+export PATH="/root/.nvm/versions/node/v24.19.0/bin:$PATH"
 cd /opt/JARVIS
 
 exec 9>"/tmp/detection_health.lock"
