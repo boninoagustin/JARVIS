@@ -144,3 +144,26 @@ Resultado: nunca se veía la recomendación.
 - `AssetHealthPanel`: el botón "Optimizar" ahora aparece también para activos **que están
   operando** en REVISAR (con confirmación, porque si aplica reinicia el bot), y la fila
   muestra "baseline: X" cuando el estado accionable difiere del baseline.
+
+## 12. Roster: TRADE / WATCH / OFF y el mecanismo de "aparcar" — 05-nov-2026
+
+Pregunta de Bon: ¿conviene operar muchos activos o solo los mejores? El optimizador semanal
+NO elegía activos: optimizaba cada uno por separado y el auto-disable sólo actuaba con MC<80%
++ OOS<0 dos semanas. Con 15 activos y ~5 señales/día cada activo recibe 1-2 trades/semana →
+imposible distinguir edge de ruido (la cuenta vieja hizo 4,1 trades/activo en 2 meses).
+
+- `scripts/ops/roster_proposal.ts`: clasifica el pool con evidencia
+  (mu = R/tr backtest, n, score = mu×√n, viabilidad por lote mínimo, shutdown_proposals):
+  TRADE (mu≥0.05, n≥30, viable, máx 2 por cluster, máx 10) · WATCH (buena pinta sin muestra
+  o cluster lleno) · OFF (edge negativo o inoperable). Publica `roster_proposals/*`.
+- Mecanismo WATCH: `disabledReason: "watch: ..."` + `active_tickers = TRADE ∪ WATCH ∪ enabled`.
+  El gate del semanal permite aplicar PARÁMETROS a un WATCH pero `apply_weekly` blinda
+  `enabled` (nunca se activa solo). Los OFF-apagados salen del ciclo.
+- 🐞 Fix de clusters en `riskClusterOf` (trading.ts): el patrón de 6 letras capturaba
+  XAUUSD/XAGUSD/XPTUSD/XBRUSD/BTCUSD → el cap FX_USD 6% contaba oro y petróleo como FX.
+  Ahora los checks específicos van primero (metales/energía/crypto/índices).
+- Panel de Salud: badge de roster (👁 WATCH / ⚠️ fuera de roster / 🟢 roster TRADE).
+- Digest semanal: línea "🎯 Roster: N TRADE · M WATCH · K OFF · operando fuera de roster: X".
+
+Primera clasificación (05-nov): 6 TRADE (JP225, GBPAUD, EURUSD, NZDUSD, NL25, EUROPE50),
+8 WATCH, 33 OFF; 9 activos operando fuera de roster (decisión del operador).

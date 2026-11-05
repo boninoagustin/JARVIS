@@ -74,6 +74,17 @@ export default function AssetHealthPanel() {
     return unsub;
   }, []);
 
+  // 05-nov-2026: propuesta de roster (TRADE/WATCH/OFF) por evidencia y cluster.
+  const [roster, setRoster] = useState<Record<string, any>>({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'roster_proposals'), (snap) => {
+      const m: Record<string, any> = {};
+      snap.forEach((d) => { if (d.id !== '_SUMMARY') m[d.id] = d.data(); });
+      setRoster(m);
+    }, () => { });
+    return unsub;
+  }, []);
+
   // 05-nov-2026: propuesta semanal de apagado (baseline<0 ×4 sem + vivo negativo).
   const [shutdown, setShutdown] = useState<Record<string, any>>({});
   useEffect(() => {
@@ -254,6 +265,20 @@ export default function AssetHealthPanel() {
                 <td style={{ padding: '8px', fontWeight: 600 }}>{ticker}</td>
                 <td style={{ padding: '8px' }}>
                   {on ? <span style={{ color: '#22c55e' }}>✅ ON</span> : <span style={{ color: '#ef4444' }} title={reason}>❌ OFF</span>}
+                  {(() => {
+                    const rp = roster[ticker];
+                    if (!rp) return null;
+                    if (on && rp.verdict !== 'TRADE') {
+                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#eab308' }}>⚠️ fuera de roster ({rp.verdict})</span>;
+                    }
+                    if (!on && rp.verdict === 'WATCH') {
+                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#38bdf8' }}>👁 WATCH</span>;
+                    }
+                    if (!on && rp.verdict === 'TRADE') {
+                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#22c55e' }}>🟢 roster TRADE</span>;
+                    }
+                    return null;
+                  })()}
                 </td>
                 <td style={{ padding: '8px', color: st?.color ?? '#888' }}>
                   {st?.label ?? '… sin datos'}

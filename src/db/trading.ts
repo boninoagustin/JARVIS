@@ -4534,13 +4534,15 @@ export function hasUnresolvedExecutionIncidents(): boolean {
  */
 export function riskClusterOf(ticker: string): string {
     const t = String(ticker || '').toUpperCase();
-    if (/^[A-Z]{6}$/.test(t)) return t.includes('USD') ? 'FX_USD' : 'FX_CROSS';
+    // 05-nov-2026: los checks ESPECÍFICOS van primero. Antes el patrón de 6 letras (pares FX)
+    // capturaba XAUUSD/XAGUSD/XPTUSD/XBRUSD/BTCUSD → el cap FX_USD contaba oro y petróleo.
     if (/^(XAU|XAG|XPT|XPD)/.test(t)) return 'METALS';
     if (/^(XTI|XBR|USOIL|NATGAS|NGAS)/.test(t)) return 'ENERGY';
     if (/^(BTC|ETH)/.test(t)) return 'CRYPTO';
     if (/^(US500|US30|USTECH100|US100|NAS100)/.test(t)) return 'US_INDICES';
     if (/^(JP225|JAPAN225)/.test(t)) return 'ASIA_INDICES';
     if (/^(GER40|FRA40|NL25|EUROPE50|UK100|ITALY40|SPAIN35|AUSTRALIA200)/.test(t)) return 'EU_INDICES';
+    if (/^[A-Z]{6}$/.test(t)) return t.includes('USD') ? 'FX_USD' : 'FX_CROSS';
     return 'OTHER';
 }
 /** Topes por cluster (% del equity). El tope total sigue en CTRADER_MAX_AGGREGATE_RISK_PCT. */

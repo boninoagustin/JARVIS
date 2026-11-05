@@ -62,7 +62,11 @@ export function checkWeeklyCandidate(report: any, current: any, nowMs = Date.now
   const no=(reason:string)=>({ok:false,reason});
   try {
     if (report?.status !== 'RECOMMEND') return no(`sin mejora aprobada: ${report?.status ?? 'sin reporte'}`);
-    if (current?.enabled !== true || (typeof current.disabledReason==='string' && current.disabledReason.trim())) return no('activo deshabilitado o retirado: se respeta la decisión del operador');
+    // 05-nov-2026: WATCH = aparcado para seguir midiendo. El semanal puede aplicar
+    // PARÁMETROS (para que esté listo al reactivarlo) pero nunca toca enabled.
+    const retiredReason = typeof current?.disabledReason === 'string' ? current.disabledReason.trim() : '';
+    const isWatch = /^watch:/i.test(retiredReason);
+    if (current?.enabled !== true && !isWatch) return no('activo deshabilitado o retirado: se respeta la decisión del operador');
     const integrity=checkCandidate(report,current,nowMs,false);
     if (!integrity.ok) return integrity;
     const next=report.final_asset_config;

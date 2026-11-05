@@ -177,6 +177,8 @@ async function main() {
     const exactWrite = { ...payload, appliedAt: new Date().toISOString(), source: 'apply_weekly' };
     await db.runTransaction(async transaction => {
       const latest = await transaction.get(docRef);
+      // 05-nov-2026: un activo WATCH se optimiza pero JAMÁS se activa por el ciclo.
+      (exactWrite as any).enabled = current.enabled === true;
       const latestConfig = latest.exists ? latest.data() : {};
       if (assetFingerprint(latestConfig) !== report.production_asset_fingerprint) throw new Error(`${ticker}: producción cambió antes del commit`);
       transaction.set(docRef, exactWrite);

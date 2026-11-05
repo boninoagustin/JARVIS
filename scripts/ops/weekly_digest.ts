@@ -129,6 +129,24 @@ for (const d of week.docs) {
 }
 const decided = win + loss;
 const wr = decided ? `${Math.round((win / decided) * 100)}%` : '—';
+// 05-nov-2026: roster propuesto (TRADE/WATCH/OFF) y cuántos operan fuera de él.
+let rosterLine = '';
+try {
+  const rosterDocs = await db.collection('roster_proposals').get();
+  const rv: Record<string, number> = { TRADE: 0, WATCH: 0, OFF: 0 };
+  const fuera: string[] = [];
+  for (const d of rosterDocs.docs) {
+    if (d.id === '_SUMMARY') continue;
+    const x = d.data();
+    if (rv[x.verdict] !== undefined) rv[x.verdict]++;
+    if (x.verdict !== 'TRADE' && x.enabledAtGeneration === true) fuera.push(d.id);
+  }
+  if (rv.TRADE + rv.WATCH + rv.OFF > 0) {
+    rosterLine = `🎯 Roster: ${rv.TRADE} TRADE · ${rv.WATCH} WATCH · ${rv.OFF} OFF${fuera.length ? ` · operando fuera de roster: ${fuera.length} (${fuera.slice(0, 6).join(', ')}${fuera.length > 6 ? '…' : ''})` : ''}`;
+  }
+} catch { /* best-effort */ }
+if (rosterLine) lines.push(rosterLine);
+
 // 05-nov-2026: parámetros MCL (maxBuyLosses/maxSellLosses) que el sweep backtesteó y el
 // vivo no aplicó (el pipeline sólo los aplica si el candidato completo pasa el gate).
 let mclStale = 0;
