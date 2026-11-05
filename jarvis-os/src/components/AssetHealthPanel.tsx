@@ -74,6 +74,17 @@ export default function AssetHealthPanel() {
     return unsub;
   }, []);
 
+  // 05-nov-2026: propuesta semanal de apagado (baseline<0 ×4 sem + vivo negativo).
+  const [shutdown, setShutdown] = useState<Record<string, any>>({});
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'shutdown_proposals'), (snap) => {
+      const m: Record<string, any> = {};
+      snap.forEach((d) => { m[d.id] = d.data(); });
+      setShutdown(m);
+    }, () => { });
+    return unsub;
+  }, []);
+
   const applyRisk = async (ticker: string, pct: number) => {
     if (!confirm(`¿Aplicar riesgo ${pct.toFixed(2)}% a ${ticker}? El bot lo toma en caliente (listener de Firestore).`)) return;
     try {
@@ -323,8 +334,13 @@ export default function AssetHealthPanel() {
                   {/* 03-nov-2026: "Apagar" sólo se destaca cuando el activo NO está bien
                       (CANDIDATO_APAGAR = recomendación; REVISAR = opción sensata). En un activo
                       OK/OPTIMIZABLE queda como link discreto: es una acción, no un consejo. */}
-                  {on && (statusOf(h) === 'CANDIDATO_APAGAR' || statusOf(h) === 'REVISAR') && (
+                  {on && (statusOf(h) === 'CANDIDATO_APAGAR' || statusOf(h) === 'REVISAR' || shutdown[ticker]?.verdict === 'PROPONER_APAGADO') && (
                     <button className="btn" onClick={() => deactivate(ticker)} title="Deshabilitar el activo en vivo (reversible)">🛑 Apagar</button>
+                  )}
+                  {on && shutdown[ticker]?.verdict === 'PROPONER_APAGADO' && (
+                    <span style={{ color: '#ef4444', fontSize: '0.7rem' }} title={shutdown[ticker]?.note || ''}>
+                      🔴 sugerido: 4 sem. baseline&lt;0 + vivo negativo
+                    </span>
                   )}
                   {on && (statusOf(h) === 'OK' || statusOf(h) === 'OPTIMIZABLE') && (
                     <>
