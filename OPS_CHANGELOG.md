@@ -167,3 +167,18 @@ imposible distinguir edge de ruido (la cuenta vieja hizo 4,1 trades/activo en 2 
 
 Primera clasificación (05-nov): 6 TRADE (JP225, GBPAUD, EURUSD, NZDUSD, NL25, EUROPE50),
 8 WATCH, 33 OFF; 9 activos operando fuera de roster (decisión del operador).
+
+### 12b. Política de OFF vs WATCH (05-nov-2026)
+
+Criterio de Bon: la historia vieja está sucia (el bot tenía bugs de ejecución), así que no
+se abandona por poco. El baseline del roster es un **backtest re-corrido con el código y el
+preset actuales** (los bugs viejos eran de ejecución, no del engine), así que es la señal
+primaria; el journal viejo NO se usa para clasificar.
+
+- OFF sólo con evidencia fuerte: lote mínimo inviable, o mu ≤ -0.10 con n ≥ 50, o
+  shutdown_proposal PROPONER_APAGADO.
+- WATCH todo lo demás (plano, fino, negativo leve, cluster lleno): se sigue backtesteando.
+- TRADE: mu ≥ 0.05, n ≥ 30, viable, máx 2 por cluster, máx 10 (+ overrides del operador).
+
+Resultado 05-nov: 9 TRADE · 23 WATCH · 15 OFF (active_tickers = 32). El ciclo del sábado
+pasa a ~21 h (de 28 disponibles).

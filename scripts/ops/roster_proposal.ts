@@ -37,6 +37,8 @@ const MIN_N = 30;
 const MAX_PER_CLUSTER = 2;
 const MAX_TRADE = 10;
 const WATCH_MIN_MU = 0.02;
+const OFF_MU = 0.10;   // mu ≤ -0.10 para apagar de verdad
+const OFF_MIN_N = 50;  // y al menos 50 trades de backtest
 
 const FX: Record<string, number> = { USD: 1, EUR: 1.08, JPY: 0.0063, GBP: 1.33, AUD: 0.66, NZD: 0.60, CAD: 0.72, CHF: 1.12 };
 function quoteCurrency(t: string): string | undefined {
@@ -158,11 +160,19 @@ for (const r of rows) {
   if (r.verdict === 'TRADE') continue;
   if (!r.feasible) { r.verdict = 'OFF'; r.reason = `lote mínimo exige ~${r.minFeasible?.toFixed(2)}% (>3%) — inoperable`; continue; }
   if (shutMap.get(r.ticker)?.verdict === 'PROPONER_APAGADO') { r.verdict = 'OFF'; r.reason = 'shutdown_proposal: PROPONER_APAGADO'; continue; }
-  if (r.mu <= 0) { r.verdict = 'OFF'; r.reason = `edge negativo (${r.mu.toFixed(3)} R/tr)`; continue; }
+  // 05-nov-2026 (criterio de Bon): con historia vieja "sucia" no se abandona por poco.
+  // OFF sólo con evidencia FUERTE: ede negativo claro (mu ≤ -0.10) y muestra suficiente (n≥50).
+  // Todo lo demás con mu ≤ 0 queda en WATCH: se sigue midiendo (costo 0 en capital) por si
+  // el engine/preset nuevos lo cambian.
+  if (r.mu <= -OFF_MU && r.n >= OFF_MIN_N) { r.verdict = 'OFF'; r.reason = `edge claramente negativo (${r.mu.toFixed(3)} ≤ ${-OFF_MU}) en ${r.n} trades`; continue; }
+  if (r.mu <= 0) { r.verdict = 'WATCH'; r.reason = `edge negativo leve (${r.mu.toFixed(3)}) — se sigue midiendo`; continue; }
   if (r.n < MIN_N) { r.verdict = 'WATCH'; r.reason = `muestra insuficiente (${r.n}/${MIN_N} trades backtest)`; continue; }
   if (r.mu >= MIN_MU_TRADE) { r.verdict = 'WATCH'; r.reason = `buen edge pero cluster ${r.cluster} lleno`; continue; }
-  if (r.mu >= WATCH_MIN_MU) { r.verdict = 'WATCH'; r.reason = `edge fino para operar (${r.mu.toFixed(3)} < ${MIN_MU_TRADE})`; continue; }
-  r.verdict = 'OFF'; r.reason = `edge fino (${r.mu.toFixed(3)} R/tr < ${WATCH_MIN_MU})`;
+  // Todo lo que no sea negativo fuerte se sigue midiendo: plano y fino → WATCH.
+  r.verdict = 'WATCH';
+  r.reason = r.mu >= WATCH_MIN_MU
+    ? `edge fino para operar (${r.mu.toFixed(3)} < ${MIN_MU_TRADE})`
+    : `plano (${r.mu.toFixed(3)} R/tr) — se sigue midiendo`;
 }
 
 const byVerdict = (v: string) => rows.filter((r) => r.verdict === v);
@@ -202,10 +212,16 @@ if (APPLY) {
   // WATCH: marcar como aparcado (reversible). NUNCA toca enabled de un activo operando.
   for (const r of RO.WATCH) {
     if (r.enabled) continue; // si está operando, no lo degradamos automáticamente
+    const cur = (await db.collection('asset_configs').doc(r.ticker).get()).data() || {};
+    const prevReason = String(cur.disabledReason || '').trim();
+    // Preservar el motivo previo (decisión del operador, allocator, etc.) y marcarlo como watch.
+    const reason = /^watch:/i.test(prevReason)
+      ? prevReason
+      : prevReason
+        ? `watch: ${prevReason} · ${r.mu.toFixed(3)} R/tr (n=${r.n})`
+        : `watch: en evaluación — ${r.mu.toFixed(3)} R/tr (n=${r.n}), vivo ${r.liveN} trades`;
     await db.collection('asset_configs').doc(r.ticker).set({
-      enabled: false,
-      disabledReason: `watch: en evaluación — ${r.mu.toFixed(3)} R/tr backtest (n=${r.n}), vivo ${r.liveN} trades`,
-      updatedAt: at, updatedBy: 'roster_proposal',
+      enabled: false, disabledReason: reason, updatedAt: at, updatedBy: 'roster_proposal',
     }, { merge: true });
   }
   // active_tickers = TRADE ∪ WATCH ∪ (los que ya operan). Los OFF-apagados salen del ciclo;
