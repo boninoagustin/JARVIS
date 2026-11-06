@@ -201,9 +201,10 @@ async function fetchEconomicCalendar(): Promise<EcoEvent[]> {
         if (!Array.isArray(data)) return [];
 
         const now = Date.now();
-        const high = data.filter(e => e?.impact === 'High' && Date.parse(e?.date || '') > now);
+        // Alto + Medio impacto (el Medio aporta contenido en días flojos)
+        const upcoming = data.filter(e => (e?.impact === 'High' || e?.impact === 'Medium') && Date.parse(e?.date || '') > now);
         // Solo cuantificables (con forecast); discursos/statements se omiten.
-        const withForecast = high.filter(e => e?.forecast && String(e.forecast).trim());
+        const withForecast = upcoming.filter(e => e?.forecast && String(e.forecast).trim());
 
         const seen = new Map<string, EcoEvent>();
         const MAIN = /rate|decision|cpi|employment|gdp|non-farm|nfp|payroll|inflation/i;
@@ -211,10 +212,16 @@ async function fetchEconomicCalendar(): Promise<EcoEvent[]> {
             const key = `${e.country}_${e.date.slice(0, 10)}`;
             const cur = seen.get(key);
             if (!cur) { seen.set(key, e); continue; }
-            // preferir el evento principal (tasa/CPI/empleo) sobre votos/derivados
+            // preferir High sobre Medium, y el evento principal (tasa/CPI/empleo) sobre derivados
+            if (e.impact === 'High' && cur.impact !== 'High') { seen.set(key, e); continue; }
             if (MAIN.test(e.title) && !MAIN.test(cur.title)) seen.set(key, e);
         }
-        return [...seen.values()].slice(0, 8);
+
+        const byDate = (a: EcoEvent, b: EcoEvent) => (Date.parse(a.date) || 0) - (Date.parse(b.date) || 0);
+        const highs = [...seen.values()].filter(e => e.impact === 'High').sort(byDate);
+        const mediums = [...seen.values()].filter(e => e.impact !== 'High').sort(byDate);
+        // priorizar Alto impacto, completar con Medio hasta 10
+        return [...highs, ...mediums].slice(0, 10);
     } catch (e: any) {
         console.error('[CAL] Error fetchEconomicCalendar:', e?.message ?? e);
         return [];

@@ -365,7 +365,7 @@ export default function NewsAnalyzer() {
           alignItems: 'center',
           gap: '8px'
         }}>
-          <Calendar size={14} color="var(--accent-gold)" /> CALENDARIO ECONÓMICO — ALTO IMPACTO
+          <Calendar size={14} color="var(--accent-gold)" /> CALENDARIO ECONÓMICO — PRÓXIMOS EVENTOS
           {calendar?.last_updated && (
             <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>
               · {new Date(calendar.last_updated).toLocaleTimeString()}
@@ -376,8 +376,8 @@ export default function NewsAnalyzer() {
         {!calendar || !calendar.events || calendar.events.length === 0 ? (
           <EmptyState
             icon="📅"
-            title="Sin eventos de alto impacto próximos"
-            description="No hay releases de alto impacto agendados para los próximos días. Se actualizan automáticamente cada 2 horas."
+            title="Sin eventos próximos"
+            description="No hay releases de alto o medio impacto agendados para los próximos días. Se actualizan automáticamente cada 2 horas."
           />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -385,6 +385,7 @@ export default function NewsAnalyzer() {
               <div key={i} className="panel" style={{ marginBottom: 0, padding: '14px 16px' }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
                   <span className="mono" style={{ fontWeight: 700, color: 'var(--accent-gold)', fontSize: '0.8rem' }}>{e.country}</span>
+                  <Badge label={e.impact === 'High' ? 'ALTO' : 'MEDIO'} variant={e.impact === 'High' ? 'error' : 'warning'} />
                   <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{e.title}</span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
                     {new Date(e.date).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
