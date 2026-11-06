@@ -8,7 +8,8 @@
     "meta:optimize": "tsx scripts/meta-optimize.ts",
     "test": "npx tsx test_smc_engine.ts",
     "dev": "tsx watch src/index.ts",
-    "deploy-webhook": "tsx scripts/deploy-webhook.ts"
+    "deploy-webhook": "tsx scripts/deploy-webhook.ts",
+    "typecheck:scripts": "bash scripts/ops/typecheck_scripts.sh"
   },
   "keywords": [],
   "author": "",

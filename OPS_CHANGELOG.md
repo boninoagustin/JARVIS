@@ -447,7 +447,14 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   rama de health stale. Corregido a `doc.id`.
 - **Por qué no lo vi**: el `tsconfig.json` incluye sólo `src/**`, así que
   `npx tsc --noEmit` NUNCA chequeó los scripts. Nuevo `scripts/ops/typecheck_scripts.sh`
-  (strict, por archivo) — hoy en verde para los 21 archivos del lote, incluidos 3 errores
-  pre-existentes que aparecieron al activarlo (`adr` possibly undefined ×2, implicit any ×2).
+  (strict, por archivo) — hoy en verde para los 21 archivos del lote, incluidos 4 errores
+  pre-existentes que aparecieron al activarlo (`adr` possibly undefined ×2 + implicit any ×2).
 - **`trading_debug.ts`**: el warning H06 ahora SÍ está en el archivo (en 15b el changelog lo
   declaraba pero el edit no se aplicó porque el script de parcheo había abortado antes).
+
+### 15d. Cierre del Lote 3 (revisión 3c aprobada)
+
+- Changelog corregido: eran **4** errores pre-existentes (adr ×2 + implicit any ×2), no 3.
+- `typecheck_scripts.sh` cableado: `npm run typecheck:scripts` + paso semanal en el ciclo
+  (`ExecStartPost=-.../typecheck_scripts.sh`, antes del sello; no bloqueante y queda en el
+  journal). Sigue sin ser un gate duro de CI/pre-commit: es una red semanal, no un bloqueo.
