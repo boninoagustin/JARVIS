@@ -21,6 +21,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
 import { isHealthFresh } from './health_freshness_core.js';
+import { buildLiveSample, describeLiveSample } from './live_sample_core.js';
+import { countConsecutiveNegativeWeeks, mergeWeek } from './shutdown_weeks_core.js';
 
 const REPO = '/opt/JARVIS';
 const WRITE = process.argv.includes('--write');
@@ -47,15 +49,10 @@ const cfgMap = new Map(cfgs.docs.map((d) => [d.id, d.data() as any]));
 // R/tr vivo por activo (trades cerrados)
 const since = Date.now() - 180 * 864e5;
 const journal = await db.collection('trade_journal').where('timestamp', '>=', since).get();
-const live = new Map<string, { n: number; sumR: number }>();
-for (const d of journal.docs) {
-  const t = d.data() as any;
-  const r = Number(t.rMultiple);
-  if (!t.result || !['WIN', 'LOSS', 'BREAKEVEN'].includes(t.result) || !Number.isFinite(r)) continue;
-  const cur = live.get(t.ticker) ?? { n: 0, sumR: 0 };
-  cur.n += 1; cur.sumR += r;
-  live.set(t.ticker, cur);
-}
+// H08: misma muestra verificada que el roster.
+const sample = buildLiveSample(journal.docs as any);
+const live = sample.byTicker;
+console.log('Muestra viva: ' + describeLiveSample(sample));
 
 const week = weekStart();
 const rows: Array<{ ticker: string; enabled: boolean; baselineR: number; avgR: number | null; weeksNeg: number; liveN: number; liveAvgR: number | null; verdict: string; note: string }> = [];
@@ -72,20 +69,12 @@ for (const doc of health.docs) {
   const avgR = h.avgR != null ? Number(h.avgR) : (Number.isFinite(Number(h.trades)) && h.trades > 0 ? baselineR / h.trades : null);
 
   // Historial de baseline semanal (se siembra con la semana actual la primera vez)
+  // H09: el dry-run lee el historial y calcula igual que --write (antes: 0 semanas).
   const ref = db.collection('shutdown_proposals').doc(ticker);
-  const prev = WRITE ? ((await ref.get()).data() as any) : {};
-  const history: Array<{ week: string; baselineR: number }> = Array.isArray(prev?.baselineHistory) ? prev.baselineHistory : [];
-  if (WRITE && Number.isFinite(baselineR)) {
-    const i = history.findIndex((x) => x.week === week);
-    if (i >= 0) history[i].baselineR = Number(baselineR.toFixed(2));
-    else history.push({ week, baselineR: Number(baselineR.toFixed(2)) });
-  }
-  const sorted = history.slice().sort((a, b) => (a.week < b.week ? 1 : -1)); // más reciente primero
-  let weeksNeg = 0;
-  for (const hw of sorted) {
-    if (Number(hw.baselineR) < 0) weeksNeg++;
-    else break;
-  }
+  const prev = ((await ref.get()).data() as any) ?? {};
+  let history: Array<{ week: string; baselineR: number }> = Array.isArray(prev?.baselineHistory) ? prev.baselineHistory : [];
+  if (Number.isFinite(baselineR)) history = mergeWeek(history, week, baselineR);
+  const weeksNeg = countConsecutiveNegativeWeeks(history);   // sólo semanas contiguas
 
   const l = live.get(ticker) ?? { n: 0, sumR: 0 };
   const liveAvgR = l.n > 0 ? l.sumR / l.n : null;
@@ -112,7 +101,7 @@ for (const doc of health.docs) {
       weeksNegative: weeksNeg, minNegativeWeeks: MIN_NEG_WEEKS,
       liveTrades: l.n, liveAvgR: liveAvgR === null ? null : Number(liveAvgR.toFixed(4)),
       note, generatedAt: new Date().toISOString(), week,
-      baselineHistory: history.sort((a, b) => (a.week < b.week ? -1 : 1)).slice(-WEEKS_KEEP),
+      baselineHistory: history,   // ya normalizado por mergeWeek
     }, { merge: true });
   }
 }

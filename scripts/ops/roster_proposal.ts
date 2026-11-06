@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
 import { isHealthFresh } from './health_freshness_core.js';
+import { buildLiveSample, describeLiveSample } from './live_sample_core.js';
 import { getAdrPrice } from '../../src/engine/tp2Cap.js';
 
 const REPO = '/opt/JARVIS';
@@ -85,15 +86,10 @@ const shutMap = new Map(shutdown.docs.map((d) => [d.id, d.data() as any]));
 // Vivo (journal del último trimestre)
 const since = Date.now() - 180 * 864e5;
 const journal = await db.collection('trade_journal').where('timestamp', '>=', since).get();
-const live = new Map<string, { n: number; sumR: number }>();
-for (const d of journal.docs) {
-  const t = d.data() as any;
-  const r = Number(t.rMultiple);
-  if (!['WIN', 'LOSS', 'BREAKEVEN'].includes(t.result) || !Number.isFinite(r)) continue;
-  const cur = live.get(t.ticker) ?? { n: 0, sumR: 0 };
-  cur.n += 1; cur.sumR += r;
-  live.set(t.ticker, cur);
-}
+// H08: muestra viva sólo con operaciones reales, únicas y verificadas.
+const sample = buildLiveSample(journal.docs as any);
+const live = sample.byTicker;
+console.log('Muestra viva: ' + describeLiveSample(sample));
 
 type Row = {
   ticker: string; cluster: string; mu: number; n: number; score: number;
