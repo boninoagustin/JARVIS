@@ -1,6 +1,8 @@
 import nodeFetch from 'node-fetch';
 import OpenAI from 'openai';
 import { db } from '../db/memory.js';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
@@ -12,6 +14,18 @@ const deepseek = DEEPSEEK_API_KEY
 
 // Fallback si no se puede leer el roster en vivo.
 const FALLBACK_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
+
+// Archivo histórico local (JSONL) para backtesting futuro.
+const ARCHIVE_DIR = '/opt/JARVIS/logs/market_intel';
+
+function appendJSONL(file: string, obj: any): void {
+    try {
+        mkdirSync(ARCHIVE_DIR, { recursive: true });
+        appendFileSync(join(ARCHIVE_DIR, file), JSON.stringify(obj) + '\n', 'utf8');
+    } catch (e: any) {
+        console.error('[ARCHIVE] Error:', e?.message ?? e);
+    }
+}
 
 // Noticias relevantes para FX / macro / oro / índices (el universo del bot).
 const NEWS_QUERIES = [
@@ -418,6 +432,17 @@ Reglas estrictas:
                 : '[FINNHUB] Análisis DeepSeek falló; se guardan solo macrodatos (noticias previas intactas).');
         }
 
+        // 5. Archivo histórico de sentimiento (para backtesting futuro)
+        if (analysisOk) {
+            const net: Record<string, number> = {};
+            for (const n of finalNews) {
+                for (const a of (n as any).analysis || []) {
+                    net[a.asset] = (net[a.asset] || 0) + (a.direction === 'bullish' ? 1 : -1);
+                }
+            }
+            appendJSONL('sentiment.jsonl', { ts: new Date().toISOString(), net });
+        }
+
         // 4. Calendario económico (anticipar eventos de alto impacto)
         if (db && Date.now() - lastCalendarAnalysis >= CALENDAR_INTERVAL) {
             try {
@@ -430,6 +455,7 @@ Reglas estrictas:
                     }, { merge: true });
                     lastCalendarAnalysis = Date.now();
                     console.log(`[CAL] Calendario económico: ${analyzed.length} eventos guardados.`);
+                    appendJSONL('calendar.jsonl', { ts: new Date().toISOString(), events: analyzed });
                 }
             } catch (e: any) {
                 console.error('[CAL] Error calendario económico:', e?.message ?? e);
