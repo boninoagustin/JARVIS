@@ -308,3 +308,22 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
   publicada ya no depende de que los JSON del sweep existan o parseen. Verificado renombrando
   `opt_out/` (aplicó igual).
 - Test: propuesta no-op para US500 → aplicada con `appliedProposalId` y sweep inaccesible.
+
+### 14f. 5ª revisión — cadena real y sello de la unidad (D1-d)
+
+- **Verificado empíricamente** en este systemd 255: una unidad omitida por `ExecCondition`
+  termina con `Result=success` y **IGUAL dispara `OnSuccess`** (test A/B: B-RAN). Por eso
+  `OnSuccess=jarvis-detection-tune` se eliminó del ciclo: encadenaba el tune aunque el ciclo
+  se omitiera.
+- Encadenamiento nuevo: `zz-chain.conf` (corre ÚLTIMO) → `mark_weekly_done.sh` + `systemctl
+  start --no-block jarvis-detection-tune`.
+- La marca semanal ya no la escribe el guard tras Python: la escribe el último ExecStartPost
+  (`mark_weekly_done.sh`), que sólo corre si TODOS los pasos obligatorios terminaron bien
+  (systemd omite los post restantes ante un fallo). Antes, si `push_reports` fallaba, la
+  marca quedaba y el reintento se omitía.
+- **PYDONE**: si Python terminó OK y falló un post, el reintento re-ejecuta sólo los
+  postprocesos (no repite las ~20 h de optimización). Probado: "retry: la optimización de
+  2026-W45 ya terminó; se re-ejecutan sólo los postprocesos".
+- **Respaldo**: nuevo `jarvis-periodic-opt-fallback.timer` (sáb 03:30 CET, `Unit=` el ciclo)
+  para el caso "scout lento/fallido y el timer del viernes fue omitido". El scout ahora tiene
+  `OnFailure=jarvis-opt-failure-notify`.

@@ -23,6 +23,8 @@ REPO=/opt/JARVIS
 MARK_DIR=/var/lib/jarvis
 MARK="$MARK_DIR/weekly_cycle_last"
 LOCK=/tmp/jarvis_weekly_cycle.lock
+# Revisión 5: si Python terminó OK pero un post falló, el reintento NO repite la optimización.
+PYDONE_DIR=/var/lib/jarvis
 SCOUT_UNIT=jarvis-asset-scout.service
 SCOUT_WAIT_MAX_SEC=$((3 * 3600))   # 3 h (antes el contador daba 6 min por error de unidades)
 
@@ -111,14 +113,25 @@ if mark_is_current; then
   exit 0
 fi
 
+# Reintento tras fallo de un post: la optimización de esta semana ya está hecha.
+PYDONE="$PYDONE_DIR/weekly_python_done_$WEEK"
+if [ -f "$PYDONE" ]; then
+  echo "retry: la optimización de $WEEK ya terminó; se re-ejecutan sólo los postprocesos"
+  ls -1t "$PYDONE_DIR"/weekly_python_done_* 2>/dev/null | tail -n +3 | xargs -r rm -f
+  exit 0
+fi
+
 echo "run: ciclo semanal $WEEK (espera scout $((SECONDS - START))s)"
 cd "$REPO" || exit 1
 touch "$MARK_DIR/weekly_cycle_keepalive"
 /usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py"
 RC=$?
 if [ "$RC" -eq 0 ]; then
-  echo "$WEEK" > "$MARK"
-  echo "done: ciclo $WEEK completado"
+  # La marca semanal NO se escribe acá: la escribe el último ExecStartPost (mark_weekly_done.sh)
+  # cuando TODA la unidad terminó bien. Acá sólo se registra que la OPTIMIZACIÓN terminó, para
+  # que un reintento por fallo de un post no repita las 20 h del ciclo.
+  touch "$PYDONE"
+  echo "done-python: ciclo $WEEK (optimización terminada; marca final en el último ExecStartPost)"
 else
   echo "fail: ciclo $WEEK terminó con código $RC (no se marca la semana)"
 fi
