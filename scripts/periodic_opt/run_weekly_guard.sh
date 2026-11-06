@@ -130,7 +130,12 @@ if [ "$RC" -eq 0 ]; then
   # La marca semanal NO se escribe acá: la escribe el último ExecStartPost (mark_weekly_done.sh)
   # cuando TODA la unidad terminó bien. Acá sólo se registra que la OPTIMIZACIÓN terminó, para
   # que un reintento por fallo de un post no repita las 20 h del ciclo.
-  touch "$PYDONE"
+  # Persistencia del checkpoint PYDONE: si no se puede escribir, el ciclo FALLA (no se puede
+  # certificar que la optimización terminó → un reintento la repetirá, que es lo seguro).
+  if ! touch "$PYDONE" 2>/dev/null || [ ! -f "$PYDONE" ]; then
+    echo "fail: no se pudo persistir el checkpoint PYDONE ($PYDONE) — ciclo NO certificado"
+    exit 1
+  fi
   echo "done-python: ciclo $WEEK (optimización terminada; marca final en el último ExecStartPost)"
 else
   echo "fail: ciclo $WEEK terminó con código $RC (no se marca la semana)"

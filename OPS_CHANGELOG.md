@@ -327,3 +327,17 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
 - **Respaldo**: nuevo `jarvis-periodic-opt-fallback.timer` (sáb 03:30 CET, `Unit=` el ciclo)
   para el caso "scout lento/fallido y el timer del viernes fue omitido". El scout ahora tiene
   `OnFailure=jarvis-opt-failure-notify`.
+
+### 14g. 6ª revisión — persistencia comprobada y continuación recuperable (D1-e)
+
+- **Sello comprobado**: `chain_mark_and_tune.sh` escribe la marca de forma atómica
+  (tmp+mv) y hace readback; cualquier fallo → exit != 0. El paso perdió el prefijo `-`:
+  si no se puede sellar, la unidad FALLA (no se anuncia éxito sin checkpoint).
+- **PYDONE comprobado**: si el guard no puede persistir el checkpoint, el ciclo falla (un
+  reintento repetirá la optimización, que es lo seguro).
+- **Continuación recuperable**: antes de sellar se persiste `weekly_tune_pending` con la
+  semana; el tune se encola después. Si el encolado falla o el host cae entre medio, un
+  timer nuevo (`jarvis-weekly-continuation.timer`, sáb 04/06/08/10 y lun 06 CET) reintenta
+  el encolado de forma idempotente (si el tune ya está activo, limpia la obligación).
+- Nota: el sello acredita los pasos OBLIGATORIOS (los `-` de ML/evals/MCL siguen siendo
+  best-effort deliberado).
