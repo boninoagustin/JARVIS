@@ -360,3 +360,19 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   pendiente del sábado se recupera el lunes).
 - Digest: línea "🔁 Continuación al tune: <estado>".
 - `scripts/ops/test_weekly_continuation.sh`: 13 casos (incluye las 4 pruebas pedidas).
+
+### 14i. 8ª revisión — consumidor robusto y detección de "completado real" (D1-g)
+
+- **Wrapper**: si no puede persistir `completed`/`failed`, escribe `stale` como fallback y
+  deja el aviso; nunca miente con un `warn` silencioso.
+- **Recuperación**:
+  · `started`/`stale` + unidad inactiva → mira `Result` de la unidad: `success` ⇒ REPARA el
+    registro como `completed` y limpia **sin re-ejecutar** (antes un tune completado sin
+    registro se clasificaba "interrumpido" y se volvía a lanzar, 10-18 h).
+  · `pending` + unidad activa → `running`, sin incrementar intentos (antes cada timer
+    acercaba a `expired` una obligación en curso).
+  · `expired` → exit 1 (consistente con las otras expiraciones: "requiere atención").
+- **Semántica documentada del tune manual**: un `systemctl start` manual SIN `tune_run_id`
+  no consume la obligación semanal; CON un `tune_run_id` pendiente, la consume (el tune
+  corrió). Cubierto por tests.
+- Test ampliado a 18 casos (systemd simulado con TUNE_STATE_CMD/TUNE_RESULT_CMD).

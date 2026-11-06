@@ -1,21 +1,24 @@
 #!/bin/bash
-# Recupera la obligación de continuación ciclo→tune (revisión 7, 06-nov-2026).
+# Recupera la obligación de continuación ciclo→tune (revisión 8, 06-nov-2026).
 #
 # Estados del registro durable (weekly_continuation.json):
-#   pending   → encolado pedido; si no hay tune activo, se reencola.
-#   started   → el consumidor arrancó; si la unidad está inactiva, fue interrumpida → pending.
+#   pending   → encolado pedido. Si el tune está ACTIVO no se toca (ni intentos ni reencolado).
+#   started   → el consumidor arrancó. Si la unidad está inactiva se distingue:
+#                 · Result=success  → terminó bien y sólo falló el registro → se REPARA
+#                   (completed) sin re-ejecutar.
+#                 · otro             → interrumpida de verdad → pending.
+#   stale     → estado terminal no persistido por el wrapper → se repara por Result.
 #   completed → ya consumida: se limpia SIN re-ejecutar (idempotencia).
-#   failed    → reintento acotado (máx 3 intentos) → luego expired.
-#   expired   → vencida por política; no se re-ejecuta y se informa (el digest la reporta).
+#   failed    → reintento acotado (máx 3) → luego expired.
+#   expired   → vencida; no se re-ejecuta, se informa (exit 1 = requiere atención).
 #
-# Ya NO compara la semana con la actual: un pendiente del sábado se recupera el lunes
-# (revisión 6 de auditoría). Sólo expira por antigüedad (>5 días) o por exceso de intentos.
-#
-# Env (tests): CONT_DIR, TUNE_START_CMD
+# Env (tests): CONT_DIR, TUNE_START_CMD, TUNE_STATE_CMD, TUNE_RESULT_CMD
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/weekly_continuation_lib.sh"
 TUNE_START_CMD="${TUNE_START_CMD:-systemctl start --no-block jarvis-detection-tune.service}"
+TUNE_STATE_CMD="${TUNE_STATE_CMD:-systemctl show -p ActiveState --value jarvis-detection-tune.service}"
+TUNE_RESULT_CMD="${TUNE_RESULT_CMD:-systemctl show -p Result --value jarvis-detection-tune.service}"
 MAX_ATTEMPTS=3
 MAX_AGE_SEC=$((5 * 86400))
 
@@ -43,6 +46,14 @@ if [ -n "$CREATED" ]; then
   fi
 fi
 
+unit_active() {
+  case "$($TUNE_STATE_CMD 2>/dev/null || echo unknown)" in
+    active|activating|reloading) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+unit_result() { $TUNE_RESULT_CMD 2>/dev/null || echo unknown; }
+
 case "$STATE" in
   completed)
     rm -f "$CONT_FILE" "$TUNE_ID_FILE" 2>/dev/null
@@ -51,25 +62,46 @@ case "$STATE" in
     ;;
   expired)
     echo "expired: corrida $RUN_ID sin acción (el digest la reporta)"
-    exit 0
+    exit 1
+    ;;
+  pending)
+    if unit_active; then
+      # El tune está corriendo aunque el wrapper no haya podido registrar 'started'.
+      echo "running: el tune de $RUN_ID está activo; no se incrementan intentos"
+      exit 0
+    fi
+    ;;
+  stale)
+    # Estado terminal no persistido: reparar por Result sin re-ejecutar.
+    RES=$(unit_result)
+    if [ "$RES" = "success" ]; then
+      cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at' || true
+      rm -f "$CONT_FILE" "$TUNE_ID_FILE" 2>/dev/null
+      echo "repaired: $RUN_ID terminó OK (Result=success); registro reparado sin re-ejecutar"
+      exit 0
+    fi
+    echo "stale: el tune de $RUN_ID no terminó OK (Result=$RES) → se reintenta"
+    cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
     ;;
   started)
-    ST=$(systemctl show -p ActiveState --value jarvis-detection-tune.service 2>/dev/null || echo unknown)
-    case "$ST" in
-      active|activating|reloading)
-        echo "running: el tune de $RUN_ID sigue en curso ($ST)"
-        exit 0
-        ;;
-    esac
-    echo "interrupted: el tune de $RUN_ID arrancó y la unidad está $ST → se reencola"
+    if unit_active; then
+      echo "running: el tune de $RUN_ID sigue en curso"
+      exit 0
+    fi
+    RES=$(unit_result)
+    if [ "$RES" = "success" ]; then
+      # Terminó bien y sólo falló la persistencia del estado terminal: reparar, NO re-ejecutar.
+      cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at' || true
+      rm -f "$CONT_FILE" "$TUNE_ID_FILE" 2>/dev/null
+      echo "repaired: $RUN_ID terminó OK (Result=success) sin 'completed' persistido → reparado, sin re-ejecutar"
+      exit 0
+    fi
+    echo "interrupted: el tune de $RUN_ID arrancó y no terminó OK (Result=$RES) → se reencola"
     cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
     ;;
   failed)
     echo "failed: el tune de $RUN_ID falló → se reintenta"
     cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
-    ;;
-  pending|"")
-    : # sigue pendiente
     ;;
   *)
     echo "warn: estado desconocido '$STATE' → se trata como pending"
@@ -85,7 +117,6 @@ if [ "$ATTEMPTS" -gt "$MAX_ATTEMPTS" ]; then
 fi
 cont_write --argjson n "$ATTEMPTS" '.attempts=$n' || { echo "fail: no se pudo persistir attempts"; exit 1; }
 
-# identidad para el consumidor + encolado
 printf '%s\n' "$RUN_ID" > "$TUNE_ID_FILE.tmp" 2>/dev/null \
   && mv -f "$TUNE_ID_FILE.tmp" "$TUNE_ID_FILE" 2>/dev/null \
   && [ "$(cat "$TUNE_ID_FILE" 2>/dev/null)" = "$RUN_ID" ] \

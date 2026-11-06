@@ -25,12 +25,17 @@ $TUNE_CMD
 RC=$?
 
 if [ "$MATCH" = "1" ]; then
+  AT=$(wc_now)
   if [ "$RC" -eq 0 ]; then
-    cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at' \
-      || echo "warn: no se pudo persistir completed (runId $RUN_ID)"
+    # Estado terminal. Si no se puede persistir, se intenta dejar 'stale' (la recuperación
+    # repara el registro sin re-ejecutar cuando Result=success); nunca se miente con un warn.
+    cont_write --arg at "$AT" '.state="completed" | .completedAt=$at' \
+      || cont_write --arg at "$AT" '.state="stale" | .note="completed-write-failed" | .completedAt=$at' \
+      || echo "warn: no se pudo persistir el estado terminal (runId $RUN_ID) — la recuperación lo repara por Result"
   else
-    cont_write --arg at "$(wc_now)" '.state="failed" | .completedAt=$at' \
-      || echo "warn: no se pudo persistir failed (runId $RUN_ID)"
+    cont_write --arg at "$AT" '.state="failed" | .completedAt=$at' \
+      || cont_write --arg at "$AT" '.state="stale" | .note="failed-write-failed" | .completedAt=$at' \
+      || echo "warn: no se pudo persistir el estado terminal (runId $RUN_ID)"
   fi
   rm -f "$TUNE_ID_FILE" 2>/dev/null || true
 fi
