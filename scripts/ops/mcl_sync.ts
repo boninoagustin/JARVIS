@@ -28,6 +28,8 @@ const APPLY = process.argv.includes('--apply');
 const WRITE = process.argv.includes('--write');
 const ONLY_ENABLED = process.argv.includes('--only-enabled');
 
+import { applyProposalToSessions } from './mcl_proposal_core.js';
+
 const sa = JSON.parse(fs.readFileSync(path.join(REPO, 'firebase-key.json'), 'utf8'));
 if (admin.apps.length === 0) admin.initializeApp({ credential: admin.credential.cert(sa) });
 const db = admin.firestore();
@@ -63,52 +65,105 @@ for (const [ticker, report] of sweepFiles()) {
   }
 }
 
-if (!diffs.length) {
-  console.log('✅ maxBuyLosses/maxSellLosses alineados con el último sweep');
-  process.exit(0);
-}
-
-console.log(`diferencias vivo vs sweep: ${diffs.length}`);
-for (const d of diffs) console.log(`  ${d.ticker}/${d.session} ${d.field}: ${d.live} → ${d.want}${enabled.has(d.ticker) ? '' : ' (apagado)'}`);
-
-if (WRITE && !APPLY) {
-  const at = new Date().toISOString();
-  const byTicker = new Map<string, Diff[]>();
-  for (const d of diffs) {
-    const arr = byTicker.get(d.ticker) ?? [];
-    arr.push(d);
-    byTicker.set(d.ticker, arr);
-  }
-  for (const [ticker, arr] of byTicker) {
-    await db.collection('mcl_proposals').doc(ticker).set({
-      ticker, diffs: arr.map((x) => ({ session: x.session, field: x.field, current: x.live === undefined ? null : x.live, proposed: x.want })),
-      generatedAt: at, applied: false, source: 'directional_mcl_tune (train)',
+// applyProposalToSessions vive en mcl_proposal_core.ts (puro y testeable).
+/** Recalcula el resumen con las propuestas realmente pendientes (no aplicadas ni obsoletas). */
+async function refreshSummary(at: string): Promise<{ count: number; tickers: string[] }> {
+    const snap = await db.collection('mcl_proposals').get();
+    let count = 0;
+    const tickers: string[] = [];
+    for (const d of snap.docs) {
+        if (d.id === '_SUMMARY') continue;
+        const x = d.data() as any;
+        if (x.applied === true || x.superseded === true) continue;
+        const n = Array.isArray(x.diffs) ? x.diffs.length : 0;
+        if (n) { count += n; tickers.push(d.id); }
+    }
+    await db.collection('mcl_proposals').doc('_SUMMARY').set({
+        generatedAt: at, count, tickers, pendingValues: count, pendingTickers: tickers.length,
     }, { merge: true });
-  }
-  await db.collection('mcl_proposals').doc('_SUMMARY').set({
-    generatedAt: at, count: diffs.length, tickers: [...byTicker.keys()],
-  }, { merge: true });
-  console.log(`\n✅ ${diffs.length} propuestas publicadas en mcl_proposals/ (${byTicker.size} activos) — se aplican a mano con --apply`);
-  process.exit(0);
+    return { count, tickers };
 }
 
-if (!APPLY) {
-  console.log('\n[dry-run] agregá --write (propuestas) o --apply (aplicar)');
-  process.exit(0);
+// ── H03-b: aplicar PROPUESTAS PUBLICADAS (lo que vio el operador), nunca el sweep actual ──
+if (APPLY) {
+    const props = await db.collection('mcl_proposals').get();
+    const pend = props.docs.filter((d) => d.id !== '_SUMMARY' && d.data().applied !== true
+        && d.data().superseded !== true && Array.isArray(d.data().diffs) && d.data().diffs.length > 0);
+    if (!pend.length) {
+        await refreshSummary(new Date().toISOString());
+        console.log('✅ no hay propuestas pendientes que aplicar');
+        process.exit(0);
+    }
+    let applied = 0;
+    const conflicts: string[] = [];
+    for (const doc of pend) {
+        const p = doc.data() as any;
+        if (ONLY_ENABLED && !enabled.has(doc.id)) continue;
+        const atMs = Date.parse(String(p.generatedAt || ''));
+        if (!Number.isFinite(atMs) || Date.now() - atMs > 8 * 864e5) {
+            conflicts.push(`${doc.id}: propuesta vieja (${p.generatedAt}) — republicar con --write`);
+            continue;
+        }
+        try {
+            // Una transacción por PROPUESTA (todos sus diffs + la marca applied): nunca queda
+            // parcial. Si el campo cambió desde la publicación → conflicto, no se pisa.
+            await db.runTransaction(async (tx) => {
+                const ref = db.collection('asset_configs').doc(doc.id);
+                const snap = await tx.get(ref);
+                if (!snap.exists) throw new Error('activo inexistente');
+                const cfg = snap.data() || {};
+                const res = applyProposalToSessions(cfg.sessions, p.diffs);
+                if (!res.ok) throw new Error(res.conflict);
+                tx.update(ref, { sessions: res.sessions });
+                tx.update(doc.ref, { applied: true, appliedAt: new Date().toISOString() });
+            });
+            applied++;
+            console.log(`  ✅ ${doc.id}: ${p.diffs.map((x: any) => `${x.session}.${x.field} ${x.current}→${x.proposed}`).join(', ')}`);
+        } catch (e: any) {
+            conflicts.push(`${doc.id}: ${e.message}`);
+        }
+    }
+    const sum = await refreshSummary(new Date().toISOString());
+    console.log(`\n${applied} propuesta(s) aplicadas · ${conflicts.length} conflicto(s) · pendientes: ${sum.count} valores en ${sum.tickers.length} activos`);
+    for (const c of conflicts) console.log('  ⚠️ ', c);
+    process.exit(conflicts.length ? 2 : 0);
 }
 
-let n = 0;
-for (const d of diffs) {
-  // Transaccional: relee y escribe atómico; si alguien cambió la config, Firestore reintenta.
-  await db.runTransaction(async (tx) => {
-    const ref = db.collection('asset_configs').doc(d.ticker);
-    const snap = await tx.get(ref);
-    const cfg = snap.data() || {};
-    const sessions = JSON.parse(JSON.stringify(cfg.sessions || {}));
-    sessions[d.session] = { ...(sessions[d.session] || {}), [d.field]: d.want };
-    tx.update(ref, { sessions });
-  });
-  await db.collection('mcl_proposals').doc(d.ticker).set({ applied: true, appliedAt: new Date().toISOString() }, { merge: true }).catch(() => { });
-  n++;
+if (diffs.length) {
+    console.log(`diferencias vivo vs sweep: ${diffs.length}`);
+    for (const d of diffs) console.log(`  ${d.ticker}/${d.session} ${d.field}: ${d.live} → ${d.want}${enabled.has(d.ticker) ? '' : ' (apagado)'}`);
+} else {
+    console.log('✅ maxBuyLosses/maxSellLosses alineados con el último sweep');
 }
-console.log(`\n✅ ${n} valores aplicados (transaccional, merge por sesión)`);
+
+if (WRITE) {
+    const at = new Date().toISOString();
+    const byTicker = new Map<string, Diff[]>();
+    for (const d of diffs) {
+        const arr = byTicker.get(d.ticker) ?? [];
+        arr.push(d);
+        byTicker.set(d.ticker, arr);
+    }
+    for (const [ticker, arr] of byTicker) {
+        await db.collection('mcl_proposals').doc(ticker).set({
+            ticker,
+            diffs: arr.map((x) => ({ session: x.session, field: x.field, current: x.live === undefined ? null : x.live, proposed: x.want })),
+            generatedAt: at, applied: false, superseded: false, source: 'directional_mcl_tune (train)',
+        }, { merge: true });
+    }
+    // H03-b: cerrar propuestas de activos que YA no tienen diferencias (antes quedaban vivas).
+    const existing = await db.collection('mcl_proposals').get();
+    for (const d of existing.docs) {
+        if (d.id === '_SUMMARY') continue;
+        if (!byTicker.has(d.id) && d.data().applied !== true) {
+            await d.ref.set({ superseded: true, supersededAt: at }, { merge: true });
+        }
+    }
+    const sum = await refreshSummary(at);
+    console.log(`\n✅ ${diffs.length} valores publicados (${byTicker.size} activos) · pendientes totales: ${sum.count} en ${sum.tickers.length} activos`);
+    console.log('   aplicar a mano: npx tsx scripts/ops/mcl_sync.ts --apply');
+    process.exit(0);
+}
+
+console.log('\n[dry-run] agregá --write (propuestas) o --apply (aplicar)');
+process.exit(0);

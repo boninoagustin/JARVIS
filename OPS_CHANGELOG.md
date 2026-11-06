@@ -274,3 +274,18 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
 - Nuevo `src/engine/RiskCaps.ts` (puro, sin efectos) + `scripts/ops/test_risk_caps.ts` con
   los 7 escenarios pedidos por el auditor (5 FX 1,5%, candidatos, posición sin reserva,
   exclude, clusters, rechazo terminal, texto sin evidencia).
+
+### 14d. 3ª revisión — D1-b / H03-b (06-nov)
+
+- **D1-b (HIGH)**: el timer del ciclo podía solaparse con el scout y no había dedupe semanal.
+  Nuevo `scripts/periodic_opt/run_weekly_guard.sh` como ExecStart del ciclo:
+  espera al scout (máx 3 h), `flock -n` (si ya corre otro, sale), marca ISO `YYYY-Www` en
+  /var/lib/jarvis (se escribe SÓLO si run_weekly terminó OK) y `--check` para tests.
+  Los timers siguen como respaldo: el wrapper deduplica. Verificado: con lock ocupado → skip;
+  con marca de la semana → skip; `--force` lo ignora.
+- **H03-b (MED)**: `--apply` ahora consume las PROPUESTAS PUBLICADAS (lo que vio el
+  operador), no el sweep actual; una transacción por propuesta (todos sus diffs + applied),
+  conflicto si el campo cambió desde la publicación, frescura ≤8 días.
+  `--write` publica SIEMPRE el resumen (también con 0) y marca `superseded` las propuestas
+  que ya no tienen diferencias (antes el digest anunciaba propuestas viejas).
+- Lógica pura en `scripts/ops/mcl_proposal_core.ts` + `test_mcl_proposal.ts` (5 casos).
