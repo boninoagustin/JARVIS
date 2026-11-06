@@ -2,6 +2,7 @@ import os
 import io
 import json
 import subprocess
+import shutil
 import tempfile
 import time
 import pandas as pd
@@ -176,6 +177,46 @@ async def predict(req: PredictRequest):
 
 
 JARVIS_DIR = "/opt/JARVIS"
+
+
+@app.post("/api/backtest/export-csv")
+async def backtest_export_csv(ticker: str, tfs: str = "M5,M15,H1,H4,D1"):
+    """Genera los CSVs de logs SMC para un ticker usando el SMCEngine.
+
+    Lo usa el ciclo semanal (run_weekly.py → refresh_csvs) para regenerar el histórico
+    antes del hyperopt. Restaurado del commit anterior a f71d6c2 (que lo borró como parte
+    de 'eliminar backtesting manual', sin notar que el BOT depende de esta ruta).
+    """
+    script = os.path.join(JARVIS_DIR, "scripts", "export_smc_csv.ts")
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail="Script export_smc_csv.ts no encontrado")
+
+    env = os.environ.copy()
+    env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
+
+    import glob
+    for d in glob.glob("/tmp/tsx-*") + glob.glob("/tmp/esbuild-*"):
+        shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
+
+    results = {}
+    for tf in tfs.split(","):
+        tf = tf.strip()
+        try:
+            result = subprocess.run(
+                ["npx", "tsx", script, ticker, "--timeframes", tf],
+                capture_output=True, text=True, timeout=300,
+                cwd=JARVIS_DIR, env=env,
+            )
+            output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout or "")
+            results[tf] = {"ok": result.returncode == 0, "output": output[-200:]}
+        except subprocess.TimeoutExpired:
+            results[tf] = {"ok": False, "error": "timeout"}
+        except Exception as e:
+            results[tf] = {"ok": False, "error": str(e)}
+
+    return {"status": "ok", "ticker": ticker, "results": results}
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Detección SMC por activo: salud del roster + optimizador a demanda (oct-2026)
