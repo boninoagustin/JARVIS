@@ -9,7 +9,8 @@
     "test": "npx tsx test_smc_engine.ts",
     "dev": "tsx watch src/index.ts",
     "deploy-webhook": "tsx scripts/deploy-webhook.ts",
-    "typecheck:scripts": "bash scripts/ops/typecheck_scripts.sh"
+    "typecheck:scripts": "bash scripts/ops/typecheck_scripts.sh",
+    "check:deps": "bash scripts/ops/check_bot_deps.sh"
   },
   "keywords": [],
   "author": "",
