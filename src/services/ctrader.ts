@@ -1515,11 +1515,11 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                         console.error('[CTRADER] ❌ No se pudo enviar alerta Telegram de ghost position:', tgErr.message);
                     }
                 }
-                const rejectionMarked = (amendErr as any)?.brokerRejection != null
-                    || /no se abrió posición/i.test(String(amendErr?.message ?? ''));
+                // H02-b (2ª revisión): acá HUBO fill (la posición se abrió y el cierre de
+                // emergencia la cerró). "Cerrada" no prueba "nunca tuvo fill": no se emite
+                // filledVolumeCents=0 ni se clasifica por texto. La identidad se conserva y el
+                // incidente se resuelve con contabilidad real (broker), no con una heurística.
                 return {success:false,positionId,executionUncertain:!emergencyClosed||pendingOrderUnresolved,
-                    // Evidencia de "sin fill" sólo si el cierre de emergencia quedó verificado.
-                    ...(rejectionMarked && emergencyClosed && !pendingOrderUnresolved ? { filledVolumeCents: 0 } : {}),
                     error:`FILL_SAFETY: ${amendErr.message}. ${emergencyClosed&&!pendingOrderUnresolved?'Position closed [broker verified]':'POSITION OR REMAINDER MAY REMAIN OPEN — manual reconciliation required; do not retry'}`};
         }
 

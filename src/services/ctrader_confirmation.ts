@@ -234,6 +234,13 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
 
     // Execute the trade
     const requestedRiskPercent = effectiveRiskPercentFor(pending.ticker, pending.riskMult);
+    // H01-b (2ª revisión): reservar el presupuesto EXACTO en RAM antes de enviar. El cap de
+    // exposiciones concurrentes lee esta RAM; sin esto usaba el fallback (que ignora
+    // riskMult y el factor de sesión). Si la entrada falla, el trade se elimina y libera.
+    {
+        const ramTrade = globalState.activeTrades.get(tradeId);
+        if (ramTrade) (ramTrade as any).requestedRiskPercent = requestedRiskPercent;
+    }
     const orderParams: CTraderOrderParams = {
         ticker: pending.ticker,
         direction: pending.direction,

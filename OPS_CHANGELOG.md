@@ -257,3 +257,20 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
   tenía 8 h de timeout y podía solaparse); el timer del ciclo queda como red de seguridad.
   Se quitó el health-all duplicado del runner del tune (la cadena ya lo corre con propuestas).
 - Digest: línea "🔧 MCL propuesto (sweep train-only): N valores" en lugar de "desactualizado".
+
+### 14c. 2ª revisión de la auditoría — H01-b / H02-b (06-nov)
+
+- **Manual no reservaba en RAM**: el cap leía el trade sin `requestedRiskPercent` y usaba el
+  fallback (ignorando ×riskMult/×sesión). Ahora la aprobación reserva el presupuesto exacto
+  en `globalState.activeTrades` ANTES de enviar (si falla, el trade se borra y libera).
+- **AUTO revalidaba otra fórmula**: el closure recalculaba `effectiveRiskPercentFor()` en
+  cada recheck. Ahora `frozenRequestedRiskPercent` se captura UNA vez y se usa en recheck,
+  sizing y persistencia.
+- **Candidatos consumían exposición**: el fallback contaba señales ignoradas/expiradas (sin
+  reserva ni posición) hasta la limpieza de huérfanos (2 h). `computeOpenRisk()` excluye
+  candidatos: sólo cuenta reserva en RAM o posición existente.
+- **H02-b**: el productor ya no clasifica por texto en el camino FILL_SAFETY (allí HUBO fill
+  y cierre verificado: no se emite `filledVolumeCents=0`). "Cerrada" ≠ "nunca tuvo fill".
+- Nuevo `src/engine/RiskCaps.ts` (puro, sin efectos) + `scripts/ops/test_risk_caps.ts` con
+  los 7 escenarios pedidos por el auditor (5 FX 1,5%, candidatos, posición sin reserva,
+  exclude, clusters, rechazo terminal, texto sin evidencia).
