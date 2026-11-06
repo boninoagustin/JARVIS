@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Terminal, PieChart, Settings, Play, BrainCircuit } from 'lucide-react';
+import { Activity, Newspaper, PieChart, Settings, BrainCircuit } from 'lucide-react';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
-import FundamentalTerminal from './components/FundamentalTerminal';
 import AnalyticsJournal from './components/AnalyticsJournal';
 import AdminPanel from './components/AdminPanel';
-import BacktestingPanel from './components/BacktestingPanel';
 import PeriodicOptPanel from './components/PeriodicOptPanel';
 import AssetHealthPanel from './components/AssetHealthPanel';
+import NewsAnalyzer from './components/NewsAnalyzer';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
@@ -25,14 +24,11 @@ function Sidebar() {
         <NavLink to="/radar" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Activity size={18} /> Radar Cuantitativo
         </NavLink>
-        <NavLink to="/terminal" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Terminal size={18} /> Terminal Fundamental
+        <NavLink to="/noticias" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <Newspaper size={18} /> Analizador de Noticias
         </NavLink>
         <NavLink to="/journal" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <PieChart size={18} /> Diario Analítico
-        </NavLink>
-        <NavLink to="/backtesting" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Play size={18} /> Backtesting
         </NavLink>
         <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Settings size={18} /> Panel de Control
@@ -241,9 +237,9 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/radar" replace />} />
             <Route path="/radar" element={<RadarHeatmap />} />
-            <Route path="/terminal" element={<FundamentalTerminal />} />
+            <Route path="/noticias" element={<NewsAnalyzer />} />
+            <Route path="/terminal" element={<Navigate to="/noticias" replace />} />
             <Route path="/journal" element={<AnalyticsJournal />} />
-            <Route path="/backtesting" element={<BacktestingPanel />} />
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="/autotune" element={<PeriodicOptPanel />} />
             <Route path="/assets" element={<AssetHealthPanel />} />

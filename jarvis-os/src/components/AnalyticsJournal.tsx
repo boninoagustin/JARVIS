@@ -19,7 +19,7 @@ import {
   BarChart, Bar, XAxis, YAxis, AreaChart, Area, CartesianGrid
 } from 'recharts';
 
-import { getSessionForTimestamp } from '../services/backtestEngine';
+import { getSessionForTimestamp } from '../services/session';
 import { TICKERS } from './admin/types';
 
 interface TradeLog {
