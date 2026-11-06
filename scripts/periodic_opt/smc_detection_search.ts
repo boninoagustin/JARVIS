@@ -351,7 +351,10 @@ async function main() {
       await ref.set(out, { merge: true });
       console.log('HEALTH_SAVED');
     } catch (e) {
+      // H07: si no se pudo persistir el health, el job FALLA (antes exit 0 → cadena verde
+      // con datos viejos y propuestas consumiendo health stale).
       console.log('HEALTH_FIRESTORE_SKIP: ' + String((e as Error).message).slice(0, 100));
+      process.exit(1);
     }
     process.exit(0);
   }

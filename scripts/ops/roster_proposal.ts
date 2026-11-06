@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
+import { isHealthFresh } from './health_freshness_core.js';
 import { getAdrPrice } from '../../src/engine/tp2Cap.js';
 
 const REPO = '/opt/JARVIS';
@@ -105,6 +106,8 @@ for (const doc of health.docs) {
   const ticker = doc.id;
   if (ticker === '_GLOBAL') continue;
   const h = doc.data() as any;
+    // H07: health viejo/sin fecha → se trata como SIN_DATOS (no se propone sobre él).
+    if (!isHealthFresh(h)) continue;
   const cfg = cfgMap.get(ticker) || {};
   const n = Number(h.trades ?? 0);
   const mu = Number(h.avgR ?? (n > 0 ? Number(h.baselineR) / n : 0));
