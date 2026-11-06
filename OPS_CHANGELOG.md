@@ -391,3 +391,13 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
 - Restaurado el bit ejecutable de `recover_tune_pending.sh` y del test.
 - Test: 14 escenarios / 21 asserts (incluye los 4 casos pedidos; el conteo anterior de "18"
   era de asserts, no de escenarios).
+
+### 14k. Cierre de D1 (10ª revisión) + LOW cosmético
+
+- El auditor **acepta el lote 2h**: D1 queda cerrado desde la máquina de estados de
+  continuación (runId + estados durables + evidencia positiva de salida).
+- LOW corregido: el mensaje distingue "failed (salió con status N en este boot)" de
+  "interrupted (sin evidencia de salida / crash-reboot)". El comportamiento ya era correcto.
+- Caveat H07 anotado por el auditor: `completed` es proxy del exit code del wrapper; si el
+  pipeline del tune traga errores de activos, "success" no garantiza el trabajo completo.
+  Es exactamente el hallazgo H07 del informe original → va en el Lote 3.

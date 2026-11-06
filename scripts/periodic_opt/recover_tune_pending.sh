@@ -57,6 +57,16 @@ unit_active() {
     *) return 1 ;;
   esac
 }
+unit_has_exit_timestamps() {
+  local start exit_ts
+  start=$($TUNE_START_TS_CMD 2>/dev/null || echo "")
+  exit_ts=$($TUNE_EXIT_TS_CMD 2>/dev/null || echo "")
+  case "$start" in ""|n/a|unknown) return 1 ;; esac
+  case "$exit_ts" in ""|n/a|unknown) return 1 ;; esac
+  return 0
+}
+unit_exit_status() { $TUNE_STATUS_CMD 2>/dev/null || echo ""; }
+
 unit_completed_evidence() {
   local start exit_ts status
   start=$($TUNE_START_TS_CMD 2>/dev/null || echo "")
@@ -114,7 +124,11 @@ case "$STATE" in
       echo "repaired: $RUN_ID con evidencia de salida OK → reparado sin re-ejecutar"
       exit 0
     fi
-    echo "interrupted: el tune de $RUN_ID no tiene evidencia de salida (crash/reboot) → se reencola"
+    if unit_has_exit_timestamps; then
+      echo "failed: el tune de $RUN_ID salió con status $(unit_exit_status) en este boot → se reencola"
+    else
+      echo "interrupted: el tune de $RUN_ID no tiene evidencia de salida (crash/reboot) → se reencola"
+    fi
     cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
     ;;
   failed)
