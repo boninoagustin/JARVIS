@@ -1,8 +1,17 @@
 import nodeFetch from 'node-fetch';
+import OpenAI from 'openai';
 import { db } from '../db/memory.js';
-import { generateResponse } from '../llm/client.js';
 
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-flash';
+const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 
+const deepseek = DEEPSEEK_API_KEY
+    ? new OpenAI({ baseURL: DEEPSEEK_BASE_URL, apiKey: DEEPSEEK_API_KEY })
+    : null;
+
+// Fallback si no se puede leer el roster en vivo.
+const FALLBACK_ASSETS = ['BTCUSD', 'EURUSD', 'US100', 'XAUUSD'];
 
 async function fetchYahooPrice(symbol: string): Promise<number | null> {
     try {
@@ -18,6 +27,20 @@ async function fetchYahooPrice(symbol: string): Promise<number | null> {
     } catch (e: any) {
         console.error(`[YAHOO] Error fetching price for ${symbol}:`, e.message);
         return null;
+    }
+}
+
+/** Activos que el bot opera EN VIVO (assetSessionConfigs con enabled=true y sin disabledReason). */
+async function getLiveAssets(): Promise<string[]> {
+    try {
+        const { globalState } = await import('../db/trading.js');
+        const assets = [...(globalState.assetSessionConfigs as Map<string, any>).entries()]
+            .filter(([k, c]) => k !== 'GLOBAL' && c?.enabled === true && !c?.disabledReason)
+            .map(([k]) => k);
+        return assets.length > 0 ? assets : FALLBACK_ASSETS;
+    } catch (e: any) {
+        console.error('[FINNHUB] Error leyendo roster en vivo:', e?.message ?? e);
+        return FALLBACK_ASSETS;
     }
 }
 
@@ -52,10 +75,9 @@ export async function updateFundamentals() {
         // 1. Obtener noticias de mercado general (Forex, Crypto, Stocks)
         const res = await nodeFetch(`https://finnhub.io/api/v1/news?category=general&token=${process.env.FINNHUB_API_KEY || ''}`);
         const newsData: any = await res.json();
-        
+
         if (!Array.isArray(newsData) || newsData.length === 0) {
             console.warn('[FINNHUB] No se obtuvieron noticias validas.');
-            // Si no hay noticias, guardar al menos los macrodatos si están disponibles
             if (db && (vixPrice !== null || dxyPrice !== null || us10yPrice !== null)) {
                 const macroData: any = {};
                 if (vixPrice !== null) macroData.vix = vixPrice;
@@ -71,97 +93,80 @@ export async function updateFundamentals() {
         }
 
         // Tomar las 10 noticias más recientes para analizar
-        const topNews = newsData.slice(0, 10).map(n => ({
+        const topNews = newsData.slice(0, 10).map((n: any) => ({
             time: new Date(n.datetime * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
             source: n.source,
             text: n.headline,
-            impact: n.category === 'top news' ? 'high' : 'medium' // Estimación simple de impacto
+            impact: n.category === 'top news' ? 'high' : 'medium'
         }));
 
-        // 2. Analizar sentimiento y traducir noticias usando el LLM (Gemini)
-        const prompt = `
-Eres un analista financiero cuantitativo y traductor. A continuación te presento los últimos titulares de noticias del mercado en inglés:
+        const liveAssets = await getLiveAssets();
+        console.log(`[FINNHUB] Roster en vivo (${liveAssets.length}): ${liveAssets.join(', ')}`);
 
-${topNews.map((n, idx) => `ID ${idx}: [${n.source}] ${n.text}`).join('\n')}
+        // 2. Análisis por-noticia × por-activo usando DeepSeek
+        let newsAnalysis: Record<string, Array<{ asset: string; direction: 'bullish' | 'bearish'; reason: string }>> = {};
+        let finalNews = [...topNews];
 
-Por favor realiza dos tareas:
-1. Traduce cada uno de los titulares al español de manera natural, profesional y precisa (manteniendo acrónimos financieros conocidos como FOMC, Fed, CPI, NFP si aplica).
-2. Analiza el sentimiento de mercado y el impacto probable para los siguientes activos:
-   - BTCUSD (Bitcoin)
-   - EURUSD (Euro/Dólar)
-   - US100 (Nasdaq)
-   - XAUUSD (Oro/Dólar)
+        if (deepseek) {
+            const prompt = `Eres un analista financiero cuantitativo experto. A continuación tienes los titulares de noticias de mercado (en inglés):
 
-Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta, sin backticks de Markdown:
+${topNews.map((n: any, idx: number) => `ID ${idx}: [${n.source}] ${n.text}`).join('\n')}
+
+Activos que el bot opera EN VIVO (analiza ÚNICAMENTE estos):
+${liveAssets.join(', ')}
+
+Para CADA titular realiza DOS tareas:
+1. Tradúcelo al español de forma natural y precisa (manteniendo acrónimos como FOMC, Fed, CPI, NFP).
+2. Determina qué activos de la lista se ven afectados de forma CLARA y si el efecto es ALCISTA (bullish) o BAJISTA (bearish), con una razón breve en español (máx ~12 palabras). Si un activo no tiene efecto claro, OMÍTELO.
+
+Responde ÚNICAMENTE con un objeto JSON válido (sin backticks de Markdown) con esta estructura exacta:
 {
   "translations": {
-    "0": "Traducción al español del titular ID 0",
-    "1": "Traducción al español del titular ID 1",
-    "2": "Traducción al español del titular ID 2",
-    "3": "Traducción al español del titular ID 3",
-    "4": "Traducción al español del titular ID 4",
-    "5": "Traducción al español del titular ID 5",
-    "6": "Traducción al español del titular ID 6",
-    "7": "Traducción al español del titular ID 7",
-    "8": "Traducción al español del titular ID 8",
-    "9": "Traducción al español del titular ID 9"
+    "0": "traducción del titular ID 0",
+    "1": "traducción del titular ID 1"
   },
-  "sentiment": {
-    "BTCUSD": {
-      "score": "75% BULLISH", // O BEARISH o NEUTRAL / MIXED
-      "reason": "Explicación breve del motivo basado en las noticias (en español).",
-      "status": "status-buy" // status-buy (alcista), status-sell (bajista), status-neutral, status-alert
-    },
-    "EURUSD": {
-      "score": "60% BEARISH",
-      "reason": "Explicación en español...",
-      "status": "status-sell"
-    },
-    "US100": {
-      "score": "NEUTRAL / MIXED",
-      "reason": "Explicación en español...",
-      "status": "status-alert"
-    },
-    "XAUUSD": {
-      "score": "80% BULLISH",
-      "reason": "Explicación en español...",
-      "status": "status-buy"
-    }
+  "news_analysis": {
+    "0": [
+      { "asset": "BTCUSD", "direction": "bullish", "reason": "razón breve en español" },
+      { "asset": "XAUUSD", "direction": "bearish", "reason": "razón breve en español" }
+    ],
+    "1": [
+      { "asset": "EURUSD", "direction": "bullish", "reason": "razón breve en español" }
+    ]
   }
 }
-        `;
 
-        const llmResponse = await generateResponse([{ role: 'user', content: prompt }]);
-        const responseText = llmResponse.content || '{}';
-        
-        let sentimentData = {};
-        let finalNews = [...topNews];
-        try {
-            // Limpiar posible formato markdown del JSON
-            const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleanJson);
-            
-            sentimentData = parsed.sentiment || {};
-            
-            // Si el LLM devolvió las traducciones, aplicarlas a las noticias
-            if (parsed.translations) {
-                finalNews = topNews.map((n, idx) => {
-                    const translatedText = parsed.translations[String(idx)] || parsed.translations[idx];
-                    return {
-                        ...n,
-                        text: translatedText || n.text
-                    };
+Reglas estrictas:
+- "direction" SOLO puede ser "bullish" o "bearish".
+- Incluye únicamente activos con efecto claro; los neutrales se omiten del array.
+- Genera un array "news_analysis" para TODOS los IDs (puede ser un array vacío [] si ninguna noticia afecta a ningún activo).
+- No inventes activos que no estén en la lista de "en vivo".`;
+
+            try {
+                const completion = await deepseek.chat.completions.create({
+                    model: DEEPSEEK_MODEL,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.2,
+                    max_tokens: 8000
                 });
+                const responseText = completion.choices?.[0]?.message?.content || '';
+
+                const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                const parsed = JSON.parse(cleanJson);
+
+                newsAnalysis = parsed.news_analysis || {};
+
+                finalNews = topNews.map((n: any, idx: number) => {
+                    const translatedText = parsed.translations?.[String(idx)] ?? parsed.translations?.[idx];
+                    const analysis = (newsAnalysis[String(idx)] ?? newsAnalysis[idx]) || [];
+                    return { ...n, text: translatedText || n.text, analysis };
+                });
+                console.log(`[FINNHUB] DeepSeek analizó ${topNews.length} noticias para ${liveAssets.length} activos.`);
+            } catch (e: any) {
+                console.error('[FINNHUB] Error analizando noticias con DeepSeek:', e?.message ?? e);
             }
-        } catch (e) {
-            console.error('[FINNHUB] Error parseando respuesta del LLM:', responseText);
-            // Valores por defecto si falla
-            sentimentData = {
-                BTCUSD: { score: "NEUTRAL", reason: "Error analizando sentimiento", status: "status-neutral" },
-                EURUSD: { score: "NEUTRAL", reason: "Error analizando sentimiento", status: "status-neutral" },
-                US100: { score: "NEUTRAL", reason: "Error analizando sentimiento", status: "status-neutral" },
-                XAUUSD: { score: "NEUTRAL", reason: "Error analizando sentimiento", status: "status-neutral" }
-            };
+        } else {
+            console.warn('[FINNHUB] DEEPSEEK_API_KEY no configurada. Noticias sin análisis.');
         }
 
         // 3. Guardar en Firebase
@@ -174,12 +179,11 @@ Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta, sin 
             await db.collection('app_settings').doc('fundamentals').set({
                 last_updated: new Date().toISOString(),
                 news: finalNews,
-                sentiment: sentimentData,
                 macro: macroData
             }, { merge: true });
-            console.log('[FINNHUB] Datos fundamentales guardados en Firebase.');
+            console.log('[FINNHUB] Datos fundamentales (con análisis por-activo) guardados en Firebase.');
         }
     } catch (error: any) {
-        console.error('[FINNHUB] Error en updateFundamentals:', error.message);
+        console.error('[FINNHUB] Error en updateFundamentals:', error?.message ?? error);
     }
 }
