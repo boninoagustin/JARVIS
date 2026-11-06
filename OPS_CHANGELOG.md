@@ -401,3 +401,25 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
 - Caveat H07 anotado por el auditor: `completed` es proxy del exit code del wrapper; si el
   pipeline del tune traga errores de activos, "success" no garantiza el trabajo completo.
   Es exactamente el hallazgo H07 del informe original → va en el Lote 3.
+
+### 15. Lote 3 (Fase B) — H04/H06/H07/H08/H09/H11/H12
+
+- **H04** (HIGH): apply del preset ahora atómico y con CAS: lock O_EXCL (`node:fs` no tiene
+  flock), stale >2h, backup versionado `.bak-<ts>`, tmp+rename, readback y `configFingerprint`
+  en `DetectionMeta`. Nuevo `scripts/ops/preset_apply_core.ts`.
+- **H06**: los contadores BUY/SELL/rachas devuelven `null` cuando la lectura es desconocida
+  (antes 0 = fail-open). En live la entrada se retiene (`*_COUNT_UNKNOWN`, alerta 1/h); en
+  backtest se trata como 0 para no sesgar el replay.
+- **H07**: si el health no puede persistir, el job FALLA (exit 1) y systemd no corre las
+  propuestas; además los consumidores ignoran health sin fecha o >8 días (`isHealthFresh`).
+- **H08**: muestra viva filtrada: fuera backtesting, duplicados, no cerrados y sin
+  contabilidad VERIFIED; dedupe por posición. Log de composición en ambos scripts.
+- **H09**: la racha de semanas negativas exige semanas CONTIGUAS (7 días exactos) y el
+  dry-run lee el historial igual que `--write` (`countConsecutiveNegativeWeeks`).
+- **H11**: singleflight en el refresh del token (auto-renewal/connect/retry convergen) y
+  escritura del `.env` atómica (tmp+fsync+rename), modo 0600, backup 0600 y readback.
+- **H12**: el mínimo viable se compara contra la PROPUESTA FINAL capada, no contra Kelly sin
+  cap (caso mínimo 4% + Kelly 5% → ya no propone 3%).
+- Tests nuevos: `test_detection_apply`, `test_counters_failclosed`, `test_health_freshness`,
+  `test_health_runner`, `test_live_sample`, `test_shutdown_weeks`, `test_token_singleflight`,
+  `test_risk_allocator`. Suite completa: 10 tsx + 2 shell + integridad semanal en verde.

@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
 import { isHealthFresh } from './health_freshness_core.js';
+import { decideRiskProposal } from './risk_allocator_core.js';
 import { getAdrPrice } from '../../src/engine/tp2Cap.js';
 
 const REPO = '/opt/JARVIS';
@@ -78,7 +79,6 @@ for (const doc of health.docs) {
   const current = Number.isFinite(Number(cfg.riskPercent)) && Number(cfg.riskPercent) > 0 ? Number(cfg.riskPercent) : 1;
 
   const kelly = Number.isFinite(mu) ? Math.max(0, (mu / (SIGMA_R ** 2)) * KELLY_FRACTION) : 0;
-  let proposal = Math.min(MAX_PCT, Math.max(MIN_PCT, kelly * 100));
 
   // Riesgo mínimo viable: lote mínimo × SL típico (ADR/4) en moneda de cuenta.
   const cap = caps[doc.id];
@@ -91,28 +91,12 @@ for (const doc of health.docs) {
     minFeasible = ((cap.minVolume * (slTypical / 100) * (rate as number)) / equity) * 100;
   }
 
-  let verdict = 'MANTENER';
-  let note = '';
-  if (!Number.isFinite(mu) || mu <= 0 || n < MIN_TRADES) {
-    proposal = current;
-    verdict = mu <= 0 ? 'NO_OPERAR' : 'SIN_MUESTRA';
-    note = mu <= 0 ? `edge negativo (${mu.toFixed(3)} R/tr)` : `n=${n} < ${MIN_TRADES}`;
-  } else if (minFeasible !== null && minFeasible > kelly * 100) {
-    // Conflicto estructural sólo si el mínimo operable es grande y supera claramente a Kelly;
-    // los desajustes marginales (0,3% vs 0,1%) son "edge fino", no una razón para apagar.
-    const structural = minFeasible > 1 && minFeasible > 2 * kelly * 100;
-    proposal = current;
-    verdict = structural ? 'NO_OPERAR' : 'MANTENER';
-    note = `lote mínimo exige ~${minFeasible.toFixed(2)}% > Kelly ${(kelly * 100).toFixed(2)}%${structural ? '' : ' (marginal)'}`;
-  } else if (mu < MU_FOR_INCREASE) {
-    proposal = current;
-    verdict = 'MANTENER';
-    note = `edge fino (${mu.toFixed(3)} R/tr < ${MU_FOR_INCREASE})`;
-  } else {
-    const diff = proposal - current;
-    verdict = Math.abs(diff) < 0.15 ? 'MANTENER' : diff > 0 ? 'SUBIR' : 'BAJAR';
-    note = `Kelly/4 = ${(kelly * 100).toFixed(2)}%`;
-  }
+  // H12: decisión pura (el mínimo viable se compara contra la propuesta final capada).
+  const decision = decideRiskProposal({
+    mu, n, kellyPct: kelly * 100, current, minFeasible,
+    maxPct: MAX_PCT, minPct: MIN_PCT, minTrades: MIN_TRADES, muForIncrease: MU_FOR_INCREASE,
+  });
+  const { proposal, verdict, note } = decision;
   rows.push({ ticker: doc.id, mu, n, kelly, minFeasible, current, proposal, verdict, note });
 }
 
