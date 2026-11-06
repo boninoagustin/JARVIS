@@ -1607,22 +1607,45 @@ async function evaluateAssetKillswitch(ticker: string, nowMs: number, store: any
     }
     return false;
 }
-async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+async function countDailySellsForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
     return await pmCountDailySells(db, ticker, nowMs, isBacktest, backtestSessionId);
 }
 
 /**
  * 🆕 v7.2: Cuenta los trades BUY ejecutados hoy para un ticker específico.
  */
-async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+async function countDailyBuysForTicker(ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
     return await pmCountDailyBuys(db, ticker, nowMs, isBacktest, backtestSessionId);
 }
 
 /**
  * Cuenta las pérdidas consecutivas de un activo en la sesión y dirección actual para el día de hoy.
  */
-async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, store: StateStore, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
+async function countConsecutiveLosses(ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, store: StateStore, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
     return await countConsecutiveLossesForAsset(db, ticker, session, direction, nowMs, store.globalPortfolioConfig, isBacktest, backtestSessionId);
+}
+
+/**
+ * H06 (auditoría 2026-11-05): un contador NO verificable (Firestore caído) no es "cero".
+ * Se retiene la entrada (fail-closed) y se avisa con throttle, sin tumbar el gate global.
+ */
+let lastUnknownCounterAlertTs = 0;
+function blockForUnknownCounter(kind: 'MCL_SELL' | 'SELL' | 'MCL_BUY' | 'BUY', ticker: string, oteData: any, state: any, store: StateStore, saveState?: () => Promise<any>): void {
+    console.log(`[${kind}] ⛔ ${ticker} retenido: contador no verificable (lectura de trade_journal falló).`);
+    logBlockedSignal(`${kind}_COUNT_UNKNOWN`, oteData, Date.now());
+    state.lastGatillo!.status = 'BLOCKED_DATA_UNKNOWN';
+    if (saveState) saveState().catch(() => { });
+    store.activeTrades.delete(oteData.tradeId);
+    if (db) db.collection('active_trades').doc(oteData.tradeId).delete().catch(() => { });
+    const now = Date.now();
+    if (now - lastUnknownCounterAlertTs > 60 * 60 * 1000) {
+        lastUnknownCounterAlertTs = now;
+        sendTelegramAlert(
+            `🛡️ <b>[${kind} COUNT UNKNOWN]</b> ${ticker} retenido.\n\n` +
+            `📊 No se pudo leer el contador de trades (Firestore). Sin datos no se puede garantizar el límite → se bloquea la entrada.\n` +
+            `💡 <i>Se reintenta en el próximo setup; si persiste, revisar Firestore.</i>`
+        ).catch(() => { });
+    }
 }
 
 export async function processTradingAlert(alertText: string, store: StateStore = globalState) {
@@ -4877,7 +4900,11 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             const currentSession = getCurrentSession(nowMs);
             const sessionConfig = sellConfig.sessions?.[currentSession];
             if (sessionConfig && sessionConfig.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0) {
-                const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, store, isBacktest, activeSessionId);
+                let currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'SELL', nowMs, store, isBacktest, activeSessionId);
+                if (currentConsecutiveLosses === null) {
+                    if (!isBacktest) { blockForUnknownCounter('MCL_SELL', ticker, oteData, state, store, () => safeSet(state)); return; }
+                    currentConsecutiveLosses = 0;
+                }
                 if (currentConsecutiveLosses >= sessionConfig.maxSellLosses) {
                     console.log(`[MCL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxSellLosses} pérdidas consecutivas en sesión ${currentSession}.`);
             logBlockedSignal('MCL_SELL', oteData, nowMs);
@@ -4898,7 +4925,11 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
             // 📊 Verificar límite diario de SELLs
             if (sellConfig.maxSellsPerDay > 0) {
-                const dailySells = await countDailySellsForTicker(ticker, nowMs, isBacktest, activeSessionId);
+                let dailySells = await countDailySellsForTicker(ticker, nowMs, isBacktest, activeSessionId);
+                if (dailySells === null) {
+                    if (!isBacktest) { blockForUnknownCounter('SELL', ticker, oteData, state, store, () => safeSet(state)); return; }
+                    dailySells = 0;
+                }
                 if (dailySells >= sellConfig.maxSellsPerDay) {
                     console.log(`[SELL LIMIT] ⛔ Setup ${ticker} SELL BLOQUEADO: ${dailySells}/${sellConfig.maxSellsPerDay} SELLs diarios alcanzados.`);
             logBlockedSignal('SELL_LIMIT', oteData, nowMs);
@@ -4927,7 +4958,11 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             const currentSession = getCurrentSession(nowMs);
             const sessionConfig = buyConfig.sessions?.[currentSession];
             if (sessionConfig && sessionConfig.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0) {
-                const currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, store, isBacktest, activeSessionId);
+                let currentConsecutiveLosses = await countConsecutiveLosses(ticker, currentSession, 'BUY', nowMs, store, isBacktest, activeSessionId);
+                if (currentConsecutiveLosses === null) {
+                    if (!isBacktest) { blockForUnknownCounter('MCL_BUY', ticker, oteData, state, store, () => safeSet(state)); return; }
+                    currentConsecutiveLosses = 0;
+                }
                 if (currentConsecutiveLosses >= sessionConfig.maxBuyLosses) {
                     console.log(`[MCL LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${currentConsecutiveLosses}/${sessionConfig.maxBuyLosses} pérdidas consecutivas en sesión ${currentSession}.`);
                     logBlockedSignal('MCL_BUY', oteData, nowMs);
@@ -4948,7 +4983,11 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
 
             // 📊 Verificar límite diario de BUYs
             if (buyConfig.maxBuysPerDay > 0) {
-                const dailyBuys = await countDailyBuysForTicker(ticker, nowMs, isBacktest, activeSessionId);
+                let dailyBuys = await countDailyBuysForTicker(ticker, nowMs, isBacktest, activeSessionId);
+                if (dailyBuys === null) {
+                    if (!isBacktest) { blockForUnknownCounter('BUY', ticker, oteData, state, store, () => safeSet(state)); return; }
+                    dailyBuys = 0;
+                }
                 if (dailyBuys >= buyConfig.maxBuysPerDay) {
                     console.log(`[BUY LIMIT] ⛔ Setup ${ticker} BUY BLOQUEADO: ${dailyBuys}/${buyConfig.maxBuysPerDay} BUYs diarios alcanzados.`);
             logBlockedSignal('BUY_LIMIT', oteData, nowMs);

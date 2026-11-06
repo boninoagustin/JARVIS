@@ -438,8 +438,8 @@ export async function evaluateAssetRisk(
         : dataHold(`[${ticker}] asset-risk-data-unavailable`), !isBacktest);
 }
 
-export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
+export async function countDailySellsForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
+    if (!db) return null;
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`sells_${namespace}_${ticker}`, nowMs, async () => {
@@ -462,11 +462,11 @@ export async function countDailySellsForTicker(db: firestore.Firestore, ticker: 
                     typeof data.timestamp === 'number' && Number.isFinite(data.timestamp) && data.timestamp <= nowMs));
         });
         return isBacktest ? entries.length : uniquePositions(entries).rows.length;
-    }, 0); // 0 = fail open
+    }, null); // null = lectura desconocida (fail-closed en el consumidor live)
 }
 
-export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
+export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: string, nowMs: number, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
+    if (!db) return null;
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`buys_${namespace}_${ticker}`, nowMs, async () => {
@@ -489,11 +489,11 @@ export async function countDailyBuysForTicker(db: firestore.Firestore, ticker: s
                     typeof data.timestamp === 'number' && Number.isFinite(data.timestamp) && data.timestamp <= nowMs));
         });
         return isBacktest ? entries.length : uniquePositions(entries).rows.length;
-    }, 0);
+    }, null);
 }
 
-export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, globalPortfolioConfig: GlobalPortfolioConfig, isBacktest: boolean = false, backtestSessionId?: string): Promise<number> {
-    if (!db) return 0;
+export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ticker: string, session: string, direction: 'BUY' | 'SELL', nowMs: number, globalPortfolioConfig: GlobalPortfolioConfig, isBacktest: boolean = false, backtestSessionId?: string): Promise<number | null> {
+    if (!db) return null;
     
     const namespace = isBacktest ? `bt_${backtestSessionId ?? 'all'}` : 'live';
     return withCache(`streak_${namespace}_${ticker}_${session}_${direction}`, nowMs, async () => {
@@ -550,5 +550,5 @@ export async function countConsecutiveLossesForAsset(db: firestore.Firestore, ti
         }
         
         return streak;
-    }, 0);
+    }, null);
 }
