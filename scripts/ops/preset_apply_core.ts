@@ -12,6 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+export function jsonSha(obj: any): string {
+    return crypto.createHash('sha256').update(JSON.stringify(obj)).digest('hex');
+}
+
 export function fileSha(p: string): string {
     return fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') : '';
 }
@@ -48,7 +52,9 @@ export function applyPresetAtomic(opts: {
     if (!acquired) return { ok: false, code: 'LOCKED', message: 'no se pudo tomar el lock' };
 
     try {
-        if (opts.expectedSha && fileSha(opts.presetPath) !== opts.expectedSha) {
+        // expectedSha === '' significa "el preset NO existía al evaluar": si alguien lo creó
+        // durante la búsqueda, también es un cambio y se aborta (caso presets nuevos).
+        if (opts.expectedSha !== undefined && fileSha(opts.presetPath) !== opts.expectedSha) {
             return { ok: false, code: 'CHANGED', message: 'el preset cambió desde la evaluación' };
         }
         const current = fs.existsSync(opts.presetPath) ? JSON.parse(fs.readFileSync(opts.presetPath, 'utf8')) : {};

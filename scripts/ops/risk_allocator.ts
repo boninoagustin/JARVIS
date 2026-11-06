@@ -68,11 +68,12 @@ type Row = {
 };
 const rows: Row[] = [];
 
+const staleHealth: string[] = [];
 for (const doc of health.docs) {
   if (doc.id === '_GLOBAL') continue;
   const h = doc.data() as any;
-    // H07: health viejo/sin fecha → se trata como SIN_DATOS (no se propone sobre él).
-    if (!isHealthFresh(h)) continue;
+    // H07: health viejo/sin fecha → SIN_DATOS explícito (no se omite en silencio).
+    if (!isHealthFresh(h)) { staleHealth.push(ticker); continue; }
   const cfg = cfgMap.get(doc.id) || {};
   const mu = Number(h.avgR ?? (h.trades > 0 ? h.baselineR / h.trades : 0));
   const n = Number(h.trades ?? 0);
@@ -99,6 +100,8 @@ for (const doc of health.docs) {
   const { proposal, verdict, note } = decision;
   rows.push({ ticker: doc.id, mu, n, kelly, minFeasible, current, proposal, verdict, note });
 }
+
+if (staleHealth.length) console.log(`⚫ SIN_DATOS por health stale (>8 días): ${staleHealth.length} activo(s) · ${staleHealth.join(', ')}`);
 
 rows.sort((a, b) => b.mu - a.mu);
 console.log(`equity ${equity.toFixed(0)} ${acCurrency} · σ=${SIGMA_R}R · ¼ Kelly · rango [${MIN_PCT}%, ${MAX_PCT}%]\n`);

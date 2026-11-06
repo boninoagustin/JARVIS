@@ -98,12 +98,13 @@ type Row = {
 };
 const rows: Row[] = [];
 
+const staleHealth: string[] = [];
 for (const doc of health.docs) {
   const ticker = doc.id;
   if (ticker === '_GLOBAL') continue;
   const h = doc.data() as any;
-    // H07: health viejo/sin fecha → se trata como SIN_DATOS (no se propone sobre él).
-    if (!isHealthFresh(h)) continue;
+    // H07: health viejo/sin fecha → SIN_DATOS explícito (no se omite en silencio).
+    if (!isHealthFresh(h)) { staleHealth.push(ticker); continue; }
   const cfg = cfgMap.get(ticker) || {};
   const n = Number(h.trades ?? 0);
   const mu = Number(h.avgR ?? (n > 0 ? Number(h.baselineR) / n : 0));
@@ -143,6 +144,8 @@ for (const r of rows) {
     tradeCount++;
   }
 }
+
+if (staleHealth.length) console.log(`⚫ SIN_DATOS por health stale (>8 días): ${staleHealth.length} activo(s) · ${staleHealth.join(', ')}`);
 
 // TRADE: mejores por cluster
 const candidates = rows.filter((r) => r.verdict !== 'TRADE' && r.mu >= MIN_MU_TRADE && r.n >= MIN_N && r.feasible)

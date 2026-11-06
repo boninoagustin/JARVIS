@@ -12,7 +12,7 @@ import { BacktestConfig } from '../../jarvis-os/src/services/backtestTypes.js';
 import { loadOptimizedPreset } from '../../src/engine/smc/smc_config.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { assertLegacyDetectionSearch,rejectLegacyDetectionProfileFlags } from '../smc_export_context.js';
-import { applyPresetAtomic, fileSha } from '../ops/preset_apply_core.js';
+import { applyPresetAtomic, fileSha, jsonSha } from '../ops/preset_apply_core.js';
 rejectLegacyDetectionProfileFlags(process.argv.slice(2));
 
 const TICKER = (process.argv[2] || 'EURUSD').toUpperCase();
@@ -466,7 +466,7 @@ async function main() {
     // H04: lock + CAS + backup versionado + rename atómico (ver preset_apply_core.ts).
     const applied = applyPresetAtomic({
       presetPath: PRESET_PATH,
-      expectedSha: PRESET_SHA_AT_START || undefined,
+      expectedSha: PRESET_SHA_AT_START,   // '' = el preset no existía al evaluar
       build: (cur: any) => {
         const presetJson = { ...(cur || {}) };
         for (const tf of ['M15', 'H1', 'H4', 'D1']) {
@@ -482,7 +482,9 @@ async function main() {
           trainR: Number(best!.totalR.toFixed(2)), oosR: Number(candOos.totalR.toFixed(2)),
           prevTrainR: Number(actual.totalR.toFixed(2)), prevOosR: Number(actOos.totalR.toFixed(2)),
           candidatesTested: N, params: p,
-          configFingerprint: (PRESET_SHA_AT_START || '').slice(0, 12),   // config evaluada (auditable)
+          // Honestidad de nombres: el sha del preset es el PRESET; el de la config es la CONFIG.
+          presetFingerprint: (PRESET_SHA_AT_START || '(nuevo)').slice(0, 12),
+          configFingerprint: jsonSha(config).slice(0, 12),   // config REALMENTE usada en la evaluación
         };
         return presetJson;
       },

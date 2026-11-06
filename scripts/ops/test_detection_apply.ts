@@ -59,5 +59,24 @@ const r4 = applyPresetAtomic({ presetPath: preset, lockPath: lock, expectedSha: 
 assert.equal(r4.ok, true, 'un lock >2h es huérfano y debe retirarse');
 console.log('PASS lock huérfano (>2h) retirado y aplicado');
 
+
+console.log('\n=== H04: preset NUEVO (no existía al evaluar) ===');
+const nuevo = path.join(dir, 'optimized_preset_NUEVO.json');
+const lock2 = path.join(dir, 'apply2.lock');
+// no existe al capturar el sha; expectedSha = '' significa "no existía"
+const r5 = applyPresetAtomic({ presetPath: nuevo, lockPath: lock2, expectedSha: '', build: (c) => ({ ...c, Detection: { a: 1 } }) });
+assert.equal(r5.ok, true, 'sin preset previo y sin cambios → debe crear');
+assert.equal(fs.existsSync(nuevo), true);
+console.log('PASS preset ausente + expectedSha="" → crea');
+
+// alguien lo crea durante la búsqueda → CAS debe abortar
+const nuevo2 = path.join(dir, 'optimized_preset_NUEVO2.json');
+fs.writeFileSync(nuevo2, JSON.stringify({ Detection: { a: 99 } }));
+const r6 = applyPresetAtomic({ presetPath: nuevo2, lockPath: lock2, expectedSha: '', build: (c) => ({ ...c, Detection: { a: 1 } }) });
+assert.equal(r6.ok, false);
+if (!r6.ok) assert.equal(r6.code, 'CHANGED');
+assert.equal(JSON.parse(fs.readFileSync(nuevo2, 'utf8')).Detection.a, 99, 'no debe pisar');
+console.log('PASS preset creado durante la evaluación → CHANGED (no pisa)');
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('\nAUTOTEST OK');

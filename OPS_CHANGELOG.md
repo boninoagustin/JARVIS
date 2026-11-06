@@ -423,3 +423,19 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
 - Tests nuevos: `test_detection_apply`, `test_counters_failclosed`, `test_health_freshness`,
   `test_health_runner`, `test_live_sample`, `test_shutdown_weeks`, `test_token_singleflight`,
   `test_risk_allocator`. Suite completa: 10 tsx + 2 shell + integridad semanal en verde.
+
+### 15b. Residuales de la revisión del Lote 3
+
+- **H04 fingerprints honestos**: `DetectionMeta.presetFingerprint` (sha del archivo) y
+  `configFingerprint` (sha de la CONFIG realmente evaluada, `jsonSha(config)`). Antes el
+  campo `configFingerprint` guardaba el sha del preset (nombre engañoso).
+- **H04 preset nuevo**: si no había preset al evaluar, `expectedSha=''` y el CAS aborta si
+  alguien lo crea durante la búsqueda (10-18 h). Test nuevo.
+- **H07 stale visible**: los consumidores ya no omiten en silencio; loguean
+  `⚫ SIN_DATOS por health stale (>8 días): N activo(s) · ...` en roster/allocator/shutdown.
+- **H09**: `WEEKS_KEEP=52` usado explícitamente por `mergeWeek` (antes la constante era
+  muerta y la retención quedó en el default).
+- **H06 debug**: `trading_debug.ts` queda marcado como script de debug fail-open (no live),
+  con warning explícito para no cablearlo sin el patrón number|null.
+- Pendiente declarado (fuera de este lote): paridad de config del tune (`buildConfig()`
+  genérico vs `asset_configs` real) — es la parte "propuesta" del plan de H04.
