@@ -439,3 +439,15 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   con warning explícito para no cablearlo sin el patrón number|null.
 - Pendiente declarado (fuera de este lote): paridad de config del tune (`buildConfig()`
   genérico vs `asset_configs` real) — es la parte "propuesta" del plan de H04.
+
+### 15c. Revisión 3b — bug de tipo en risk_allocator + hueco de verificación
+
+- **Bug real**: `staleHealth.push(ticker)` en `risk_allocator.ts` (ahí la variable es
+  `doc.id`). Compilaba con tsx (esbuild no chequea tipos) y habría crasheado justo en la
+  rama de health stale. Corregido a `doc.id`.
+- **Por qué no lo vi**: el `tsconfig.json` incluye sólo `src/**`, así que
+  `npx tsc --noEmit` NUNCA chequeó los scripts. Nuevo `scripts/ops/typecheck_scripts.sh`
+  (strict, por archivo) — hoy en verde para los 21 archivos del lote, incluidos 3 errores
+  pre-existentes que aparecieron al activarlo (`adr` possibly undefined ×2, implicit any ×2).
+- **`trading_debug.ts`**: el warning H06 ahora SÍ está en el archivo (en 15b el changelog lo
+  declaraba pero el edit no se aplicó porque el script de parcheo había abortado antes).

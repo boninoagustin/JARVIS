@@ -112,7 +112,7 @@ for (const doc of health.docs) {
 
   // Viabilidad por lote mínimo (igual criterio que risk_allocator)
   const cap = caps[ticker];
-  const adr = getAdrPrice(ticker);
+  const adr = Number(getAdrPrice(ticker));
   const qc = quoteCurrency(ticker);
   const rate = qc && FX[qc] && FX[acCurrency] ? FX[qc] / FX[acCurrency] : undefined;
   let minFeasible: number | null = null;

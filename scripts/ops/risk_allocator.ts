@@ -73,7 +73,7 @@ for (const doc of health.docs) {
   if (doc.id === '_GLOBAL') continue;
   const h = doc.data() as any;
     // H07: health viejo/sin fecha → SIN_DATOS explícito (no se omite en silencio).
-    if (!isHealthFresh(h)) { staleHealth.push(ticker); continue; }
+    if (!isHealthFresh(h)) { staleHealth.push(doc.id); continue; }
   const cfg = cfgMap.get(doc.id) || {};
   const mu = Number(h.avgR ?? (h.trades > 0 ? h.baselineR / h.trades : 0));
   const n = Number(h.trades ?? 0);
@@ -83,7 +83,7 @@ for (const doc of health.docs) {
 
   // Riesgo mínimo viable: lote mínimo × SL típico (ADR/4) en moneda de cuenta.
   const cap = caps[doc.id];
-  const adr = getAdrPrice(doc.id);
+  const adr = Number(getAdrPrice(doc.id));
   const quote = quoteCurrency(doc.id);
   const rate = quote && FX[quote] && FX[acCurrency] ? FX[quote] / FX[acCurrency] : undefined;
   let minFeasible: number | null = null;

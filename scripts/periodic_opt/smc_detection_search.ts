@@ -272,7 +272,7 @@ async function evaluate(params: Record<string, any> | null, candlesByTf: Record<
   // 🔧 runBacktest NO prepara los entries: hay que pasar prepareEntries como 4º arg (si no, 0 trades).
   const prepared = await prepareEntries(logsMap as any);
   const res = runBacktest(logsMap as any, config, undefined, prepared);
-  const totalR = res.trades.reduce((s, x) => s + (x.rMultiple ?? 0), 0);
+  const totalR = res.trades.reduce((s: number, x: any) => s + (x.rMultiple ?? 0), 0);
   const avgR = res.trades.length > 0 ? totalR / res.trades.length : 0;
   return { totalR, trades: res.trades.length, avgR };
 }
@@ -305,7 +305,7 @@ async function main() {
       const lim = HEALTH_LIMITS[tf];
       if (lim && candlesByTf[tf].length > lim) candlesByTf[tf] = candlesByTf[tf].slice(-lim);
     }
-    const allTs = candlesByTf['15'].map(c => c.timestamp);
+    const allTs = candlesByTf['15'].map((c: any) => c.timestamp);
     const minTs = Math.min(...allTs), maxTs = Math.max(...allTs);
     const splitTs = Math.round(minTs + 0.7 * (maxTs - minTs));
     const base = await evaluate(null, candlesByTf, config, 0, 0); // período completo

@@ -1,3 +1,7 @@
+// ⚠️ SCRIPT DE DEBUG — NO es el camino live del bot (nadie lo importa en producción).
+// H06 (auditoría 2026-11-05): sus contadores locales son FAIL-OPEN (`if (!db) return 0`)
+// a propósito para debug. Si se cablea al live, aplicar el patrón de src/db/trading.ts
+// (number|null + bloqueo en live).
 import { db } from './memory.js';
 import { z } from 'zod';
 import { bot } from '../bot/telegram.js';
