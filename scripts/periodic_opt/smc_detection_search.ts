@@ -12,11 +12,15 @@ import { BacktestConfig } from '../../jarvis-os/src/services/backtestTypes.js';
 import { loadOptimizedPreset } from '../../src/engine/smc/smc_config.js';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { assertLegacyDetectionSearch,rejectLegacyDetectionProfileFlags } from '../smc_export_context.js';
+import { applyPresetAtomic, fileSha } from '../ops/preset_apply_core.js';
 rejectLegacyDetectionProfileFlags(process.argv.slice(2));
 
 const TICKER = (process.argv[2] || 'EURUSD').toUpperCase();
 const N_TRIALS = parseInt(process.argv[3] || '120', 10);
 const SPLIT_TS = process.argv[4] ? Number(process.argv[4]) : 0; // 0 = período completo
+// H04: fingerprint del preset al INICIO; al aplicar, si cambió, se aborta (CAS).
+const PRESET_PATH = path.join(process.cwd(), `optimized_preset_${TICKER}.json`);
+const PRESET_SHA_AT_START = fileSha(PRESET_PATH);
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -455,26 +459,36 @@ async function main() {
     }
     // Aplicar: escribir bloques M15/H1/H4/D1 (pivot/wick/div/z) + sección Detection (13 params).
     // Detection la lee loadOptimizedPreset (fase 2) para aplicar TODOS los umbrales por activo.
-    const presetPath = path.join(process.cwd(), `optimized_preset_${TICKER}.json`);
-    const presetJson = fs.existsSync(presetPath) ? JSON.parse(fs.readFileSync(presetPath, 'utf-8')) : {};
-    fs.copyFileSync(presetPath, presetPath + '.bak-pre-detection');
     const p = best!.params;
-    for (const tf of ['M15', 'H1', 'H4', 'D1']) {
-      presetJson[tf] = presetJson[tf] ?? {};
-      presetJson[tf].pivot_len = p.pivot_len;
-      presetJson[tf].wick_pct = p.min_sweep_wick_pct;
-      presetJson[tf].div_len = p.div_pivot_len;
-      presetJson[tf].z_window = p.z_score_window;
+    // H04: lock + CAS + backup versionado + rename atómico (ver preset_apply_core.ts).
+    const applied = applyPresetAtomic({
+      presetPath: PRESET_PATH,
+      expectedSha: PRESET_SHA_AT_START || undefined,
+      build: (cur: any) => {
+        const presetJson = { ...(cur || {}) };
+        for (const tf of ['M15', 'H1', 'H4', 'D1']) {
+          presetJson[tf] = presetJson[tf] ?? {};
+          presetJson[tf].pivot_len = p.pivot_len;
+          presetJson[tf].wick_pct = p.min_sweep_wick_pct;
+          presetJson[tf].div_len = p.div_pivot_len;
+          presetJson[tf].z_window = p.z_score_window;
+        }
+        presetJson.Detection = { ...p };
+        presetJson.DetectionMeta = {
+          source: 'detection_tune', appliedAt: new Date().toISOString(),
+          trainR: Number(best!.totalR.toFixed(2)), oosR: Number(candOos.totalR.toFixed(2)),
+          prevTrainR: Number(actual.totalR.toFixed(2)), prevOosR: Number(actOos.totalR.toFixed(2)),
+          candidatesTested: N, params: p,
+          configFingerprint: (PRESET_SHA_AT_START || '').slice(0, 12),   // config evaluada (auditable)
+        };
+        return presetJson;
+      },
+    });
+    if (!applied.ok) {
+      console.error(`APPLY_ABORTED (${applied.code}): ${applied.message}`);
+      process.exit(2);
     }
-    presetJson.Detection = { ...p };
-    presetJson.DetectionMeta = {
-      source: 'detection_tune', appliedAt: new Date().toISOString(),
-      trainR: Number(best!.totalR.toFixed(2)), oosR: Number(candOos.totalR.toFixed(2)),
-      prevTrainR: Number(actual.totalR.toFixed(2)), prevOosR: Number(actOos.totalR.toFixed(2)),
-      candidatesTested: N, params: p,
-    };
-    fs.writeFileSync(presetPath, JSON.stringify(presetJson, null, 2));
-    console.log(`DECISIÓN: APLICADO → ${presetPath} (backup: ${presetPath}.bak-pre-detection)`);
+    console.log(`DECISIÓN: APLICADO → ${PRESET_PATH} (backup: ${applied.backup})`);
 
     // Reflejar inmediatamente en Firestore detection_health/{TICKER} para el dashboard
     try {
