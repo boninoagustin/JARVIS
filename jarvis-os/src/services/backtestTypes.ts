@@ -1,0 +1,191 @@
+// Tipos para el motor de backtesting standalone
+import type { ExecutionPolicyInput, ExecutionPolicy, ExecutionInstrument, ExecutionPositionState, ExecutionObservation } from '../../../src/engine/ExecutionTypes';
+import type { RadarZone, RadarState, ImpulseLeg, ScoreState } from '../../../src/engine/Types';
+export type { RadarZone, RadarState, ImpulseLeg, ScoreState };
+
+export interface BacktestTrade {
+  rolloverInitialRiskPrice?: number;
+  rolloverTriage?: Array<{nowMs:number;execution:'PROPOSAL_ONLY';proposal:import('../../../src/engine/RolloverTriagePolicy').RolloverTriageProposal}>;
+  mlRegimeShadow?: import('../../../src/engine/MLRegimeFeatures').RegimePrediction;
+  executionPolicy?: ExecutionPolicy;
+  executionInstrument?: ExecutionInstrument;
+  executionState?: ExecutionPositionState;
+  initialSlPrice?: number;
+  id: string; timestamp: number; direction: 'BUY' | 'SELL';
+  entryPrice: number; tp1Price: number; tp2Price: number; slPrice: number;
+  originalSlPrice?: number;
+  points: number; events: string[]; grade: string;
+  triggerType?: 'choch15m' | 'bos15m' | 'oteChoch15m' | 'oteBos15m' | 'choch5m' | 'bos5m' | 'oteChoch5m' | 'oteBos5m' | string;
+  result?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnl?: number;
+  resultTp1?: 'WIN' | 'LOSS' | 'TIMEOUT' | 'REVERSAL'; pnlTp1?: number;
+  resultTp2?: 'WIN' | 'LOSS' | 'BE' | 'TIMEOUT' | 'REVERSAL'; pnlTp2?: number;
+  tp1Hit?: boolean; tp1_5Hit?: boolean; slHalfwayHit?: boolean; closeTimestamp?: number; durationMin?: number;
+  rMultiple?: number; rMultipleTp1?: number; rMultipleTp2?: number; riskMult?: number;
+  /** 🆕 TimesFM F1: acción del filtro al crear el trade ('APPROVE'|'REDUCE'), dirección del forecast y spread/ATR */
+  timesfmAction?: string; timesfmDir?: string; timesfmSpreadAtr?: number;
+  oteEntryUsed?: number;
+  tf?: string;
+  marketBias?: Record<string, string>;
+  vwapStatus?: Record<string, string>;
+  /** 🆕 ROI time-decay que cerró/ajustó este trade ("30m_0.5%" o "breakeven") */
+  roiDecayApplied?: string;
+  /** 🆕 ML F2: features del estado al momento de la entrada (mismas 12 dims que MLFilter.extractFeatures).
+   *  Se congelan en el trade para que train_ml_model.py entrene con datos REALES (no sintéticos). */
+  mlFeatures?: Record<string, number>;
+  /** 🆕 sep-2026: gatillo REAL que ejecutó el trade (oteChoch5m/oteBos15m/...), seteado por
+   *  AlphaModel.evaluateImpulseCore. La clasificación triggerType usa este campo cuando existe
+   *  (los eventos del Pine mezclan TFs y ensuciaban la etiqueta). */
+  execTrigger?: string;
+}
+
+export interface BaseTriggerConfig {
+  enabled: boolean;
+  minScore: number;
+  slBuff: number;
+  tp2: number;
+  partialClosePct: number;
+  slAfterTp1: 'midpoint' | 'breakeven' | 'none';
+  tp15BeEnabled: boolean;
+  atrTrailEnabled: boolean;
+  structuralTrailEnabled: boolean;
+  tp1StructuralMinRR: number;
+}
+
+export interface TriggerConfig extends BaseTriggerConfig {}
+
+export interface OteConfig extends BaseTriggerConfig {}
+
+export interface SessionConfig {
+  choch15m: TriggerConfig;
+  bos15m: TriggerConfig;
+  oteChoch15m?: OteConfig;
+  oteBos15m?: OteConfig;
+  maxSellLosses?: number;
+  maxBuyLosses?: number;
+}
+
+export interface BacktestConfig {
+  rolloverPolicy?: import('../../../src/engine/RolloverRuntimeContext').RolloverRuntimePolicy;
+  mlRegimeShadow?: boolean;
+  /** Archived bilateral evidence only. Key ticker:tradeId:nowMs; never modeled midpoint quotes. */
+  rolloverTriageContexts?: Record<string, import('../../../src/engine/RolloverTriagePolicy').RolloverTriageContext>;
+  /** Explicit observed-as-of sidecar keyed ticker:tf:direction:decisionMs. Never inferred from CSV defaults. */
+  mlRegimeContexts?: Record<string, import('../../../src/engine/MLRegimeFeatures').RegimeContextInput>;
+  executionPolicy?: ExecutionPolicyInput;
+  executionInstrument?: ExecutionInstrument;
+  ticker: string;
+  minBuyPoints: number;
+  minSellPoints: number;
+  minRR?: number; // Minimum RR required to take a trade
+  oteEntryPercent: number;
+  entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
+  
+  // Session-specific triggers and scores
+  sessions?: Record<string, SessionConfig>;
+  sessionFilter?: string[]; // Array of allowed sessions (e.g. ['LONDON', 'NY'])
+  
+  // Killswitches
+  maxDailyLossR?: number;
+  dailyProfitTargetR?: number;
+  maxConsecutiveLosses?: number;
+  maxTradesPerDay?: number;
+  maxTradesPerSession?: number;
+  trailingDrawdownR?: number;
+  
+  // Realism (Spread & Commissions)
+  spreadPips?: number;
+  slBufferPercent?: number;
+  commissionPerLot?: number;
+  maxHoldMin?: number;
+  latencyMs?: number;
+  
+  /** 🆕 ROI time-decay table: {"0":0.015,"30":0.005,"60":0}
+   *  "0"=1.5% initial target, after 30m→0.5%, after 60m→breakeven */
+  minimal_roi?: Record<string, number>;
+
+  /** 🆕 F3-etapa1: TP1 estructural — el extremo del impulso se usa como TP1
+   *  solo si queda a >= minRR × riesgo; si no, fallback al 1R fijo (AlphaModel.ts:391-394). */
+  tp1StructuralMinRR?: number;
+
+  /** 🆕 TimesFM F1: config del filtro (ver src/engine/TimesfmFilter.ts). Ausente = filtro off. */
+
+  /** 🛡️ ML F3 (sep-2026): gate ML del vivo dentro del backtest (walk-forward).
+   *  trainedAt = mtime del modelo → solo rechaza trades posteriores al entrenamiento. */
+  mlGate?: { enabled?: boolean; modelPath?: string; trainedAt?: number };
+  /** 🛡️ sep-2026: pico de spread en 20:29-21:00 UTC (undefined → default 19; 0 = off) */
+  rolloverPeakPips?: number;
+  timesfm?: Partial<import('../../../src/engine/TimesfmFilter').TimesfmFilterConfig>;
+}
+
+export interface BacktestResult {
+  researchReport?: {schema:1;applyEligible:false;profitabilityEvidence:false;rolloverProfile:string;mlRegimeShadow:boolean;triageExecution:'PROPOSAL_ONLY_NO_BILATERAL_EXECUTION_MODEL';configSha256:string};
+  trades: BacktestTrade[]; totalEvents: number; processedEvents: number;
+  startDate: string; endDate: string;
+  /** 🛡️ ML F3 (sep-2026): rechazos del gate ML walk-forward (0 si mlGate off) */
+  mlRejected?: number;
+  mlGateEnabled?: boolean;
+  replayDiagnostics?: import('./replayWindow').ReplayDiagnostics;
+}
+
+export interface ParsedAlert {
+  executionObservation?: ExecutionObservation;
+  prefix: string;
+  eventTf: string;
+  readableTf: string;
+  currentDirection: 'BUY' | 'SELL' | null;
+  trendMatch?: string | null;
+  rawZones?: Record<string, unknown>[];
+  currentPrice?: number;
+  highPrice?: number;
+  lowPrice?: number;
+  origin?: number;
+  vwapUnder?: boolean;
+  vwapOver?: boolean;
+}
+
+export interface LogEntry {
+  ts: number; line: string; tf: string; parsed?: ParsedAlert;
+}
+
+export function emptyState(): RadarState {
+  return {
+    zones: [], lastPrice: null, previousPrice: null,
+    scoreBuy: { points: 0, lastUpdate: 0, events: [] },
+    scoreSell: { points: 0, lastUpdate: 0, events: [] },
+    marketBias: { 'D': 'NEUTRAL', '240': 'NEUTRAL', '60': 'NEUTRAL', '15': 'NEUTRAL', '5': 'NEUTRAL' },
+    vwapStatus: {},
+    lastSyncDate: null, lastSniperAlert: 0, lastHeartbeat: 0,
+    activeImpulseBuy: null, activeImpulseSell: null,
+    activeMacroImpulseBuy: null, activeMacroImpulseSell: null,
+    activeLocks: [],
+  };
+}
+
+export function normalizeZone(raw: Record<string, unknown>): RadarZone {
+  const r = { ...raw } as Record<string, unknown>;
+  if (r.t !== undefined && r.tf === undefined) r.tf = r.t;
+  if (r.d !== undefined && r.dir === undefined) r.dir = r.d;
+  if (r.p !== undefined && r.top === undefined) r.top = r.p;
+  if (r.b !== undefined && r.btm === undefined) r.btm = r.b;
+  if (r.lv !== undefined && r.lvl === undefined) r.lvl = r.lv;
+  if (r.md !== undefined && r.medal === undefined) r.medal = r.md;
+  if (r.sc !== undefined && r.score === undefined) r.score = r.sc;
+  if (r.mi !== undefined && r.mid === undefined) r.mid = r.mi;
+  if (r.a !== undefined && r.atr === undefined) r.atr = r.a;
+  return r as unknown as RadarZone;
+}
+
+export const parseTF = (tf: string) => {
+  if (tf === 'D') return 'D';
+  if (tf === '240') return '4H';
+  if (tf === '60') return '1H';
+  if (tf === '15') return '15M';
+  if (tf === '5') return '5M';
+  return `${tf}M`;
+};
+
+export const getBuffer = (ticker: string, price: number) =>
+  (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
+
+export const getDecimals = (ticker: string) =>
+  (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
