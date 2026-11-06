@@ -6,7 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
 
-const ENV_PATH = path.resolve(process.cwd(), '.env');
+// H11: sobreescribible para tests (no toca el .env real).
+const ENV_PATH = process.env.CTRADER_ENV_PATH || path.resolve(process.cwd(), '.env');
 const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;      // ~30,4 días (valor real de expires_in)
 const RENEW_THRESHOLD_MS = 3 * 24 * 3600 * 1000; // renovar cuando queden <3 días
 const CHECK_INTERVAL_MS = 12 * 3600 * 1000;      // chequeo periódico cada 12h
@@ -24,10 +25,21 @@ function readEnvValue(key: string): string {
     return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
 }
 
-/** Escribe varias claves del .env con UN solo backup. Preserva el resto del archivo. */
+/**
+ * H11 (auditoría 2026-11-05): escritura ATÓMICA del .env.
+ * - backup con permisos 0600,
+ * - tmp + fsync + rename (un crash no deja el .env truncado),
+ * - modo 0600 y readback de las claves escritas.
+ */
 function writeEnvValues(pairs: Record<string, string>): void {
     let txt = readEnvFile();
-    fs.copyFileSync(ENV_PATH, `${ENV_PATH}.bak-token-${Date.now()}`);
+    const backup = `${ENV_PATH}.bak-token-${Date.now()}`;
+    try {
+        fs.copyFileSync(ENV_PATH, backup);
+        fs.chmodSync(backup, 0o600);
+    } catch (e: any) {
+        console.warn(`[CTRADER-TOKEN] ⚠️ No se pudo crear el backup (${e?.message || e}); se continúa con la escritura atómica.`);
+    }
     for (const [key, value] of Object.entries(pairs)) {
         if (txt.includes(`\n${key}=`) || txt.startsWith(`${key}=`)) {
             txt = txt.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`);
@@ -35,7 +47,23 @@ function writeEnvValues(pairs: Record<string, string>): void {
             txt = txt.replace(/\n?$/, `\n${key}=${value}\n`);
         }
     }
-    fs.writeFileSync(ENV_PATH, txt, 'utf8');
+    const tmp = `${ENV_PATH}.tmp`;
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+        fs.writeFileSync(fd, txt, 'utf8');
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, ENV_PATH);
+    try { fs.chmodSync(ENV_PATH, 0o600); } catch { /* best-effort */ }
+    // readback: el par nuevo tiene que estar en el archivo final
+    const after = readEnvFile();
+    for (const key of Object.keys(pairs)) {
+        if (!new RegExp(`^${key}=`, 'm').test(after)) {
+            throw new Error(`readback falló: ${key} no quedó en ${ENV_PATH}`);
+        }
+    }
 }
 
 /** Tiempo restante de validez del access token actual (ms). 0 = sin fecha registrada. */
@@ -50,10 +78,25 @@ export function tokenRemainingMs(): number {
  * Actualiza el .env (con backup) y la config EN MEMORIA para que la próxima conexión
  * use el token nuevo sin reiniciar el proceso.
  */
-export async function refreshCtraderToken(force = false): Promise<boolean> {
-    if (!force && Date.now() - lastAttemptTs < MIN_RETRY_GAP_MS) return false;
-    lastAttemptTs = Date.now();
+let refreshInFlight: Promise<boolean> | null = null;
 
+/**
+ * H11: SINGLEFLIGHT. Varios orígenes llaman al refresh (auto-renewal, connectCTrader,
+ * connectWithRetry con force). Todos convergen al MISMO intento en curso: nunca hay dos
+ * rotaciones concurrentes, y `force` sólo elude el cooldown, no el dedupe.
+ */
+export function refreshCtraderToken(force = false): Promise<boolean> {
+    if (refreshInFlight) {
+        console.log('[CTRADER-TOKEN] ↔️ refresh ya en curso — se reutiliza (singleflight)');
+        return refreshInFlight;
+    }
+    if (!force && Date.now() - lastAttemptTs < MIN_RETRY_GAP_MS) return Promise.resolve(false);
+    lastAttemptTs = Date.now();
+    refreshInFlight = doRefresh().finally(() => { refreshInFlight = null; });
+    return refreshInFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
     const refreshToken = readEnvValue('CTRADER_REFRESH_TOKEN') || process.env.CTRADER_REFRESH_TOKEN || '';
     if (!refreshToken) {
         console.warn('[CTRADER-TOKEN] ⚠️ No hay CTRADER_REFRESH_TOKEN en .env — renovación automática deshabilitada.');
