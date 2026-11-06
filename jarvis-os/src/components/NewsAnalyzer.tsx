@@ -11,7 +11,8 @@ import {
   Search,
   Sliders,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  Calendar
 } from 'lucide-react';
 import { EmptyState, Badge } from './MicroStates';
 
@@ -37,6 +38,28 @@ interface Fundamentals {
   last_updated: string;
   news: NewsItem[];
   macro?: { vix?: number; dxy?: number; us10y?: number };
+}
+
+interface EcoEventAnalysis {
+  asset: string;
+  beat: 'bullish' | 'bearish';
+  miss: 'bullish' | 'bearish';
+  reason: string;
+}
+
+interface EcoEvent {
+  title: string;
+  country: string;
+  date: string;
+  impact: string;
+  forecast: string;
+  previous: string;
+  analysis?: EcoEventAnalysis[];
+}
+
+interface EconomicCalendar {
+  last_updated: string;
+  events: EcoEvent[];
 }
 
 interface MacroIndicator {
@@ -69,6 +92,7 @@ export default function NewsAnalyzer() {
   const [impactFilter, setImpactFilter] = useState<'all' | 'high' | 'medium'>('all');
   const [assetFilter, setAssetFilter] = useState<string>('all');
   const [tradedAssets, setTradedAssets] = useState<string[]>([]);
+  const [calendar, setCalendar] = useState<EconomicCalendar | null>(null);
 
   useEffect(() => {
     const unsubGlobal = onSnapshot(doc(db, 'app_settings', 'global'), (globalSnap) => {
@@ -96,6 +120,14 @@ export default function NewsAnalyzer() {
       }
     });
 
+    const unsubCalendar = onSnapshot(doc(db, 'app_settings', 'economic_calendar'), (calSnap) => {
+      try {
+        if (calSnap.exists()) setCalendar(calSnap.data() as EconomicCalendar);
+      } catch (err) {
+        console.error('[NewsAnalyzer] Error processing economic calendar:', err);
+      }
+    });
+
     fetchMacroData();
 
     const unsubRadar = (() => {
@@ -115,6 +147,7 @@ export default function NewsAnalyzer() {
     return () => {
       unsubGlobal();
       unsubFundamentals();
+      unsubCalendar();
       unsubRadar();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,6 +351,77 @@ export default function NewsAnalyzer() {
             {climate.text}
           </p>
         </div>
+      </div>
+
+      {/* ─── CALENDARIO ECONÓMICO (ANTICIPACIÓN) ─── */}
+      <div style={{ marginBottom: '24px' }}>
+        <h3 style={{
+          fontSize: '0.85rem',
+          textTransform: 'uppercase',
+          color: 'var(--text-secondary)',
+          letterSpacing: '0.05em',
+          marginBottom: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <Calendar size={14} color="var(--accent-gold)" /> CALENDARIO ECONÓMICO — ALTO IMPACTO
+          {calendar?.last_updated && (
+            <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>
+              · {new Date(calendar.last_updated).toLocaleTimeString()}
+            </span>
+          )}
+        </h3>
+
+        {!calendar || !calendar.events || calendar.events.length === 0 ? (
+          <EmptyState
+            icon="📅"
+            title="Sin eventos de alto impacto próximos"
+            description="No hay releases de alto impacto agendados para los próximos días. Se actualizan automáticamente cada 2 horas."
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {calendar.events.map((e, i) => (
+              <div key={i} className="panel" style={{ marginBottom: 0, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                  <span className="mono" style={{ fontWeight: 700, color: 'var(--accent-gold)', fontSize: '0.8rem' }}>{e.country}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{e.title}</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                    {new Date(e.date).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {(e.forecast || e.previous) && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      forecast {e.forecast || '—'} · previo {e.previous || '—'}
+                    </span>
+                  )}
+                </div>
+
+                {(e.analysis || []).length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {e.analysis!.map((a, j) => (
+                      <div key={j} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '0.82rem', lineHeight: '1.45', flexWrap: 'wrap' }}>
+                        <span className="mono" style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{a.asset}</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          supera →{' '}
+                          <span style={{ fontWeight: 700, color: a.beat === 'bullish' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {a.beat === 'bullish' ? '📈 ALCISTA' : '📉 BAJISTA'}
+                          </span>
+                          {' '}· no llega →{' '}
+                          <span style={{ fontWeight: 700, color: a.miss === 'bullish' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {a.miss === 'bullish' ? '📈 ALCISTA' : '📉 BAJISTA'}
+                          </span>
+                        </span>
+                        <span style={{ color: 'var(--text-secondary)' }}>— {a.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Sin anticipación calculada.</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ─── 2. CONCLUSIONES POR NOTICIA (CENTRO) ─── */}

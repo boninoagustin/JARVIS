@@ -168,6 +168,107 @@ async function fetchRelevantNews(): Promise<Array<{ time: string; source: string
     return [];
 }
 
+// ── Calendario económico (ForexFactory) ──────────────────────────────────────
+interface EcoEventAnalysis {
+    asset: string;
+    beat: 'bullish' | 'bearish';
+    miss: 'bullish' | 'bearish';
+    reason: string;
+}
+
+interface EcoEvent {
+    title: string;
+    country: string;
+    date: string;
+    impact: string;
+    forecast: string;
+    previous: string;
+    analysis?: EcoEventAnalysis[];
+}
+
+let lastCalendarAnalysis = 0;
+const CALENDAR_INTERVAL = 2 * 60 * 60 * 1000; // re-analizar como mucho cada 2h (gentil con ForexFactory)
+
+/** Eventos de alto impacto futuros (ForexFactory), con forecast, dedup por país+día. */
+async function fetchEconomicCalendar(): Promise<EcoEvent[]> {
+    try {
+        const res = await nodeFetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
+        const data: any[] = await res.json();
+        if (!Array.isArray(data)) return [];
+
+        const now = Date.now();
+        const high = data.filter(e => e?.impact === 'High' && Date.parse(e?.date || '') > now);
+        // Solo cuantificables (con forecast); discursos/statements se omiten.
+        const withForecast = high.filter(e => e?.forecast && String(e.forecast).trim());
+
+        const seen = new Map<string, EcoEvent>();
+        const MAIN = /rate|decision|cpi|employment|gdp|non-farm|nfp|payroll|inflation/i;
+        for (const e of withForecast) {
+            const key = `${e.country}_${e.date.slice(0, 10)}`;
+            const cur = seen.get(key);
+            if (!cur) { seen.set(key, e); continue; }
+            // preferir el evento principal (tasa/CPI/empleo) sobre votos/derivados
+            if (MAIN.test(e.title) && !MAIN.test(cur.title)) seen.set(key, e);
+        }
+        return [...seen.values()].slice(0, 8);
+    } catch (e: any) {
+        console.error('[CAL] Error fetchEconomicCalendar:', e?.message ?? e);
+        return [];
+    }
+}
+
+/** Anticipación por evento: si el dato sale por encima/por debajo del forecast. */
+async function analyzeEconomicCalendar(events: EcoEvent[], liveAssets: string[]): Promise<EcoEvent[]> {
+    if (!deepseek || events.length === 0) return events;
+
+    const prompt = `Eres un analista financiero cuantitativo. A continuación los próximos eventos económicos de ALTO impacto (con forecast y valor previo):
+
+${events.map((e, idx) => `ID ${idx}: [${e.country}] ${e.title} (forecast ${e.forecast || '—'}, previous ${e.previous || '—'})`).join('\n')}
+
+Activos que el bot opera EN VIVO:
+${liveAssets.join(', ')}
+
+Para CADA evento, determiná qué activos se ven afectados y en qué dirección si el dato SALE POR ENCIMA del forecast ("beat") o POR DEBAJO ("miss"). Para decisiones de tasas, "beat" = suba mayor a la esperada, "miss" = suba menor o recorte.
+
+Responde ÚNICAMENTE con un objeto JSON válido (sin backticks de Markdown) con esta estructura:
+{
+  "event_analysis": {
+    "0": [
+      { "asset": "EURUSD", "beat": "bearish", "miss": "bullish", "reason": "razón breve en español" }
+    ]
+  }
+}
+
+Reglas estrictas:
+- "beat" y "miss" SOLO pueden ser "bullish" o "bearish".
+- Incluí únicamente activos con efecto claro; los neutrales se omiten.
+- Generá un array "event_analysis" para TODOS los IDs.`;
+
+    try {
+        const completion = await deepseek.chat.completions.create({
+            model: DEEPSEEK_MODEL,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 12000
+        });
+        const responseText = completion.choices?.[0]?.message?.content || '';
+        const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        const ea = parsed.event_analysis || {};
+        return events.map((e, idx) => ({
+            ...e,
+            analysis: (ea[String(idx)] ?? ea[idx]) || []
+        }));
+    } catch (e: any) {
+        console.error('[CAL] Error DeepSeek calendario:', e?.message ?? e);
+        return events;
+    }
+}
+
 export async function updateFundamentals() {
     const { getCurrentSessionId } = await import('./backtesting.js');
     if (getCurrentSessionId()) {
@@ -308,6 +409,24 @@ Reglas estrictas:
             console.log(analysisOk
                 ? '[FINNHUB] Datos fundamentales (con análisis por-activo) guardados en Firebase.'
                 : '[FINNHUB] Análisis DeepSeek falló; se guardan solo macrodatos (noticias previas intactas).');
+        }
+
+        // 4. Calendario económico (anticipar eventos de alto impacto)
+        if (db && Date.now() - lastCalendarAnalysis >= CALENDAR_INTERVAL) {
+            try {
+                const events = await fetchEconomicCalendar();
+                if (events.length > 0) {
+                    const analyzed = await analyzeEconomicCalendar(events, liveAssets);
+                    await db.collection('app_settings').doc('economic_calendar').set({
+                        last_updated: new Date().toISOString(),
+                        events: analyzed
+                    }, { merge: true });
+                    lastCalendarAnalysis = Date.now();
+                    console.log(`[CAL] Calendario económico: ${analyzed.length} eventos guardados.`);
+                }
+            } catch (e: any) {
+                console.error('[CAL] Error calendario económico:', e?.message ?? e);
+            }
         }
     } catch (error: any) {
         console.error('[FINNHUB] Error en updateFundamentals:', error?.message ?? error);
