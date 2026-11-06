@@ -203,6 +203,9 @@ interface EcoEvent {
 let lastCalendarAnalysis = 0;
 const CALENDAR_INTERVAL = 2 * 60 * 60 * 1000; // re-analizar como mucho cada 2h (gentil con ForexFactory)
 
+let lastSentimentAnalysis = 0;
+const SENTIMENT_INTERVAL = 30 * 60 * 1000; // re-analizar sentimiento cada 30 min (costo IA)
+
 /** Eventos de alto impacto futuros (ForexFactory), con forecast, dedup por país+día. */
 async function fetchEconomicCalendar(): Promise<EcoEvent[]> {
     try {
@@ -346,7 +349,11 @@ export async function updateFundamentals() {
         let finalNews = [...topNews];
         let analysisOk = false;
 
-        if (deepseek) {
+        if (!deepseek) {
+            console.warn('[FINNHUB] DEEPSEEK_API_KEY no configurada. Noticias sin análisis.');
+        } else if (Date.now() - lastSentimentAnalysis < SENTIMENT_INTERVAL) {
+            console.log('[FINNHUB] Sentimiento throttled (30 min). Salteando análisis IA para ahorrar costo.');
+        } else {
             const prompt = `Eres un analista financiero cuantitativo experto. A continuación tienes titulares de noticias de mercado (en inglés):
 
 ${topNews.map((n: any, idx: number) => `ID ${idx}: [${n.source}] ${n.text}`).join('\n')}
@@ -402,14 +409,13 @@ Reglas estrictas:
                         return { ...n, text: translatedText || n.text, analysis };
                     });
                     analysisOk = true;
+                    lastSentimentAnalysis = Date.now();
                     console.log(`[FINNHUB] DeepSeek analizó ${topNews.length} noticias para ${liveAssets.length} activos (intento ${attempt}).`);
                 } catch (e: any) {
                     console.error(`[FINNHUB] Error DeepSeek (intento ${attempt}):`, e?.message ?? e);
                     if (attempt < 3) await new Promise(r => setTimeout(r, 3000));
                 }
             }
-        } else {
-            console.warn('[FINNHUB] DEEPSEEK_API_KEY no configurada. Noticias sin análisis.');
         }
 
         // 3. Guardar en Firebase
