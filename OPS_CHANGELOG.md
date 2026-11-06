@@ -341,3 +341,22 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
   el encolado de forma idempotente (si el tune ya está activo, limpia la obligación).
 - Nota: el sello acredita los pasos OBLIGATORIOS (los `-` de ML/evals/MCL siguen siendo
   best-effort deliberado).
+
+### 14h. 7ª revisión — identidad de corrida y estados durables (D1-f)
+
+El auditor pidió la corrección estructural: una identidad compartida con el consumidor y un
+registro durable de estados (no más `if`s sobre archivos sueltos).
+
+- `weekly_continuation.json` (write atómico + readback): `{runId, week, state, createdAt,
+  startedAt, completedAt, attempts}`. Estados: pending → started → completed/failed → expired.
+- `chain_mark_and_tune.sh` genera el runId y deja el registro en `pending`; **ya no lo borra
+  al encolar** (un arranque aceptado no es recepción durable).
+- El tune corre bajo `tune_run_wrapper.sh`: registra `started` al comenzar y
+  `completed`/`failed` al terminar, ligado al runId. Un tune **manual** (sin runId) no
+  consume la obligación.
+- `recover_tune_pending.sh`: pending→reencola; started+unidad inactiva→interrumpida→reencola;
+  completed→limpia **sin re-ejecutar**; failed→reintento acotado (3); antigüedad >5 días o
+  intentos excedidos→`expired` con aviso (ya NO se descarta por cambio de semana ISO: un
+  pendiente del sábado se recupera el lunes).
+- Digest: línea "🔁 Continuación al tune: <estado>".
+- `scripts/ops/test_weekly_continuation.sh`: 13 casos (incluye las 4 pruebas pedidas).

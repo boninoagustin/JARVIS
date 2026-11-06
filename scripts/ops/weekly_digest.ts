@@ -130,6 +130,17 @@ for (const d of week.docs) {
 }
 const decided = win + loss;
 const wr = decided ? `${Math.round((win / decided) * 100)}%` : '—';
+// Revisión 7 (06-nov-2026): estado de la continuación ciclo→tune (runId durable).
+try {
+  const contPath = '/var/lib/jarvis/weekly_continuation.json';
+  if (fs.existsSync(contPath)) {
+    const cont = JSON.parse(fs.readFileSync(contPath, 'utf8'));
+    if (cont?.state && cont.state !== 'completed') {
+      lines.push(`🔁 Continuación al tune: ${cont.state} (runId ${String(cont.runId || '').slice(0, 8)} · ${cont.week || '?'}) — revisar /var/lib/jarvis/weekly_continuation.json`);
+    }
+  }
+} catch { /* best-effort */ }
+
 // 05-nov-2026: roster propuesto (TRADE/WATCH/OFF) y cuántos operan fuera de él.
 let rosterLine = '';
 try {
