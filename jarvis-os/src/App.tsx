@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Newspaper, PieChart, Settings, BrainCircuit } from 'lucide-react';
+import { Activity, Newspaper, PieChart, Settings, BrainCircuit, FlaskConical } from 'lucide-react';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import RadarHeatmap from './components/RadarHeatmap';
@@ -9,6 +9,7 @@ import AdminPanel from './components/AdminPanel';
 import PeriodicOptPanel from './components/PeriodicOptPanel';
 import AssetHealthPanel from './components/AssetHealthPanel';
 import NewsAnalyzer from './components/NewsAnalyzer';
+import BacktestProgress from './components/BacktestProgress';
 import { ToastProvider, useToast } from './components/Toast';
 import './index.css';
 
@@ -29,6 +30,9 @@ function Sidebar() {
         </NavLink>
         <NavLink to="/journal" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <PieChart size={18} /> Diario Analítico
+        </NavLink>
+        <NavLink to="/backtest" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <FlaskConical size={18} /> Backtesting
         </NavLink>
         <NavLink to="/admin" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Settings size={18} /> Panel de Control
@@ -240,6 +244,7 @@ function App() {
             <Route path="/noticias" element={<NewsAnalyzer />} />
             <Route path="/terminal" element={<Navigate to="/noticias" replace />} />
             <Route path="/journal" element={<AnalyticsJournal />} />
+            <Route path="/backtest" element={<BacktestProgress />} />
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="/autotune" element={<PeriodicOptPanel />} />
             <Route path="/assets" element={<AssetHealthPanel />} />
