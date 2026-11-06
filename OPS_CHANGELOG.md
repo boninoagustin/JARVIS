@@ -376,3 +376,18 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   no consume la obligación semanal; CON un `tune_run_id` pendiente, la consume (el tune
   corrió). Cubierto por tests.
 - Test ampliado a 18 casos (systemd simulado con TUNE_STATE_CMD/TUNE_RESULT_CMD).
+
+### 14j. 9ª revisión — evidencia positiva de salida (D1-h)
+
+- **`Result=success` no prueba nada**: verificado en el host, la unidad tune aparece con
+  `Result=success`, `ExecMainStatus=0` y **`ExecMain*Timestamp` vacíos** (nunca corrió en
+  este boot). Reparar por `Result` convertía un crash durante el tune en una omisión
+  silenciosa de la semana.
+- Ahora la reparación exige evidencia POSITIVA: `ExecMainStartTimestamp` y
+  `ExecMainExitTimestamp` presentes y `ExecMainStatus=0`. Sin evidencia → `interrupted` →
+  se reencola (dirección segura).
+- La reparación propaga el fallo de escritura: si no puede persistir, **conserva el registro**
+  y sale 1 (antes hacía `|| true` y borraba igual).
+- Restaurado el bit ejecutable de `recover_tune_pending.sh` y del test.
+- Test: 14 escenarios / 21 asserts (incluye los 4 casos pedidos; el conteo anterior de "18"
+  era de asserts, no de escenarios).

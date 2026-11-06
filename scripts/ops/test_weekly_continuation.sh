@@ -13,9 +13,14 @@ ok() { echo "PASS $1"; }
 bad() { echo "FAIL $1"; FAIL=1; }
 T=$(mktemp -d)
 export CONT_DIR="$T" MARK_DIR="$T"
-# systemd simulado por defecto: unidad inactiva y Result fallido (interrumpida)
+# systemd simulado. Por defecto: unidad inactiva y SIN evidencia de salida (crash/reboot):
+# Result=success es el default del sistema, por eso la recuperación exige timestamps.
 export TUNE_START_CMD=true TUNE_CMD=true
-export TUNE_STATE_CMD='echo inactive' TUNE_RESULT_CMD='echo failed'
+export TUNE_STATE_CMD='echo inactive'
+export TUNE_START_TS_CMD=true TUNE_EXIT_TS_CMD=true TUNE_STATUS_CMD='echo 0'
+# evidencia positiva de completado (arrancó y salió en este boot con status 0)
+EVID() { export TUNE_START_TS_CMD='echo Fri_2026-11-06' TUNE_EXIT_TS_CMD='echo Fri_2026-11-06' TUNE_STATUS_CMD='echo 0'; }
+NOEVID() { export TUNE_START_TS_CMD=true TUNE_EXIT_TS_CMD=true TUNE_STATUS_CMD='echo 0'; }
 state() { jq -r '.state // empty' "$T/weekly_continuation.json" 2>/dev/null; }
 runid() { jq -r '.runId // empty' "$T/weekly_continuation.json" 2>/dev/null; }
 new_record() { # $1=state $2=runId $3=attempts
@@ -52,28 +57,39 @@ OUT=$(TUNE_STATE_CMD='echo active' bash "$REC" 2>&1); RC=$?
 [ "$RC" = "0" ] && echo "$OUT" | grep -q "running" && [ "$(jq -r '.attempts' "$T/weekly_continuation.json")" = "0" ] \
   && ok "pending+active no incrementa intentos" || bad "pending+active mal manejado: $OUT"
 
-# 6) started + inactiva + Result=failed → interrumpida → reencola
+# 6) started + inactiva + SIN evidencia de salida (crash/reboot) → interrumpida → reencola
 new_record started "run-interr" 0
-OUT=$(TUNE_STATE_CMD='echo inactive' TUNE_RESULT_CMD='echo failed' TUNE_START_CMD=true bash "$REC" 2>&1)
-echo "$OUT" | grep -q "interrupted" && ok "started inactivo+failed → interrupted/requeue" || bad "no detectó interrupción: $OUT"
+NOEVID
+OUT=$(TUNE_START_CMD=true bash "$REC" 2>&1)
+echo "$OUT" | grep -q "interrupted" && ok "started sin evidencia → interrupted/requeue" || bad "no detectó interrupción: $OUT"
 
-# 7) started + inactiva + Result=success → REPARA sin re-ejecutar
+# 6b) status=0 pero SIN timestamp de salida → tampoco es evidencia
+new_record started "run-sin-ts" 0
+export TUNE_START_TS_CMD='echo Fri_2026-11-06' TUNE_EXIT_TS_CMD=true TUNE_STATUS_CMD='echo 0'
+OUT=$(TUNE_START_CMD=true bash "$REC" 2>&1)
+echo "$OUT" | grep -q "interrupted" && ok "status=0 sin exit timestamp → interrupted" || bad "aceptó status sin salida: $OUT"
+
+# 7) started + inactiva + EVIDENCIA de salida OK → REPARA sin re-ejecutar
 new_record started "run-ok-sin-completed" 0
-OUT=$(TUNE_STATE_CMD='echo inactive' TUNE_RESULT_CMD='echo success' TUNE_START_CMD=false bash "$REC" 2>&1); RC=$?
+EVID
+OUT=$(TUNE_START_CMD=false bash "$REC" 2>&1); RC=$?
 [ "$RC" = "0" ] && echo "$OUT" | grep -q "repaired" && [ ! -f "$T/weekly_continuation.json" ] \
-  && ok "Result=success → reparado sin re-ejecutar" || bad "no reparó un completado sin registro: $OUT"
+  && ok "evidencia de salida OK → reparado sin re-ejecutar" || bad "no reparó con evidencia: $OUT"
 
-# 8) stale + Result=success → repara; stale + failed → reintenta
+# 8) stale: con evidencia → repara; sin evidencia → reintenta
 new_record stale "run-stale-ok" 0
-OUT=$(TUNE_STATE_CMD='echo inactive' TUNE_RESULT_CMD='echo success' bash "$REC" 2>&1)
-echo "$OUT" | grep -q "repaired" && ok "stale+success → reparado" || bad "stale+success no reparó: $OUT"
+EVID
+OUT=$(bash "$REC" 2>&1)
+echo "$OUT" | grep -q "repaired" && ok "stale+evidencia → reparado" || bad "stale+evidencia no reparó: $OUT"
 new_record stale "run-stale-bad" 0
-OUT=$(TUNE_STATE_CMD='echo inactive' TUNE_RESULT_CMD='echo failed' TUNE_START_CMD=true bash "$REC" 2>&1)
-echo "$OUT" | grep -q "reintenta" && ok "stale+failed → reintenta" || bad "stale+failed no reintentó: $OUT"
+NOEVID
+OUT=$(TUNE_START_CMD=true bash "$REC" 2>&1)
+echo "$OUT" | grep -q "reintenta" && ok "stale sin evidencia → reintenta" || bad "stale sin evidencia no reintentó: $OUT"
 
 # 9) failed → reintento
 new_record failed
-OUT=$(TUNE_STATE_CMD='echo inactive' bash "$REC" 2>&1)
+NOEVID
+OUT=$(bash "$REC" 2>&1)
 echo "$OUT" | grep -q "reintenta" && ok "failed → reintenta" || bad "no reintentó failed: $OUT"
 
 # 10) vencimiento por antigüedad (>5 días) → expired y exit 1
@@ -90,6 +106,18 @@ OUT=$(bash "$REC" 2>&1); RC=$?
 new_record pending "run-muchos" 3
 OUT=$(TUNE_START_CMD=true bash "$REC" 2>&1); RC=$?
 [ "$RC" = "1" ] && echo "$OUT" | grep -q "superó" && ok "intentos → expired" || bad "no expiró por intentos: $OUT"
+
+# 12b) la reparación NO puede persistirse → se conserva el registro y rc=1
+new_record started "run-repair-fail" 0
+EVID
+if chattr +i "$T/weekly_continuation.json" 2>/dev/null; then
+  OUT=$(TUNE_START_CMD=false bash "$REC" 2>&1); RC=$?
+  chattr -i "$T/weekly_continuation.json" 2>/dev/null
+  [ "$RC" = "1" ] && echo "$OUT" | grep -q "no se pudo persistir la reparación" && [ -f "$T/weekly_continuation.json" ] \
+    && ok "fallo de reparación: conserva registro y rc=1" || bad "reparación fallida mal manejada: $OUT"
+else
+  echo "SKIP reparación con write protegido (chattr no disponible)"
+fi
 
 # 13) tune manual SIN identidad → no consume la obligación
 new_record pending "run-semanal" 0

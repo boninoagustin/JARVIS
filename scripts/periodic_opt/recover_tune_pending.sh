@@ -18,7 +18,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/weekly_continuation_lib.sh"
 TUNE_START_CMD="${TUNE_START_CMD:-systemctl start --no-block jarvis-detection-tune.service}"
 TUNE_STATE_CMD="${TUNE_STATE_CMD:-systemctl show -p ActiveState --value jarvis-detection-tune.service}"
-TUNE_RESULT_CMD="${TUNE_RESULT_CMD:-systemctl show -p Result --value jarvis-detection-tune.service}"
+# Evidencia POSITIVA de completado: Result=success es el default de systemd cuando la unidad
+# no corrió en este boot (verificado en el host: Result=success con ExecMain*Timestamp vacíos).
+# Se exige haber arrancado Y salido en este boot, con status 0.
+TUNE_START_TS_CMD="${TUNE_START_TS_CMD:-systemctl show -p ExecMainStartTimestamp --value jarvis-detection-tune.service}"
+TUNE_EXIT_TS_CMD="${TUNE_EXIT_TS_CMD:-systemctl show -p ExecMainExitTimestamp --value jarvis-detection-tune.service}"
+TUNE_STATUS_CMD="${TUNE_STATUS_CMD:-systemctl show -p ExecMainStatus --value jarvis-detection-tune.service}"
 MAX_ATTEMPTS=3
 MAX_AGE_SEC=$((5 * 86400))
 
@@ -52,7 +57,16 @@ unit_active() {
     *) return 1 ;;
   esac
 }
-unit_result() { $TUNE_RESULT_CMD 2>/dev/null || echo unknown; }
+unit_completed_evidence() {
+  local start exit_ts status
+  start=$($TUNE_START_TS_CMD 2>/dev/null || echo "")
+  exit_ts=$($TUNE_EXIT_TS_CMD 2>/dev/null || echo "")
+  status=$($TUNE_STATUS_CMD 2>/dev/null || echo "")
+  case "$start" in ""|n/a|unknown) return 1 ;; esac
+  case "$exit_ts" in ""|n/a|unknown) return 1 ;; esac
+  [ "$status" = "0" ] || return 1
+  return 0
+}
 
 case "$STATE" in
   completed)
@@ -72,15 +86,17 @@ case "$STATE" in
     fi
     ;;
   stale)
-    # Estado terminal no persistido: reparar por Result sin re-ejecutar.
-    RES=$(unit_result)
-    if [ "$RES" = "success" ]; then
-      cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at' || true
+    # Estado terminal no persistido: sólo se repara con evidencia POSITIVA de salida.
+    if unit_completed_evidence; then
+      if ! cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at'; then
+        echo "fail: no se pudo persistir la reparación de $RUN_ID; se conserva el registro"
+        exit 1
+      fi
       rm -f "$CONT_FILE" "$TUNE_ID_FILE" 2>/dev/null
-      echo "repaired: $RUN_ID terminó OK (Result=success); registro reparado sin re-ejecutar"
+      echo "repaired: $RUN_ID con evidencia de salida OK; registro reparado sin re-ejecutar"
       exit 0
     fi
-    echo "stale: el tune de $RUN_ID no terminó OK (Result=$RES) → se reintenta"
+    echo "stale: el tune de $RUN_ID no tiene evidencia de salida OK → se reintenta"
     cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
     ;;
   started)
@@ -88,15 +104,17 @@ case "$STATE" in
       echo "running: el tune de $RUN_ID sigue en curso"
       exit 0
     fi
-    RES=$(unit_result)
-    if [ "$RES" = "success" ]; then
-      # Terminó bien y sólo falló la persistencia del estado terminal: reparar, NO re-ejecutar.
-      cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at' || true
+    if unit_completed_evidence; then
+      # Terminó bien en este boot y sólo falló la persistencia: reparar, NO re-ejecutar.
+      if ! cont_write --arg at "$(wc_now)" '.state="completed" | .completedAt=$at'; then
+        echo "fail: no se pudo persistir la reparación de $RUN_ID; se conserva el registro"
+        exit 1
+      fi
       rm -f "$CONT_FILE" "$TUNE_ID_FILE" 2>/dev/null
-      echo "repaired: $RUN_ID terminó OK (Result=success) sin 'completed' persistido → reparado, sin re-ejecutar"
+      echo "repaired: $RUN_ID con evidencia de salida OK → reparado sin re-ejecutar"
       exit 0
     fi
-    echo "interrupted: el tune de $RUN_ID arrancó y no terminó OK (Result=$RES) → se reencola"
+    echo "interrupted: el tune de $RUN_ID no tiene evidencia de salida (crash/reboot) → se reencola"
     cont_write '.state="pending"' || { echo "fail: no se pudo marcar pending"; exit 1; }
     ;;
   failed)
