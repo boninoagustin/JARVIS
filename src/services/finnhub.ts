@@ -300,6 +300,14 @@ export async function updateFundamentals() {
         return;
     }
 
+    // Fin de semana: mercado cerrado → no hay noticias/eventos accionables ni trades.
+    // Saltear todo para no gastar tokens de IA sin valor.
+    const dow = new Date().getDay(); // 0=domingo, 6=sábado (TZ del servidor)
+    if (dow === 0 || dow === 6) {
+        console.log('[FINNHUB] Fin de semana: mercado cerrado. Salteando sentimiento/calendario.');
+        return;
+    }
+
     console.log('[FINNHUB] Actualizando datos fundamentales...');
     try {
         // Obtener macrodatos en paralelo
