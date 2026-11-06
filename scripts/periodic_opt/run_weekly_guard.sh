@@ -1,32 +1,37 @@
 #!/bin/bash
-# Guarda del ciclo semanal de optimización — D1-b (2ª revisión, 06-nov-2026).
+# Guarda del ciclo semanal de optimización — v2 (revisión 4, 06-nov-2026).
 #
-# Problema que resuelve: el timer del ciclo seguía activo por su cuenta, así que si el
-# Asset Scout tardaba >30 min el ciclo arrancaba en paralelo. Además no había deduplicación
-# semanal: dos disparadores podían iniciar dos corridas.
+# Problema: con Type=oneshot el scout está en "activating" mientras trabaja y
+# `systemctl is-active` NO lo considera activo → el wrapper arrancaba el ciclo en paralelo.
+# Además, un "skip" con exit 0 hacía que systemd ejecutara los ExecStartPost y OnSuccess.
 #
-# Reglas:
-#   1) Espera a que el Asset Scout termine (máx 3 h) para no solaparlo.
-#   2) flock NO bloqueante: si otro wrapper ya está corriendo, éste sale (0).
-#   3) Marca semanal ISO (YYYY-Www) en /var/lib/jarvis: si el ciclo ya corrió esta semana,
-#      no vuelve a correr.
-#   4) La marca se escribe SÓLO si run_weekly terminó con éxito.
+# Diseño:
+#   --condition : lo usa ExecCondition=. Devuelve 0 si el ciclo DEBE correr; !=0 si debe
+#                 omitirse (marca semanal, scout trabajando, lock ocupado). Un ExecCondition
+#                 fallido hace que systemd OMITA la unidad: no corre ExecStart, ni
+#                 ExecStartPost, ni OnSuccess. Es la deduplicación completa, no sólo de Python.
+#   --run       : lo usa ExecStart=. Espera al scout con detección real de estados, toma el
+#                 lock y ejecuta run_weekly.py. Si el lock se ocupa en la carrera, falla
+#                 cerrado (exit 1) para no ejecutar postprocesos de un ciclo ajeno.
+#   --check     : modo humano/test: imprime la decisión sin ejecutar nada.
+#   --force     : ignora la marca semanal (operador).
 #
-# Uso:
-#   run_weekly_guard.sh            # ejecuta el ciclo (con las guardas)
-#   run_weekly_guard.sh --check    # sólo informa qué haría (para tests)
-#   run_weekly_guard.sh --force    # ignora la marca semanal (operador)
+# Estados del scout: active|activating|reloading|deactivating → se considera "trabajando".
+# Si systemd no responde (error/estado desconocido) → FAIL CLOSED (se asume trabajando).
 set -u
 REPO=/opt/JARVIS
 MARK_DIR=/var/lib/jarvis
 MARK="$MARK_DIR/weekly_cycle_last"
 LOCK=/tmp/jarvis_weekly_cycle.lock
-KEEPALIVE_FILE="$MARK_DIR/weekly_cycle_keepalive"
-CHECK=0
+SCOUT_UNIT=jarvis-asset-scout.service
+SCOUT_WAIT_MAX_SEC=$((3 * 3600))   # 3 h (antes el contador daba 6 min por error de unidades)
+
+MODE=--run
 FORCE=0
 for a in "$@"; do
   case "$a" in
-    --check) CHECK=1 ;;
+    --condition|--check) MODE="$a" ;;
+    --run) MODE=--run ;;
     --force) FORCE=1 ;;
   esac
 done
@@ -34,47 +39,81 @@ done
 WEEK=$(date -u +%G-W%V)
 mkdir -p "$MARK_DIR"
 
-check_only() { echo "$1"; [ "$CHECK" = "1" ] && exit 0 || true; }
+mark_is_current() {
+  [ "$FORCE" = "1" ] && return 1
+  [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$WEEK" ]
+}
 
-# 1) ¿ya corrió esta semana?
-if [ "$FORCE" != "1" ] && [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$WEEK" ]; then
-  echo "skip: el ciclo ya corrió esta semana ($WEEK)"
+# Estado del scout. Override para tests: SCOUT_STATE_OVERRIDE=activating
+scout_state() {
+  if [ -n "${SCOUT_STATE_OVERRIDE:-}" ]; then echo "$SCOUT_STATE_OVERRIDE"; return 0; fi
+  local st
+  if ! st=$(systemctl show -p ActiveState --value "$SCOUT_UNIT" 2>/dev/null); then
+    echo "unknown"; return 0
+  fi
+  [ -z "$st" ] && st="unknown"
+  echo "$st"
+}
+scout_is_running() {
+  local st; st=$(scout_state)
+  case "$st" in
+    active|activating|reloading|deactivating) return 0 ;;
+    unknown) return 0 ;;   # fail closed
+    *) return 1 ;;
+  esac
+}
+
+case "$MODE" in
+  --condition)
+    if mark_is_current; then echo "skip: ya corrió la semana $WEEK"; exit 1; fi
+    if scout_is_running; then echo "skip: scout trabajando ($(scout_state))"; exit 1; fi
+    exec 8>"$LOCK"
+    if ! flock -n 8; then echo "skip: lock del ciclo ocupado"; exit 1; fi
+    echo "run-ok: semana $WEEK (marca libre, scout inactivo, lock libre)"
+    exit 0
+    ;;
+  --check)
+    echo "semana: $WEEK"
+    echo "marca: $( [ -f "$MARK" ] && cat "$MARK" 2>/dev/null || echo '(ninguna)' )$( [ "$FORCE" = "1" ] && echo ' (ignorada por --force)' )"
+    echo "scout: $(scout_state)"
+    echo "lock: $( cmp -s /dev/null /dev/null && ( exec 8>"$LOCK"; if flock -n 8; then echo libre; else echo ocupado; fi ) )"
+    if mark_is_current; then echo "decisión: skip (marca)"; else
+      if scout_is_running; then echo "decisión: esperaría al scout"; else echo "decisión: correría"; fi
+    fi
+    exit 0
+    ;;
+esac
+
+# ── --run ──
+if mark_is_current; then
+  echo "skip: ya corrió la semana $WEEK"
   exit 0
 fi
 
-# 2) esperar a que termine el Asset Scout (máx 3 h)
-WAITED=0
-while systemctl is-active --quiet jarvis-asset-scout.service 2>/dev/null; do
-  if [ "$WAITED" -ge 360 ]; then
-    echo "abort: el Asset Scout sigue activo tras 3 h; no se solapa el ciclo"
+START=$SECONDS
+while scout_is_running; do
+  if [ $((SECONDS - START)) -ge "$SCOUT_WAIT_MAX_SEC" ]; then
+    echo "abort: el scout sigue trabajando tras $((SCOUT_WAIT_MAX_SEC/3600)) h; no se solapa"
     exit 1
   fi
   sleep 30
-  WAITED=$((WAITED+30))
 done
 
-# 3) flock no bloqueante (si otro wrapper corre, salir)
 exec 9>"$LOCK"
 if ! flock -n 9; then
-  echo "skip: otro ciclo ya está en ejecución (lock ocupado)"
+  # Carrera con otro wrapper: no ejecutamos Python NI postprocesos de un ciclo ajeno.
+  echo "abort: otro ciclo tomó el lock durante la carrera; se omite esta corrida"
+  exit 1
+fi
+
+if mark_is_current; then
+  echo "skip: ya corrió la semana $WEEK"
   exit 0
 fi
 
-# re-chequear la marca después de tomar el lock (otro pudo terminar mientras esperábamos)
-if [ "$FORCE" != "1" ] && [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$WEEK" ]; then
-  echo "skip: el ciclo ya corrió esta semana ($WEEK)"
-  exit 0
-fi
-
-if [ "$CHECK" = "1" ]; then
-  echo "would-run: semana $WEEK (scout inactivo, lock libre, sin marca)"
-  exit 0
-fi
-
-echo "run: ciclo semanal $WEEK (espera scout ${WAITED}s)"
+echo "run: ciclo semanal $WEEK (espera scout $((SECONDS - START))s)"
 cd "$REPO" || exit 1
-# keepalive: permite a un monitor distinguir "corriendo" de "colgado" por la fecha del archivo
-touch "$KEEPALIVE_FILE"
+touch "$MARK_DIR/weekly_cycle_keepalive"
 /usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py"
 RC=$?
 if [ "$RC" -eq 0 ]; then

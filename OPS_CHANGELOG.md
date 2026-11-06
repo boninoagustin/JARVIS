@@ -289,3 +289,22 @@ sin encadenar y health duplicado en el runner del tune), H06/H07/H08/H09/H11/H12
   `--write` publica SIEMPRE el resumen (también con 0) y marca `superseded` las propuestas
   que ya no tienen diferencias (antes el digest anunciaba propuestas viejas).
 - Lógica pura en `scripts/ops/mcl_proposal_core.ts` + `test_mcl_proposal.ts` (5 casos).
+
+### 14e. 4ª revisión — guarda v2 (D1-c) + versión de propuesta MCL (H03-c)
+
+- **D1-c (HIGH)**: `is-active` no veía `activating` (el scout es `Type=oneshot`) → el ciclo
+  podía arrancar en paralelo. La guarda v2 detecta `active|activating|reloading|deactivating`
+  y FALLA CERRADO ante `unknown`/error de systemd. Además el límite de espera era 6 min por un
+  error de unidades; ahora 3 h reales con `SECONDS`.
+- **D1-c (HIGH)**: un `skip` con exit 0 hacía correr los `ExecStartPost` y `OnSuccess`.
+  Nuevo drop-in `05-guard.conf` con `ExecCondition=run_weekly_guard.sh --condition`: si no
+  corresponde correr, systemd OMITE la unidad completa (sin Python, sin postprocesos, sin
+  tune). ExecCondition se evalúa ANTES de ExecStartPre (incluido el autotune).
+- **H03-c (HIGH)**: la propuesta se leía fuera de la transacción y se marcaba el doc B con
+  los valores de A. Cada propuesta lleva ahora `proposalId` inmutable y la transacción relee
+  el doc: si cambió la versión, está aplicada u obsoleta → aborta. `appliedProposalId` queda
+  registrado.
+- **H03-c (MED)**: la rama `--apply` se movió ANTES de leer el sweep: aplicar una propuesta
+  publicada ya no depende de que los JSON del sweep existan o parseen. Verificado renombrando
+  `opt_out/` (aplicó igual).
+- Test: propuesta no-op para US500 → aplicada con `appliedProposalId` y sweep inaccesible.
