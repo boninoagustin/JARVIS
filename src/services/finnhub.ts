@@ -21,6 +21,43 @@ const NEWS_QUERIES = [
     'European Asian stock markets indices'
 ];
 
+const STOPWORDS = new Set([
+    'the','a','an','is','are','was','were','be','been','being','has','have','had',
+    'do','does','did','will','would','could','should','can','may','might',
+    'of','in','on','at','to','for','as','by','with','and','or','but','its','it',
+    'this','that','these','those','what','which','who','whom','how','why','when','where',
+    'say','says','said','more','after','before','amid','over','under','into','from',
+    'up','down','out','vs','new','top','week','ahead'
+]);
+
+// Titulares irrelevantes para el trading del bot: mineras, joyería, ETFs,
+// nombres de compañía (Ltd/Inc/Corp/PLC), tickers y resultados corporativos.
+const IRRELEVANT_PATTERNS: RegExp[] = [
+    /\b(mining|miner|mines)\b/i,
+    /\b(jewelr|jewellery|jewelry|dhanteras|hallmark|bullion)\b/i,
+    /\b(ltd|inc|corp|plc|llc)\b/i,
+    /\b(nse:|bse:|nyse:|nasdaq:|lse:)\b/i,
+    /\b(gold trust|etf|exchange-traded)\b/i,
+    /\b(net income|net profit|revenue|dividend|market cap|share price|eps)\b/i,
+    /\b(rupee|rupees|inr|rs|lakh|crore|bhari|taka)\b/i
+];
+
+function tokenize(s: string): Set<string> {
+    return new Set(s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w)));
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 || b.size === 0) return 0;
+    let inter = 0;
+    for (const w of a) if (b.has(w)) inter++;
+    const union = a.size + b.size - inter;
+    return inter / union;
+}
+
+function isIrrelevant(title: string): boolean {
+    return IRRELEVANT_PATTERNS.some(re => re.test(title));
+}
+
 async function fetchYahooPrice(symbol: string): Promise<number | null> {
     try {
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
@@ -87,17 +124,24 @@ async function fetchRelevantNews(): Promise<Array<{ time: string; source: string
         if (r.length === 0) await new Promise(res => setTimeout(res, 500));
     }
 
-    const seen = new Set<string>();
-    const deduped = collected.filter(n => {
-        const k = n.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 70);
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-    });
+    // 1. Filtrar titulares irrelevantes (mineras, joyería, compañías, tickers)
+    const relevant = collected.filter(n => !isIrrelevant(n.title));
 
-    deduped.sort((a, b) => (Date.parse(b.pubDate) || 0) - (Date.parse(a.pubDate) || 0));
+    // 2. Dedupe difuso por solapamiento de tokens significativos (misma noticia, distinta fuente)
+    const kept: Array<{ title: string; source: string; pubDate: string }> = [];
+    const keptTokens: Set<string>[] = [];
+    for (const n of relevant) {
+        const tk = tokenize(n.title);
+        if (tk.size === 0) continue;
+        const dup = keptTokens.some(kt => jaccard(tk, kt) >= 0.7);
+        if (dup) continue;
+        kept.push(n);
+        keptTokens.push(tk);
+    }
 
-    const mapped = deduped.map(n => ({
+    kept.sort((a, b) => (Date.parse(b.pubDate) || 0) - (Date.parse(a.pubDate) || 0));
+
+    const mapped = kept.map(n => ({
         time: n.pubDate ? new Date(n.pubDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : '--:--',
         source: n.source || 'Market',
         text: n.title,
@@ -178,6 +222,7 @@ export async function updateFundamentals() {
         // 2. Análisis por-noticia × por-activo usando DeepSeek
         let newsAnalysis: Record<string, Array<{ asset: string; direction: 'bullish' | 'bearish'; reason: string }>> = {};
         let finalNews = [...topNews];
+        let analysisOk = false;
 
         if (deepseek) {
             const prompt = `Eres un analista financiero cuantitativo experto. A continuación tienes titulares de noticias de mercado (en inglés):
@@ -214,28 +259,32 @@ Reglas estrictas:
 - Genera un array "news_analysis" para TODOS los IDs (puede ser un array vacío [] si la noticia no afecta a ningún activo).
 - No inventes activos que no estén en la lista de "en vivo".`;
 
-            try {
-                const completion = await deepseek.chat.completions.create({
-                    model: DEEPSEEK_MODEL,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.2,
-                    max_tokens: 12000
-                });
-                const responseText = completion.choices?.[0]?.message?.content || '';
+            for (let attempt = 1; attempt <= 3 && !analysisOk; attempt++) {
+                try {
+                    const completion = await deepseek.chat.completions.create({
+                        model: DEEPSEEK_MODEL,
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.2,
+                        max_tokens: 12000
+                    });
+                    const responseText = completion.choices?.[0]?.message?.content || '';
 
-                const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                const parsed = JSON.parse(cleanJson);
+                    const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                    const parsed = JSON.parse(cleanJson);
 
-                newsAnalysis = parsed.news_analysis || {};
+                    newsAnalysis = parsed.news_analysis || {};
 
-                finalNews = topNews.map((n: any, idx: number) => {
-                    const translatedText = parsed.translations?.[String(idx)] ?? parsed.translations?.[idx];
-                    const analysis = (newsAnalysis[String(idx)] ?? newsAnalysis[idx]) || [];
-                    return { ...n, text: translatedText || n.text, analysis };
-                });
-                console.log(`[FINNHUB] DeepSeek analizó ${topNews.length} noticias para ${liveAssets.length} activos.`);
-            } catch (e: any) {
-                console.error('[FINNHUB] Error analizando noticias con DeepSeek:', e?.message ?? e);
+                    finalNews = topNews.map((n: any, idx: number) => {
+                        const translatedText = parsed.translations?.[String(idx)] ?? parsed.translations?.[idx];
+                        const analysis = (newsAnalysis[String(idx)] ?? newsAnalysis[idx]) || [];
+                        return { ...n, text: translatedText || n.text, analysis };
+                    });
+                    analysisOk = true;
+                    console.log(`[FINNHUB] DeepSeek analizó ${topNews.length} noticias para ${liveAssets.length} activos (intento ${attempt}).`);
+                } catch (e: any) {
+                    console.error(`[FINNHUB] Error DeepSeek (intento ${attempt}):`, e?.message ?? e);
+                    if (attempt < 3) await new Promise(r => setTimeout(r, 3000));
+                }
             }
         } else {
             console.warn('[FINNHUB] DEEPSEEK_API_KEY no configurada. Noticias sin análisis.');
@@ -248,12 +297,17 @@ Reglas estrictas:
             if (dxyPrice !== null) macroData.dxy = dxyPrice;
             if (us10yPrice !== null) macroData.us10y = us10yPrice;
 
-            await db.collection('app_settings').doc('fundamentals').set({
+            const payload: any = {
                 last_updated: new Date().toISOString(),
-                news: finalNews,
                 macro: macroData
-            }, { merge: true });
-            console.log('[FINNHUB] Datos fundamentales (con análisis por-activo) guardados en Firebase.');
+            };
+            // Solo pisar las noticias si el análisis DeepSeek tuvo éxito (evita dejar titulares sin analizar).
+            if (analysisOk) payload.news = finalNews;
+
+            await db.collection('app_settings').doc('fundamentals').set(payload, { merge: true });
+            console.log(analysisOk
+                ? '[FINNHUB] Datos fundamentales (con análisis por-activo) guardados en Firebase.'
+                : '[FINNHUB] Análisis DeepSeek falló; se guardan solo macrodatos (noticias previas intactas).');
         }
     } catch (error: any) {
         console.error('[FINNHUB] Error en updateFundamentals:', error?.message ?? error);
