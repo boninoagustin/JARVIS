@@ -15,12 +15,11 @@ async function main() {
     // especiales que el panel consume (ASSET_SCOUT, LOSER_TRIGGERS_PROPOSAL). Antes se subía
     // TODO (current_sessions_*, trigger_tune_*, sizing_*, prev_*, parity_*) y el panel
     // renderizaba tarjetas fantasma duplicadas (esos archivos traen ticker adentro).
-    const files = readdirSync(dir).filter(f => {
-        const base = f.replace('.json', '');
-        return /^[A-Z][A-Z0-9]*$/.test(base)
-            || f === 'asset_scout.json'
-            || f === 'loser_triggers_proposal.json';
-    });
+    // Only top-level public artifacts; never publish private selection_state checkpoints.
+    const files = readdirSync(dir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && (/^[A-Z][A-Z0-9]*\.json$/.test(entry.name)
+            || entry.name === 'asset_scout.json' || entry.name === 'loser_triggers_proposal.json'))
+        .map(entry => entry.name);
     if (files.length === 0) { console.log('sin reportes para subir'); process.exit(0); }
     for (const f of files) {
         const ticker = f.replace('.json', '').toUpperCase();

@@ -2,8 +2,9 @@
 # Tune semanal de detección SMC por activo (dueño de los bloques TF del preset, ex-bruteforcer).
 # Modo tune: búsqueda sobre train 70% + OOS del candidato vs actual + regla conservadora.
 # Reinicia JARVIS solo si algún activo se aplicó (los engines cachean el preset al crearse).
+set -uo pipefail
 export PATH="/root/.nvm/versions/node/v24.19.0/bin:$PATH"
-cd /opt/JARVIS
+cd /opt/JARVIS || exit 1
 
 # 🛡️ Anti-duplicados: si ya hay una corrida de detección, ESPERAR a que termine (flock bloqueante).
 exec 9>"/tmp/detection_tune.lock"
@@ -21,6 +22,7 @@ fi
 ROSTER="${DETECTION_ROSTER:-AUDCAD AUDJPY EUROPE50 FRA40 JP225 NL25 USDJPY USOIL XAUUSD EURUSD GBPUSD GBPJPY NZDUSD GBPAUD}"
 TRIALS="${DETECTION_TRIALS:-80}"
 APPLIED=0
+FAILED=0
 
 # 📝 Log de la corrida (fix 02-nov-2026): SOLO se persisten las líneas con valor de auditoría.
 # Antes se hacía `tee -a` de TODO el stdout y cada corrida dejaba ~2.7 GB, de los cuales el
@@ -41,8 +43,13 @@ for t in $ROSTER; do
   BEFORE=$(wc -l < "$SUMMARY")
   # Heap 2560: los trials no necesitan más (el pico real está en la generación del M5) y
   # evita el OOM que tumbó el sistema con heap 4096.
-  NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" tune "$TRIALS" 2>/dev/null \
+  NODE_OPTIONS="--max-old-space-size=2560" npx tsx scripts/periodic_opt/smc_detection_search.ts "$t" tune "$TRIALS" 2>>"$LOG_DIR/detection_tune_errors_$(date +%Y%m%d).log" \
     | grep -aE "$KEEP" >> "$SUMMARY"
+  PIPE_RC=("${PIPESTATUS[@]}")
+  if [ "${PIPE_RC[0]}" -ne 0 ] || [ "${PIPE_RC[1]}" -ne 0 ]; then
+    echo "TUNE_FAILED: $t worker=${PIPE_RC[0]} log=${PIPE_RC[1]}" | tee -a "$SUMMARY"
+    FAILED=$((FAILED + 1))
+  fi
   if tail -n +$((BEFORE + 1)) "$SUMMARY" | grep -q "TUNE_RESULT: APPLIED"; then
     APPLIED=$((APPLIED + 1))
   fi
@@ -56,11 +63,20 @@ done
 echo "=== $(date +%H:%M:%S) FIN tune semanal. Aplicados: $APPLIED ===" >> "$SUMMARY"
 if [ "$APPLIED" -gt 0 ]; then
   echo "Reiniciando JARVIS para cargar los presets nuevos..." >> "$SUMMARY"
-  pm2 restart JARVIS --update-env 2>&1 | tail -2 >> "$SUMMARY"
+  if ! pm2 restart JARVIS --update-env 2>&1 | tail -2 >> "$SUMMARY"; then
+    echo 'TUNE_FAILED: presets persisted but bot restart failed' | tee -a "$SUMMARY"
+    FAILED=$((FAILED + 1))
+  fi
   # Re-proteger tras el restart (pm2 no preserva oom_score_adj)
   NEWPID=$(pm2 pid JARVIS 2>/dev/null)
   [ -n "$NEWPID" ] && echo -1000 > "/proc/$NEWPID/oom_score_adj" 2>/dev/null
 fi
+
+if [ "$FAILED" -gt 0 ]; then
+  echo "TUNE_JOB_FAILED: $FAILED fallo(s); no se certifica el cierre ni se encadena health" | tee -a "$SUMMARY"
+  exit 1
+fi
+exit 0
 
 # D1 (auditoría 2026-11-05): el health-all se movió a la cadena (OnSuccess del tune →
 # jarvis-health-weekly, que además corre las propuestas). Antes se ejecutaba DOS veces.

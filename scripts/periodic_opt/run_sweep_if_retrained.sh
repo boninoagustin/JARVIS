@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_sweep_if_retrained.sh — corre el sweep de umbral ML SOLO si un modelo cambió desde el último sweep.
 # Se cuelga del pipeline dominical (ExecStartPost, DESPUÉS de train_ml_weekly).
-# El sweep tarda ~1h → corre DETACHED vía systemd-run (no bloquea el service ni el health_check).
+# Espera el sweep: el aviso de cierre no debe adelantarse a su resultado.
 # Resultado: publica ml_gate_evals/{TICKER} → visible en el panel GATE ML POR ACTIVO.
 set -uo pipefail
 
@@ -30,18 +30,14 @@ if [ "$current" == "$(cat "$STATE")" ]; then
   exit 0
 fi
 
-echo "[sweep-hook] 🔄 CAMBIOS detectados en modelos → lanzando sweep ML (detached)..." | tee -a "$LOG"
-diff <(cat "$STATE") <(echo "$current") | tee -a "$LOG"
-
-# systemd-run --collect --no-block: unidad transitoria que se auto-recolecta al terminar.
-# Sobrevive al fin del service del dominical (los hijos de bash morirían por SIGTERM).
-systemd-run --collect --no-block \
-  --unit="jarvis-sweep-ml-$(date +%s)" \
-  --property=WorkingDirectory="$REPO" \
-  --property=MemoryHigh=4G \
-  --property=MemoryMax=5G \
-  --property=Nice=10 \
-  /bin/bash -c "$NPX tsx $REPO/scripts/ml_threshold_sweep.ts >> \"$LOG\" 2>&1 && echo \"\$current\" > \"$STATE\" || echo '[sweep-hook] sweep FALLÓ — estado NO actualizado (reintenta el próximo domingo)' >> \"$LOG\""
-
-echo "[sweep-hook] unidad transitoria lanzada. Log: $LOG" | tee -a "$LOG"
+echo "[sweep-hook] CAMBIOS detectados en modelos → sweep ML secuencial..." | tee -a "$LOG"
+# Stay inside the parent unit memory/time limits. Never claim completion while detached.
+cd "$REPO" || exit 1
+if ! "$NPX" tsx "$REPO/scripts/ml_threshold_sweep.ts" >> "$LOG" 2>&1; then
+  echo '[sweep-hook] sweep FALLÓ — checkpoint preservado; revisar antes de declarar cierre' | tee -a "$LOG"
+  exit 1
+fi
+# Persist the actual parent-shell snapshot (the old detached shell wrote an empty variable).
+printf '%s\n' "$current" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" || exit 1
+echo "[sweep-hook] sweep completado; checkpoint actualizado. Log: $LOG" | tee -a "$LOG"
 exit 0

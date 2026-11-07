@@ -1,0 +1,50 @@
+/** Pure presentation rules. None of these diagnostics authorizes a live mutation. */
+export const MAX_REPORT_AGE_MS = 8 * 864e5;
+export interface Metrics {
+    expectancy?: number; profit_factor?: number; net_pnl_r?: number;
+    max_drawdown_r?: number; win_rate?: number; trade_count?: number;
+}
+export interface MetricReport {
+    proposal_validation?: Metrics; production_validation?: Metrics;
+    proposal_oos?: Metrics; production_oos?: Metrics;
+    evaluation_certificate?: { validation_role?: string };
+    certificate?: { validation_role?: string };
+}
+export function isFreshReport(timestamp: unknown, now = Date.now()): boolean {
+    const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : timestamp;
+    return typeof ts === 'number' && Number.isFinite(ts) && ts > 0 && ts <= now && now - ts <= MAX_REPORT_AGE_MS;
+}
+export function reportScope(report: { ticker: string; timestamp: unknown }, activeTickers: readonly string[], now = Date.now()) {
+    if (!activeTickers.includes(report.ticker)) return { current: false, label: 'HISTÓRICO · fuera de active_tickers (o lista no disponible)' };
+    if (!isFreshReport(report.timestamp, now)) return { current: false, label: 'HISTÓRICO / VENCIDO · fecha inválida, futura o antigüedad > 8 días' };
+    return { current: true, label: 'REPORTE VIGENTE · ≤ 8 días · universo de optimización (no roster operativo)' };
+}
+export function reportMetrics(report: MetricReport) {
+    const selection = !!(report.proposal_validation || report.production_validation)
+        || (report.evaluation_certificate ?? report.certificate)?.validation_role === 'selection_validation';
+    // Never mix an explicitly named validation partition with a legacy metric alias.
+    const explicit = !!(report.proposal_validation || report.production_validation);
+    return {
+        proposal: explicit ? report.proposal_validation : report.proposal_oos,
+        production: explicit ? report.production_validation : report.production_oos,
+        label: selection ? 'Validación de selección · NO es OOS independiente' : 'OOS legado · independencia no acreditada',
+    };
+}
+export function metricDelta(proposal: unknown, production: unknown): number | undefined {
+    return typeof proposal === 'number' && Number.isFinite(proposal)
+        && typeof production === 'number' && Number.isFinite(production) ? proposal - production : undefined;
+}
+export function pnlChangeLabel(dropRatio: unknown): string {
+    if (typeof dropRatio !== 'number' || !Number.isFinite(dropRatio)) return 'PnL: sin comparación válida';
+    return dropRatio < 0 ? `PnL mejora: ${(Math.abs(dropRatio) * 100).toFixed(0)}% (vs |base|)`
+        : dropRatio > 0 ? `PnL caída: ${(dropRatio * 100).toFixed(0)}% (vs |base|)` : 'PnL: sin cambio';
+}
+export function reportVerdict(status: string, current: boolean): string {
+    const verdict = status === 'RECOMMEND' ? 'CANDIDATA DE INVESTIGACIÓN · no autoriza operar'
+        : status === 'HOLD_MC' ? 'HOLD MC · revisar resultado / disponibilidad / error técnico'
+        : status === 'HOLD' ? 'HOLD · sin propuesta de cambio' : status;
+    return current ? verdict : `Histórico: ${verdict}`;
+}
+export function mlDiagnostic(ev?: { bestGate?: { umbral?: number; n?: number }; sinGate?: { n?: number } }): string {
+    return `Diagnóstico solamente · umbral ensayado ${ev?.bestGate?.umbral ?? '—'} · n gate ${ev?.bestGate?.n ?? '—'} / sin gate ${ev?.sinGate?.n ?? '—'}. Activar un booleano no despliega ese umbral; equivalencia con runtime no acreditada.`;
+}

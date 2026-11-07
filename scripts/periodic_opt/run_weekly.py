@@ -23,6 +23,9 @@ from pathlib import Path
 
 REPO = Path("/opt/JARVIS")
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from selection_freshness import (atomic_json, load_checkpoint, needs_selection,
+                                 save_success, previous_selection)
 sys.path.insert(0, str(REPO / 'scripts' / 'hyperopt'))
 from objective_adapter import canonicalize_result, canonical_metrics
 VENV_PY = REPO / "scripts" / "hyperopt" / ".venv" / "bin" / "python"
@@ -149,14 +152,23 @@ def count_new_trades(api_key: str, ticker: str, since_ts: int) -> int:
     url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
            f"/databases/(default)/documents/trade_journal?key={api_key}&pageSize=400")
     n = 0
-    for doc in rest_json(url).get("documents", []):
-        f = doc.get("fields", {})
-        if f.get("ticker", {}).get("stringValue", "").upper() != ticker:
-            continue
-        ts = f.get("timestamp", {}).get("integerValue")
-        if ts and int(ts) > since_ts:
-            n += 1
-    return n
+    page_token = None
+    seen_tokens = set()
+    while True:
+        page = rest_json(url + ('&pageToken=' + urllib.parse.quote(page_token, safe='') if page_token else ''))
+        for doc in page.get('documents', []):
+            f = doc.get('fields', {})
+            if f.get('ticker', {}).get('stringValue', '').upper() != ticker:
+                continue
+            ts = f.get('timestamp', {}).get('integerValue')
+            if ts and int(ts) > since_ts:
+                n += 1
+        page_token = page.get('nextPageToken')
+        if not page_token:
+            return n
+        if page_token in seen_tokens:
+            raise RuntimeError('trade_journal pagination repeated a page token')
+        seen_tokens.add(page_token)
 
 
 def load_last_report(ticker: str) -> dict:
@@ -623,6 +635,19 @@ def main() -> int:
         done = set(progress.get('done') or [])
         started_at = progress.get('started_at') or started_at
     progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}))
+    cycle_outcomes = []
+    def write_cycle_summary(*, completed=False, error=None):
+        counts = {key: sum(item['outcome'] == key for item in cycle_outcomes)
+                  for key in ('evaluated', 'skipped', 'failed')}
+        errors = [item['ticker'] for item in cycle_outcomes
+                  if item['outcome'] == 'failed' or item['status'] == 'ERROR']
+        atomic_json(opt_dir / 'weekly_selection_summary.json', {
+            'version': 1, 'started_at': started_at,
+            'completed_at': int(time.time()*1000) if completed else None,
+            'status': ('failed' if error or errors else 'completed') if completed else 'running',
+            'tickers': tickers, 'outcomes': cycle_outcomes, 'counts': counts,
+            'errors': errors, 'error': error})
+    write_cycle_summary()
     if not args.skip_hyperopt:
         r = subprocess.run([sys.executable, str(HYPEROPT), '--help'], capture_output=True, text=True, timeout=60)
         text = (r.stdout or '') + (r.stderr or '')
@@ -630,23 +655,28 @@ def main() -> int:
         missing = [flag for flag in required if flag not in text]
         if r.returncode or missing:
             print(f'PREFLIGHT FAIL: hyperopt wrapper missing flags {missing}', flush=True)
+            write_cycle_summary(completed=True, error=f'hyperopt preflight failed; missing flags {missing}')
             return 1
     api_key = None if args.config_file else get_api_key()
     if FETCH_ENABLED and not args.skip_fetch and not args.skip_refresh:
         r = subprocess.run(['npx', 'tsx', str(FETCH_HISTORY)], cwd=str(REPO), capture_output=True, text=True, timeout=9000)
         if r.returncode:
             print(f'fetch_history failed: {(r.stderr or r.stdout)[-300:]}', flush=True)
+            write_cycle_summary(completed=True, error=f'fetch_history failed: {(r.stderr or r.stdout)[-300:]}')
             return 1
     summary = []
     for ticker in tickers:
-        if ticker in done:
-            continue
+        # Resume is input-aware: old progress alone is never selection evidence.
+        # Completed tickers pass the same durable freshness check as normal runs.
         print(f'═══ {ticker} ═══', flush=True)
         report = {'ticker': ticker, 'timestamp': int(time.time()*1000), 'status': 'HOLD', 'apply_eligible': False}
+        state_path = reports_dir / 'selection_state' / f'{ticker}.json'
+        state = load_checkpoint(state_path, ticker, validate_certified_report)
+        report['last_successful_selection'] = previous_selection(state, state_path)
+        selection_ran = False
+        candle_ms = 0
         try:
-            last_path = reports_dir / f'{ticker}.json'
-            last = json.loads(last_path.read_text()) if last_path.exists() else {}
-            last_ts = int(last.get('timestamp') or 0)
+            last_ts = state['watermark']['journal_since_ms'] if state else 0
             refresh = {'ok': True}
             if not args.skip_refresh:
                 refresh = refresh_csvs(ticker)
@@ -660,9 +690,18 @@ def main() -> int:
                 if review.returncode:
                     raise RuntimeError(f'followup dispatch failed: {(review.stderr or review.stdout)[-500:]}')
             new_trades = 0 if args.config_file else count_new_trades(api_key, ticker, last_ts)
-            if not args.force and not args.verification and new_trades < args.min_new_trades and last_candle_ms(ticker) <= last_ts:
+            candle_ms = last_candle_ms(ticker)
+            report['selection_inputs'] = {'candle_ms': candle_ms, 'new_trades': new_trades,
+                                          'journal_since_ms': last_ts, 'min_new_trades': args.min_new_trades}
+            if (not args.force and not args.verification and not args.config_file
+                    and not needs_selection(state, candle_ms, new_trades, args.min_new_trades)):
+                report['selection_outcome'] = 'skipped'
                 report['reason'] = 'no fresh candles/journal: selection skipped (anti-overfit)'
+                report['application'] = {'status': 'UNCHANGED', 'at': report['timestamp'],
+                    'reason': 'Selección omitida: datos ya evaluados; no se intentó aplicar cambios'}
             else:
+                selection_ran = True
+                report['selection_outcome'] = 'evaluating'
                 cache_p = None
                 if not args.skip_timesfm:
                     try:
@@ -767,11 +806,23 @@ def main() -> int:
                         report.update(status='HOLD_ML_ERROR', apply_eligible=False)
                 if not args.skip_telemetry:
                     report['shadow_week'] = shadow_week(ticker)
+                report['selection_outcome'] = 'evaluated'
+                saved = save_success(state_path, report, candle_ms, validate_certified_report)
+                if saved is None:
+                    report['selection_outcome'] = 'failed'
+                    if report['status'] in ('HOLD', 'RECOMMEND', 'HOLD_MC', 'HOLD_DSR'):
+                        report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False,
+                                      reason='selection incomplete or missing valid evaluation evidence; successful checkpoint unchanged')
+                else:
+                    report['successful_selection_watermark'] = saved['watermark']
         except Exception as e:
-            report.update(status='ERROR', apply_eligible=False, reason=str(e)[:1000])
+            report.update(status='ERROR', selection_outcome='failed', apply_eligible=False, reason=str(e)[:1000])
             print(f'ERROR {ticker}: {e}', flush=True)
-        (reports_dir/f'{ticker}.json').write_text(json.dumps(report, indent=2, allow_nan=False, default=str))
-        if weekly_rollout_allowed(args):
+        if report.get('selection_outcome') == 'failed':
+            report['application'] = {'status': 'BLOCKED', 'at': report['timestamp'],
+                                    'reason': 'Evaluación fallida; no aplicación'}
+        atomic_json(reports_dir/f'{ticker}.json', report)
+        if weekly_rollout_allowed(args) and selection_ran and report.get('selection_outcome') == 'evaluated':
             deployment = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=False),
                                         cwd=str(REPO), capture_output=True, text=True, timeout=300)
             print(f"{ticker} aplicación: {(deployment.stdout or deployment.stderr)[-1500:]}", flush=True)
@@ -783,6 +834,11 @@ def main() -> int:
                 (reports_dir/f'{ticker}.json').write_text(json.dumps(report, indent=2, allow_nan=False, default=str))
                 report['status'] = 'ERROR'
         summary.append((ticker, report['status']))
+        cycle_outcomes.append({'ticker': ticker, 'timestamp': report['timestamp'],
+                               'outcome': report.get('selection_outcome', 'failed'),
+                               'status': report['status'], 'reason': report.get('reason'),
+                               'deployment_error': report.get('deployment_error')})
+        write_cycle_summary()
         if report['status'] not in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR'):
             done.add(ticker)
         progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}, indent=2))
@@ -793,6 +849,7 @@ def main() -> int:
             print(f'{script}: exit={r.returncode}', flush=True)
     # Prospective certification remains separate; never relabel historical evidence.
     errors = [t for t, status in summary if status in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR')]
+    write_cycle_summary(completed=True)
     if errors:
         return 1
     progress_file.unlink(missing_ok=True)

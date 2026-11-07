@@ -33,7 +33,10 @@ class ProductionMainDispatchTests(unittest.TestCase):
     Path(cmd[cmd.index('--snapshot-out')+1]).write_text(json.dumps({'enabled':True}))
     Path(cmd[cmd.index('--manifest-out')+1]).write_text(json.dumps({'test_end_ms':1000}))
     return {'config':{'ticker':'EURUSD','enabled':True}}
+   real_run=w.subprocess.run
+   real_certify=w.certify_report
    def subprocess_run(cmd,**kw):
+    if cmd[0]=='node':return real_run(cmd,**kw)
     self.assertIn('--weekly-rollout',cmd)
     if '--followup-only' in cmd:events.append('followup')
     else:
@@ -43,7 +46,18 @@ class ProductionMainDispatchTests(unittest.TestCase):
      self.assertEqual(saved['status'],'RECOMMEND')
      self.assertEqual(saved['production_backtest_config']['ticker'],'EURUSD')
     return SimpleNamespace(returncode=0,stdout='{}',stderr='')
-   def certify(report,*args,**kwargs):report['status']='RECOMMEND'
+   def certify(report,*args,**kwargs):
+    # Synthetic evidence still traverses the real certificate/integrity boundary.
+    config={'ticker':'EURUSD','enabled':True}
+    manifest={'test_end_ms':1000,'validation_end_ms':1000,'test_independence':'unverified'}
+    provenance={'evaluation_manifest':manifest,'dataset_files':[{'path':'fixture.csv','sha256':'synthetic'}]}
+    production={'evaluation_fingerprint':w.json_fingerprint(provenance),'provenance':provenance,'metrics_validation':{'expectancy':0}}
+    def evaluate(candidate):
+     return {'config':candidate,'config_fingerprint':w.json_fingerprint(candidate),
+             'evaluation_fingerprint':w.json_fingerprint(provenance),'provenance':provenance,
+             'metrics_validation':{'expectancy':1},'validation_r':[1]*10}
+    return real_certify(report,config,{'enabled':True},production,manifest,evaluate,
+                        montecarlo=lambda *args:{'survival':.9})
    argv=['run_weekly.py','--tickers','EURUSD','--skip-fetch','--skip-refresh','--skip-hyperopt','--skip-timesfm','--skip-aux','--skip-ml','--skip-telemetry','--force']
    with patch.object(w,'AUTO_APPLY_ENABLED',True),patch.object(w,'REPORTS_DIR',reports),patch.object(w,'OPT_OUT_DIR',opt),patch.object(w.sys,'argv',argv),patch.object(w,'get_api_key',return_value='synthetic-fixture-not-a-secret'),patch.object(w,'count_new_trades',return_value=100),patch.object(w,'command_json',side_effect=command),patch.object(w,'canonicalize_result',side_effect=lambda x:x),patch.object(w,'certify_report',side_effect=certify),patch.object(w,'run_dsr_gate',return_value={}),patch.object(w.subprocess,'run',side_effect=subprocess_run):
     self.assertEqual(w.main(),0)

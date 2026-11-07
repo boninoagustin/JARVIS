@@ -15,6 +15,7 @@ import { execSync } from 'node:child_process';
 import adminModule from 'firebase-admin';
 const admin = adminModule.default ?? adminModule;
 import { SMCEngine } from '../src/engine/smc/SMCEngine.js';
+import { closedVerifiedSample, candidateEnabled } from './ops/real_candidate_sample.js';
 
 type ItemStatus = 'PASS' | 'WARN' | 'FAIL';
 interface Item { check: string; status: ItemStatus; detail: string }
@@ -277,20 +278,11 @@ async function checkRealCandidates() {
     const now = Date.now();
     const cfgsSnap = await db.collection('asset_configs').get();
     const enabled = new Set<string>();
-    cfgsSnap.docs.forEach(d => { if (d.id !== 'GLOBAL' && d.data().enabled !== false) enabled.add(d.id); });
+    cfgsSnap.docs.forEach((d: any) => { if (d.id !== 'GLOBAL' && candidateEnabled(d.data())) enabled.add(d.id); });
 
-    const cut21 = now - 21 * 86400e3;
     const jSnap = await db.collection('trade_journal').get();
-    const live = new Map<string, { n: number; wins: number }>();
-    for (const d of jSnap.docs) {
-      const x = d.data();
-      const ts = Number(x.timestamp || x.entryTs || 0);
-      if (ts < cut21 || !x.ticker) continue;
-      const s = live.get(x.ticker) || { n: 0, wins: 0 };
-      s.n++;
-      if (x.result === 'WIN') s.wins++;
-      live.set(x.ticker, s);
-    }
+    // Signals, SKIPs, backtests, unverified/duplicate positions are not live evidence.
+    const live = closedVerifiedSample(jSnap.docs, now);
 
     const cands: { t: string; surv: number; wr: number; n: number }[] = [];
     for (const f of fs.readdirSync(repDir)) {
@@ -301,19 +293,19 @@ async function checkRealCandidates() {
       try { r = JSON.parse(fs.readFileSync(`${repDir}/${f}`, 'utf8')); } catch { continue; }
       if (r.status !== 'RECOMMEND') continue;
       const age = (now - (r.timestamp || 0)) / 86400e3;
-      if (age > 8 || !Number.isFinite(age)) continue;
+      if (age < 0 || age > 8 || !Number.isFinite(age)) continue;
       const surv = r.montecarlo?.survival;
-      if (typeof surv !== 'number' || surv < 0.8) continue;
+      if (typeof surv !== 'number' || !Number.isFinite(surv) || surv < 0.8 || surv > 1) continue;
       const lv = live.get(t);
       if (!lv || lv.n < 8 || lv.wins / lv.n < 0.4) continue;
       cands.push({ t, surv, wr: lv.wins / lv.n, n: lv.n });
     }
     cands.sort((a, b) => b.surv - a.surv || b.wr - a.wr);
     if (cands.length === 0) {
-      log('real_candidates', 'WARN', 'Ningún activo pasa los criterios de cuenta real (RECOMMEND fresco + MC≥80% + enabled + vivo n≥8 y WR≥40%)');
+      log('real_candidates', 'WARN', 'Sin candidatos en el filtro orientativo para revisión de cuenta real (RECOMMEND ≤8d + MC≥80% + activo habilitado + ≥8 cierres verificados únicos en 21d y WR≥40%). No bloquea demo ni autoriza operar dinero real.');
     } else {
       const top = cands.slice(0, 3).map((c, i) => `${i + 1}) ${c.t} (MC ${(c.surv * 100).toFixed(0)}% · vivo ${(c.wr * 100).toFixed(0)}% · n=${c.n})`).join('  ·  ');
-      log('real_candidates', 'PASS', top);
+      log('real_candidates', 'PASS', `${top} · filtro orientativo, no autorización de cuenta real; verificar independencia y cuenta de origen.`);
     }
   } catch (e: any) {
     log('real_candidates', 'WARN', `No se pudo calcular: ${e.message}`);
