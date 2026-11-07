@@ -1,5 +1,24 @@
 # Cambios de operación — 02-nov-2026
 
+## Panel Salud de Activos — recomendación única (07-nov-2026)
+
+- La recomendación operativa se calcula con roster_proposals, configuración real ON/OFF
+  y evidencia reciente (8 días). TRADE: activar recomendado/mantener; WATCH/PARKED/OFF:
+  pausar nuevas entradas o mantener apagado. Sin evidencia o con override: revisar.
+- Si roster TRADE contradice riesgo NO_OPERAR se pide revisar viabilidad, no se ofrece
+  activar recomendado. Diagnóstico de detección ya no usa OPERAR/APAGAR como etiquetas.
+- Motivo y antigüedad visibles. Riesgo separado y su botón dice Aplicar solo riesgo.
+  Acciones fuera de roster viven en Acciones manuales con confirmación de excepción;
+  no escriben un rosterOverride ni convierten la propuesta en TRADE.
+- Activación recomendada relee roster/health/config/riesgo al pulsar. Las acciones siguen
+  siendo explícitas: el despliegue no cambia enabled, riesgos, propuestas ni posiciones.
+- Pruebas: 19 casos puros, Vite build OK y navegador real (Puppeteer) sin errores.
+  EUROPE50 WATCH muestra Mantener apagado (cluster lleno); ITALY40 TRADE Mantener activo;
+  USTECH100 muestra Revisar por conflicto con riesgo NO_OPERAR. Excepción manual probada
+  cancelando confirmación y verificando cero escrituras Firestore desde el navegador.
+- npm run build (tsc -b) sigue bloqueado por seis errores existentes en backtestEngine.ts
+  restaurado; ninguno en los archivos del panel modificados. No se alteró ese motor.
+
 ## Recuperación cTrader — 07-nov-2026
 
 - Incidente: PM2 online pero autenticación de cuenta fallaba con CANT_ROUTE_REQUEST.

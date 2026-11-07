@@ -2,12 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
+import { assetRecommendation } from '../services/assetRecommendation';
 
-// Salud de detección SMC por activo (roster completo de 30):
-// - detection_health/{ticker} lo escribe el health/tune del VPS.
-// - Estados: OK | REVISAR | OPTIMIZABLE | CANDIDATO_APAGAR
-// - Botón Optimizar (REVISAR) → lanza el optimizador del activo (Kronos, background).
-// - Botón Activar (si tras optimizar da ganancia y el activo está OFF) → enabled=true.
+// Recomendación operativa única desde roster_proposals.
+// detection_health muestra diagnósticos, nunca recomendaciones paralelas de activar/apagar.
+// Las acciones fuera de roster son manuales, secundarias y requieren confirmación explícita.
 
 interface HealthDoc {
   ticker: string;
@@ -29,14 +28,16 @@ interface HealthDoc {
 interface AssetCfg {
   enabled?: boolean;
   disabledReason?: string;
+  riskPercent?: number;
+  rosterOverride?: { verdict?: string };
 }
 
 const STATUS_STYLE: Record<string, { label: string; color: string }> = {
-  OK: { label: '✅ OPERAR', color: '#22c55e' },
-  REVISAR: { label: '🔧 REVISAR', color: '#eab308' },
+  OK: { label: 'Baseline positivo', color: '#22c55e' },
+  REVISAR: { label: 'Revisar detección', color: '#eab308' },
   OPTIMIZANDO: { label: '⏳ OPTIMIZANDO...', color: '#38bdf8' },
-  OPTIMIZABLE: { label: '🟢 OPTIMIZABLE', color: '#22c55e' },
-  CANDIDATO_APAGAR: { label: '🚫 APAGAR', color: '#ef4444' },
+  OPTIMIZABLE: { label: 'Candidato de tune positivo', color: '#22c55e' },
+  CANDIDATO_APAGAR: { label: 'Detección débil', color: '#eab308' },
 };
 
 export default function AssetHealthPanel() {
@@ -85,17 +86,6 @@ export default function AssetHealthPanel() {
     return unsub;
   }, []);
 
-  // 05-nov-2026: propuesta semanal de apagado (baseline<0 ×4 sem + vivo negativo).
-  const [shutdown, setShutdown] = useState<Record<string, any>>({});
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'shutdown_proposals'), (snap) => {
-      const m: Record<string, any> = {};
-      snap.forEach((d) => { m[d.id] = d.data(); });
-      setShutdown(m);
-    }, () => { });
-    return unsub;
-  }, []);
-
   const applyRisk = async (ticker: string, pct: number) => {
     if (!confirm(`¿Aplicar riesgo ${pct.toFixed(2)}% a ${ticker}? El bot lo toma en caliente (listener de Firestore).`)) return;
     try {
@@ -122,6 +112,7 @@ export default function AssetHealthPanel() {
       switch (sort.key) {
         case 'ticker': return r.ticker;
         case 'on': return onVal(r.c);
+        case 'recommendation': return roster[r.ticker]?.verdict ?? 'SIN PROPUESTA';
         case 'status': return r.h?.status ?? 'SIN_DATOS';
         case 'bestR': return r.h?.bestR ?? -9999;
         case 'avgR': return r.h?.avgR ?? -9999;
@@ -135,7 +126,7 @@ export default function AssetHealthPanel() {
       if (typeof va === 'string' || typeof vb === 'string') return sort.dir * String(va).localeCompare(String(vb));
       return sort.dir * ((va as number) - (vb as number));
     });
-  }, [health, cfgs, sort, props]);
+  }, [health, cfgs, sort, props, roster]);
 
   const isOn = (c?: AssetCfg) => c?.enabled === true && !(c.disabledReason && c.disabledReason.trim() !== '');
 
@@ -164,9 +155,24 @@ export default function AssetHealthPanel() {
     }
   };
 
-  const activate = async (ticker: string) => {
-    if (!confirm(`¿Activar ${ticker} en vivo? El bot empezará a operarlo con su configuración actual (preset de detección tuneado + config Firestore).`)) return;
+  const activate = async (ticker: string, manual = false) => {
     try {
+      // Re-read evidence when clicked: a background weekly run may have changed the roster.
+      const [rp, hp, cp, risk] = await Promise.all([
+        getDoc(doc(db, 'roster_proposals', ticker)), getDoc(doc(db, 'detection_health', ticker)),
+        getDoc(doc(db, 'asset_configs', ticker)), getDoc(doc(db, 'risk_proposals', ticker)),
+      ]);
+      const cfg = cp.data() as AssetCfg | undefined;
+      const decision = assetRecommendation({ on: isOn(cfg), roster: rp.data(), healthAt: hp.data()?.evaluatedAt,
+        operatorOverride: cfg?.rosterOverride?.verdict === 'TRADE', riskVerdict: risk.data()?.verdict });
+      if (!manual && decision.action !== 'activate') {
+        toast(`No activar recomendado: ${decision.reason}`, 'error');
+        return;
+      }
+      const message = manual
+        ? `EXCEPCIÓN MANUAL: ${ticker} no tiene una recomendación vigente de activar. ${decision.reason}\n\n¿Activarlo de todos modos con el riesgo configurado? Esto NO cambia su roster ni lo convierte en TRADE recomendado.`
+        : `¿Activar ${ticker} según el roster TRADE? Usará el riesgo configurado, sin aumentarlo. Las propuestas de riesgo se aprueban por separado.`;
+      if (!confirm(message)) return;
       await setDoc(doc(db, 'asset_configs', ticker), { enabled: true, disabledReason: '' }, { merge: true });
       // 🚀 Promover a active_tickers para que el optimizador semanal lo procese
       try {
@@ -190,13 +196,13 @@ export default function AssetHealthPanel() {
   // 03-nov-2026: faltaba el botón para apagar. Escribe disabledReason para que sea una
   // decisión del operador explícita (el rollout y el auto-disable la respetan).
   const deactivate = async (ticker: string) => {
-    if (!confirm(`¿Apagar ${ticker}? Deja de operar en vivo (reversible). El optimizador semanal lo sigue evaluando.`)) return;
+    if (!confirm(`¿Pausar nuevas entradas de ${ticker}? Es reversible. Esta acción no envía órdenes de cierre ni modifica posiciones abiertas. WATCH sigue en optimización; PARKED recibe health semanal.`)) return;
     try {
       await setDoc(doc(db, 'asset_configs', ticker), {
         enabled: false,
         disabledReason: `desactivado desde Salud de Activos (${new Date().toISOString().slice(0, 10)})`,
       }, { merge: true });
-      toast(`🛑 ${ticker} apagado.`, 'success');
+      toast(`⏸ ${ticker}: nuevas entradas pausadas. No se enviaron órdenes de cierre.`, 'success');
     } catch (e: any) {
       toast(`Error apagando: ${e.message}`, 'error');
     }
@@ -232,20 +238,24 @@ export default function AssetHealthPanel() {
   }, [health]);
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto' }}>
+    <div style={{ padding: '20px', maxWidth: '1600px', margin: '0 auto', overflowX: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <h2 style={{ margin: 0 }}>Salud de Activos (detección SMC)</h2>
         <button onClick={launchHealthAll} className="btn btn-primary">📊 Evaluar todo el pool</button>
       </div>
       <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-        Estado medido con el motor real: baseline del preset actual sobre las últimas ~45k velas M5 (≈4-5 meses). 🔧 REVISAR = pierde y
-        vale la pena optimizar · 🚫 APAGAR = pierde y ninguna configuración lo arregla (problema de scoring/gestión).
+        <strong>El roster define la recomendación.</strong> TRADE: activar o mantener activo. WATCH: pausar entradas y seguir optimizando.
+        {' '}PARKED / OFF: mantener apagado. Las acciones requieren tu confirmación y no cierran posiciones abiertas.
+      </p>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+        TRADE exige ≥ 0,05 R/tr, ≥ 30 trades, viabilidad y cupo (máx. 2 por cluster / 10 en total).
+        {' '}La detección y el riesgo son diagnósticos separados: un baseline positivo no equivale a una recomendación de activar.
       </p>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
-            {([['ticker', 'Activo'], ['on', 'Operando'], ['status', 'Salud'], ['baselineR', 'Baseline (R)'],
-              ['bestR', 'Mejor tras optimizar (R)'], ['avgR', 'R/tr'], ['riskProp', 'Riesgo'], ['trades', 'Trades'], ['actions', 'Acciones']] as const).map(([key, label]) => (
+            {([['ticker', 'Activo'], ['on', 'Entradas'], ['recommendation', 'Recomendación del roster'], ['status', 'Diagnóstico de detección'], ['baselineR', 'Baseline (R)'],
+              ['bestR', 'Mejor tras optimizar (R)'], ['avgR', 'R/tr'], ['riskProp', 'Riesgo (separado)'], ['trades', 'Trades'], ['actions', 'Acciones']] as const).map(([key, label]) => (
               <th key={key} onClick={() => key !== 'actions' && toggleSort(key)}
                 title={key === 'actions' ? undefined : 'Clic para ordenar'}
                 style={{ padding: '8px', cursor: key === 'actions' ? 'default' : 'pointer', userSelect: 'none' }}>
@@ -259,29 +269,19 @@ export default function AssetHealthPanel() {
             const st = STATUS_STYLE[statusOf(h)];
             const on = isOn(c);
             const reason = on ? '' : (c?.disabledReason || '—');
-            const showActivate = !on && h && (h.status === 'OPTIMIZABLE' || (h.bestR !== null && (h.bestR ?? 0) > 0) || (h.status === 'OK' && (h.baselineR ?? 0) > 0));
+            const recommendation = assetRecommendation({ on, roster: roster[ticker], healthAt: h?.evaluatedAt,
+              operatorOverride: c?.rosterOverride?.verdict === 'TRADE', riskVerdict: props[ticker]?.verdict });
             return (
               <tr key={ticker} style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <td style={{ padding: '8px', fontWeight: 600 }}>{ticker}</td>
                 <td style={{ padding: '8px' }}>
                   {on ? <span style={{ color: '#22c55e' }}>✅ ON</span> : <span style={{ color: '#ef4444' }} title={reason}>❌ OFF</span>}
-                  {(() => {
-                    const rp = roster[ticker];
-                    if (!rp) return null;
-                    if (on && rp.verdict !== 'TRADE') {
-                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#eab308' }}>⚠️ fuera de roster ({rp.verdict})</span>;
-                    }
-                    if (!on && rp.verdict === 'WATCH') {
-                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#38bdf8' }}>👁 WATCH</span>;
-                    }
-                    if (!on && rp.verdict === 'PARKED') {
-                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8' }}>🅿️ PARKED (health semanal)</span>;
-                    }
-                    if (!on && rp.verdict === 'TRADE') {
-                      return <span title={rp.reason || ''} style={{ display: 'block', fontSize: '0.68rem', color: '#22c55e' }}>🟢 roster TRADE</span>;
-                    }
-                    return null;
-                  })()}
+                </td>
+                <td style={{ padding: '8px', minWidth: 200 }}>
+                  <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{recommendation.rosterLabel}</span>
+                  <strong style={{ display: 'block', color: recommendation.color }}>{recommendation.label}</strong>
+                  <span style={{ display: 'block', marginTop: 4, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{recommendation.reason}</span>
+                  {roster[ticker]?.generatedAt && <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Roster: {ago(roster[ticker].generatedAt)}</span>}
                 </td>
                 <td style={{ padding: '8px', color: st?.color ?? '#888' }}>
                   {st?.label ?? '… sin datos'}
@@ -300,18 +300,21 @@ export default function AssetHealthPanel() {
                     return (
                       <>
                         <span style={{ color }} title={`${pr.verdict} · ${pr.note || ''}`}>
-                          {(Number(pr.currentPct) ?? 0).toFixed(2)}% → {(Number(pr.proposalPct) ?? 0).toFixed(2)}%
+                          Configurado: {Number.isFinite(Number(c?.riskPercent)) ? `${Number(c?.riskPercent).toFixed(2)}%` : 'global'}
+                          <span style={{ display: 'block' }}>Propuesta: {Number.isFinite(Number(pr.proposalPct)) ? `${Number(pr.proposalPct).toFixed(2)}%` : '—'} · {pr.verdict}</span>
                         </span>
+                        <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.68rem' }}>No activa el activo ni garantiza una entrada.</span>
                         {(pr.verdict === 'SUBIR' || pr.verdict === 'BAJAR') && !pr.applied && (
                           <button className="btn" style={{ marginLeft: 6, padding: '2px 6px', fontSize: '0.72rem' }}
-                            onClick={() => applyRisk(ticker, Number(pr.proposalPct))}>Aplicar</button>
+                            onClick={() => applyRisk(ticker, Number(pr.proposalPct))}>Aplicar solo riesgo</button>
                         )}
                       </>
                     );
                   })()}
                 </td>
                 <td style={{ padding: '8px' }}>{h?.trades ?? '—'}</td>
-                <td style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <td style={{ padding: '8px', minWidth: 220 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
                   {(() => {
                     const st = statusOf(h);
                     const since = h?.optimizingAt ? new Date(h.optimizingAt) : null;
@@ -356,27 +359,28 @@ export default function AssetHealthPanel() {
                       </>
                     );
                   })()}
-                  {showActivate && (
-                    <button className="btn btn-primary" onClick={() => activate(ticker)}>🟢 Activar</button>
+                  {recommendation.action === 'activate' && (
+                    <button className="btn btn-primary" onClick={() => activate(ticker)}>Activar recomendado</button>
                   )}
-                  {/* 03-nov-2026: "Apagar" sólo se destaca cuando el activo NO está bien
-                      (CANDIDATO_APAGAR = recomendación; REVISAR = opción sensata). En un activo
-                      OK/OPTIMIZABLE queda como link discreto: es una acción, no un consejo. */}
-                  {on && (statusOf(h) === 'CANDIDATO_APAGAR' || statusOf(h) === 'REVISAR' || shutdown[ticker]?.verdict === 'PROPONER_APAGADO') && (
-                    <button className="btn" onClick={() => deactivate(ticker)} title="Deshabilitar el activo en vivo (reversible)">🛑 Apagar</button>
+                  {recommendation.action === 'pause' && (
+                    <button className="btn" onClick={() => deactivate(ticker)} title="Pausa nuevas entradas; no envía órdenes de cierre">Pausar nuevas entradas</button>
                   )}
-                  {on && shutdown[ticker]?.verdict === 'PROPONER_APAGADO' && (
-                    <span style={{ color: '#ef4444', fontSize: '0.7rem' }} title={shutdown[ticker]?.note || ''}>
-                      🔴 sugerido: 4 sem. baseline&lt;0 + vivo negativo
-                    </span>
-                  )}
-                  {on && (statusOf(h) === 'OK' || statusOf(h) === 'OPTIMIZABLE') && (
-                    <>
-                      <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>✓ Calibrado</span>
-                      <a onClick={() => deactivate(ticker)} title="Deshabilitar (reversible) — sólo si querés sacarlo del pool activo"
-                        style={{ fontSize: '0.72rem', color: '#888', cursor: 'pointer', textDecoration: 'underline' }}>deshabilitar</a>
-                    </>
-                  )}
+                  <details style={{ fontSize: '0.72rem' }}>
+                    <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>Acciones manuales</summary>
+                    {!on && recommendation.action !== 'activate' && (
+                      <>
+                        <p>Fuera de recomendación. No convierte el roster en TRADE.</p>
+                        <button className="btn" onClick={() => activate(ticker, true)}>Activar manualmente (excepción)</button>
+                      </>
+                    )}
+                    {on && recommendation.action !== 'pause' && (
+                      <button className="btn" onClick={() => deactivate(ticker)}>Pausar manualmente</button>
+                    )}
+                    {((!on && recommendation.action === 'activate') || (on && recommendation.action === 'pause')) && (
+                      <span>La acción recomendada está disponible arriba.</span>
+                    )}
+                  </details>
+                  </div>
                 </td>
               </tr>
             );
