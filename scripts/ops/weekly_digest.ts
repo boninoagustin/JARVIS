@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
 import { parse as parseEnv } from 'dotenv';
-import { digestJobState, validateTelegramResponse } from './digest_status_core.js';
+import { digestJobState, summarizeSelection, validateTelegramResponse } from './digest_status_core.js';
 
 const REPO = '/opt/JARVIS';
 const SEND = process.argv.includes('--send');
@@ -103,6 +103,17 @@ for (const d of reports.docs) {
 }
 const rec = byStatus.RECOMMEND || 0;
 lines.push(`🎯 Candidatos: ${rec} RECOMMEND · ${byStatus.HOLD || 0} HOLD · ${byStatus.HOLD_MC || 0} HOLD_MC (ciclo ${fmtAgo(newestReport)})`);
+
+// Evidencia de evaluación real vs omitida (regresión de frescura). El resumen es el
+// artefacto local del runner; si no existe no se finge un cierre válido.
+try {
+  const sumPath = path.join(REPO, 'scripts/periodic_opt/opt_out/weekly_selection_summary.json');
+  if (fs.existsSync(sumPath)) {
+    const sel = summarizeSelection(JSON.parse(fs.readFileSync(sumPath, 'utf8')));
+    lines.push(sel.line);
+    if (!sel.complete) { cycleReady = false; if (sel.warning) warnings.push(sel.warning); }
+  }
+} catch { /* best-effort; el estado de las unidades ya cubre fallos duros */ }
 
 // Aplicaciones auto-vigiladas + tests prospectivos + modelos
 const st = (await db.collection('optimization_config').doc('auto_state').get()).data() as any || {};
