@@ -1,0 +1,9 @@
+[Unit]
+Description=JARVIS — resumen al cierre del ciclo (health y propuestas)
+After=network.target jarvis-health-weekly.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JARVIS
+ExecStart=/root/.nvm/versions/node/v24.19.0/bin/npx tsx /opt/JARVIS/scripts/ops/weekly_digest.ts --cycle-close --send
+TimeoutStartSec=10min

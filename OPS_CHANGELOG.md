@@ -1,5 +1,26 @@
 # Cambios de operación — 02-nov-2026
 
+## Digest al cierre real, no el lunes — 07-nov-2026
+
+- Por pedido del operador: jarvis-health-weekly.service dispara jarvis-weekly-digest.service
+  con OnSuccess y OnFailure, después de que el servicio finalice. El digest espera After=health.
+  Salud → riesgo → shutdown → roster → aviso, sin esperar un día de la semana.
+- Las tres propuestas ya no ignoran errores: si alguna falla, health queda failed, se
+  detienen los posts restantes y el digest informa ciclo incompleto. No anuncia listo con
+  propuestas parciales. Los fallos anteriores de ciclo/tune conservan sus avisos existentes.
+- jarvis-weekly-digest.timer quedó disabled e inactive, sin próximo disparo. No hay envío
+  adicional el lunes. La definición anterior se conserva para rollback.
+- weekly_digest --cycle-close explica que ya se puede revisar Salud de Activos y Optimización
+  Periódica; no aplica riesgos ni activaciones. Consulta config actual al contar fuera de roster.
+  ExecCondition omitida se distingue de un fallo y un oneshot activating se informa en curso.
+- Envío con timeout y validación real de HTTP + Telegram ok:true; no registra tokens ni cuerpos.
+  Tests aislados de estados/entrega y typecheck estricto de los tres scripts: OK.
+  systemd-analyze verify y comprobación de propiedades efectivas: OK.
+- Se envió una vez el resumen actual mediante el servicio, sin rerun del optimizador/health:
+  07-nov 09:16 ART, TELEGRAM_CONFIRMED, Result=success / ExecMainStatus=0.
+- Respaldo previo en /var/lib/jarvis/digest_migration_20261107_131534.
+  Configs desplegadas versionadas en scripts/ops/systemd/.
+
 ## Panel Salud de Activos — recomendación única (07-nov-2026)
 
 - La recomendación operativa se calcula con roster_proposals, configuración real ON/OFF

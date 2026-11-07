@@ -7,16 +7,20 @@
  * Este resumen agrupa, en 12 líneas legibles, todo lo que pasó el fin de semana y
  * avisa si algún job programado no corrió o terminó mal.
  *
- * Uso:  npx tsx scripts/ops/weekly_digest.ts            # imprime (dry-run)
- *       npx tsx scripts/ops/weekly_digest.ts --send     # envía por Telegram
+ * Se ejecuta al cerrar health + propuestas (OnSuccess/OnFailure), no el lunes.
+ * Uso:  npx tsx scripts/ops/weekly_digest.ts --cycle-close         # dry-run
+ *       npx tsx scripts/ops/weekly_digest.ts --cycle-close --send  # Telegram
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
+import { parse as parseEnv } from 'dotenv';
+import { digestJobState, validateTelegramResponse } from './digest_status_core.js';
 
 const REPO = '/opt/JARVIS';
 const SEND = process.argv.includes('--send');
+const CYCLE_CLOSE = process.argv.includes('--cycle-close');
 const DAY = 864e5;
 
 const UNITS: Array<[string, string]> = [
@@ -50,8 +54,8 @@ function unitInfo(unit: string) {
   }
   const active = get('ActiveState');
   const result = get('Result');
-  const failed = result && !['success', 'start', ''].includes(result);
-  return { unit, durMin, lastRun, active, result, failed };
+  const jobState = digestJobState(result, active);
+  return { unit, durMin, lastRun, active, result, state: jobState, failed: jobState === 'failed' };
 }
 
 const fmtDur = (m: number | null) => (m === null ? '?' : m >= 90 ? `${(m / 60).toFixed(1)}h` : `${m}min`);
@@ -67,6 +71,8 @@ const db = admin.firestore();
 
 const lines: string[] = [`📊 JARVIS — resumen semanal (${new Date().toISOString().slice(0, 10)})`];
 const warnings: string[] = [];
+let cycleReady = true;
+const coreUnits = new Set(['jarvis-periodic-opt.service', 'jarvis-detection-tune.service', 'jarvis-health-weekly.service']);
 
 for (const [unit, label] of UNITS) {
   const info = unitInfo(unit);
@@ -76,10 +82,13 @@ for (const [unit, label] of UNITS) {
     lines.push(`✅ ${label}: corriendo (servicio residente)`);
     continue;
   }
-  const icon = info.failed ? '❌' : stale ? '⚠️' : '✅';
-  lines.push(`${icon} ${label}: ${info.failed ? `FALLÓ (${info.result})` : 'ok'} · ${fmtDur(info.durMin)} · ${fmtAgo(info.lastRun)}`);
-  if (info.failed) warnings.push(`${label} terminó con ${info.result}`);
-  if (stale) warnings.push(`${label} no corre desde ${fmtAgo(info.lastRun)}`);
+  if (coreUnits.has(unit) && (info.failed || info.state === 'running' || stale)) cycleReady = false;
+  const icon = info.failed ? '❌' : info.state === 'running' ? '⏳' : stale ? '⚠️' : '✅';
+  const detail = info.failed ? `FALLÓ (${info.result || info.active})` : info.state === 'running' ? 'en curso' : info.state === 'skipped' ? 'último intento omitido por guarda; cierre previo' : 'ok';
+  lines.push(`${icon} ${label}: ${detail} · ${fmtDur(info.durMin)} · ${fmtAgo(info.lastRun)}`);
+  if (info.failed) warnings.push(`${label} terminó con ${info.result || info.active}`);
+  if (info.state === 'running') warnings.push(`${label} todavía no terminó`);
+  if (stale) warnings.push(`${label} no tiene un cierre reciente (${fmtAgo(info.lastRun)})`);
 }
 
 // Informes del ciclo: estados de los candidatos
@@ -136,6 +145,8 @@ try {
   if (fs.existsSync(contPath)) {
     const cont = JSON.parse(fs.readFileSync(contPath, 'utf8'));
     if (cont?.state && cont.state !== 'completed') {
+      cycleReady = false;
+      warnings.push(`Continuación al tune pendiente: ${cont.state}`);
       lines.push(`🔁 Continuación al tune: ${cont.state} (runId ${String(cont.runId || '').slice(0, 8)} · ${cont.week || '?'}) — revisar /var/lib/jarvis/weekly_continuation.json`);
     }
   }
@@ -144,14 +155,18 @@ try {
 // 05-nov-2026: roster propuesto (TRADE/WATCH/OFF) y cuántos operan fuera de él.
 let rosterLine = '';
 try {
-  const rosterDocs = await db.collection('roster_proposals').get();
+  const [rosterDocs, configDocs] = await Promise.all([
+    db.collection('roster_proposals').get(), db.collection('asset_configs').get(),
+  ]);
+  const configMap = new Map(configDocs.docs.map(d => [d.id, d.data()]));
   const rv: Record<string, number> = { TRADE: 0, WATCH: 0, PARKED: 0, OFF: 0 };
   const fuera: string[] = [];
   for (const d of rosterDocs.docs) {
     if (d.id === '_SUMMARY') continue;
     const x = d.data();
     if (rv[x.verdict] !== undefined) rv[x.verdict]++;
-    if (x.verdict !== 'TRADE' && x.enabledAtGeneration === true) fuera.push(d.id);
+    const cfg = configMap.get(d.id);
+    if (x.verdict !== 'TRADE' && cfg?.enabled === true && !String(cfg.disabledReason || '').trim()) fuera.push(d.id);
   }
   if (rv.TRADE + rv.WATCH + rv.PARKED + rv.OFF > 0) {
     rosterLine = `🎯 Roster: ${rv.TRADE} TRADE · ${rv.WATCH} WATCH · ${rv.PARKED} PARKED · ${rv.OFF} OFF${fuera.length ? ` · operando fuera de roster: ${fuera.length} (${fuera.slice(0, 6).join(', ')}${fuera.length > 6 ? '…' : ''})` : ''}`;
@@ -200,8 +215,15 @@ if (tuneFiles.length) {
   if (m) lines.push(`🔬 Tune: aplicados ${m[1]} (${tuneFiles[tuneFiles.length - 1].replace(/[^0-9]/g, '').slice(0, 8)})`);
 }
 
+if (CYCLE_CLOSE) {
+  lines[0] = cycleReady ? '✅ JARVIS — ciclo semanal finalizado' : '⚠️ JARVIS — ciclo semanal incompleto';
+  lines.splice(1, 0, cycleReady
+    ? 'Health y propuestas listos. Revisá Salud de Activos y Optimización Periódica: ya podés decidir qué aplicar, sin esperar al lunes. Riesgo y activaciones requieren tu aprobación.'
+    : 'Hay etapas fallidas o pendientes. No apliques recomendaciones como si el ciclo hubiera cerrado correctamente; revisá las incidencias.');
+}
+
 if (warnings.length) {
-  lines.push('', '⚠️ ATAJO:', ...warnings.map((w) => `• ${w}`));
+  lines.push('', '⚠️ INCIDENCIAS:', ...warnings.map((w) => `• ${w}`));
 } else {
   lines.push('', '✅ Sin incidencias en los jobs programados.');
 }
@@ -211,14 +233,22 @@ console.log(text);
 
 if (!SEND) { console.log('\n[dry-run] agregá --send para enviarlo por Telegram'); process.exit(0); }
 
-const env = fs.readFileSync(path.join(REPO, '.env'), 'utf8');
-const token = /TELEGRAM_BOT_TOKEN="([^"]+)"/.exec(env)?.[1];
-const chat = /TELEGRAM_ALLOWED_USER_IDS="([^"]+)"/.exec(env)?.[1] || '1348898450';
-if (!token) { console.error('sin TELEGRAM_BOT_TOKEN'); process.exit(1); }
-const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-  body: new URLSearchParams({ chat_id: chat, text }).toString(),
-});
-const body = await res.text();
-console.log('\nenviado:', body.slice(0, 120));
+const env = parseEnv(fs.readFileSync(path.join(REPO, '.env'), 'utf8'));
+const token = env.TELEGRAM_BOT_TOKEN;
+const chat = (env.TELEGRAM_ALLOWED_USER_IDS || '').split(',')[0].trim();
+if (!token || !chat) { console.error('Falta configuración de Telegram'); process.exit(1); }
+try {
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ chat_id: chat, text }).toString(),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body: unknown = await res.json();
+  validateTelegramResponse(res.ok, body);
+  console.log('\nTELEGRAM_CONFIRMED');
+} catch {
+  // Do not log request URLs, credentials, or Telegram response bodies.
+  console.error('TELEGRAM_FAILED: entrega no confirmada');
+  process.exit(1);
+}
 process.exit(0);
