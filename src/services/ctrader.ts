@@ -193,15 +193,27 @@ async function connectWithRetry(): Promise<boolean> {
             console.log(`[CTRADER] 🔌 Conectando a cTrader Open API (intento ${attempt})...`);
             console.log(`[CTRADER] Modo: ${config.CTRADER_DEMO ? 'DEMO 🧪' : 'LIVE 🔴'}`);
             
-            const { connect } = await import('ctrader-ts');
+            const { CTrader } = await import('ctrader-ts');
             let timedOut = false;
-            
-            const connectPromise = connect({
+            // Own the socket BEFORE authentication. SDK connect() loses the client when
+            // account auth rejects (e.g. CANT_ROUTE_REQUEST), leaking a socket per retry.
+            const accountId = parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0;
+            const pendingClient = new CTrader({
+                host: config.CTRADER_DEMO ? 'demo.ctraderapi.com' : 'live.ctraderapi.com',
+                port: 5035,
+                accountId,
+                onReconnect: async () => {
+                    await pendingClient.raw.auth.authenticateApp(config.CTRADER_CLIENT_ID, config.CTRADER_CLIENT_SECRET);
+                    await pendingClient.raw.auth.authenticateAccount(accountId, config.CTRADER_ACCESS_TOKEN);
+                    await pendingClient.raw.market.restoreSubscriptions();
+                },
+            });
+            const { authenticateOwnedClient } = await import('./ctrader_auth_owned.js');
+            const connectPromise = authenticateOwnedClient(pendingClient, {
                 clientId: config.CTRADER_CLIENT_ID,
                 clientSecret: config.CTRADER_CLIENT_SECRET,
+                accountId,
                 accessToken: config.CTRADER_ACCESS_TOKEN,
-                accountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
-                environment: config.CTRADER_DEMO ? 'demo' : 'live',
             });
             
             connectPromise.then(c => { 
@@ -211,7 +223,7 @@ async function connectWithRetry(): Promise<boolean> {
             }).catch(() => {});
             
             const client = await withTimeout(connectPromise, CONNECT_TIMEOUT_MS, 'connectCTrader')
-                .catch(err => { timedOut = true; throw err; });
+                .catch(err => { timedOut = true; pendingClient.disconnect(); throw err; });
                 
             ctClient = client;
             isConnected = true;

@@ -1,5 +1,25 @@
 # Cambios de operación — 02-nov-2026
 
+## Recuperación cTrader — 07-nov-2026
+
+- Incidente: PM2 online pero autenticación de cuenta fallaba con CANT_ROUTE_REQUEST.
+  Se observaron cientos de sockets TCP del mismo proceso: SDK connect() no devuelve
+  su cliente cuando falla el auth y el caller no podía cerrar esos sockets.
+- Verificación independiente, sin órdenes ni refresh de tokens: app/account auth OK,
+  cero posiciones y cero órdenes. Posición 301741586 (GBPCHF) completamente cerrada;
+  neto broker 0,88 USD coincide con el journal VERIFIED ZE8F2K.
+- Registro activo FB3JE2 era un fragmento sin ticker/tradeId/direction. Se respaldó
+  localmente en scratch/broker_recovery_20261107.json (0600) y en Firestore
+  ops_recovery_archive/broker_20261107_FB3JE2 antes de retirarlo transaccionalmente.
+  Journal y resultado económico preservados, sin duplicar PnL ni marcar SKIP.
+- Conexión: el proceso ahora posee el cliente antes del handshake y lo desconecta
+  ante fallo o timeout; mantiene autenticación y restauración de suscripciones en reconnect.
+  Test aislado de cinco casos con cliente falso; no utiliza tokens reales ni envía órdenes.
+- Se recuperó la conexión por reinicio controlado. El origen del rechazo transitorio
+  del broker no está demostrado; la fuga de sockets sí queda corregida.
+- El watchdog conserva por ahora su detección legacy basada en logs; no confundir
+  accesibilidad TCP con autenticación efectiva de la cuenta.
+
 Registro de los cambios de infraestructura hechos sobre el servidor (no viven en git,
 pero acá queda el qué y el por qué). Todo es reversible.
 
