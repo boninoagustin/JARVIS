@@ -1,5 +1,27 @@
 # Cambios de operación — 02-nov-2026
 
+## Frescura durable + panel honesto — 07-nov-2026
+
+- run_weekly.py usaba el timestamp del último intento como watermark; tras el 404 del
+  viernes el reintento (mercado cerrado) creyó "sin datos nuevos" y omitió la selección
+  de los 32 activos. Ahora selection_freshness.py mantiene un checkpoint de la última
+  selección EXITOSA (vela + journal) separado del intento: ERROR/skip nunca avanzan el
+  watermark, y sin evidencia se re-evalúa solo (sin --force). El reintento quedó
+  respaldado en /var/lib/jarvis/recovery_rerun_2026-W45_* y relanzado; AUDCAD entró en
+  hyperopt completo (400 trials), no en skip.
+- run_detection_tune.sh propaga fallos del worker y no encadena health si algo falló.
+  run_sweep_if_retrained.sh ya no corre detached (espera el sweep y persiste checkpoint).
+  push_reports.js no publica selection_state privado.
+- health_check.ts: el filtro "cuenta real" usa muestra cerrada y verificada única
+  (descarta señales/backtests/duplicados/no-VERIFIED). Es orientativo; no autoriza real.
+- Panel Optimización Periódica quedó en modo diagnóstico (sin escrituras): históricos
+  fuera de active_tickers o >8 días excluidos, validación de selección ≠ OOS, Δ real,
+  PnL negativo = mejora, HOLD_MC ambiguo no se etiqueta SIN EDGE, gatillos/ML no aplican
+  cambios no certificados. Activación/roster derivados a Salud de Activos.
+- Relanzamiento de recuperación de la semana 2026-W45: se limpiaron mark y PYDONE (con
+  respaldo) y se inició el ciclo completo. La cadena sigue optimización → tune → health
+  → digest al cierre.
+
 ## Digest al cierre real, no el lunes — 07-nov-2026
 
 - Por pedido del operador: jarvis-health-weekly.service dispara jarvis-weekly-digest.service
