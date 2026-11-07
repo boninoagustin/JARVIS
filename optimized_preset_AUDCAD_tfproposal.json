@@ -1,6 +1,6 @@
 {
   "ticker": "AUDCAD",
-  "generatedAt": "2026-10-24T22:55:26.468Z",
+  "generatedAt": "2026-11-07T00:06:51.770Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {
@@ -30,12 +30,12 @@
       }
     },
     "metrics": {
-      "trades": 67,
-      "wins": 47,
-      "wr": 0.7014925373134329,
-      "pf": 2.424175141718391,
-      "exp": 0.46452688095919953,
-      "maxDD": 4.10748047156269,
+      "trades": 82,
+      "wins": 57,
+      "wr": 0.6951219512195121,
+      "pf": 2.326851532546266,
+      "exp": 0.4436083793765721,
+      "maxDD": 3.8971878481117725,
       "maxAbsR": 1.5718750000001167
     }
   },
@@ -67,16 +67,16 @@
       }
     },
     "metrics": {
-      "trades": 67,
-      "wins": 47,
-      "wr": 0.7014925373134329,
-      "pf": 2.424175141718391,
-      "exp": 0.46452688095919953,
-      "maxDD": 4.10748047156269,
+      "trades": 82,
+      "wins": 57,
+      "wr": 0.6951219512195121,
+      "pf": 2.326851532546266,
+      "exp": 0.4436083793765721,
+      "maxDD": 3.8971878481117725,
       "maxAbsR": 1.5718750000001167
     }
   },
   "verdict": "HOLD",
   "reason": "sin mejora suficiente vs baseline",
-  "elapsedSec": 1557
+  "elapsedSec": 2312
 }

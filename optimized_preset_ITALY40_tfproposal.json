@@ -1,0 +1,57 @@
+{
+  "ticker": "ITALY40",
+  "generatedAt": "2026-11-07T00:55:40.585Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {},
+    "metrics": {
+      "trades": 38,
+      "wins": 13,
+      "wr": 0.34210526315789475,
+      "pf": 0.7292873627831576,
+      "exp": -0.17810051684603834,
+      "maxDD": 10.267817699627656,
+      "maxAbsR": 1.499999533197324
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 5,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.3,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 59,
+      "wins": 25,
+      "wr": 0.423728813559322,
+      "pf": 1.014795131010094,
+      "exp": 0.008526011534593335,
+      "maxDD": 7.327901978219641,
+      "maxAbsR": 1.499999533197324
+    }
+  },
+  "verdict": "RECOMMEND",
+  "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
+  "elapsedSec": 637
+}
