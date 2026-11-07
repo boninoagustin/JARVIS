@@ -1,5 +1,25 @@
 # Cambios de operación — 02-nov-2026
 
+## Toggles de features restaurados (sin duplicar roster) — 07-nov-2026
+
+- El panel Optimización Periódica vuelve a tener controles accionables: gate ML, filtro
+  correlación, TimesFM, rollover A/D, políticas de salida, gatillos perdedores y promoción
+  de Asset Scout. Cada acción exige evaluación fresca (≤8 días) + confirmación; escribe su
+  config real (read-modify-write en TimesFM/loser) y el bot la toma en caliente.
+- Gate ML honesto: el toggle cambia mlGateEnabled; el umbral runtime lo fija el modelo.
+- El roster (activar/pausar activo) sigue en Salud de Activos como única fuente, sin duplicar.
+
+## Incidente: ediciones concurrentes rompieron el hyperopt — 07-nov-2026
+
+- El worker de hyperopt verifica (fail-closed) el hash de todo src/ y jarvis-os/src/ al
+  inicializar y en cada evaluate. Editar el panel (jarvis-os/src/…) MIENTRAS corría el
+  ciclo disparó `source snapshot changed after init` y tumbó 4 activos (AUDCAD/AUDJPY/
+  AUDNZD/AUSTRALIA200) con ERROR, no por el fix de frescura sino por la edición concurrente.
+- Lección: NO editar src/, jarvis-os/src/, scripts/hyperopt/ ni scripts/periodic_opt/
+  mientras corre la optimización semanal. El código quedó commiteado antes de relanzar.
+- Relanzamiento de recuperación: se detuvo el ciclo, se confirmó estado limpio (mark/PYDONE
+  sin rescribir por el stop) y se volvió a iniciar con fuentes estables.
+
 ## Frescura durable + panel honesto — 07-nov-2026
 
 - run_weekly.py usaba el timestamp del último intento como watermark; tras el 404 del
@@ -496,7 +516,7 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   propuestas; además los consumidores ignoran health sin fecha o >8 días (`isHealthFresh`).
 - **H08**: muestra viva filtrada: fuera backtesting, duplicados, no cerrados y sin
   contabilidad VERIFIED; dedupe por posición. Log de composición en ambos scripts.
-- **H09**: la racha de semanas negativas exige semanas CONTIGUAS (7 días exactos) y el
+- **H09**: la racha de semanas negativas exige semanas CONTIGUAS (7 d��as exactos) y el
   dry-run lee el historial igual que `--write` (`countConsecutiveNegativeWeeks`).
 - **H11**: singleflight en el refresh del token (auto-renewal/connect/retry convergen) y
   escritura del `.env` atómica (tmp+fsync+rename), modo 0600, backup 0600 y readback.
