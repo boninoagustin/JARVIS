@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
@@ -211,6 +211,10 @@ export default function PeriodicOptPanel() {
     const [scout, setScout] = useState<ScoutReport | null>(null);
     const [activeList, setActiveList] = useState<string[]>([]);
     const [assetEnabled, setAssetEnabled] = useState<Record<string, boolean>>({});
+    const [promoting, setPromoting] = useState<string | null>(null);
+    const [exitApplying, setExitApplying] = useState<string | null>(null);
+    const [appliedExitPolicies, setAppliedExitPolicies] = useState<Record<string, string>>({});
+    const [loserApplied, setLoserApplied] = useState<Record<string, number>>({});
 
     // All sections refresh as one read-only batch. Failed reads clear old values,
     // rather than displaying an earlier successful response as current evidence.
@@ -283,6 +287,129 @@ export default function PeriodicOptPanel() {
 
     const card: React.CSSProperties = { padding: '20px', backgroundColor: '#0a0a0a', border: '1px solid #222', borderRadius: '8px' };
 
+    // ── Acciones de features (restauradas con evidencia fresca + confirmación) ──
+    // Cada toggle escribe su config real en asset_configs y el bot la toma en caliente.
+    // No se actúa sobre evaluaciones vencidas; el roster (activar/pausar activo) vive en Salud.
+    const confirmAction = (label: string, fresh: boolean, detail: string): boolean => {
+        if (!fresh) { toast(`${label}: evaluación/propuesta vencida o sin fecha — refrescá el panel`, 'error'); return false; }
+        return window.confirm(`${label}\n\n${detail}`);
+    };
+
+    const promoteTicker = async (ticker: string) => {
+        if (!confirmAction('Promover activo', isFreshReport(scout?.generatedAt),
+            `Agregar ${ticker} al universo de optimización (active_tickers). NO lo habilita a operar: eso es el roster en Salud de Activos.`)) return;
+        setPromoting(ticker);
+        try {
+            const ref = doc(db, 'optimization_config', 'active_tickers');
+            const snap = await getDoc(ref);
+            const cur: string[] = snap.exists() ? ((snap.data() as any).tickers || []) : [];
+            if (cur.includes(ticker)) { toast(`${ticker} ya está en el universo`, 'info'); return; }
+            await setDoc(ref, { tickers: [...cur, ticker], updatedAt: new Date().toISOString() }, { merge: true });
+            setActiveList([...cur, ticker]);
+            toast(`⚡ ${ticker} PROMOVIDO al universo de optimización (próximo ciclo)`, 'success');
+        } catch (e) { console.error(e); toast(`Error promoviendo ${ticker}`, 'error'); }
+        finally { setPromoting(null); }
+    };
+
+    const toggleMLGate = async (ticker: string, on: boolean) => {
+        const ev = mlEvals[ticker];
+        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(ev?.evaluatedAt),
+            `Cambia mlGateEnabled. El umbral runtime lo fija el modelo (pipeline de entrenamiento), no este botón: umbral probado ${ev?.bestGate?.umbral ?? '—'}.`)) return;
+        try {
+            await setDoc(doc(db, 'asset_configs', ticker), { mlGateEnabled: on }, { merge: true });
+            setMlGateOn(p => ({ ...p, [ticker]: on }));
+            toast(`Gate ML ${on ? 'ON' : 'OFF'} en ${ticker}`, on ? 'success' : 'info');
+        } catch (e) { console.error(e); toast(`Error gate ML ${ticker}`, 'error'); }
+    };
+
+    const toggleCorrFilter = async (ticker: string, on: boolean) => {
+        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, isFreshReport(corrEvals[ticker]?.evaluatedAt),
+            `correlationFilter.shadow=${!on}. ${on ? 'Bloquea y aplica risk-parity' : 'Solo observa'}.`)) return;
+        try {
+            await setDoc(doc(db, 'asset_configs', ticker), { correlationFilter: { shadow: !on } }, { merge: true });
+            setCorrOn(p => ({ ...p, [ticker]: on }));
+            toast(`Correlación ${on ? 'ON' : 'observa'} en ${ticker}`, on ? 'success' : 'info');
+        } catch (e) { console.error(e); toast(`Error correlación ${ticker}`, 'error'); }
+    };
+
+    const toggleTimesfm = async (ticker: string, on: boolean) => {
+        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(tfmEvals[ticker]?.evaluatedAt),
+            `timesfm.enabled=${on} (read-modify-write para no pisar el resto del bloque timesfm).`)) return;
+        try {
+            const ref = doc(db, 'asset_configs', ticker);
+            const snap = await getDoc(ref);
+            const cur = snap.exists() ? ((snap.data() as any).timesfm ?? {}) : {};
+            await setDoc(ref, { timesfm: { ...cur, enabled: on } }, { merge: true });
+            setTfmOn(p => ({ ...p, [ticker]: on }));
+            toast(`TimesFM ${on ? 'ON' : 'OFF'} en ${ticker}`, on ? 'success' : 'info');
+        } catch (e) { console.error(e); toast(`Error TimesFM ${ticker}`, 'error'); }
+    };
+
+    const toggleRollover = async (ticker: string, rule: 'A' | 'D', on: boolean) => {
+        if (!confirmAction(`Rollover ${rule} ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(rollEvals[ticker]?.evaluatedAt),
+            `${rule === 'A' ? 'rolloverBeEnabled' : 'rolloverEntryBlock'} = ${on}.`)) return;
+        try {
+            const field = rule === 'A' ? 'rolloverBeEnabled' : 'rolloverEntryBlock';
+            await setDoc(doc(db, 'asset_configs', ticker), { [field]: on }, { merge: true });
+            setRollOn(p => ({ ...p, [ticker]: { ...(p[ticker] ?? { A: true, D: true }), [rule]: on } }));
+            toast(`Rollover ${rule} ${on ? 'ON' : 'OFF'} en ${ticker}`, on ? 'success' : 'info');
+        } catch (e) { console.error(e); toast(`Error rollover ${ticker}`, 'error'); }
+    };
+
+    const applyExitPolicy = async (ticker: string, policy: 'P1' | 'P2' | 'P3') => {
+        if (!confirmAction(`Política de salida ${policy} — ${ticker}`, isFreshReport(exitsEvals[ticker]?.evaluatedAt),
+            `Reescribe los genes de salida de TODOS los gatillos de ${ticker} (no cierra posiciones abiertas).`)) return;
+        setExitApplying(ticker);
+        try {
+            const GENES: Record<string, Record<string, any>> = {
+                P1: { partialClosePct: 0, tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'none' },
+                P2: { partialClosePct: 50, tp15BeEnabled: true, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'midpoint' },
+                P3: { partialClosePct: 50, tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'none' },
+            };
+            const ref = doc(db, 'asset_configs', ticker);
+            const snap = await getDoc(ref);
+            const cur = snap.exists() ? (snap.data() as any) : {};
+            const sessions = JSON.parse(JSON.stringify(cur.sessions ?? {}));
+            let touched = 0;
+            for (const s of Object.keys(sessions)) for (const g of Object.keys(sessions[s] ?? {})) { sessions[s][g] = { ...sessions[s][g], ...GENES[policy] }; touched++; }
+            await setDoc(ref, { sessions, updatedAt: new Date().toISOString(), updatedBy: 'panel_exit_policy' }, { merge: true });
+            setAppliedExitPolicies(p => ({ ...p, [ticker]: policy }));
+            toast(`🎯 ${ticker}: política ${policy} aplicada a ${touched} gatillos`, 'success');
+        } catch (e) { console.error(e); toast(`Error política de salida ${ticker}`, 'error'); }
+        finally { setExitApplying(null); }
+    };
+
+    const applyLoserForTicker = async (ticker: string) => {
+        if (!loser) return;
+        const props = [...loser.disables, ...loser.enables].filter(p => p.ticker === ticker);
+        if (props.length === 0) { toast(`Sin propuestas para ${ticker}`, 'info'); return; }
+        if (!confirmAction(`Gatillos perdedores — ${ticker}`, isFreshReport(loser.generatedAt),
+            `Apaga (minScore=99) o reactiva (minScore=4+enabled) los gatillos×sesión propuestos. ${props.map(p => `${p.session}/${p.trigger}`).join(', ')}.`)) return;
+        setPromoting(ticker);
+        try {
+            const ref = doc(db, 'asset_configs', ticker);
+            const snap = await getDoc(ref);
+            const current = snap.exists() ? (snap.data() as any) : {};
+            const merged = JSON.parse(JSON.stringify(current.sessions || {}));
+            for (const p of props) {
+                merged[p.session] = merged[p.session] || {};
+                const curT = merged[p.session][p.trigger] || {};
+                if (loser.disables.includes(p)) merged[p.session][p.trigger] = { ...curT, minScore: 99 };
+                else merged[p.session][p.trigger] = { ...curT, minScore: 4, enabled: true };
+            }
+            await setDoc(ref, { sessions: merged, updatedAt: new Date().toISOString(), updatedBy: 'panel_loser' }, { merge: true });
+            const next = { ...loserApplied, [ticker]: Date.now() };
+            setLoserApplied(next);
+            const lref = doc(db, 'opt_reports', 'LOSER_TRIGGERS_PROPOSAL');
+            const lsnap = await getDoc(lref);
+            const prevApplied = (lsnap.exists() && lsnap.data().applied && typeof lsnap.data().applied === 'object') ? lsnap.data().applied : {};
+            await setDoc(lref, { applied: { ...prevApplied, [ticker]: Date.now() } }, { merge: true });
+            toast(`✅ Gatillos aplicados para ${ticker}`, 'success');
+            void refreshAll();
+        } catch (e) { console.error(e); toast(`Error gatillos ${ticker}`, 'error'); }
+        finally { setPromoting(null); }
+    };
+
     if (loading) return <div style={{ padding: '20px', color: 'var(--text-secondary)' }}>Cargando reportes de optimización...</div>;
 
     return (
@@ -303,9 +430,9 @@ export default function PeriodicOptPanel() {
             </div>
 
             <p style={{ color: '#aaa', margin: 0 }}>
-                Panel de diagnóstico, sin escrituras. Gates, salidas y gatillos: investigación, no aplicables aquí.
-                {' '}<a href="/assets">Salud de Activos</a>: roster, activación y riesgo; no aplica estos gates.
-                {' '}La selección del optimizador no equivale a autorización operativa ni recepción del bot.
+                Gates, salidas y gatillos se pueden activar/desactivar acá con evidencia fresca (eval ≤8 días); el bot los toma en caliente.
+                {' '}<a href="/assets">Salud de Activos</a>: roster, activación y riesgo (única fuente para decidir qué activos operan).
+                {' '}La selección del optimizador y los contrafactuales no son garantía de rendimiento futuro ni confirman recepción del bot.
             </p>
             {stateError && <div role="alert" style={{ color: '#ffaa00' }}>{stateError}</div>}
             <div>Reportes vigentes (≤8 días y active_tickers): {reports.filter(r => reportScope(r, activeList).current).length}.
@@ -483,7 +610,7 @@ export default function PeriodicOptPanel() {
                             </span>
                         )}
                     </div>
-                    <p>Investigación no aplicable: sin candidato final versionado y certificado. No modifica sesiones.</p>
+                    <p style={{ fontSize: '0.8rem', color: '#aaa' }}>Propuesta de apagar (minScore=99) o reactivar gatillos×sesión perdedores/ganadores. Aplicarla es decisión tuya; el bot la toma en caliente. No cierra posiciones abiertas.</p>
                     {loser.disables.length === 0 && loser.enables.length === 0 ? (
                         <p style={{ color: '#888', fontSize: '0.85rem', marginTop: '10px', marginBottom: 0 }}>
                             Sin propuestas en este reporte: ningún gatillo×sesión pasa los umbrales (n≥8, ±0.15R/t en ventana 84d).
@@ -506,7 +633,7 @@ export default function PeriodicOptPanel() {
                                     <div key={ticker} style={{ border: '1px solid #222', borderRadius: '6px', padding: '12px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                                             <b style={{ color: '#e6e6e6' }}>{ticker}</b>
-                                            <span>Solo investigación · no aplicable</span>
+                                            <button className="btn" disabled={!isFreshReport(loser.generatedAt) || loserApplied[ticker] !== undefined} onClick={() => applyLoserForTicker(ticker)}>{loserApplied[ticker] !== undefined ? 'Aplicado' : !isFreshReport(loser.generatedAt) ? 'Propuesta vencida' : 'Aplicar'}</button>
                                         </div>
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
                                             {ds.map(d => (
@@ -572,7 +699,9 @@ export default function PeriodicOptPanel() {
                                             <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#aaa' }}>{row.error ? '—' : (row.win84?.maxDD ?? 0).toFixed(1)}</td>
                                             <td style={{ padding: '6px 8px', fontWeight: 700, color: vColor }}>{row.error ? 'ERROR' : v}</td>
                                             <td style={{ padding: '6px 8px' }}>
-                                                <span>{promoted ? 'En universo de optimización' : 'Solo investigación'}</span>
+                                                {promoted
+                                                    ? <span style={{ color: '#00e676', fontSize: '0.78rem' }}>En universo de optimización</span>
+                                                    : <button className="btn" disabled={promoting === row.ticker || !isFreshReport(scout?.generatedAt)} onClick={() => promoteTicker(row.ticker)}>{promoting === row.ticker ? '…' : 'Promover'}</button>}
                                             </td>
                                         </tr>
                                     );
@@ -631,7 +760,7 @@ export default function PeriodicOptPanel() {
                                             : <span style={{ color: '#666' }}>sin evaluación</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <span style={{ color: '#888', fontSize: '0.75rem' }}>Diagnóstico · no aplicable aquí</span>
+                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleMLGate(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Apagar gate' : 'Activar gate'}</button>
                                     </td>
                                 </tr>
                             );
@@ -641,7 +770,7 @@ export default function PeriodicOptPanel() {
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '10px', marginBottom: 0 }}>
                     {mlTickers.length === 0
                         ? 'Sin activos — la lista sale de optimization_config/active_tickers.'
-                        : 'Sweep de selección: no certifica OOS ni equivalencia con el umbral runtime. Ningún gate se modifica desde este panel.'}
+                        : 'El toggle cambia mlGateEnabled (el bot lo toma en caliente). El umbral runtime lo fija el modelo; el sweep no certifica OOS ni equivalencia con ese umbral.'}
                 </p>
             </div>
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>
@@ -687,7 +816,7 @@ export default function PeriodicOptPanel() {
                                         {ev ? (rp?.n > 0 ? `${fmtUsd(rp.usd)}${fmtRc(rp.R)} (${rp.n})` : '—') : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <span style={{ color: '#888', fontSize: '0.75rem' }}>Diagnóstico · no aplicable aquí</span>
+                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleCorrFilter(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Pasar a observación' : 'Activar filtro'}</button>
                                     </td>
                                 </tr>
                             );
@@ -700,7 +829,7 @@ export default function PeriodicOptPanel() {
                         : 'Aún sin evaluación — el contrafactual se publica con el pipeline dominical.'}
                 </p>
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '6px', marginBottom: 0 }}>
-                    Contrafactual diagnóstico: un Δ favorable no autoriza cambios. No acredita equivalencia con la configuración actual ni recepción del bot.
+                    Contrafactual diagnóstico: activar el filtro es una decisión tuya; el bot la toma en caliente. Un Δ favorable no es garantía de rendimiento futuro.
                 </p>
             </div>
             {/* 🆕 16-sep-2026: TIMESFM POR ACTIVO — contrafactual + botón (asset_configs.timesfm.enabled) */}
@@ -744,7 +873,7 @@ export default function PeriodicOptPanel() {
                                         {ev && ev.reject > 0 ? `${ev.reject} bloqueadas` : ev ? '0' : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <span style={{ color: '#888', fontSize: '0.75rem' }}>Diagnóstico · no aplicable aquí</span>
+                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleTimesfm(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Apagar TimesFM' : 'Activar TimesFM'}</button>
                                     </td>
                                 </tr>
                             );
@@ -844,7 +973,13 @@ export default function PeriodicOptPanel() {
                                         {ev.genes ? `parcial ${ev.genes.partialClosePct}% · BE:${ev.genes.tp15BeEnabled ? 'on' : 'off'} · trail:${ev.genes.atrTrailEnabled ? 'on' : 'off'}` : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <span>Investigación · política no aplicable aquí</span>
+                                        {enough && isFreshReport(ev?.evaluatedAt) ? (
+                                            <span style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                                <button className="btn" onClick={() => applyExitPolicy(t, 'P1')} disabled={exitApplying === t}>P1</button>
+                                                <button className="btn" onClick={() => applyExitPolicy(t, 'P2')} disabled={exitApplying === t}>P2</button>
+                                                <button className="btn" onClick={() => applyExitPolicy(t, 'P3')} disabled={exitApplying === t}>P3</button>
+                                            </span>
+                                        ) : <span style={{ color: '#888', fontSize: '0.72rem' }}>{!isFreshReport(ev?.evaluatedAt) ? 'eval vencida' : `n=${ev.n}/30`}</span>}
                                     </td>
                                 </tr>
                             );
@@ -893,7 +1028,8 @@ export default function PeriodicOptPanel() {
                                     </td>
                                     <td style={{ padding: '8px 4px', color: ev.dBlocked > 0 ? '#ffaa00' : '#888' }}>{ev.dBlocked}</td>
                                     <td style={{ padding: '8px 4px', display: 'flex', gap: '6px' }}>
-                                        <span>A {st.A ? 'ON' : 'OFF'} · D {st.D ? 'ON' : 'OFF'} (almacenado; sin recepción del bot)</span>
+                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleRollover(t, 'A', !st.A)}>A {st.A ? 'ON' : 'OFF'}</button>
+                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleRollover(t, 'D', !st.D)}>D {st.D ? 'ON' : 'OFF'}</button>
                                     </td>
                                 </tr>
                             );

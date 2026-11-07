@@ -45,9 +45,16 @@ test('ML displays tested threshold and sample without equating a boolean with de
     assert.match(text, /0.65/); assert.match(text, /n gate 32 \/ sin gate 95/);
     assert.match(text, /equivalencia con runtime no acreditada/);
 });
-test('panel has no mutation APIs/handlers and refreshes every diagnostic together', () => {
+test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
-    assert.doesNotMatch(panel, /\b(setDoc|updateDoc|deleteDoc|writeBatch|runTransaction|confirmActivate|confirmDisable|confirmLoserApply|applyExitPolicy|toggleMLGate)\b/);
+    // Feature toggles are actionable again, each gated by fresh evidence + confirmation.
+    for (const h of ['toggleMLGate', 'toggleCorrFilter', 'toggleTimesfm', 'toggleRollover', 'applyExitPolicy', 'applyLoserForTicker', 'promoteTicker']) assert.match(panel, new RegExp(`\\b${h}\\b`));
+    assert.match(panel, /confirmAction/);
+    assert.match(panel, /isFreshReport\(/);
+    assert.match(panel, /setDoc\(/);
+    // Asset enable/disable (roster) is NOT duplicated here: single source in Salud de Activos.
+    assert.doesNotMatch(panel, /confirmActivate|confirmDisable/);
+    assert.doesNotMatch(panel, /updatedBy: 'panel_activate'|updatedBy: 'panel_disable'/);
     assert.match(panel, /Promise\.allSettled/);
     assert.match(panel, /onClick=\{\(\) => void refreshAll\(\)\}/);
     for (const collection of ['opt_reports', 'auto_state', 'asset_configs', 'active_tickers', 'health_check', 'ml_gate_evals', 'corr_gate_evals', 'timesfm_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals']) assert.ok(panel.includes(collection));
