@@ -158,6 +158,18 @@ class FreshnessTests(unittest.TestCase):
         self.assertTrue(f.needs_selection(None, 100, 0, 20))
         self.assertEqual(self.run_main()[1]['selection_outcome'], 'evaluated')
 
+    def test_benign_timesfm_cache_error_does_not_invalidate_selection(self):
+        # La colecta TimesFM puede dar 0 orígenes (el hyperopt corre sin cache); eso no
+        # debe convertir una evaluación válida en HOLD_SELECTION_ERROR.
+        base = {'status': 'HOLD', 'selection_outcome': 'evaluated',
+                'proposal_validation': {'n_trades': 10}, 'production_validation': {'n_trades': 10},
+                'evaluation_provenance': {'dataset_files': [{'path': 'x', 'sha256': 'a' * 64}]},
+                'evaluation_certificate': {'version': 1}, 'timestamp': 123,
+                'timesfm_cache_error': 'colecta devolvió 0 orígenes — nada que forecastear'}
+        self.assertTrue(f.successful_selection(base, lambda r: True))
+        self.assertFalse(f.successful_selection({**base, 'deployment_error': 'boom'}, lambda r: True))
+        self.assertFalse(f.successful_selection({**base, 'selection_outcome': 'skipped'}, lambda r: True))
+
     def test_journal_pagination_counts_all_pages(self):
         doc = lambda ts: {'fields': {'ticker': {'stringValue': 'EURUSD'}, 'timestamp': {'integerValue': str(ts)}}}
         with patch.object(w, 'rest_json', side_effect=[{'documents': [doc(10)], 'nextPageToken': 'token /'}, {'documents': [doc(20), doc(30)]}]) as rest:

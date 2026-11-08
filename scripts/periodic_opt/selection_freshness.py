@@ -37,7 +37,9 @@ def successful_selection(report: dict, validate) -> bool:
         return False
     if report.get('selection_outcome') == 'skipped':
         return False
-    if any(k.endswith('_error') for k in report):
+    # timesfm_cache_error es benigno: la colecta de orígenes puede dar 0 (y el hyperopt
+    # corre igual sin cache TimesFM); no invalida la evaluación de scoring/gestión.
+    if any(k.endswith('_error') and k != 'timesfm_cache_error' for k in report):
         return False
     if not isinstance(report.get('proposal_validation'), dict) or not report['proposal_validation']:
         return False
