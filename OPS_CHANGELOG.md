@@ -1,5 +1,19 @@
 # Cambios de operación — 02-nov-2026
 
+## Paper mode (Opción A) — 09-nov-2026
+
+- Rompe el círculo "apagado → sin evidencia → apagado": los activos apagados del universo
+  (roster WATCH/PARKED) ahora se SIMULAN semanalmente con el motor completo (todas las
+  temporalidades M5→D1) sobre la ventana reciente (90 días), guardando trades individuales
+  como `paper_trades/{ticker}`. NUNCA ejecuta en cTrader.
+- `roster_proposal.ts` lee esa evidencia y marca `paperReady` (n≥8, WR≥40%, expectativa>0)
+  en los activos no-TRADE. Es una PROPUESTA de activación visible en Salud de Activos
+  ("🧪 Paper-ready"), nunca auto-apply ni P&L verificado.
+- `paper_trades.ts` corre en la cadena health-weekly (best-effort) ANTES del roster.
+- Precedente (Capas): prospective_test y prospective_promote ya no descartan los RECOMMEND
+  de activos apagados (se certifican forward y su config CERTIFIED se aplica sin tocar
+  enabled/disabledReason).
+
 ## Evidencia mínima para toggles + arreglo TimesFM — 09-nov-2026
 
 - El panel exige ahora evidencia mínima para activar/desactivar cualquier filtro:
@@ -494,7 +508,7 @@ registro durable de estados (no más `if`s sobre archivos sueltos).
   corrió). Cubierto por tests.
 - Test ampliado a 18 casos (systemd simulado con TUNE_STATE_CMD/TUNE_RESULT_CMD).
 
-### 14j. 9ª revisión — evidencia positiva de salida (D1-h)
+### 14j. 9ª revisi��n — evidencia positiva de salida (D1-h)
 
 - **`Result=success` no prueba nada**: verificado en el host, la unidad tune aparece con
   `Result=success`, `ExecMainStatus=0` y **`ExecMain*Timestamp` vacíos** (nunca corrió en
