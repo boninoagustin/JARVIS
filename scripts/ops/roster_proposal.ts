@@ -91,10 +91,18 @@ const sample = buildLiveSample(journal.docs as any);
 const live = sample.byTicker;
 console.log('Muestra viva: ' + describeLiveSample(sample));
 
+// Paper mode (09-nov-2026): evidencia simulada de los activos apagados (paper_trades).
+// NUNCA cuenta como P&L verificado; es una señal forward para PROPONER activación.
+const paperSnap = await db.collection('paper_trades').get();
+const paperMap = new Map(paperSnap.docs.map((d) => [d.id, d.data() as any]));
+const PAPER_MIN_N = 8;
+const PAPER_MIN_WR = 0.40;
+
 type Row = {
   ticker: string; cluster: string; mu: number; n: number; score: number;
   feasible: boolean; minFeasible: number | null; liveN: number; liveAvgR: number | null;
   enabled: boolean; reason: string; verdict: string;
+  paperN: number; paperWr: number | null; paperExp: number | null; paperReady: boolean;
 };
 const rows: Row[] = [];
 
@@ -124,9 +132,14 @@ for (const doc of health.docs) {
   const l = live.get(ticker) ?? { n: 0, sumR: 0 };
   const liveAvgR = l.n > 0 ? l.sumR / l.n : null;
   const score = mu * Math.sqrt(Math.min(n, 200));
+  const p = paperMap.get(ticker);
+  const paperN = Number(p?.n ?? 0);
+  const paperWr = paperN > 0 ? Number(p?.wr ?? 0) : null;
+  const paperExp = paperN > 0 ? Number(p?.expectancy ?? 0) : null;
   rows.push({
     ticker, cluster: riskClusterOf(ticker), mu, n, score, feasible, minFeasible,
     liveN: l.n, liveAvgR, enabled, reason: String(cfg.disabledReason || ''), verdict: 'OFF',
+    paperN, paperWr, paperExp, paperReady: false,
   });
 }
 
@@ -186,6 +199,13 @@ for (const r of rows) {
     : `plano (${r.mu.toFixed(3)} R/tr) — se sigue midiendo`;
 }
 
+// Paper-ready: activo NO-TRADE con evidencia paper suficiente. Es una PROPUESTA de
+// activación (no cambia el veredicto ni auto-activa plata real).
+for (const r of rows) {
+  if (r.verdict === 'TRADE') continue;
+  r.paperReady = r.paperN >= PAPER_MIN_N && (r.paperWr ?? 0) >= PAPER_MIN_WR && (r.paperExp ?? 0) > 0;
+}
+
 const byVerdict = (v: string) => rows.filter((r) => r.verdict === v);
 const RO = { TRADE: byVerdict('TRADE'), WATCH: byVerdict('WATCH'), PARKED: byVerdict('PARKED'), OFF: byVerdict('OFF') };
 
@@ -207,6 +227,9 @@ if (WRITE) {
       backtestTrades: r.n, score: Number(r.score.toFixed(3)), feasible: r.feasible,
       minFeasiblePct: r.minFeasible === null ? null : Number(r.minFeasible.toFixed(2)),
       liveTrades: r.liveN, liveAvgR: r.liveAvgR === null ? null : Number(r.liveAvgR.toFixed(4)),
+      paperTrades: r.paperN, paperWr: r.paperWr === null ? null : Number(r.paperWr.toFixed(4)),
+      paperExp: r.paperExp === null ? null : Number(r.paperExp.toFixed(4)),
+      paperReady: r.paperReady,
       reason: r.reason, generatedAt: at, enabledAtGeneration: r.enabled,
     }, { merge: true });
   }
