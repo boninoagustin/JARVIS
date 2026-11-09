@@ -66,7 +66,10 @@ for (const doc of tests.docs) {
   const current = (await assetRef.get()).data() as any;
   if (!current) { console.log(`  ${ticker}: asset_configs no existe, se omite`); continue; }
   if (current.enabled !== true || (typeof current.disabledReason === 'string' && current.disabledReason.trim())) {
-    console.log(`  ${ticker}: activo deshabilitado por el operador, se omite`); continue;
+    // Capa 1 (09-nov-2026): el config CERTIFIED se aplica igual aunque el activo esté
+    // apagado (queda listo para cuando el roster lo active). Los controles del operador
+    // (enabled/disabledReason) NO se tocan: el activo sigue apagado hasta el roster.
+    console.log(`  ${ticker}: activo apagado (roster) — se aplica el config certificado, el activo sigue apagado hasta activación por roster`);
   }
   if (typeof ev.production?.expectancy !== 'number' || !Number.isFinite(ev.production.expectancy)) {
     console.log(`  ${ticker}: evidencia sin expectancy de producción, se omite`); continue;

@@ -194,11 +194,12 @@ async function autoregister() {
     const ticker = rep.ticker || f.replace(/\.json$/, '');
     const assetDoc = await assetRef(ticker).get();
     const asset = assetDoc.data() as any;
-    // Solo activos que pueden operar: un RECOMMEND de un activo apagado no es testeable.
-    if (!asset || asset.enabled !== true || (typeof asset.disabledReason === 'string' && asset.disabledReason.trim())) {
-      console.log(`[auto] ${ticker}: activo deshabilitado, se omite`);
-      continue;
-    }
+    // Capa 1 (09-nov-2026): los RECOMMEND de activos apagados también se registran y
+    // evalúan forward (backtest sobre datos futuros, sin operar en cTrader) para certificar
+    // su config; el roster decide aparte si los activa. Esto destraba el círculo
+    // "apagado → sin evidencia → apagado".
+    const trading = asset?.enabled === true && !(typeof asset?.disabledReason === 'string' && asset.disabledReason.trim());
+    if (!trading) console.log(`[auto] ${ticker}: activo apagado (roster) — se registra igual para certificar su config forward`);
     const ex = await testRef(ticker).get();
     if (ex.exists) continue;
     console.log(`[auto] ${ticker}: RECOMMEND sin test → registrando`);
