@@ -48,3 +48,14 @@ export function reportVerdict(status: string, current: boolean): string {
 export function mlDiagnostic(ev?: { bestGate?: { umbral?: number; n?: number }; sinGate?: { n?: number } }): string {
     return `Diagnóstico solamente · umbral ensayado ${ev?.bestGate?.umbral ?? '—'} · n gate ${ev?.bestGate?.n ?? '—'} / sin gate ${ev?.sinGate?.n ?? '—'}. Activar un booleano no despliega ese umbral; equivalencia con runtime no acreditada.`;
 }
+/** Minimum closed/simulated sample before a filter toggle is allowed. Matches the exits n≥30 gate. */
+export const MIN_FILTER_SAMPLE = 30;
+/** Evidence gate for toggling a counterfactual filter: fresh eval + non-trivial sample. */
+export function filterEvidence(ts: unknown, n: unknown, now = Date.now()) {
+    const fresh = isFreshReport(ts, now);
+    const count = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+    const enough = count >= MIN_FILTER_SAMPLE;
+    const reason = !fresh ? 'evaluación vencida o sin fecha'
+        : !enough ? `muestra insuficiente (n=${count}/${MIN_FILTER_SAMPLE})` : null;
+    return { fresh, enough, actionable: fresh && enough, n: count, reason };
+}

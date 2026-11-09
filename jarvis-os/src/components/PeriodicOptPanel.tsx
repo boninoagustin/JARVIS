@@ -3,7 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
-import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport } from '../services/periodicOptPresentation';
+import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence } from '../services/periodicOptPresentation';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -290,8 +290,10 @@ export default function PeriodicOptPanel() {
     // ── Acciones de features (restauradas con evidencia fresca + confirmación) ──
     // Cada toggle escribe su config real en asset_configs y el bot la toma en caliente.
     // No se actúa sobre evaluaciones vencidas; el roster (activar/pausar activo) vive en Salud.
-    const confirmAction = (label: string, fresh: boolean, detail: string): boolean => {
-        if (!fresh) { toast(`${label}: evaluación/propuesta vencida o sin fecha — refrescá el panel`, 'error'); return false; }
+    const confirmAction = (label: string, evidence: boolean | { actionable: boolean; reason: string | null }, detail: string): boolean => {
+        const actionable = typeof evidence === 'boolean' ? evidence : evidence.actionable;
+        const reason = typeof evidence === 'boolean' ? null : evidence.reason;
+        if (!actionable) { toast(`${label}: ${reason ?? 'evidencia insuficiente'}`, 'error'); return false; }
         return window.confirm(`${label}\n\n${detail}`);
     };
 
@@ -313,7 +315,7 @@ export default function PeriodicOptPanel() {
 
     const toggleMLGate = async (ticker: string, on: boolean) => {
         const ev = mlEvals[ticker];
-        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(ev?.evaluatedAt),
+        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n),
             `Cambia mlGateEnabled. El umbral runtime lo fija el modelo (pipeline de entrenamiento), no este botón: umbral probado ${ev?.bestGate?.umbral ?? '—'}.`)) return;
         try {
             await setDoc(doc(db, 'asset_configs', ticker), { mlGateEnabled: on }, { merge: true });
@@ -323,7 +325,7 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleCorrFilter = async (ticker: string, on: boolean) => {
-        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, isFreshReport(corrEvals[ticker]?.evaluatedAt),
+        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, filterEvidence(corrEvals[ticker]?.evaluatedAt, corrEvals[ticker]?.n),
             `correlationFilter.shadow=${!on}. ${on ? 'Bloquea y aplica risk-parity' : 'Solo observa'}.`)) return;
         try {
             await setDoc(doc(db, 'asset_configs', ticker), { correlationFilter: { shadow: !on } }, { merge: true });
@@ -333,7 +335,7 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleTimesfm = async (ticker: string, on: boolean) => {
-        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(tfmEvals[ticker]?.evaluatedAt),
+        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, filterEvidence(tfmEvals[ticker]?.evaluatedAt, tfmEvals[ticker]?.n),
             `timesfm.enabled=${on} (read-modify-write para no pisar el resto del bloque timesfm).`)) return;
         try {
             const ref = doc(db, 'asset_configs', ticker);
@@ -346,7 +348,7 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleRollover = async (ticker: string, rule: 'A' | 'D', on: boolean) => {
-        if (!confirmAction(`Rollover ${rule} ${on ? 'ON' : 'OFF'} — ${ticker}`, isFreshReport(rollEvals[ticker]?.evaluatedAt),
+        if (!confirmAction(`Rollover ${rule} ${on ? 'ON' : 'OFF'} — ${ticker}`, filterEvidence(rollEvals[ticker]?.evaluatedAt, rollEvals[ticker]?.nVentanas),
             `${rule === 'A' ? 'rolloverBeEnabled' : 'rolloverEntryBlock'} = ${on}.`)) return;
         try {
             const field = rule === 'A' ? 'rolloverBeEnabled' : 'rolloverEntryBlock';
@@ -357,7 +359,7 @@ export default function PeriodicOptPanel() {
     };
 
     const applyExitPolicy = async (ticker: string, policy: 'P1' | 'P2' | 'P3') => {
-        if (!confirmAction(`Política de salida ${policy} — ${ticker}`, isFreshReport(exitsEvals[ticker]?.evaluatedAt),
+        if (!confirmAction(`Política de salida ${policy} — ${ticker}`, filterEvidence(exitsEvals[ticker]?.evaluatedAt, exitsEvals[ticker]?.n),
             `Reescribe los genes de salida de TODOS los gatillos de ${ticker} (no cierra posiciones abiertas).`)) return;
         setExitApplying(ticker);
         try {
@@ -383,7 +385,7 @@ export default function PeriodicOptPanel() {
         if (!loser) return;
         const props = [...loser.disables, ...loser.enables].filter(p => p.ticker === ticker);
         if (props.length === 0) { toast(`Sin propuestas para ${ticker}`, 'info'); return; }
-        if (!confirmAction(`Gatillos perdedores — ${ticker}`, isFreshReport(loser.generatedAt),
+        if (!confirmAction(`Gatillos perdedores — ${ticker}`, filterEvidence(loser.generatedAt, props.reduce((s, p) => s + (Number(p.n) || 0), 0)),
             `Apaga (minScore=99) o reactiva (minScore=4+enabled) los gatillos×sesión propuestos. ${props.map(p => `${p.session}/${p.trigger}`).join(', ')}.`)) return;
         setPromoting(ticker);
         try {
@@ -633,7 +635,7 @@ export default function PeriodicOptPanel() {
                                     <div key={ticker} style={{ border: '1px solid #222', borderRadius: '6px', padding: '12px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                                             <b style={{ color: '#e6e6e6' }}>{ticker}</b>
-                                            <button className="btn" disabled={!isFreshReport(loser.generatedAt) || loserApplied[ticker] !== undefined} onClick={() => applyLoserForTicker(ticker)}>{loserApplied[ticker] !== undefined ? 'Aplicado' : !isFreshReport(loser.generatedAt) ? 'Propuesta vencida' : 'Aplicar'}</button>
+                                            <button className="btn" disabled={!filterEvidence(loser.generatedAt, [...ds, ...es].reduce((s, p) => s + (Number(p.n) || 0), 0)).actionable || loserApplied[ticker] !== undefined} onClick={() => applyLoserForTicker(ticker)} title={filterEvidence(loser.generatedAt, [...ds, ...es].reduce((s, p) => s + (Number(p.n) || 0), 0)).reason ?? ''}>{loserApplied[ticker] !== undefined ? 'Aplicado' : !filterEvidence(loser.generatedAt, [...ds, ...es].reduce((s, p) => s + (Number(p.n) || 0), 0)).actionable ? 'Evidencia insuficiente' : 'Aplicar'}</button>
                                         </div>
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
                                             {ds.map(d => (
@@ -760,7 +762,7 @@ export default function PeriodicOptPanel() {
                                             : <span style={{ color: '#666' }}>sin evaluación</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleMLGate(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Apagar gate' : 'Activar gate'}</button>
+                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).actionable} onClick={() => toggleMLGate(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).reason ?? ''}>{on ? 'Apagar gate' : 'Activar gate'}</button>
                                     </td>
                                 </tr>
                             );
@@ -816,7 +818,7 @@ export default function PeriodicOptPanel() {
                                         {ev ? (rp?.n > 0 ? `${fmtUsd(rp.usd)}${fmtRc(rp.R)} (${rp.n})` : '—') : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleCorrFilter(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Pasar a observación' : 'Activar filtro'}</button>
+                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleCorrFilter(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>{on ? 'Pasar a observación' : 'Activar filtro'}</button>
                                     </td>
                                 </tr>
                             );
@@ -873,7 +875,7 @@ export default function PeriodicOptPanel() {
                                         {ev && ev.reject > 0 ? `${ev.reject} bloqueadas` : ev ? '0' : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleTimesfm(t, !on)} title={!isFreshReport(ev?.evaluatedAt) ? 'Evaluación vencida' : ''}>{on ? 'Apagar TimesFM' : 'Activar TimesFM'}</button>
+                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleTimesfm(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>{on ? 'Apagar TimesFM' : 'Activar TimesFM'}</button>
                                     </td>
                                 </tr>
                             );
@@ -973,13 +975,13 @@ export default function PeriodicOptPanel() {
                                         {ev.genes ? `parcial ${ev.genes.partialClosePct}% · BE:${ev.genes.tp15BeEnabled ? 'on' : 'off'} · trail:${ev.genes.atrTrailEnabled ? 'on' : 'off'}` : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        {enough && isFreshReport(ev?.evaluatedAt) ? (
+                                        {filterEvidence(ev?.evaluatedAt, ev?.n).actionable ? (
                                             <span style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                                                 <button className="btn" onClick={() => applyExitPolicy(t, 'P1')} disabled={exitApplying === t}>P1</button>
                                                 <button className="btn" onClick={() => applyExitPolicy(t, 'P2')} disabled={exitApplying === t}>P2</button>
                                                 <button className="btn" onClick={() => applyExitPolicy(t, 'P3')} disabled={exitApplying === t}>P3</button>
                                             </span>
-                                        ) : <span style={{ color: '#888', fontSize: '0.72rem' }}>{!isFreshReport(ev?.evaluatedAt) ? 'eval vencida' : `n=${ev.n}/30`}</span>}
+                                        ) : <span style={{ color: '#888', fontSize: '0.72rem' }}>{filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}</span>}
                                     </td>
                                 </tr>
                             );
@@ -1028,8 +1030,8 @@ export default function PeriodicOptPanel() {
                                     </td>
                                     <td style={{ padding: '8px 4px', color: ev.dBlocked > 0 ? '#ffaa00' : '#888' }}>{ev.dBlocked}</td>
                                     <td style={{ padding: '8px 4px', display: 'flex', gap: '6px' }}>
-                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleRollover(t, 'A', !st.A)}>A {st.A ? 'ON' : 'OFF'}</button>
-                                        <button className="btn" disabled={!isFreshReport(ev?.evaluatedAt)} onClick={() => toggleRollover(t, 'D', !st.D)}>D {st.D ? 'ON' : 'OFF'}</button>
+                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.nVentanas).actionable} onClick={() => toggleRollover(t, 'A', !st.A)}>A {st.A ? 'ON' : 'OFF'}</button>
+                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.nVentanas).actionable} onClick={() => toggleRollover(t, 'D', !st.D)}>D {st.D ? 'ON' : 'OFF'}</button>
                                     </td>
                                 </tr>
                             );

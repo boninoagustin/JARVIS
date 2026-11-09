@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic } from './periodicOptPresentation.ts';
+import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE } from './periodicOptPresentation.ts';
 const now = Date.UTC(2026, 10, 7, 19, 0);
 test('freshness is inclusive at eight days, fails closed for old/missing/future dates', () => {
     assert.equal(isFreshReport(now - MAX_REPORT_AGE_MS, now), true);
@@ -44,6 +44,18 @@ test('ML displays tested threshold and sample without equating a boolean with de
     const text = mlDiagnostic({ bestGate: { umbral: 0.65, n: 32 }, sinGate: { n: 95 } });
     assert.match(text, /0.65/); assert.match(text, /n gate 32 \/ sin gate 95/);
     assert.match(text, /equivalencia con runtime no acreditada/);
+});
+test('filter toggles require fresh eval and a minimum sample', () => {
+    const now = Date.UTC(2026, 10, 9, 12);
+    assert.equal(filterEvidence(now - 1000, 40, now).actionable, true);
+    assert.equal(filterEvidence(now - 1000, 30, now).actionable, true);
+    assert.equal(filterEvidence(now - 1000, 29, now).actionable, false); // below MIN_FILTER_SAMPLE
+    assert.match(filterEvidence(now - 1000, 29, now).reason!, /muestra insuficiente \(n=29\/30\)/);
+    assert.equal(filterEvidence(now - MAX_REPORT_AGE_MS - 1, 100, now).actionable, false); // stale
+    assert.match(filterEvidence(now - MAX_REPORT_AGE_MS - 1, 100, now).reason!, /vencida/);
+    assert.equal(filterEvidence(undefined, 100, now).actionable, false); // no date
+    assert.equal(filterEvidence(now - 1000, 0, now).actionable, false); // zero sample (TimesFM hoy n=0)
+    assert.equal(filterEvidence(now - 1000, NaN, now).actionable, false);
 });
 test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
