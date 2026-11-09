@@ -45,6 +45,17 @@ export function reportVerdict(status: string, current: boolean): string {
         : status === 'HOLD' ? 'HOLD · sin propuesta de cambio' : status;
     return current ? verdict : `Histórico: ${verdict}`;
 }
+/** Plain-language "qué hacer" summary for the top of an asset card. */
+export function reportSummary(status: string, current: boolean): { label: string; color: string } {
+    if (!current) return { label: 'Histórico (fuera del universo o vencido): ignorar para decidir.', color: '#94a3b8' };
+    switch (status) {
+        case 'RECOMMEND': return { label: 'Hay una mejora con evidencia. Se aplica sola si pasa la certificación posterior; no tenés que hacer nada.', color: '#22c55e' };
+        case 'HOLD': return { label: 'Sin mejora esta semana: se mantiene la configuración actual.', color: '#94a3b8' };
+        case 'HOLD_MC': return { label: 'Resultado no concluyente (muestra o Monte Carlo): no implica apagar el activo.', color: '#eab308' };
+        case 'ERROR': case 'HOLD_SELECTION_ERROR': case 'HOLD_INTEGRITY': case 'HOLD_ML_ERROR': return { label: 'No se pudo evaluar: se conserva la configuración anterior.', color: '#ef4444' };
+        default: return { label: 'Sin conclusión clara.', color: '#94a3b8' };
+    }
+}
 export function mlDiagnostic(ev?: { bestGate?: { umbral?: number; n?: number }; sinGate?: { n?: number } }): string {
     return `Diagnóstico solamente · umbral ensayado ${ev?.bestGate?.umbral ?? '—'} · n gate ${ev?.bestGate?.n ?? '—'} / sin gate ${ev?.sinGate?.n ?? '—'}. Activar un booleano no despliega ese umbral; equivalencia con runtime no acreditada.`;
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation } from './periodicOptPresentation.ts';
+import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation, reportSummary } from './periodicOptPresentation.ts';
 const now = Date.UTC(2026, 10, 7, 19, 0);
 test('freshness is inclusive at eight days, fails closed for old/missing/future dates', () => {
     assert.equal(isFreshReport(now - MAX_REPORT_AGE_MS, now), true);
@@ -66,6 +66,15 @@ test('activation is only recommended when the counterfactual improves (delta > 0
     assert.equal(activationRecommendation(now - 1000, 5, 5, now).recommend, false); // muestra insuficiente
     assert.equal(activationRecommendation(now - 1000, 40, NaN, now).recommend, false);
     assert.equal(activationRecommendation(undefined, 40, 5, now).recommend, false);
+});
+test('report summary is plain-language and never tells the user to disable on HOLD_MC', () => {
+    assert.match(reportSummary('RECOMMEND', true).label, /mejora con evidencia/);
+    assert.equal(reportSummary('RECOMMEND', true).color, '#22c55e');
+    assert.match(reportSummary('HOLD', true).label, /se mantiene/);
+    assert.match(reportSummary('HOLD_MC', true).label, /no implica apagar/);
+    assert.doesNotMatch(reportSummary('HOLD_MC', true).label, /desactivar/);
+    assert.match(reportSummary('ERROR', true).label, /se conserva/);
+    assert.match(reportSummary('HOLD', false).label, /ignorar/);
 });
 test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');

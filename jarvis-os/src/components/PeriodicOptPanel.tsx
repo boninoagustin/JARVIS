@@ -3,7 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
-import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation } from '../services/periodicOptPresentation';
+import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation, reportSummary } from '../services/periodicOptPresentation';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -487,7 +487,7 @@ export default function PeriodicOptPanel() {
             {[...reports].sort((a, b) => Number(reportScope(b, activeList).current) - Number(reportScope(a, activeList).current)).map(r => {
                 const metrics = reportMetrics(r);
                 return (
-                <div key={`${r.ticker}:${r.timestamp}`} style={card}>
+                <div key={`${r.ticker}:${r.timestamp}`} style={{ ...card, borderLeft: `4px solid ${reportSummary(r.status, reportScope(r, activeList).current).color}` }}>
                     <div style={{ color: reportScope(r, activeList).current ? '#aaa' : '#ffaa00', marginBottom: 8 }}>{reportScope(r, activeList).label}</div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                         <h3 style={{ margin: 0, color: '#e6e6e6', fontSize: '1.1rem' }}>{r.ticker}</h3>
@@ -498,6 +498,11 @@ export default function PeriodicOptPanel() {
                             {statusBadge(r)}
                         </div>
                     </div>
+                    <p style={{ margin: '10px 0 0', fontSize: '0.88rem', color: reportSummary(r.status, reportScope(r, activeList).current).color, fontWeight: 600 }}>
+                        {reportSummary(r.status, reportScope(r, activeList).current).label}
+                    </p>
+                    <details style={{ marginTop: 12 }}>
+                        <summary style={{ cursor: 'pointer', color: '#888', fontSize: '0.8rem' }}>Ver detalle técnico</summary>
 
                     {(r.status === 'ERROR' || r.status === 'REFRESH_ERROR' || r.status.startsWith('HOLD_')) && (
                         <p style={{ color: '#ff3333', fontSize: '0.85rem', marginTop: '12px' }}>🛑 {r.reason || 'Resultado no concluyente; revisar evidencia y disponibilidad. No implica desactivar el activo.'}</p>
@@ -605,6 +610,7 @@ export default function PeriodicOptPanel() {
 
 
                     <WeeklyOperationalStatus report={r} autoState={autoState} config={configMetadata[r.ticker]} stateError={stateError} />
+                    </details>
 
                     <p style={{ color: '#888', fontSize: '0.8rem' }}>Este diagnóstico no recomienda activar ni desactivar.
                         {' '}Revisar el roster en <a href="/assets">Salud de Activos</a>.</p>
