@@ -3,7 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
-import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence } from '../services/periodicOptPresentation';
+import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation } from '../services/periodicOptPresentation';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -315,7 +315,11 @@ export default function PeriodicOptPanel() {
 
     const toggleMLGate = async (ticker: string, on: boolean) => {
         const ev = mlEvals[ticker];
-        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n),
+        // Activar exige que el gate MEJORE (Δ>0); apagar solo exige evidencia fresca+mínima.
+        const advice = on
+            ? activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta)
+            : filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n);
+        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
             `Cambia mlGateEnabled. El umbral runtime lo fija el modelo (pipeline de entrenamiento), no este botón: umbral probado ${ev?.bestGate?.umbral ?? '—'}.`)) return;
         try {
             await setDoc(doc(db, 'asset_configs', ticker), { mlGateEnabled: on }, { merge: true });
@@ -325,7 +329,10 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleCorrFilter = async (ticker: string, on: boolean) => {
-        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, filterEvidence(corrEvals[ticker]?.evaluatedAt, corrEvals[ticker]?.n),
+        const ev = corrEvals[ticker];
+        const delta = (Number(ev?.blk?.usd) || 0) + (Number(ev?.rp?.usd) || 0);
+        const advice = on ? activationRecommendation(ev?.evaluatedAt, ev?.n, delta) : filterEvidence(ev?.evaluatedAt, ev?.n);
+        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
             `correlationFilter.shadow=${!on}. ${on ? 'Bloquea y aplica risk-parity' : 'Solo observa'}.`)) return;
         try {
             await setDoc(doc(db, 'asset_configs', ticker), { correlationFilter: { shadow: !on } }, { merge: true });
@@ -335,7 +342,10 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleTimesfm = async (ticker: string, on: boolean) => {
-        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, filterEvidence(tfmEvals[ticker]?.evaluatedAt, tfmEvals[ticker]?.n),
+        const ev = tfmEvals[ticker];
+        const delta = Number(ev?.mult?.usd) || 0;
+        const advice = on ? activationRecommendation(ev?.evaluatedAt, ev?.n, delta) : filterEvidence(ev?.evaluatedAt, ev?.n);
+        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
             `timesfm.enabled=${on} (read-modify-write para no pisar el resto del bloque timesfm).`)) return;
         try {
             const ref = doc(db, 'asset_configs', ticker);
@@ -762,7 +772,11 @@ export default function PeriodicOptPanel() {
                                             : <span style={{ color: '#666' }}>sin evaluación</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).actionable} onClick={() => toggleMLGate(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).reason ?? ''}>{on ? 'Apagar gate' : 'Activar gate'}</button>
+                                        {on
+                                            ? <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).actionable} onClick={() => toggleMLGate(t, false)} title={filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).reason ?? ''}>Apagar gate</button>
+                                            : activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta).recommend
+                                                ? <button className="btn" onClick={() => toggleMLGate(t, true)}>Activar gate</button>
+                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta).reason ?? ''}>No activar</span>}
                                     </td>
                                 </tr>
                             );
@@ -818,7 +832,11 @@ export default function PeriodicOptPanel() {
                                         {ev ? (rp?.n > 0 ? `${fmtUsd(rp.usd)}${fmtRc(rp.R)} (${rp.n})` : '—') : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleCorrFilter(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>{on ? 'Pasar a observación' : 'Activar filtro'}</button>
+                                        {on
+                                            ? <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleCorrFilter(t, false)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>Pasar a observación</button>
+                                            : activationRecommendation(ev?.evaluatedAt, ev?.n, (Number(ev?.blk?.usd) || 0) + (Number(ev?.rp?.usd) || 0)).recommend
+                                                ? <button className="btn" onClick={() => toggleCorrFilter(t, true)}>Activar filtro</button>
+                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={activationRecommendation(ev?.evaluatedAt, ev?.n, (Number(ev?.blk?.usd) || 0) + (Number(ev?.rp?.usd) || 0)).reason ?? ''}>No activar</span>}
                                     </td>
                                 </tr>
                             );
@@ -875,7 +893,11 @@ export default function PeriodicOptPanel() {
                                         {ev && ev.reject > 0 ? `${ev.reject} bloqueadas` : ev ? '0' : '—'}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleTimesfm(t, !on)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>{on ? 'Apagar TimesFM' : 'Activar TimesFM'}</button>
+                                        {on
+                                            ? <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleTimesfm(t, false)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>Apagar TimesFM</button>
+                                            : activationRecommendation(ev?.evaluatedAt, ev?.n, Number(ev?.mult?.usd) || 0).recommend
+                                                ? <button className="btn" onClick={() => toggleTimesfm(t, true)}>Activar TimesFM</button>
+                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={activationRecommendation(ev?.evaluatedAt, ev?.n, Number(ev?.mult?.usd) || 0).reason ?? ''}>No activar</span>}
                                     </td>
                                 </tr>
                             );

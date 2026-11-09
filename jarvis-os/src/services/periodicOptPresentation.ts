@@ -59,3 +59,12 @@ export function filterEvidence(ts: unknown, n: unknown, now = Date.now()) {
         : !enough ? `muestra insuficiente (n=${count}/${MIN_FILTER_SAMPLE})` : null;
     return { fresh, enough, actionable: fresh && enough, n: count, reason };
 }
+/** Activating a filter is only offered when the counterfactual shows a POSITIVE
+ * improvement (delta > 0); a negative/zero delta means "do not activate". */
+export function activationRecommendation(ts: unknown, n: unknown, delta: unknown, now = Date.now()) {
+    const ev = filterEvidence(ts, n, now);
+    if (!ev.actionable) return { ...ev, recommend: false };
+    const d = typeof delta === 'number' && Number.isFinite(delta) ? delta : 0;
+    if (d <= 0) return { ...ev, recommend: false, reason: `no mejora (Δ ${d.toFixed(1)}) — no recomendado activar` };
+    return { ...ev, recommend: true, reason: null };
+}

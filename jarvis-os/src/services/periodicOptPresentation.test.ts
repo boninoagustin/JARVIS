@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE } from './periodicOptPresentation.ts';
+import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation } from './periodicOptPresentation.ts';
 const now = Date.UTC(2026, 10, 7, 19, 0);
 test('freshness is inclusive at eight days, fails closed for old/missing/future dates', () => {
     assert.equal(isFreshReport(now - MAX_REPORT_AGE_MS, now), true);
@@ -56,6 +56,16 @@ test('filter toggles require fresh eval and a minimum sample', () => {
     assert.equal(filterEvidence(undefined, 100, now).actionable, false); // no date
     assert.equal(filterEvidence(now - 1000, 0, now).actionable, false); // zero sample (TimesFM hoy n=0)
     assert.equal(filterEvidence(now - 1000, NaN, now).actionable, false);
+});
+test('activation is only recommended when the counterfactual improves (delta > 0)', () => {
+    const now = Date.UTC(2026, 10, 9, 12);
+    assert.equal(activationRecommendation(now - 1000, 40, 1.2, now).recommend, true);
+    assert.equal(activationRecommendation(now - 1000, 40, -11.8, now).recommend, false); // empeora
+    assert.match(activationRecommendation(now - 1000, 40, -11.8, now).reason!, /no mejora \(Δ -11\.8\)/);
+    assert.equal(activationRecommendation(now - 1000, 40, 0, now).recommend, false); // sin cambio
+    assert.equal(activationRecommendation(now - 1000, 5, 5, now).recommend, false); // muestra insuficiente
+    assert.equal(activationRecommendation(now - 1000, 40, NaN, now).recommend, false);
+    assert.equal(activationRecommendation(undefined, 40, 5, now).recommend, false);
 });
 test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
