@@ -46,10 +46,13 @@ export function reportVerdict(status: string, current: boolean): string {
     return current ? verdict : `Histórico: ${verdict}`;
 }
 /** Plain-language "qué hacer" summary for the top of an asset card. */
-export function reportSummary(status: string, current: boolean): { label: string; color: string } {
+export function reportSummary(status: string, current: boolean, trading = true): { label: string; color: string } {
     if (!current) return { label: 'Histórico (fuera del universo o vencido): ignorar para decidir.', color: '#94a3b8' };
     switch (status) {
-        case 'RECOMMEND': return { label: 'Hay una mejora con evidencia. Se aplica sola si pasa la certificación posterior; no tenés que hacer nada.', color: '#22c55e' };
+        case 'RECOMMEND':
+            return trading
+                ? { label: 'Hay una mejora con evidencia. Se aplica sola si pasa la certificación posterior; no tenés que hacer nada.', color: '#22c55e' }
+                : { label: 'Hay una mejora, pero el activo está apagado (roster). Se certifica forward y quedaría lista para aplicarse si lo reactivás en Salud de Activos.', color: '#eab308' };
         case 'HOLD': return { label: 'Sin mejora esta semana: se mantiene la configuración actual.', color: '#94a3b8' };
         case 'HOLD_MC': return { label: 'Resultado no concluyente (muestra o Monte Carlo): no implica apagar el activo.', color: '#eab308' };
         case 'ERROR': case 'HOLD_SELECTION_ERROR': case 'HOLD_INTEGRITY': case 'HOLD_ML_ERROR': return { label: 'No se pudo evaluar: se conserva la configuración anterior.', color: '#ef4444' };

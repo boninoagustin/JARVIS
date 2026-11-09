@@ -76,6 +76,13 @@ test('report summary is plain-language and never tells the user to disable on HO
     assert.match(reportSummary('ERROR', true).label, /se conserva/);
     assert.match(reportSummary('HOLD', false).label, /ignorar/);
 });
+test('RECOMMEND on a disabled asset says the improvement is pending, not auto-applied', () => {
+    assert.match(reportSummary('RECOMMEND', true, false).label, /activo está apagado/);
+    assert.match(reportSummary('RECOMMEND', true, false).label, /si lo reactivás/);
+    assert.equal(reportSummary('RECOMMEND', true, false).color, '#eab308');
+    assert.doesNotMatch(reportSummary('RECOMMEND', true, false).label, /no tenés que hacer nada/);
+    assert.match(reportSummary('RECOMMEND', true, true).label, /no tenés que hacer nada/);
+});
 test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
     // Feature toggles are actionable again, each gated by fresh evidence + confirmation.

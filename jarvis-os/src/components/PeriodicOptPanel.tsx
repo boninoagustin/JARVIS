@@ -486,8 +486,10 @@ export default function PeriodicOptPanel() {
 
             {[...reports].sort((a, b) => Number(reportScope(b, activeList).current) - Number(reportScope(a, activeList).current)).map(r => {
                 const metrics = reportMetrics(r);
+                const snapshot = configMetadata[r.ticker]?.currentSnapshot as any;
+                const trading = snapshot?.enabled === true && !String(snapshot?.disabledReason || '').trim();
                 return (
-                <div key={`${r.ticker}:${r.timestamp}`} style={{ ...card, borderLeft: `4px solid ${reportSummary(r.status, reportScope(r, activeList).current).color}` }}>
+                <div key={`${r.ticker}:${r.timestamp}`} style={{ ...card, borderLeft: `4px solid ${reportSummary(r.status, reportScope(r, activeList).current, trading).color}` }}>
                     <div style={{ color: reportScope(r, activeList).current ? '#aaa' : '#ffaa00', marginBottom: 8 }}>{reportScope(r, activeList).label}</div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                         <h3 style={{ margin: 0, color: '#e6e6e6', fontSize: '1.1rem' }}>{r.ticker}</h3>
@@ -498,8 +500,8 @@ export default function PeriodicOptPanel() {
                             {statusBadge(r)}
                         </div>
                     </div>
-                    <p style={{ margin: '10px 0 0', fontSize: '0.88rem', color: reportSummary(r.status, reportScope(r, activeList).current).color, fontWeight: 600 }}>
-                        {reportSummary(r.status, reportScope(r, activeList).current).label}
+                    <p style={{ margin: '10px 0 0', fontSize: '0.88rem', color: reportSummary(r.status, reportScope(r, activeList).current, trading).color, fontWeight: 600 }}>
+                        {reportSummary(r.status, reportScope(r, activeList).current, trading).label}
                     </p>
                     <details style={{ marginTop: 12 }}>
                         <summary style={{ cursor: 'pointer', color: '#888', fontSize: '0.8rem' }}>Ver detalle técnico</summary>
