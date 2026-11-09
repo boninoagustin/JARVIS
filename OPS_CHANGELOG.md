@@ -1,5 +1,20 @@
 # Cambios de operación — 02-nov-2026
 
+## Evidencia mínima para toggles + arreglo TimesFM — 09-nov-2026
+
+- El panel exige ahora evidencia mínima para activar/desactivar cualquier filtro:
+  evaluación fresca (≤8 días) + muestra ≥30 trades (filterEvidence). Correlación (n=1-5),
+  TimesFM (n=0) y rollover (sin datos) quedan bloqueados hasta tener evidencia real;
+  el ML gate usa sinGate.n. Cada botón muestra el motivo del bloqueo.
+- Arreglada la colecta de orígenes TimesFM (0 orígenes desde ~oct-2026). Dos causas:
+  (1) collect_triggers pasaba el ticker en minúscula y el worker exige mayúscula,
+  fallando init en silencio (process.exit(0) en finally); (2) el guard readOnlyReplayConfig
+  borraba collectOnly/collectPath en evaluate. Se agregó el RPC dedicado collect_origins
+  que preserva el modo collect restringido a logs/<ticker>/forecasts/triggers_m5.jsonl.
+  La colecta vuelve a escribir orígenes (EURUSD: 30), con lo que TimesFM retoma datos.
+- El gate ML sigue siendo honesto: el toggle cambia mlGateEnabled; el umbral runtime lo
+  fija el modelo, no el botón (el Δ de R del sweep no se despliega con el toggle).
+
 ## Toggles de features restaurados (sin duplicar roster) — 07-nov-2026
 
 - El panel Optimización Periódica vuelve a tener controles accionables: gate ML, filtro
