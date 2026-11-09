@@ -100,15 +100,21 @@ async function main() {
     }
 
     const w = new RpcWorker();
+    let exitCode = 0;
     try {
-        await w.call('init', { ticker: ticker.toLowerCase(), log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
+        // El worker exige ticker en MAYÚSCULA (init falla con minúscula y antes quedaba
+        // enmascarado por process.exit(0) → "0 orígenes" silencioso desde ~oct-2026).
+        await w.call('init', { ticker, log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
         const t0 = Date.now();
-        const result: any = await w.call('evaluate', { config });
-        const n = result?.metrics?.trade_count ?? '?';
+        const result: any = await w.call('collect_origins', { config, collectPath: outPath });
+        const n = result?.trade_count ?? '?';
         console.log(`[COLLECT] ${ticker}: backtest completo (${((Date.now() - t0) / 1000).toFixed(1)}s, trades=${n}). Orígenes → ${outPath}`);
+    } catch (e) {
+        console.error('ERROR:', (e as Error).message);
+        exitCode = 1;
     } finally {
         w.close();
-        process.exit(0);
     }
+    process.exit(exitCode);
 }
-main().catch(e => { console.error('ERROR:', e.message); process.exit(1); });
+main();

@@ -455,6 +455,21 @@ function replay(config: any, partition: Partition): any {
   return {result,trades,closed,metrics:computeMetrics(closed),r:closed.map(t => t.rMultiple)};
 }
 
+async function handleCollectOrigins(params: any): Promise<any> {
+  if (!state) throw new Error('Worker no inicializado. Llamar method=init primero.');
+  const collectPath = params.collectPath;
+  const sanctioned = path.resolve(REPO_ROOT, 'logs', String(state.ticker).toLowerCase(), 'forecasts', 'triggers_m5.jsonl');
+  if (typeof collectPath !== 'string' || path.resolve(collectPath) !== sanctioned)
+    throw new Error('collectPath debe ser logs/<ticker>/forecasts/triggers_m5.jsonl');
+  const config = JSON.parse(JSON.stringify(params.config ?? {}));
+  if (config.ticker !== state.ticker) throw new Error('config ticker mismatch');
+  // readOnlyReplayConfig borra collectOnly/collectPath en evaluate (sin escrituras).
+  // La colecta de orígenes TimesFM los preserva, restringidos a un único path sancionado.
+  config.timesfm = { ...(config.timesfm ?? {}), enabled: false, collectOnly: true, collectPath: sanctioned };
+  const result = runBacktest(state.logs, config, undefined, state.prepared);
+  return { trade_count: result.trades?.length ?? 0 };
+}
+
 async function handleCollectTrades(params: any): Promise<any> {
   if (!state) throw new Error('Worker no inicializado. Llamar method=init primero.');
   if(state.wfaPlan)throw new Error('WFA sessions only permit evaluate_window');
@@ -538,6 +553,7 @@ async function handleRpc(line: string): Promise<void> {
       case 'evaluate_final': result = await handleEvaluate(req.params || {}, true); break;
       case 'evaluate_window': result = await handleEvaluateWindow(req.params || {}); break;
       case 'collect_trades': result = await handleCollectTrades(req.params || {}); break;
+      case 'collect_origins': result = await handleCollectOrigins(req.params || {}); break;
       case 'ping':     result = { pong: true, ts: Date.now() }; break;
       case 'shutdown': send({ id: req.id, result: { ok: true } }); log('shutdown'); process.exit(0); return;
       default: throw new Error(`Unknown method: ${req.method}`);
