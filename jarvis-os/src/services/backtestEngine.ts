@@ -1858,11 +1858,14 @@ function processAlert(
     // Block moved up
 
     if (activeLeg) {
+      // Paridad con vivo (trading.ts:3573-3585): ids de zona + bypass de score alto.
       const hasZoneConf = activeScore.events.some(e =>
         e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') ||
-        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('Silver_Bullet_')
+        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('Silver_Bullet_') ||
+        e.id.includes('ZoneTouched_') || e.id.includes('TL_Sweep_')
       );
-      const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= minPtsRequired);
+      const highScoreBypass = Math.min(minPtsRequired, 8);
+      const efectiveValidation = hasZoneConf || hasSpatialBacking || (totalPoints >= highScoreBypass);
       activeLeg.isValidated = efectiveValidation;
       activeLeg.chochPoints = totalPoints;
       activeLeg.chochEvents = [...activeScore.events.map(e => e.id), `${prefix}_${parseTF(eventTf)}`];
