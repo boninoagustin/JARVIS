@@ -1881,14 +1881,15 @@ function processAlert(
         
         const tfKey = prefix === 'EVENTO_CHOCH' ? `choch${tfSuffix}` : `bos${tfSuffix}`;
         const tfConfig = sessionConfig?.[tfKey as keyof typeof sessionConfig] as any;
-        const slBuff = tfConfig?.slBuff ?? 0;
+        const slBuff = tfConfig?.slBuff;
         const activeFixedRR = tfConfig?.tp2 ?? 1.5;
         // Explicit RR zero is not target absence. Reject before price rounding can
         // turn an equal-entry request into a tiny favorable target.
         if (experimental && (!Number.isFinite(Number(activeFixedRR)) || Number(activeFixedRR) <= 0)) return;
 
         // 🔧 FIX: misma fórmula de SL que el vivo (calculateDynamicSlBuffer + piso getMinPipDistance)
-        const rawBuffer = slBuff > 0 ? slBuff : (config.slBufferPercent ?? 0.1);
+        // Paridad con vivo (trading.ts:3612): slBuff=0 explícito NO cae a config.slBufferPercent.
+        const rawBuffer = slBuff != null ? slBuff : (config.slBufferPercent ?? 0.1);
         let slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, rawBuffer);
         const minPipDist = getMinPipDistance(ticker);
         if (slBufferAmt < minPipDist) slBufferAmt = minPipDist;
