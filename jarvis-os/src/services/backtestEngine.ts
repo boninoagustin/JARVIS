@@ -1532,7 +1532,8 @@ function processAlert(
         recordMacroImpulse(state, eventTf, newMacroLeg);
       }
     }
-    addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 1;
+    // Paridad con vivo (trading.ts:3048): BOS base 2, no 1.
+    addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 2;
     addedEventId = `${prefix === 'EVENTO_CHOCH' ? 'CHoCH' : 'BOS'}_${readableTf}`;
   }
   else if (prefix === 'ZONE_BROKEN') {
@@ -1767,23 +1768,27 @@ function processAlert(
       const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
       const tfKeyBos = `bos${eventTf}m` as keyof typeof sessionConfig;
 
+      // Paridad con vivo (trading.ts:3536-3550): minScoreBuy/minScoreSell por dirección.
+      const dirMin = (tfConfig: any, fallback: number) => currentDirection === 'BUY'
+        ? (tfConfig?.minScoreBuy ?? tfConfig?.minScore ?? fallback)
+        : (tfConfig?.minScoreSell ?? tfConfig?.minScore ?? fallback);
       if (prefix === 'EVENTO_CHOCH') {
         const tfConfig = sessionConfig[tfKeyChoch] as any;
         if (tfConfig) {
             triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = tfConfig.minScore ?? baseMin;
+            minPtsRequired = dirMin(tfConfig, baseMin);
         } else if ((sessionConfig as any).choch) {
             triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
-            minPtsRequired = (sessionConfig as any).choch.minScore ?? baseMin;
+            minPtsRequired = dirMin((sessionConfig as any).choch, baseMin);
         }
       } else if (prefix === 'EVENTO_BOS') {
         const tfConfig = sessionConfig[tfKeyBos] as any;
         if (tfConfig) {
             triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = tfConfig.minScore ?? baseMin;
+            minPtsRequired = dirMin(tfConfig, baseMin);
         } else if ((sessionConfig as any).bos) {
             triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
-            minPtsRequired = (sessionConfig as any).bos.minScore ?? baseMin;
+            minPtsRequired = dirMin((sessionConfig as any).bos, baseMin);
         }
       }
     } else {
@@ -1837,38 +1842,9 @@ function processAlert(
     const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
     if (biasGateStrict) console.log(`[BIASGATE-DBG] eval ${ticker} ${currentDirection} 4Hagainst=${is4HAgainst} 1Hagainst=${is1HAgainst}`);
 
-    // 🆕 MULTI-TF SCORE MULTIPLIER (Mejora 5)
-    let scoreMultiplier = 1.0;
-    const tradeDir = currentDirection;
-    const biasD = freshBias('D') || freshBias('1D');
-    const bias4H = freshBias('4H') || freshBias('240');
-    const bias1H = freshBias('1H') || freshBias('60');
-
-    let alignedTfs = 0;
-    let againstTfs = 0;
-
-    if (biasD === tradeDir) alignedTfs++;
-    else if (biasD && biasD !== tradeDir) againstTfs++;
-
-    if (bias4H === tradeDir) alignedTfs++;
-    else if (bias4H && bias4H !== tradeDir) againstTfs++;
-
-    if (bias1H === tradeDir) alignedTfs++;
-    else if (bias1H && bias1H !== tradeDir) againstTfs++;
-
-    if (alignedTfs >= 3) scoreMultiplier = 1.3;
-    else if (againstTfs >= 2) scoreMultiplier = 0.6;
-    else if (biasD && biasD !== tradeDir) scoreMultiplier = 0.8;
-
-    totalPoints = Math.floor(totalPoints * scoreMultiplier);
-
-    const se = dailyStats.sessionExp?.[`${currentSession}-${currentDirection}`];
-    if (se && se.n >= 5) {
-        const expR = se.sumR / se.n;
-        if (expR < -0.3) minPtsRequired += 2;
-        else if (expR < 0) minPtsRequired += 1;
-        else if (expR > 0.5 && se.n >= 10) minPtsRequired = Math.max(minPtsRequired - 1, 3);
-    }
+    // Paridad con vivo: el vivo NO aplica scoreMultiplier ni ajuste de umbral por
+    // expR de sesión. Estos eran exclusivos del backtest y causaban divergencia.
+    // (removido: scoreMultiplier 0.6/0.8/1.3 y nudges de expR +2/+1/-1)
 
     // Crypto: reduce minPtsRequired by 1 (ported from live)
     const isCryptoTicker = ticker.includes('BTC') || ticker.includes('ETH');
@@ -2415,7 +2391,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     // Solo aplica a trades posteriores al entrenamiento del modelo (trainedAt = mtime):
     // el modelo de la semana pasada evalúa la semana nueva, nunca su propio período de train.
     // Sin modelo o sin mlGate → comportamiento legacy (todo aprobado).
-    // 🆕 PARIDAD 16-sep-2026: el gate del VIVO se extendió a TODOS los gatillos (directas
+    // ���� PARIDAD 16-sep-2026: el gate del VIVO se extendió a TODOS los gatillos (directas
     // incluidas, ML GATE EXTENDIDO en trading.ts — OTE las veta AlphaModel, las directas el
     // dispatch). El motor gatea ahora TODAS las entradas (antes solo OTE_Retracement) para
     // que el sweep/hyperopt midan lo mismo que el vivo.
