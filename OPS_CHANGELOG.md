@@ -3,16 +3,18 @@
 ## Paper mode (Opción A) — 09-nov-2026
 
 - Rompe el círculo "apagado → sin evidencia → apagado": los activos apagados del universo
-  (roster WATCH/PARKED) ahora se SIMULAN semanalmente con el motor completo (todas las
-  temporalidades M5→D1) sobre la ventana reciente (90 días), guardando trades individuales
-  como `paper_trades/{ticker}`. NUNCA ejecuta en cTrader.
-- `roster_proposal.ts` lee esa evidencia y marca `paperReady` (n≥8, WR≥40%, expectativa>0)
-  en los activos no-TRADE. Es una PROPUESTA de activación visible en Salud de Activos
-  ("🧪 Paper-ready"), nunca auto-apply ni P&L verificado.
+  (roster WATCH/PARKED) se SIMULAN con el motor completo (todas las TFs M5→D1) y warmup
+  multi-TF, guardando trades individuales `forward_paper_v1` en `paper_trades/{ticker}`.
+  NUNCA ejecuta en cTrader; es un replay forward sobre datos posteriores al registro.
+- IMPORTANTE (corrección): el replay histórico de 90 días NO autoriza activación. El
+  `paperReady` exige ahora paper forward OBSERVED + certificación CERTIFIED del MISMO
+  candidato (misma fingerprint y registration_fingerprint), ventana ≥7 días posterior al
+  registro, ≥8 cierres individuales válidos WR≥40% exp>0. Sin certificación → no paper-ready.
+- `prospective_test.register()` congela el candidato (engine snapshot + proveniencia de
+  fuentes/modelos/caches + registration_fingerprint) para que paper_replay valide identidad
+  fail-closed. Legacy sin proveniencia se INVALIDATE (no se confía).
 - `paper_trades.ts` corre en la cadena health-weekly (best-effort) ANTES del roster.
-- Precedente (Capas): prospective_test y prospective_promote ya no descartan los RECOMMEND
-  de activos apagados (se certifican forward y su config CERTIFIED se aplica sin tocar
-  enabled/disabledReason).
+- La evidencia paper emerge en las semanas SIGUIENTES al registro (necesita ≥7 días forward).
 
 ## Evidencia mínima para toggles + arreglo TimesFM — 09-nov-2026
 
