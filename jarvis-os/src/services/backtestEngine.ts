@@ -43,6 +43,7 @@ import {buildRolloverFreezeContext} from '../../../src/engine/RolloverRuntimeCon
 import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../src/engine/RolloverTriagePolicy';
 import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
+import { canonicalZoneMedal } from '../../../src/engine/smc/zone_protocol';
 import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';
 import type { ExecutionQuote, ExecutionMarketSnapshot, ExecutionPositionState, ExecutionObservation, SmartRoutingDecision } from '../../../src/engine/ExecutionTypes';
@@ -972,7 +973,7 @@ function processAlert(
     // Evaluate impulse legs
 
     const currentSession = getSessionForTimestamp(nowMs);
-    const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
+    const sessionConfig = config.sessions?.[currentSession] ?? config.sessions?.['ALL'];
     const ctx = { config, currentSession, sessionConfig, rolloverFreeze, observationInterval };
 
     const buyRes = evaluateImpulseCore(state.activeImpulseBuy, currentPrice, highPrice, lowPrice, ticker, state, nowMs, ctx);
@@ -1728,7 +1729,7 @@ function processAlert(
 
     // Apply Anti-Bias Filters
     
-    const sessionConfig = config.sessions?.[currentSession] || config.sessions?.['OFF'];
+    const sessionConfig = config.sessions?.[currentSession] ?? config.sessions?.['ALL'];
     if (currentDirection === 'SELL') {
       if (sessionConfig?.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0 && dailyStats.sellLossCount >= sessionConfig.maxSellLosses) return;
     } else if (currentDirection === 'BUY') {
@@ -1962,7 +1963,7 @@ function processAlert(
                 if (z.medal === 'SMC_DIV') return false; 
                 
                 const zTfMs = parseTfToMinutes(z.tf || '');
-                const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD');
+                const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD') || canonicalZoneMedal(z.medal) === 'GodZone';
                 
                 return isStrong || zTfMs >= signalTfMs;
             });
