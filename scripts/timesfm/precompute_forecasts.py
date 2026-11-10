@@ -131,6 +131,9 @@ def main() -> None:
                     "q50": [round(float(x), 8) for x in qf[j, :, 5]],
                     "q90": [round(float(x), 8) for x in qf[j, :, 9]],
                     "model_version": MODEL_VERSION,
+                    # As-of verificable: el contexto usa SOLO cierres ≤ t (look-ahead cero).
+                    # availableAt = t permite a la auditoría descartar forecasts con datos futuros.
+                    "availableAt": t,
                 }
                 out.write(json.dumps(rec) + "\n")
             done += len(chunk)
