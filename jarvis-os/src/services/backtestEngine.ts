@@ -434,7 +434,10 @@ export async function prepareEntries(logs: Map<string, (string | LogEntry)[]>): 
            continue;
         }
         
-        const firstComma = r.indexOf(',');
+        // loadSelectionLogs ya extrae el campo (sin timestamp ni comillas). Sólo re-parsear
+        // si es CSV crudo (empieza con comilla). Antes, un payload SYNC_ZONES con comas
+        // internas se truncaba en la primera coma → zonas vacías → smartAtr=0 → OTE forzado.
+        const firstComma = r.startsWith('"') ? r.indexOf(',') : -1;
         const line = firstComma > 0 ? r.substring(firstComma + 1).replace(/^"|"$/g, '') : r;
 
         const tsMatch = line.match(/TS:\s*(\d+)/i);
