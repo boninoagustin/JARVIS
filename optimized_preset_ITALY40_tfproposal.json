@@ -1,6 +1,6 @@
 {
   "ticker": "ITALY40",
-  "generatedAt": "2026-11-07T00:55:40.585Z",
+  "generatedAt": "2026-11-09T04:20:06.695Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {},
@@ -8,9 +8,9 @@
       "trades": 38,
       "wins": 13,
       "wr": 0.34210526315789475,
-      "pf": 0.7292873627831576,
-      "exp": -0.17810051684603834,
-      "maxDD": 10.267817699627656,
+      "pf": 0.7370730648569832,
+      "exp": -0.17297834162136663,
+      "maxDD": 10.073175041090131,
       "maxAbsR": 1.499999533197324
     }
   },
@@ -45,13 +45,13 @@
       "trades": 59,
       "wins": 25,
       "wr": 0.423728813559322,
-      "pf": 1.014795131010094,
-      "exp": 0.008526011534593335,
-      "maxDD": 7.327901978219641,
+      "pf": 1.0026226496773172,
+      "exp": 0.0015113581207728901,
+      "maxDD": 7.257318029611355,
       "maxAbsR": 1.499999533197324
     }
   },
   "verdict": "RECOMMEND",
   "reason": "mejora ≥+0.05R/t con ≥20 trades y DD controlada",
-  "elapsedSec": 637
+  "elapsedSec": 737
 }
