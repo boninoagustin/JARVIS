@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseSweepArgs, completedTrades, metrics, chronologicalWindows } from './ml_threshold_sweep.js';
+import { parseSweepArgs, completedTrades, metrics, chronologicalWindows, isolateML } from './ml_threshold_sweep.js';
 
 // ── parseSweepArgs ──
 assert.deepEqual(parseSweepArgs(['--ticker', 'eurusd']), { ticker: 'EURUSD', apply: false });
@@ -47,4 +47,16 @@ assert.ok(w);
 assert.ok(w.selection.from < w.selection.to && w.selection.to < w.validation.from && w.validation.from < w.validation.to);
 assert.equal(w.validation.to, 3001); // last ts + 1
 
-console.log('PASS sweep: args, closed-trade filtering, metrics, chronological split (hermético)');
+// ── isolateML: apaga TimesFM y pone correlación en observación, sin mutar el original ──
+const src = { ticker: 'EURUSD', enabled: true, timesfm: { enabled: true, horizon: 12 }, correlationFilter: { shadow: false } };
+const iso = isolateML(src);
+assert.equal(iso.timesfm.enabled, false);
+assert.equal(iso.correlationFilter.shadow, true);
+assert.equal(src.timesfm.enabled, true, 'no debe mutar el asset original');
+assert.equal(src.correlationFilter.shadow, false);
+assert.equal(iso.enabled, true, 'los parámetros de trading se conservan');
+const noTfm = isolateML({ ticker: 'X', enabled: false });
+assert.equal(noTfm.timesfm, undefined);
+assert.equal(noTfm.correlationFilter, undefined);
+
+console.log('PASS sweep: args, closed-trade filtering, metrics, chronological split, aislamiento ML (hermético)');

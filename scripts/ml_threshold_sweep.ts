@@ -57,6 +57,19 @@ function freeze<T>(value: T): T {
   if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); }
   return value;
 }
+/** Aísla el gate ML: evalúa su contribución con los demás filtros contrafactuales
+ * apagados (TimesFM) o en observación (correlación). El fingerprint resultante queda
+ * vinculado a ESTA configuración aislada; activar con otro estado de filtros no coincide. */
+export function isolateML(asset: any): any {
+  const isolated = json(asset);
+  if (isolated.timesfm && typeof isolated.timesfm === 'object') {
+    isolated.timesfm = { ...isolated.timesfm, enabled: false };
+  }
+  if (isolated.correlationFilter && typeof isolated.correlationFilter === 'object') {
+    isolated.correlationFilter = { ...isolated.correlationFilter, shadow: true };
+  }
+  return isolated;
+}
 export function chronologicalWindows(entries: readonly {ts: number}[], availableAt: number, now: number) {
   const post = entries.map(e => e.ts).filter(t => Number.isSafeInteger(t) && t > availableAt && t < now).sort((a,b) => a-b);
   if (post.length < 4) return undefined;
@@ -133,19 +146,21 @@ export async function main(args = process.argv.slice(2)) {
   if (!snapshot.exists) throw new Error(`missing asset config: ${ticker}`);
   const asset = json(snapshot.data());
   const configHash = sha(stableCanonical(asset));
+  // Aislar el gate ML: la evidencia queda vinculada a la config con TimesFM apagado y
+  // correlación observando (no a la config de producción con TimesFM encendido).
+  const evalAsset = isolateML(asset);
   const modelPath = path.join(ROOT, 'scripts/hyperopt/models', `ml_model_${ticker}.json`);
   // Never silently substitute a generic model for a missing ticker model.
   const rawModel = fs.readFileSync(modelPath);
   const dir = path.join(ROOT, 'logs', ticker.toLowerCase(), 'history_exported');
   const inputPaths = fs.readdirSync(dir).filter(f => f.endsWith('.csv')).map(f => path.join(dir, f));
-  const mapped = readOnlyReplayConfig(mapAssetConfig(ticker, asset));
-  if (mapped.timesfm?.enabled) inputPaths.push(mapped.timesfm.cachePath);
+  const mapped = readOnlyReplayConfig(mapAssetConfig(ticker, evalAsset));
   inputPaths.push(modelPath);
   const hashes = new Map(inputPaths.map(file => [file, sha(fs.readFileSync(file))]));
   const logs = loadSelectionLogs({ticker, logsDir: dir});
   if (logs.size !== 5) throw new Error('all five production TF datasets are required');
   const entries = await prepareEntries(logs);
-  const result = evaluateSweep({ticker, asset, rawModel, modelPath, entries, logs, now: Date.now()});
+  const result = evaluateSweep({ticker, asset: evalAsset, rawModel, modelPath, entries, logs, now: Date.now()});
   for (const [file, hash] of hashes) if (sha(fs.readFileSync(file)) !== hash) throw new Error(`input changed during replay: ${file}`);
   const current = await db.doc(`asset_configs/${ticker}`).get();
   if (!current.exists || sha(stableCanonical(json(current.data()))) !== configHash) throw new Error('asset config changed during replay');
