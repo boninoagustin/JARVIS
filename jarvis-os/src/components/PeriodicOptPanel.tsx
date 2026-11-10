@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField } from 'firebase/firestore';
+import { validateMLGateEvaluation } from '../services/mlGateDeployment';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
-import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation, reportSummary, reportPlainDetail } from '../services/periodicOptPresentation';
+import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, isFreshReport, filterEvidence, activationRecommendation, reportSummary, reportPlainDetail } from '../services/periodicOptPresentation';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -314,18 +315,41 @@ export default function PeriodicOptPanel() {
     };
 
     const toggleMLGate = async (ticker: string, on: boolean) => {
-        const ev = mlEvals[ticker];
-        // Activar exige que el gate MEJORE (Δ>0); apagar solo exige evidencia fresca+mínima.
-        const advice = on
-            ? activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta)
-            : filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n);
-        if (!confirmAction(`Gate ML ${on ? 'ON' : 'OFF'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
-            `Cambia mlGateEnabled. El umbral runtime lo fija el modelo (pipeline de entrenamiento), no este botón: umbral probado ${ev?.bestGate?.umbral ?? '—'}.`)) return;
         try {
-            await setDoc(doc(db, 'asset_configs', ticker), { mlGateEnabled: on }, { merge: true });
-            setMlGateOn(p => ({ ...p, [ticker]: on }));
-            toast(`Gate ML ${on ? 'ON' : 'OFF'} en ${ticker}`, on ? 'success' : 'info');
-        } catch (e) { console.error(e); toast(`Error gate ML ${ticker}`, 'error'); }
+            const configRef = doc(db, 'asset_configs', ticker);
+            const evidenceRef = doc(db, 'ml_gate_evals', ticker);
+            // Apagar es seguro (vuelve a la heurística sin ML) y no exige evidencia.
+            if (!on) {
+                const cs = await getDoc(configRef);
+                if (!cs.exists()) throw new Error('Falta configuración.');
+                if (!confirm(`Apagar gate ML — ${ticker}\n\nVuelve al filtro heurístico (sin ML). Es reversible y no cambia el riesgo ni activa/desactiva el activo. ¿Confirmás?`)) return;
+                await setDoc(configRef, { mlGateEnabled: false, mlGateDeployment: deleteField() }, { merge: true });
+                setMlGateOn(p => ({ ...p, [ticker]: false }));
+                toast(`Gate ML OFF solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
+                void refreshAll();
+                return;
+            }
+            // Activar exige evidencia v2 verificable (modelo exacto + umbral + muestra + Δ>0).
+            const [cs, es] = await Promise.all([getDoc(configRef), getDoc(evidenceRef)]);
+            if (!cs.exists() || !es.exists()) throw new Error('Falta configuración o evaluación verificable.');
+            const evidence = es.data();
+            const checked = validateMLGateEvaluation(evidence, { ticker, config: cs.data() });
+            if (!checked.ok) throw new Error(checked.reason);
+            if (!confirm(`Activar gate ML — ${ticker}\n\nSe instalará exactamente el modelo evaluado y su umbral ${checked.deployment?.threshold}. El bot verificará la identidad del modelo antes de usarlo. No cambia el riesgo ni activa el activo. ¿Confirmás?`)) return;
+            await runTransaction(db, async tx => {
+                const current = await tx.get(configRef);
+                const latest = await tx.get(evidenceRef);
+                if (!current.exists() || !latest.exists() || JSON.stringify(latest.data()) !== JSON.stringify(evidence)
+                    || current.data().mlGateEnabled !== cs.data().mlGateEnabled)
+                    throw new Error('La evidencia o la configuración cambiaron mientras confirmabas. Actualizá y revisá de nuevo.');
+                const gate = validateMLGateEvaluation(latest.data(), { ticker, config: current.data() });
+                if (!gate.ok) throw new Error(gate.reason);
+                tx.update(configRef, { mlGateEnabled: true, mlGateDeployment: gate.deployment });
+            });
+            setMlGateOn(p => ({ ...p, [ticker]: true }));
+            toast(`Gate ML ON solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
+            void refreshAll();
+        } catch (e: any) { console.error(e); toast(`No se cambió el gate ML: ${e.message}`, 'error'); }
     };
 
     const toggleCorrFilter = async (ticker: string, on: boolean) => {
@@ -761,8 +785,12 @@ export default function PeriodicOptPanel() {
                         {mlTickers.map(t => {
                             const ev = mlEvals[t];
                             const on = mlGateOn[t] === true;
-                            const delta: number | undefined = ev?.delta;
-                            const deltaGood = delta !== undefined && delta > 0;
+                            const config = configMetadata[t]?.currentSnapshot;
+                            const advice = validateMLGateEvaluation(ev, { ticker: t, config });
+                            const baseline = ev?.schemaVersion === 2 ? ev.validation?.baseline : ev?.sinGate;
+                            const gate = ev?.schemaVersion === 2 ? ev.validation?.gate : ev?.bestGate;
+                            const delta = typeof baseline?.pnlR === 'number' && typeof gate?.pnlR === 'number' ? gate.pnlR - baseline.pnlR : undefined;
+                            const deltaGood = advice.ok;
                             return (
                                 <tr key={t} style={{ borderBottom: '1px solid #1a1a1a' }}>
                                     <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}</td>
@@ -772,27 +800,28 @@ export default function PeriodicOptPanel() {
                                             : <span style={{ color: '#888' }}>○ OFF</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', color: '#aaa', fontSize: '0.78rem' }}>
-                                        {ev ? (ev.modelo ?? '—') : '—'}
-                                        {ev?.trainedAt ? <div style={{ color: '#666', fontSize: '0.68rem' }}>train {new Date(ev.trainedAt).toLocaleDateString()}</div> : null}
+                                        {ev?.schemaVersion === 2 ? `Modelo ${ev.model?.sha256?.slice(0, 10) ?? 'sin identidad'}` : ev?.modelo ?? '—'}
+                                        {ev?.schemaVersion === 2 && <div>Umbral evaluado: {ev.validation?.threshold ?? '—'}</div>}
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.8rem' }}>
                                         {ev
                                             ? <span>
-                                                {Number(ev.sinGate?.pnlR ?? 0).toFixed(1)}R → {Number(ev.bestGate?.pnlR ?? 0).toFixed(1)}R{' '}
-                                                <span style={{ color: deltaGood ? '#00e676' : '#ff5555', fontWeight: 700 }}>
-                                                    ({deltaGood ? '+' : ''}{Number(delta).toFixed(1)}R)
-                                                </span>
+                                                {typeof baseline?.pnlR === 'number' ? baseline.pnlR.toFixed(1) : '—'}R → {typeof gate?.pnlR === 'number' ? gate.pnlR.toFixed(1) : '—'}R{' '}
+                                                {delta !== undefined && <span style={{ color: deltaGood ? '#00e676' : delta < 0 ? '#ff5555' : '#aaa', fontWeight: 700 }}>
+                                                    ({delta > 0 ? '+' : ''}{delta.toFixed(1)}R)
+                                                </span>}
+                                                <div style={{ color: advice.ok ? '#00e676' : '#eab308' }}>{advice.ok ? 'Mejora verificada en datos separados; se puede solicitar la activación.' : advice.reason}</div>
+                                                {ev.schemaVersion === 2 && <div>Muestra: {baseline?.n ?? '—'} sin filtro / {gate?.n ?? '—'} con filtro · mínimo 30 en ambos.</div>}
                                                 <span style={{ color: '#666', fontSize: '0.68rem' }}> · {!isFreshReport(ev.evaluatedAt) && 'HISTÓRICO / VENCIDO · '}{new Date(ev.evaluatedAt).toLocaleString()}</span>
-                                                <div>{mlDiagnostic(ev)}</div>
                                             </span>
                                             : <span style={{ color: '#666' }}>sin evaluación</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
                                         {on
-                                            ? <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).actionable} onClick={() => toggleMLGate(t, false)} title={filterEvidence(ev?.evaluatedAt, ev?.sinGate?.n).reason ?? ''}>Apagar gate</button>
-                                            : activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta).recommend
-                                                ? <button className="btn" onClick={() => toggleMLGate(t, true)}>Activar gate</button>
-                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={activationRecommendation(ev?.evaluatedAt, ev?.sinGate?.n, ev?.delta).reason ?? ''}>No activar</span>}
+                                            ? <button className="btn" onClick={() => toggleMLGate(t, false)} title="Vuelve al filtro heurístico (sin ML). Es seguro y reversible.">Apagar gate</button>
+                                            : advice.ok
+                                                ? <button className="btn" onClick={() => toggleMLGate(t, true)}>Activar modelo y umbral evaluados</button>
+                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={advice.reason}>Activación bloqueada</span>}
                                     </td>
                                 </tr>
                             );
@@ -802,7 +831,7 @@ export default function PeriodicOptPanel() {
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '10px', marginBottom: 0 }}>
                     {mlTickers.length === 0
                         ? 'Sin activos — la lista sale de optimization_config/active_tickers.'
-                        : 'El toggle cambia mlGateEnabled (el bot lo toma en caliente). El umbral runtime lo fija el modelo; el sweep no certifica OOS ni equivalencia con ese umbral.'}
+                        : 'Activar instala el modelo identificado y el umbral que pasaron la evaluación separada. Si falta evidencia, cambió la configuración o el modelo no coincide en el bot, no se usa ese despliegue. ON/OFF indica lo solicitado en almacenamiento, no confirma recepción del bot.'}
                 </p>
             </div>
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>

@@ -39,7 +39,54 @@ interface MLModelExport {
 }
 
 // ── Cache (por ticker; '__default__' = modelo genérico) ──
-interface LoadedModel { trees: XGBoostTree[]; meta: MLModelExport['meta']; }
+interface LoadedModel { trees: XGBoostTree[]; meta: MLModelExport['meta']; modelSha256?: string; }
+
+/** SHA256 is over the original model file bytes, NOT parsed/reserialized JSON.
+ * Node loaders supply the digest; this browser-compatible module never imports crypto. */
+export interface MLGateDeployment {
+  schemaVersion: 2;
+  modelSha256: string;
+  threshold: number;
+  evidenceId: string;
+}
+const ML_DEPLOYMENTS = new Map<string, { deployment?: MLGateDeployment; error?: string }>();
+// A failed replacement must not leave an earlier cached model deployment-ready.
+const ML_LOAD_FAILED = new Set<string>();
+
+export function setMLGateDeployment(ticker: string, value: unknown): void {
+  const key = ticker.toUpperCase();
+  // Only absence means legacy. Explicit null/malformed data never silently opts out.
+  if (value === undefined) { ML_DEPLOYMENTS.delete(key); return; }
+  const d = value as MLGateDeployment | null;
+  if (!d || d.schemaVersion !== 2 || typeof d.modelSha256 !== 'string'
+      || !/^[a-f0-9]{64}$/.test(d.modelSha256) || typeof d.threshold !== 'number'
+      || !Number.isFinite(d.threshold) || d.threshold < 0 || d.threshold > 1
+      || typeof d.evidenceId !== 'string' || !d.evidenceId.trim()) {
+    ML_DEPLOYMENTS.set(key, { error: 'INVALID_DEPLOYMENT' });
+    console.error(`[MLFilter] ${key}: INVALID_DEPLOYMENT → legacy heuristic fallback (not deployed)`);
+    return;
+  }
+  ML_DEPLOYMENTS.set(key, { deployment: { schemaVersion: 2, modelSha256: d.modelSha256,
+    threshold: d.threshold, evidenceId: d.evidenceId } });
+}
+
+/** Ready describes identity/evidence binding, not gate activation or a deployed assertion.
+ * Any explicit deployment failure makes predict return null: the caller's documented
+ * legacy strategy heuristic applies, NEVER a different ML model/default threshold. */
+export function getMLGateStatus(ticker: string) {
+  const key = ticker.toUpperCase();
+  const entry = ML_DEPLOYMENTS.get(key);
+  const model = _models.get(key);
+  const reason = !entry ? 'LEGACY' : entry.error ? entry.error
+    : ML_LOAD_FAILED.has(key) ? 'MODEL_LOAD_FAILED'
+    : ML_REJECTED.has(key) ? 'MODEL_REJECTED'
+    : !model ? 'MODEL_MISSING' : !model.modelSha256 ? 'MODEL_IDENTITY_MISSING'
+    : model.modelSha256 !== entry.deployment!.modelSha256 ? 'MODEL_HASH_MISMATCH' : 'READY';
+  return { mode: entry ? 'deployment' : 'legacy', reason,
+    ready: reason === 'READY', gateEnabled: ML_GATE_OVERRIDES.get(key) ?? !ML_EXCLUDED_TICKERS.has(key),
+    modelSha256: model?.modelSha256, expectedModelSha256: entry?.deployment?.modelSha256,
+    threshold: entry?.deployment?.threshold, evidenceId: entry?.deployment?.evidenceId };
+}
 const _models = new Map<string, LoadedModel>();
 const DEFAULT_KEY = '__default__';
 
@@ -174,12 +221,21 @@ export function predict(
   const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
   // 02-nov-2026: si el modelo propio fue rechazado por el piso de evidencia, NO usar el
   // DEFAULT (es de otro activo): se cae a la heurística legacy, que es el fallback sano.
-  if (t && ML_REJECTED.has(t)) return null;
-  const model = _models.get(key) ?? _models.get(DEFAULT_KEY);
+  const deploymentEntry = ML_DEPLOYMENTS.get(key);
+  if (!deploymentEntry && t && ML_REJECTED.has(t)) return null;
+  if (deploymentEntry) {
+    const status = getMLGateStatus(key);
+    if (!status.ready) {
+      console.error(`[MLFilter] ${key}: ${status.reason} → legacy heuristic fallback (not deployed)`);
+      return null;
+    }
+  }
+  // Explicit deployments require the ticker's own identity-bound model, including audits.
+  const model = deploymentEntry ? _models.get(key) : (_models.get(key) ?? _models.get(DEFAULT_KEY));
   if (!model) return { probability: 1.0, approved: true, threshold: 0.65, features: vec };
 
   const prob = predictProba(vec, model.trees);
-  const threshold = model.meta?.threshold ?? 0.65;
+  const threshold = deploymentEntry?.deployment?.threshold ?? model.meta?.threshold ?? 0.65;
   return { probability: prob, approved: prob >= threshold, threshold, features: vec };
 }
 
@@ -201,9 +257,11 @@ const MIN_MODEL_TRAIN_SAMPLES = 50;
 const ML_REJECTED = new Set<string>();
 
 /** Override runtime del gate ML por ticker (true = gate ON, false = OFF → fallback heurístico).
- *  Lo usa SOLO el bot en vivo al cargar asset_configs. Sin override → lista estática. */
-export function setMLGateOverride(ticker: string, enabled: boolean): void {
-    ML_GATE_OVERRIDES.set(ticker.toUpperCase(), !!enabled);
+ *  Lo usa SOLO el bot en vivo al cargar asset_configs. undefined = quitar override (lista estática). */
+export function setMLGateOverride(ticker: string, enabled: boolean | undefined): void {
+    const key = ticker.toUpperCase();
+    if (enabled === undefined) { ML_GATE_OVERRIDES.delete(key); return; }
+    ML_GATE_OVERRIDES.set(key, !!enabled);
 }
 
 /**
@@ -211,10 +269,12 @@ export function setMLGateOverride(ticker: string, enabled: boolean): void {
  * En Node.js se puede usar fs.readFileSync + JSON.parse.
  * En browser se puede usar fetch() + response.json().
  */
-export function loadModelFromJSON(json: string | object, ticker?: string): boolean {
+export function loadModelFromJSON(json: string | object, ticker?: string, modelSha256?: string): boolean {
+  const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
+  ML_LOAD_FAILED.add(key);
   try {
+    if (modelSha256 !== undefined && !/^[a-f0-9]{64}$/.test(modelSha256)) throw new Error('invalid model SHA256');
     const { trees, meta } = validateModel(json, LEGACY_FEATURE_NAMES, LEGACY_INFERENCE_PROFILE);
-    const key = ticker ? ticker.toUpperCase() : DEFAULT_KEY;
     // 🛡️ 02-nov-2026: piso de evidencia. GBPJPY estaba cargado con acc=0.250 y
     // train_samples=28 (peor que el azar). Un modelo así no aporta señal y, si el activo
     // tiene el gate prendido, filtra al voleo. Se rechaza al cargar y se marca el ticker
@@ -234,7 +294,9 @@ export function loadModelFromJSON(json: string | object, ticker?: string): boole
     // Format/log before installing: validation or a throwing logger cannot poison the cache.
     const message = `[MLFilter] ✅ ${ticker ? ticker.toUpperCase() : 'default'}: ${trees.length} trees, acc=${meta.accuracy.toFixed(3)}, f1=${meta.f1.toFixed(3)}`;
     console.log(message);
-    _models.set(key, { trees, meta });
+    _models.set(key, { trees, meta, modelSha256 });
+    ML_LOAD_FAILED.delete(key);
+    ML_REJECTED.delete(key);
     return true;
   } catch (e: any) {
     console.error(`[MLFilter] ❌ Error: ${e.message}`);

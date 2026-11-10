@@ -11,6 +11,7 @@ import { runRolloverTriageExecution } from '../engine/RolloverTriageExecutor.js'
 import { setRolloverLiveFillObserver } from '../engine/RolloverLiveFillRegistry.js';
 import { getLastBidAsk, getRolloverQuote, syncScannerRoster, getLiveExecutionInstrument } from '../services/ctrader.js';
 import * as fs from 'fs';
+import { createHash } from 'node:crypto';
 
 import { recordMacroImpulse, selectMacroImpulse, updateMacroImpulses } from '../engine/MacroImpulse.js';
 import { z } from 'zod';
@@ -37,7 +38,29 @@ import type { ExecutionPolicyInput, ExecutionPolicy, ExecutionInstrument, Execut
 import { resolveExecutionPolicy, evaluateSmartEntryRouting, createExecutionPositionState, advanceExecutionPositionState, evaluateDynamicBreakeven, computeMultiAssetTrailingSl, computeExecutionTargets, REGIME_PROFILES } from '../engine/ExecutionMicrostructure.js';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../engine/ExecutionCosts.js';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../engine/ExecutionContext.js';
-import { setMLGateOverride } from '../engine/MLFilter.js';
+import { setMLGateOverride, setMLGateDeployment, getMLGateStatus, loadModelFromJSON } from '../engine/MLFilter.js';
+
+/** Read-only runtime adapter. Deployment evidence binds the exact bytes loaded NOW,
+ * never a stale startup cache or a generic model. No config writes or gate activation. */
+export function configureMLGateRuntime(ticker: string, rawConfig: any): void {
+    const key = ticker.toUpperCase();
+    setMLGateDeployment(key, rawConfig?.mlGateDeployment);
+    if (rawConfig?.mlGateDeployment !== undefined && getMLGateStatus(key).reason !== 'INVALID_DEPLOYMENT') {
+        try {
+            if (!/^[A-Z0-9]+$/.test(key)) throw new Error('unsafe model ticker');
+            const bytes = fs.readFileSync(`scripts/hyperopt/models/ml_model_${key}.json`);
+            loadModelFromJSON(bytes.toString('utf8'), key, createHash('sha256').update(bytes).digest('hex'));
+        } catch (error: any) {
+            // Record a failed replacement: the old cached model must not appear ready.
+            loadModelFromJSON('', key);
+            console.error(`[MLFilter] ${key}: model unavailable: ${error.message}`);
+        }
+        const status = getMLGateStatus(key);
+        if (!status.ready) console.error(`[MLFilter] ${key}: ${status.reason} → legacy heuristic fallback (not deployed)`);
+    }
+    // Preserve pre-existing boolean semantics. Deployment itself never switches ON.
+    setMLGateOverride(key, rawConfig?.mlGateEnabled === true);
+}
 import { predictRegime, regimeUnavailable, REGIME_FEATURE_SCHEMA, REGIME_VELOCITY_PROFILE, type RegimeContextInput } from '../engine/MLRegimeFeatures.js';
 import { resolveTimesfmConfig, appendTimesfmAudit, resolveTp2FromForecast, type TimesfmDecision, type TimesfmFilterConfig } from '../engine/TimesfmFilter.js';
 import { fetchLiveTimesfmDecision, configureTimesfmLiveCache, resetTimesfmLiveCache } from '../engine/TimesfmLiveCacheNode.js';
@@ -1350,6 +1373,8 @@ if (db) {
                     riskPercent: Number((data as any).riskPercent),
                     rolloverPolicy: (data as any).rolloverPolicy,
                     mlRegimeShadow: (data as any).mlRegimeShadow,
+                    mlGateEnabled: (doc.data() as any).mlGateEnabled === true,
+                    mlGateDeployment: (doc.data() as any).mlGateDeployment,
                     timesfm: (data as any).timesfm, // 🆕 F1/F2: el schema es passthrough, pero el listener lo descartaba → el gate nunca veía el filtro
                     correlationFilter: (data as any).correlationFilter, // 🧲 ago-2026: sin esto, asset_configs correlationFilter={shadow:false} NO activa el bloqueo real
                     biasConfluence: (data as any).biasConfluence, // 🛡️ sep-2026 Paso 1: confluencia de bias por activo (bono de alineación)
@@ -1361,7 +1386,7 @@ if (db) {
                 });
                 // 🛡️ 16-sep-2026: gate ML por activo en CALIENTE (default OFF — los modelos de
                 // 11-ago restan PnL). mlGateEnabled=true en el doc → gate ON en vivo sin restart.
-                setMLGateOverride(doc.id, (doc.data() as any).mlGateEnabled === true);
+                configureMLGateRuntime(doc.id, doc.data());
                 configureExperimentalRuntime(doc.id, globalState.assetSessionConfigs.get(doc.id));
             });
             // Cancel only the new experimental lifecycle on document removal; do not
@@ -5159,6 +5184,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 ts: nowMs, ticker, direction: oteData.direction, entryType: entryKind,
                                 points: oteData.points, prob: mlPredAll.probability,
                                 threshold: mlPredAll.threshold, approved: mlPredAll.approved, gateOn,
+                                mlGateStatus: getMLGateStatus(ticker),
                             }) + '\n');
                         } catch { /* audit best-effort */ }
                         if (oteData.isChochEntry && gateOn && !mlPredAll.approved) {

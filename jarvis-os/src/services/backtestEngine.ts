@@ -516,8 +516,10 @@ export function runBacktest(
     // Fail closed: a missing/invalid fold model must not reuse a prior trial's
     // model or silently change the candidate to gate-OFF.
     try {
-      if (!mlGateCfg.modelPath || !loadModelFromJSON(fs.readFileSync(mlGateCfg.modelPath, 'utf8'), config.ticker)) {
-        throw new Error('model path missing or model rejected');
+      if (!mlGateCfg.modelPath) throw new Error('model path missing');
+      const modelBytes = fs.readFileSync(mlGateCfg.modelPath);
+      if (!loadModelFromJSON(modelBytes.toString('utf8'), config.ticker, nodeCrypto.createHash('sha256').update(modelBytes).digest('hex'))) {
+        throw new Error('model rejected');
       }
     } catch (e: any) {
       throw new Error(`Replay ML model unavailable: ${e.message}`);
@@ -525,7 +527,8 @@ export function runBacktest(
   } else if (mlGateCfg?.enabled && mlGateCfg.modelPath && !_mlLoadedPaths.has(mlGateCfg.modelPath)) {
     try {
       if (fs.existsSync(mlGateCfg.modelPath)) {
-        loadModelFromJSON(fs.readFileSync(mlGateCfg.modelPath, 'utf8'), config.ticker);
+        const modelBytes = fs.readFileSync(mlGateCfg.modelPath);
+        loadModelFromJSON(modelBytes.toString('utf8'), config.ticker, nodeCrypto.createHash('sha256').update(modelBytes).digest('hex'));
       } else {
         console.warn(`[ML-GATE] ⚠️ modelo no encontrado: ${mlGateCfg.modelPath} — gate OFF`);
       }
