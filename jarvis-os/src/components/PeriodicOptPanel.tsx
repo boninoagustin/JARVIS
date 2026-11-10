@@ -3,7 +3,7 @@ import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
-import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation, reportSummary } from '../services/periodicOptPresentation';
+import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, isFreshReport, filterEvidence, activationRecommendation, reportSummary, reportPlainDetail } from '../services/periodicOptPresentation';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -504,7 +504,14 @@ export default function PeriodicOptPanel() {
                         {reportSummary(r.status, reportScope(r, activeList).current, trading).label}
                     </p>
                     <details style={{ marginTop: 12 }}>
-                        <summary style={{ cursor: 'pointer', color: '#888', fontSize: '0.8rem' }}>Ver detalle técnico</summary>
+                        <summary style={{ cursor: 'pointer', color: '#888', fontSize: '0.8rem' }}>¿Qué significa esto?</summary>
+                        <div style={{ marginTop: 8 }}>
+                            {reportPlainDetail(r.status, metrics.proposal, metrics.production).map((line, i) => (
+                                <p key={i} style={{ margin: '4px 0', fontSize: '0.82rem', color: '#ccc' }}>• {line}</p>
+                            ))}
+                        </div>
+                        <details style={{ marginTop: 8 }}>
+                            <summary style={{ cursor: 'pointer', color: '#666', fontSize: '0.72rem' }}>Ver números crudos (auditoría)</summary>
 
                     {(r.status === 'ERROR' || r.status === 'REFRESH_ERROR' || r.status.startsWith('HOLD_')) && (
                         <p style={{ color: '#ff3333', fontSize: '0.85rem', marginTop: '12px' }}>🛑 {r.reason || 'Resultado no concluyente; revisar evidencia y disponibilidad. No implica desactivar el activo.'}</p>
@@ -612,6 +619,7 @@ export default function PeriodicOptPanel() {
 
 
                     <WeeklyOperationalStatus report={r} autoState={autoState} config={configMetadata[r.ticker]} stateError={stateError} />
+                        </details>
                     </details>
 
                     <p style={{ color: '#888', fontSize: '0.8rem' }}>Este diagnóstico no recomienda activar ni desactivar.

@@ -73,6 +73,34 @@ export function filterEvidence(ts: unknown, n: unknown, now = Date.now()) {
         : !enough ? `muestra insuficiente (n=${count}/${MIN_FILTER_SAMPLE})` : null;
     return { fresh, enough, actionable: fresh && enough, n: count, reason };
 }
+/** Plain-language "¿qué significa?" for the detail foldout. No jargon, no hashes. */
+export function reportPlainDetail(status: string, proposal?: Metrics, production?: Metrics): string[] {
+    const pn = Number(proposal?.trade_count ?? 0);
+    const dn = Number(production?.trade_count ?? 0);
+    const lines: string[] = [];
+    if (status === 'RECOMMEND') {
+        lines.push('Se encontró una posible mejora en las pruebas históricas. Todavía no demuestra que vaya a funcionar al operar.');
+        if (Number.isFinite(proposal?.expectancy) && Number.isFinite(production?.expectancy)) {
+            lines.push(`La expectativa pasaría de ${Number(production!.expectancy).toFixed(2)} a ${Number(proposal!.expectancy).toFixed(2)} R por operación.`);
+        }
+        lines.push('Qué hacer: esperar la validación con datos nuevos. Este reporte no confirma que el bot haya recibido o aplicado el cambio.');
+    } else if (status === 'HOLD') {
+        lines.push('Sin mejora esta semana. Se mantiene la configuración actual.');
+    } else if (status === 'HOLD_MC') {
+        lines.push('No se aprobó la mejora: la prueba de robustez no dio una conclusión favorable. Puede faltar evidencia o haber un problema en la evaluación.');
+        lines.push('Se mantiene la configuración actual. No implica apagar el activo.');
+    } else if (status === 'ERROR' || status?.startsWith('HOLD_')) {
+        lines.push('La evaluación no se completó o no pasó los controles. Este resultado no aprueba ningún cambio.');
+    } else {
+        lines.push('Sin conclusión clara. Se mantiene la configuración actual.');
+    }
+    if (production?.trade_count != null && proposal?.trade_count != null && (dn < 30 || pn < 30)) {
+        lines.push(`Atención: hay muy pocas operaciones (${dn} con la configuración actual / ${pn} con la propuesta). No alcanza para sacar una conclusión firme.`);
+        if (pn === 0) lines.push('La propuesta no realizó operaciones: mostrar cero pérdidas no significa que haya mejorado.');
+    }
+    lines.push('Esto es diagnóstico: no recomienda activar ni desactivar. El roster y el riesgo se deciden en Salud de Activos.');
+    return lines;
+}
 /** Activating a filter is only offered when the counterfactual shows a POSITIVE
  * improvement (delta > 0); a negative/zero delta means "do not activate". */
 export function activationRecommendation(ts: unknown, n: unknown, delta: unknown, now = Date.now()) {

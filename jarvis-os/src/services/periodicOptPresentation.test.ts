@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation, reportSummary } from './periodicOptPresentation.ts';
+import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation, reportSummary, reportPlainDetail } from './periodicOptPresentation.ts';
 const now = Date.UTC(2026, 10, 7, 19, 0);
 test('freshness is inclusive at eight days, fails closed for old/missing/future dates', () => {
     assert.equal(isFreshReport(now - MAX_REPORT_AGE_MS, now), true);
@@ -82,6 +82,22 @@ test('RECOMMEND on a disabled asset says the improvement is pending, not auto-ap
     assert.equal(reportSummary('RECOMMEND', true, false).color, '#eab308');
     assert.doesNotMatch(reportSummary('RECOMMEND', true, false).label, /no tenés que hacer nada/);
     assert.match(reportSummary('RECOMMEND', true, true).label, /no tenés que hacer nada/);
+});
+test('report plain detail explains verdict and flags tiny samples', () => {
+    const holdMc = reportPlainDetail('HOLD_MC', { trade_count: 0, expectancy: 0 }, { trade_count: 1, expectancy: -1 });
+    assert.match(holdMc.join('\n'), /No se aprobó la mejora/);
+    assert.match(holdMc.join('\n'), /cero pérdidas no significa/);
+    assert.match(holdMc.join('\n'), /No implica apagar/);
+    assert.match(holdMc.join('\n'), /muy pocas operaciones/);
+    assert.doesNotMatch(holdMc.join('\n'), /Profit Factor|KS propuesta|Shadow|montecarlo/i);
+    const rec = reportPlainDetail('RECOMMEND', { trade_count: 40, expectancy: 0.6 }, { trade_count: 40, expectancy: 0.1 });
+    assert.match(rec.join('\n'), /posible mejora en las pruebas históricas/);
+    assert.match(rec.join('\n'), /pasaría de 0\.10 a 0\.60/);
+    assert.match(rec.join('\n'), /Qué hacer: esperar/);
+    assert.doesNotMatch(rec.join('\n'), /muy pocas operaciones/);
+    const err = reportPlainDetail('ERROR', undefined, undefined);
+    assert.match(err.join('\n'), /no aprueba ningún cambio/);
+    assert.doesNotMatch(err.join('\n'), /0 con la configuración/);
 });
 test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
