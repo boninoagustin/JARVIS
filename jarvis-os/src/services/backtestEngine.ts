@@ -406,6 +406,9 @@ export function parseCSV(content: string): { lines: LogEntry[]; detectedTF: stri
 export function getSessionForTimestamp(ts: number): 'LONDON' | 'NY' | 'ASIA' | 'OFF' {
   // Argentina is UTC-3 all year round
   const d = new Date(ts - 3 * 3600 * 1000);
+  // Paridad con vivo (getCurrentSession trading.ts:967-971): sábado/domingo → OFF.
+  const day = d.getUTCDay();
+  if (day === 0 || day === 6) return 'OFF';
   const arHour = d.getUTCHours();
   const arMin = d.getUTCMinutes();
   const timeDecimal = arHour + arMin / 60;
