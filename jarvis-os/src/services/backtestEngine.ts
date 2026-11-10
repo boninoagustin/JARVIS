@@ -2164,7 +2164,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     const tfMin = parseInt(String(oteData.tf || '15').replace(/\D/g, '')) || 15;
     const candleKey = timesfmCandleKey(nowMs, tfMin);
     if (tfmCfg.collectOnly) {
-      appendTimesfmAudit(tfmCfg.collectPath, { ts: candleKey, ticker: config.ticker });
+      appendTimesfmAudit(tfmCfg.collectPath, { ts: candleKey, ticker: config.ticker, tf: tfMin });
     } else {
       const fc = timesfmForecastAt ? timesfmForecastAt(nowMs, tfMin) : timesfmForecastCache?.get(candleKey);
       const atr = state.atr14 ?? 0;

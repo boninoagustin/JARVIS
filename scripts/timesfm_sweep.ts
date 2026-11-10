@@ -120,7 +120,8 @@ export async function main(args = process.argv.slice(2)) {
   if (!snapshot.exists) throw new Error(`sin config de asset: ${ticker}`);
   const asset = json(snapshot.data());
   const base = `/opt/JARVIS/logs/${ticker.toLowerCase()}/forecasts`;
-  const triggerTsList = readTriggerTs(`${base}/triggers_m5.jsonl`);
+  const prodTriggers = `${base}/triggers_production.jsonl`;
+  const triggerTsList = readTriggerTs(fs.existsSync(prodTriggers) ? prodTriggers : `${base}/triggers_m5.jsonl`);
   const cachePath = `${base}/forecasts_m5.jsonl`;
   const dir = `/opt/JARVIS/logs/${ticker.toLowerCase()}/history_exported`;
   const logs = loadSelectionLogs({ ticker, logsDir: dir });
