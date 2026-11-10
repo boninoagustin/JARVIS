@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import admin from 'firebase-admin';
 import { isHealthFresh } from './health_freshness_core.js';
+import { paperReadiness } from './paper_readiness.js';
 import { buildLiveSample, describeLiveSample } from './live_sample_core.js';
 import { getAdrPrice } from '../../src/engine/tp2Cap.js';
 
@@ -93,16 +94,18 @@ console.log('Muestra viva: ' + describeLiveSample(sample));
 
 // Paper mode (09-nov-2026): evidencia simulada de los activos apagados (paper_trades).
 // NUNCA cuenta como P&L verificado; es una señal forward para PROPONER activación.
+// El readiness exige paper forward OBSERVED + certificación CERTIFIED del MISMO candidato.
 const paperSnap = await db.collection('paper_trades').get();
 const paperMap = new Map(paperSnap.docs.map((d) => [d.id, d.data() as any]));
-const PAPER_MIN_N = 8;
-const PAPER_MIN_WR = 0.40;
+const certSnap = await db.collection('prospective_tests').get();
+const certMap = new Map(certSnap.docs.map((d) => [d.id, d.data() as any]));
 
 type Row = {
   ticker: string; cluster: string; mu: number; n: number; score: number;
   feasible: boolean; minFeasible: number | null; liveN: number; liveAvgR: number | null;
   enabled: boolean; reason: string; verdict: string;
   paperN: number; paperWr: number | null; paperExp: number | null; paperReady: boolean;
+  paperReason: string;
 };
 const rows: Row[] = [];
 
@@ -133,13 +136,11 @@ for (const doc of health.docs) {
   const liveAvgR = l.n > 0 ? l.sumR / l.n : null;
   const score = mu * Math.sqrt(Math.min(n, 200));
   const p = paperMap.get(ticker);
-  const paperN = Number(p?.n ?? 0);
-  const paperWr = paperN > 0 ? Number(p?.wr ?? 0) : null;
-  const paperExp = paperN > 0 ? Number(p?.expectancy ?? 0) : null;
+  const pr = paperReadiness(ticker, p, certMap.get(ticker));
   rows.push({
     ticker, cluster: riskClusterOf(ticker), mu, n, score, feasible, minFeasible,
     liveN: l.n, liveAvgR, enabled, reason: String(cfg.disabledReason || ''), verdict: 'OFF',
-    paperN, paperWr, paperExp, paperReady: false,
+    paperN: pr.n, paperWr: pr.wr, paperExp: pr.expectancy, paperReady: pr.ready, paperReason: pr.reason,
   });
 }
 
@@ -199,11 +200,11 @@ for (const r of rows) {
     : `plano (${r.mu.toFixed(3)} R/tr) — se sigue midiendo`;
 }
 
-// Paper-ready: activo NO-TRADE con evidencia paper suficiente. Es una PROPUESTA de
-// activación (no cambia el veredicto ni auto-activa plata real).
+// Paper-ready es una PROPUESTA de activación (no cambia el veredicto ni auto-activa
+// plata real). Se computó vía paperReadiness (paper forward OBSERVED + CERTIFIED del
+// MISMO candidato). Para los ya-TRADE no aplica: ya están activos.
 for (const r of rows) {
-  if (r.verdict === 'TRADE') continue;
-  r.paperReady = r.paperN >= PAPER_MIN_N && (r.paperWr ?? 0) >= PAPER_MIN_WR && (r.paperExp ?? 0) > 0;
+  if (r.verdict === 'TRADE') r.paperReady = false;
 }
 
 const byVerdict = (v: string) => rows.filter((r) => r.verdict === v);
@@ -229,7 +230,7 @@ if (WRITE) {
       liveTrades: r.liveN, liveAvgR: r.liveAvgR === null ? null : Number(r.liveAvgR.toFixed(4)),
       paperTrades: r.paperN, paperWr: r.paperWr === null ? null : Number(r.paperWr.toFixed(4)),
       paperExp: r.paperExp === null ? null : Number(r.paperExp.toFixed(4)),
-      paperReady: r.paperReady,
+      paperReady: r.paperReady, paperReason: r.paperReason,
       reason: r.reason, generatedAt: at, enabledAtGeneration: r.enabled,
     }, { merge: true });
   }
