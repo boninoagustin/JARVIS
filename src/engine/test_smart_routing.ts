@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { routeSmartEntry } from './SmartRouting.js';
+import { routeSmartEntry, resolveDirectTrigger } from './SmartRouting.js';
 
 const base = {
   direction: 'BUY' as const, currentSession: 'NY', totalPoints: 10, minPtsRequired: 8,
@@ -37,4 +37,20 @@ const wall = routeSmartEntry({ ...base, totalPoints: 10, riskDist: 100, zones: [
 assert.equal(wall.takeChoch, false);
 assert.equal(wall.reason, 'ote_else');
 
-console.log('PASS routeSmartEntry: decisión SMART compartida (hermético)');
+// resolveDirectTrigger: umbral por gatillo y dirección.
+const trigChoch = resolveDirectTrigger({ direction: 'BUY', entryTrigger: 'SMART', isChoch: true, eventTf: '5', assetMinBuy: 4, assetMinSell: 4,
+  sessionConfig: { choch5m: { enabled: true, minScoreBuy: 12, minScore: 8 } } });
+assert.equal(trigChoch.triggerEnabled, true);
+assert.equal(trigChoch.minPtsRequired, 12);
+assert.equal(trigChoch.liveTriggerCfg.minScoreBuy, 12);
+
+const trigSell = resolveDirectTrigger({ direction: 'SELL', entryTrigger: 'SMART', isChoch: true, eventTf: '5', assetMinBuy: 4, assetMinSell: 5,
+  sessionConfig: { choch5m: { enabled: true, minScoreSell: 16 } } });
+assert.equal(trigSell.minPtsRequired, 16);
+
+// Sin sessionConfig → entryTrigger decide (CHoCH/SMART → enabled).
+const trigNoSes = resolveDirectTrigger({ direction: 'BUY', entryTrigger: 'SMART', isChoch: true, eventTf: '5', assetMinBuy: 4, assetMinSell: 4, sessionConfig: undefined });
+assert.equal(trigNoSes.triggerEnabled, true);
+assert.equal(trigNoSes.minPtsRequired, 4);
+
+console.log('PASS routeSmartEntry + resolveDirectTrigger: decisión SMART compartida (hermético)');

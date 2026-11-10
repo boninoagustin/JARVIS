@@ -49,6 +49,49 @@ function parseTfToMinutes(tfStr: string): number {
   return 0;
 }
 
+/** Umbral de entrada directa por gatillo (minScore/minScoreBuy/minScoreSell), FUENTE
+ * ÚNICA compartida entre vivo y backtest. Reemplaza la lógica duplicada de
+ * trading.ts (~3519-3563) y backtestEngine.ts (~1771-1808). */
+export function resolveDirectTrigger(input: {
+  direction: 'BUY' | 'SELL';
+  entryTrigger: string;
+  sessionConfig: any;
+  isChoch: boolean;
+  eventTf: string;
+  assetMinBuy: number;
+  assetMinSell: number;
+}): { triggerEnabled: boolean; minPtsRequired: number; liveTriggerCfg?: any } {
+  const { direction, entryTrigger, sessionConfig, isChoch, eventTf, assetMinBuy, assetMinSell } = input;
+  const assetMin = direction === 'BUY' ? assetMinBuy : assetMinSell;
+  let triggerEnabled = false;
+  let liveTriggerCfg: any = null;
+  let minPtsRequired = assetMin;
+
+  const dirMin = (cfg: any, fallback: number) => direction === 'BUY'
+    ? (cfg?.minScoreBuy ?? cfg?.minScore ?? fallback)
+    : (cfg?.minScoreSell ?? cfg?.minScore ?? fallback);
+
+  if (sessionConfig) {
+    const tfKey = isChoch ? `choch${eventTf}m` : `bos${eventTf}m`;
+    const legacyKey = isChoch ? 'choch' : 'bos';
+    const tfConfig = sessionConfig[tfKey];
+    if (tfConfig) {
+      liveTriggerCfg = tfConfig;
+      triggerEnabled = tfConfig.enabled ?? false;
+      minPtsRequired = dirMin(tfConfig, assetMin);
+    } else if (sessionConfig[legacyKey]) {
+      triggerEnabled = sessionConfig[legacyKey].enabled ?? false;
+      minPtsRequired = dirMin(sessionConfig[legacyKey], assetMin);
+    }
+  } else if (isChoch) {
+    triggerEnabled = (entryTrigger === 'CHOCH' || entryTrigger === 'BOTH' || entryTrigger === 'SMART');
+  } else {
+    triggerEnabled = (entryTrigger === 'BOTH' || entryTrigger === 'SMART');
+  }
+
+  return { triggerEnabled, minPtsRequired, liveTriggerCfg };
+}
+
 export function routeSmartEntry(input: SmartRouteInput): SmartRouteResult {
   const { direction, currentSession, totalPoints, minPtsRequired, riskDist, currentPrice,
     signalTfMinutes, decimals, nowMs, zones, biasTs, atr14, climaxRange, alertLine, config } = input;

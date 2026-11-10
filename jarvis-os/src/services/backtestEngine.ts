@@ -44,7 +44,7 @@ import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../s
 import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
 import { canonicalZoneMedal } from '../../../src/engine/smc/zone_protocol';
-import { routeSmartEntry } from '../../../src/engine/SmartRouting';
+import { routeSmartEntry, resolveDirectTrigger } from '../../../src/engine/SmartRouting';
 import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';
 import type { ExecutionQuote, ExecutionMarketSnapshot, ExecutionPositionState, ExecutionObservation, SmartRoutingDecision } from '../../../src/engine/ExecutionTypes';
@@ -1768,44 +1768,17 @@ function processAlert(
       }
     }
 
-    let triggerEnabled = false;
-    const baseMin = currentDirection === 'BUY' ? config.minBuyPoints : config.minSellPoints;
-    let minPtsRequired = baseMin;
-    
-    if (sessionConfig) {
-      const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
-      const tfKeyBos = `bos${eventTf}m` as keyof typeof sessionConfig;
-
-      // Paridad con vivo (trading.ts:3536-3550): minScoreBuy/minScoreSell por dirección.
-      const dirMin = (tfConfig: any, fallback: number) => currentDirection === 'BUY'
-        ? (tfConfig?.minScoreBuy ?? tfConfig?.minScore ?? fallback)
-        : (tfConfig?.minScoreSell ?? tfConfig?.minScore ?? fallback);
-      if (prefix === 'EVENTO_CHOCH') {
-        const tfConfig = sessionConfig[tfKeyChoch] as any;
-        if (tfConfig) {
-            triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = dirMin(tfConfig, baseMin);
-        } else if ((sessionConfig as any).choch) {
-            triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
-            minPtsRequired = dirMin((sessionConfig as any).choch, baseMin);
-        }
-      } else if (prefix === 'EVENTO_BOS') {
-        const tfConfig = sessionConfig[tfKeyBos] as any;
-        if (tfConfig) {
-            triggerEnabled = tfConfig.enabled ?? false;
-            minPtsRequired = dirMin(tfConfig, baseMin);
-        } else if ((sessionConfig as any).bos) {
-            triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
-            minPtsRequired = dirMin((sessionConfig as any).bos, baseMin);
-        }
-      }
-    } else {
-      if (prefix === 'EVENTO_BOS') {
-        triggerEnabled = (config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-      } else {
-        triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-      }
-    }
+    const directTrigger = resolveDirectTrigger({
+      direction: currentDirection as 'BUY' | 'SELL',
+      entryTrigger: config.entryTrigger,
+      sessionConfig,
+      isChoch: prefix === 'EVENTO_CHOCH',
+      eventTf,
+      assetMinBuy: config.minBuyPoints,
+      assetMinSell: config.minSellPoints,
+    });
+    let triggerEnabled = directTrigger.triggerEnabled;
+    let minPtsRequired = directTrigger.minPtsRequired;
 
     // Macro OTE bonus (ported from live): entra como evento (pts incluidos en computePoints)
     const activeMacroLeg = selectMacroImpulse(state, currentDirection, eventTf, nowMs);

@@ -1,7 +1,7 @@
 import { db } from './memory.js';
 import { isRiderExit, resolveRiderPolicy, type RiderPolicy, type RiderTransition } from '../engine/RiderState.js';
 import { canonicalZoneMedal, parseSyncZonesPayload, parseNativeZoneBreak, matchesNativeBrokenZone, isNativeZoneAlert, assertNativeZoneSnapshot, migrateZoneProtocolState, hasLegacyUnresolvedZoneEvidence } from '../engine/smc/zone_protocol.js';
-import { routeSmartEntry } from '../engine/SmartRouting.js';
+import { routeSmartEntry, resolveDirectTrigger } from '../engine/SmartRouting.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { riskClusterOf, CLUSTER_RISK_CAPS, computeOpenRisk, isTerminalNoFill } from '../engine/RiskCaps.js';
@@ -3525,41 +3525,19 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                 if (sessionThresholds) {
                     triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
                     minPtsRequired = currentDirection === 'BUY' ? sessionThresholds.buy : sessionThresholds.sell;
-                } else if (sessionConfig) {
-                    const tfKeyChoch = `choch${eventTf}m` as keyof typeof sessionConfig;
-                    const tfKeyBos = `bos${eventTf}m` as keyof typeof sessionConfig;
-
-                    if (triggerType === 'CHoCH🚀') {
-                        const tfConfig = sessionConfig[tfKeyChoch] as any;
-                        if (tfConfig) {
-                            liveTriggerCfg = tfConfig;
-                            triggerEnabled = tfConfig.enabled ?? false;
-                            minPtsRequired = currentDirection === 'BUY'
-                                ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
-                                : (tfConfig.minScoreSell ?? tfConfig.minScore ?? config.minPointsForSell);
-                        } else if ((sessionConfig as any).choch) {
-                            triggerEnabled = (sessionConfig as any).choch.enabled ?? false;
-                            minPtsRequired = (sessionConfig as any).choch.minScore ?? (currentDirection === 'BUY' ? config.minPointsForBuy : config.minPointsForSell);
-                        }
-                    } else if (triggerType === 'BOS🔨') {
-                        const tfConfig = sessionConfig[tfKeyBos] as any;
-                        if (tfConfig) {
-                            liveTriggerCfg = tfConfig;
-                            triggerEnabled = tfConfig.enabled ?? false;
-                            minPtsRequired = currentDirection === 'BUY'
-                                ? (tfConfig.minScoreBuy ?? tfConfig.minScore ?? config.minPointsForBuy)
-                                : (tfConfig.minScoreSell ?? tfConfig.minScore ?? config.minPointsForSell);
-                        } else if ((sessionConfig as any).bos) {
-                            triggerEnabled = (sessionConfig as any).bos.enabled ?? false;
-                            minPtsRequired = (sessionConfig as any).bos.minScore ?? (currentDirection === 'BUY' ? config.minPointsForBuy : config.minPointsForSell);
-                        }
-                    }
                 } else {
-                    if (triggerType === 'BOS🔨') {
-                        triggerEnabled = (config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-                    } else {
-                        triggerEnabled = (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
-                    }
+                    const directTrigger = resolveDirectTrigger({
+                        direction: currentDirection as 'BUY' | 'SELL',
+                        entryTrigger: config.entryTrigger,
+                        sessionConfig,
+                        isChoch: triggerType === 'CHoCH🚀',
+                        eventTf,
+                        assetMinBuy: config.minPointsForBuy,
+                        assetMinSell: config.minPointsForSell,
+                    });
+                    triggerEnabled = directTrigger.triggerEnabled;
+                    liveTriggerCfg = directTrigger.liveTriggerCfg ?? null;
+                    minPtsRequired = directTrigger.minPtsRequired;
                 }
 
                 const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
