@@ -193,6 +193,36 @@ export default function AssetHealthPanel() {
     }
   };
 
+  const activateByPaper = async (ticker: string) => {
+    try {
+      // Releer evidencia al pulsar: el ciclo semanal puede haberla cambiado.
+      const [rp, pp] = await Promise.all([
+        getDoc(doc(db, 'roster_proposals', ticker)), getDoc(doc(db, 'paper_trades', ticker)),
+      ]);
+      const roster = rp.data() as any;
+      const paper = pp.data() as any;
+      if (roster?.paperReady !== true) {
+        toast('La evidencia paper ya no está vigente. Refrescá y revisá el roster.', 'error');
+        return;
+      }
+      const n = Number(paper?.n ?? 0);
+      const wr = paper?.wr != null ? Number(paper.wr) : 0;
+      const exp = paper?.expectancy != null ? Number(paper.expectancy) : 0;
+      const message = `🧪 Activar ${ticker} por evidencia paper.\n\n${n} cierres simulados · WR ${(wr * 100).toFixed(0)}% · ${exp >= 0 ? '+' : ''}${exp.toFixed(2)}R/tr.\n\nEl candidato está certificado forward y el paper es positivo. Es una decisión tuya: usa el riesgo configurado (sin aumentarlo) y NO convierte el roster en TRADE.`;
+      if (!confirm(message)) return;
+      await setDoc(doc(db, 'asset_configs', ticker), { enabled: true, disabledReason: '' }, { merge: true });
+      try {
+        const atRef = doc(db, 'optimization_config', 'active_tickers');
+        const atSnap = await getDoc(atRef);
+        const cur: string[] = atSnap.exists() && Array.isArray(atSnap.data()?.tickers) ? atSnap.data().tickers : [];
+        if (!cur.includes(ticker)) await setDoc(atRef, { tickers: [...cur, ticker], updatedAt: new Date().toISOString() }, { merge: true });
+      } catch (err) { console.warn('No se pudo auto-promover a active_tickers:', err); }
+      toast(`✅ ${ticker} activado por evidencia paper. El bot lo toma en caliente.`, 'success');
+    } catch (e: any) {
+      toast(`Error activando por paper: ${e.message}`, 'error');
+    }
+  };
+
   // 03-nov-2026: faltaba el botón para apagar. Escribe disabledReason para que sea una
   // decisión del operador explícita (el rollout y el auto-disable la respetan).
   const deactivate = async (ticker: string) => {
@@ -369,6 +399,11 @@ export default function AssetHealthPanel() {
                   )}
                   {recommendation.action === 'pause' && (
                     <button className="btn" onClick={() => deactivate(ticker)} title="Pausa nuevas entradas; no envía órdenes de cierre">Pausar nuevas entradas</button>
+                  )}
+                  {roster[ticker]?.paperReady && !on && (
+                    <button className="btn btn-primary" onClick={() => activateByPaper(ticker)} title={roster[ticker]?.paperReason || 'Candidato certificado forward + evidencia paper positiva'}>
+                      🧪 Activar por evidencia paper
+                    </button>
                   )}
                   <details style={{ fontSize: '0.72rem' }}>
                     <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>Acciones manuales</summary>
