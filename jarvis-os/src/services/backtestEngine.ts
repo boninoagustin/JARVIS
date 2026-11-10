@@ -1682,7 +1682,7 @@ function processAlert(
 
   // --- CHoCH/BOS TRIGGER VALIDATION ---
   if ((prefix === 'EVENTO_CHOCH' || prefix === 'EVENTO_BOS') && (eventTf === '5' || eventTf === '15')) {
-    if (nowMs - (state.lastSniperAlert ?? 0) < 180000) return;
+    if (nowMs - (state.lastSniperAlert ?? 0) < ((config as any).sniperCooldownMs ?? 180000)) return;
 
     const BIAS_TTL: Record<string, number> = { '5': 2*3600e3, '15': 4*3600e3, '60': 8*3600e3, '240': 48*3600e3, '1D': 120*3600e3, 'D': 120*3600e3, '4H': 48*3600e3, '1H': 8*3600e3 };
     const freshBias = (tf: string) => (nowMs - (state.biasTs?.[tf] ?? 0) < (BIAS_TTL[tf] ?? 24*3600e3)) ? state.marketBias?.[tf] : undefined;
@@ -1973,7 +1973,7 @@ function processAlert(
                 else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
             }
             
-            let rrChoch = 999.0; // Camino libre: sin zona opuesta el R:R teórico es infinito
+            let rrChoch = 3.0; // Paridad con vivo (trading.ts:3720): default optimista 3.0
             if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
                 const rewardDist = Math.abs(closestZonePrice - currentPrice);
                 rrChoch = riskDist > 0 ? rewardDist / riskDist : 0;
@@ -2051,7 +2051,8 @@ function processAlert(
               tradeId, direction: currentDirection,
               entryPrice: currentPrice,
               stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events.map(e => e.id), `${prefix}_${readableTf}`],
-              tf: readableTf
+              tf: readableTf,
+              isChochEntry: true, // paridad con vivo: entrada directa CHoCH/BOS
             };
             createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config, state);
             
@@ -2335,6 +2336,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     events: oteData.events || [],
     grade: oteData.points >= 8 ? 'A+' : 'B',
     oteEntryUsed: oteData.oteEntryUsed,
+    isChochEntry: oteData.isChochEntry === true ? true : false,
     // 🆕 sep-2026: gatillo real que ejecutó el trade (etiquetado honesto por gatillo)
     execTrigger: (oteData as any).execTrigger,
     tf: oteData.tf,
