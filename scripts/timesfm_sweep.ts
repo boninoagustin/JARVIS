@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { runBacktest, prepareEntries } from '../jarvis-os/src/services/backtestEngine.js';
-import { planReplayWindow } from '../jarvis-os/src/services/replayWindow.js';
+import { planReplayWindow, contextObservationTf } from '../jarvis-os/src/services/replayWindow.js';
 import { readOnlyReplayConfig, stableCanonical } from './hyperopt/evaluation_protocol.js';
 import { mapAssetConfig, loadSelectionLogs } from './periodic_opt/selection_context.js';
 import { loadTimesfmCache } from '../src/engine/TimesfmFilter.js';
@@ -21,17 +21,32 @@ const json = (value: any) => JSON.parse(JSON.stringify(value));
 
 export const TIMESFM_MIN_SAMPLE = 30;
 
+/** ts mínimo para evaluar: ≥60 observaciones por TF antes de él (warmup multi-TF). */
+export function minEvaluationStart(entries: any[], minObs = 60): number {
+  let latest = 0;
+  for (const tf of ['5', '15', '60', '240', 'D']) {
+    const ts = entries.filter(e => contextObservationTf(e) === tf).map(e => e.ts).sort((a, b) => a - b);
+    if (ts.length < minObs) return Number.MAX_SAFE_INTEGER;
+    latest = Math.max(latest, ts[minObs - 1]);
+  }
+  return latest;
+}
+
 export interface TmMetrics {
   n: number; wr: number; pf: number; pnlR: number; mdd: number;
 }
 
-/** Aísla TimesFM: ML apagado, correlación observando, TimesFM encendido. */
+/** Aísla TimesFM: ML apagado, correlación observando. TimesFM se controla por trial
+ * (baseline off / candidate on con caché), así que la base lo deja apagado. */
 export function isolateTimesfm(asset: any): any {
   const isolated = json(asset);
   if (isolated.mlGateEnabled !== undefined) isolated.mlGateEnabled = false;
   if (isolated.mlGate && typeof isolated.mlGate === 'object') isolated.mlGate = { ...isolated.mlGate, enabled: false };
   if (isolated.correlationFilter && typeof isolated.correlationFilter === 'object') {
     isolated.correlationFilter = { ...isolated.correlationFilter, shadow: true };
+  }
+  if (isolated.timesfm && typeof isolated.timesfm === 'object') {
+    isolated.timesfm = { ...isolated.timesfm, enabled: false };
   }
   return isolated;
 }
@@ -56,8 +71,9 @@ export function evaluateTimesfmAB(input: {
   if (!audit.ok) return { status: 'insufficient', reasons: audit.reasons };
 
   const forecasts = loadTimesfmCache(cachePath);
-  const tsList = [...forecasts.keys()].filter(ts => Number.isSafeInteger(ts) && ts > 0).sort((a, b) => a - b);
-  if (tsList.length < TIMESFM_MIN_SAMPLE) return { status: 'insufficient', reasons: [`forecasts as-of insuficientes: ${tsList.length}/${TIMESFM_MIN_SAMPLE}`] };
+  const minFrom = minEvaluationStart(entries);
+  const tsList = [...forecasts.keys()].filter(ts => Number.isSafeInteger(ts) && ts > 0 && ts >= minFrom).sort((a, b) => a - b);
+  if (tsList.length < TIMESFM_MIN_SAMPLE) return { status: 'insufficient', reasons: [`forecasts as-of tras warmup insuficientes: ${tsList.length}/${TIMESFM_MIN_SAMPLE}`] };
   const from = tsList[0], to = tsList.at(-1)! + 1;
   if (to > now) return { status: 'insufficient', reasons: ['ventana de forecast en el futuro'] };
 

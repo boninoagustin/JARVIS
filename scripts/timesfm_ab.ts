@@ -10,6 +10,9 @@
 import fs from 'node:fs';
 
 export const MIN_TIMESFM_FORECASTS = 30;
+/** Fracción mínima de triggers cubiertos por forecast as-of. Los triggers más tempranos
+ * carecen de contexto (512 velas) y son estructuralmente no forecasteables. */
+export const MIN_TIMESFM_COVERAGE = 0.9;
 
 export interface AsOfResult { ok: boolean; reason?: string }
 /** Forecast as-of: la fecha en que estuvo disponible no puede ser posterior a su vela. */
@@ -53,7 +56,7 @@ export function auditTimesfmCache(cachePath: string, triggerTsList: number[]): C
   if (valid < MIN_TIMESFM_FORECASTS) reasons.push(`cobertura insuficiente: ${valid}/${MIN_TIMESFM_FORECASTS} forecasts as-of válidos`);
   const covered = triggerTsList.filter(t => validTs.has(t)).length;
   const coverage = triggerTsList.length ? covered / triggerTsList.length : 0;
-  if (coverage < 1) reasons.push(`cobertura de triggers: ${covered}/${triggerTsList.length} con forecast as-of`);
+  if (coverage < MIN_TIMESFM_COVERAGE) reasons.push(`cobertura de triggers: ${covered}/${triggerTsList.length} con forecast as-of`);
   return { ok: reasons.length === 0, total: forecasts.length, valid, reasons, coverage };
 }
 

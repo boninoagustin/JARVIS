@@ -10,8 +10,10 @@ const iso = isolateTimesfm(src);
 assert.equal(iso.mlGateEnabled, false);
 assert.equal(iso.mlGate.enabled, false);
 assert.equal(iso.correlationFilter.shadow, true);
+assert.equal(iso.timesfm.enabled, false, 'TimesFM se controla por trial');
 assert.equal(src.mlGateEnabled, true, 'no muta el original');
 assert.equal(src.correlationFilter.shadow, false);
+assert.equal(src.timesfm.enabled, true, 'no muta el timesfm original');
 assert.equal(iso.enabled, true, 'parámetros de trading conservados');
 
 // ── evaluateTimesfmAB: fail-closed sin llamar al replay ──
