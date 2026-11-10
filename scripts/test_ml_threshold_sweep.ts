@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { parseSweepArgs, completedTrades, metrics, chronologicalWindows, isolateML } from './ml_threshold_sweep.js';
+import { parseSweepArgs, completedTrades, metrics, chronologicalWindows, isolateML, temporalBounds } from './ml_threshold_sweep.js';
 
 // ── parseSweepArgs ──
-assert.deepEqual(parseSweepArgs(['--ticker', 'eurusd']), { ticker: 'EURUSD', apply: false });
-assert.deepEqual(parseSweepArgs(['--ticker', 'GBPUSD', '--apply']), { ticker: 'GBPUSD', apply: true });
+assert.deepEqual(parseSweepArgs(['--ticker', 'eurusd']), { ticker: 'EURUSD', apply: false, assumeTrainedAt: false });
+assert.deepEqual(parseSweepArgs(['--ticker', 'GBPUSD', '--apply']), { ticker: 'GBPUSD', apply: true, assumeTrainedAt: false });
+assert.deepEqual(parseSweepArgs(['--ticker', 'X', '--assume-trained-at']), { ticker: 'X', apply: false, assumeTrainedAt: true });
 assert.throws(() => parseSweepArgs([]), /--ticker is required/);
 assert.throws(() => parseSweepArgs(['--ticker', 'ALL']), /invalid ticker/);
 assert.throws(() => parseSweepArgs(['--ticker']), /--ticker requires/);
@@ -59,4 +60,22 @@ const noTfm = isolateML({ ticker: 'X', enabled: false });
 assert.equal(noTfm.timesfm, undefined);
 assert.equal(noTfm.correlationFilter, undefined);
 
-console.log('PASS sweep: args, closed-trade filtering, metrics, chronological split, aislamiento ML (hermético)');
+// ── temporalBounds: autoritativo vs derivado conservador (opt-in) ──
+assert.equal(temporalBounds({ meta: { train_end_ms: 1500, available_at_ms: 1600 } }).status, 'verified');
+assert.equal(temporalBounds({ meta: { train_end_ms: 1500, available_at_ms: 1600 } }).derived, undefined);
+// trained_at sin Z y sin train_end_ms → fail-closed salvo opt-in
+assert.equal(temporalBounds({ meta: { trained_at: '2026-08-03T10:30:18' } }).status, 'unknown');
+assert.equal(temporalBounds({ meta: { trained_at: '2026-08-03T10:30:18Z' } }).status, 'unknown');
+const derived = temporalBounds({ meta: { trained_at: '2026-08-03T10:30:18' } }, true);
+assert.equal(derived.status, 'verified');
+assert.equal(derived.derived, 'derived_from_trained_at_conservative_cutoff');
+assert.equal(derived.train_end_ms, derived.available_at_ms); // corte conservador = fecha de entrenamiento
+assert.ok(derived.available_at_ms! > 0);
+// trained_at con Z + opt-in también deriva train_end_ms conservador
+const derivedZ = temporalBounds({ meta: { trained_at: '2026-08-03T10:30:18Z' } }, true);
+assert.equal(derivedZ.status, 'verified');
+assert.equal(derivedZ.train_end_ms, derivedZ.available_at_ms);
+// train_end_ms autoritativo + trained_at Z → verified sin derived
+assert.equal(temporalBounds({ meta: { train_end_ms: 1500, trained_at: '2026-08-03T10:30:18Z' } }).derived, undefined);
+
+console.log('PASS sweep: args, closed-trade filtering, metrics, chronological split, aislamiento ML, corte temporal (hermético)');

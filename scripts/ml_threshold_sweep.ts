@@ -1,6 +1,8 @@
 /** Exact-model chronological threshold selection + untouched holdout.
  * Default: read-only dry run. --apply writes ONLY validated ml_gate_evals evidence.
- * Usage: npx tsx scripts/ml_threshold_sweep.ts --ticker EURUSD [--apply]
+ * Usage: npx tsx scripts/ml_threshold_sweep.ts --ticker EURUSD [--apply] [--assume-trained-at]
+ * --assume-trained-at: corte temporal CONSERVADOR derivado de trained_at (supuesto, no dato
+ * medido) para modelos sin train_end_ms. Sin él, el sweep falla cerrado por proveniencia.
  * No model edits, model-mtime provenance, broker calls or asset-config writes.
  */
 import fs from 'node:fs';
@@ -10,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { runBacktest, prepareEntries } from '../jarvis-os/src/services/backtestEngine.js';
 import { planReplayWindow } from '../jarvis-os/src/services/replayWindow.js';
 import { configFingerprint, validateMLGateEvaluation } from '../jarvis-os/src/services/mlGateDeployment.js';
-import { stableCanonical, modelAvailability, readOnlyReplayConfig } from './hyperopt/evaluation_protocol.js';
+import { stableCanonical, readOnlyReplayConfig } from './hyperopt/evaluation_protocol.js';
 import { mapAssetConfig, loadSelectionLogs } from './periodic_opt/selection_context.js';
 import { loadModelFromJSON, setMLGateOverride, setMLGateDeployment, setMLWindowStart, getMLGateStatus } from '../src/engine/MLFilter.js';
 
@@ -19,9 +21,10 @@ const ROOT = '/opt/JARVIS';
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const json = (value: any) => JSON.parse(JSON.stringify(value));
 export function parseSweepArgs(args: string[]) {
-  let ticker: string | undefined, apply = false;
+  let ticker: string | undefined, apply = false, assumeTrainedAt = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--apply') { if (apply) throw new Error('duplicate --apply'); apply = true; }
+    else if (args[i] === '--assume-trained-at') { if (assumeTrainedAt) throw new Error('duplicate --assume-trained-at'); assumeTrainedAt = true; }
     else if (args[i] === '--ticker') {
       if (ticker || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('--ticker requires one ticker');
       ticker = args[++i].toUpperCase();
@@ -29,7 +32,34 @@ export function parseSweepArgs(args: string[]) {
     } else throw new Error(`unknown option: ${args[i]}`);
   }
   if (!ticker) throw new Error('--ticker is required (no implicit full-roster sweep)');
-  return { ticker, apply };
+  return { ticker, apply, assumeTrainedAt };
+}
+/** Corte temporal del modelo. Autoritativo si registra train_end_ms/available_at_ms.
+ * --assume-trained-at (opt-in) deriva un corte CONSERVADOR de trained_at (sin Z → UTC):
+ * el modelo no juzga nada anterior a su fecha de entrenamiento. Es un supuesto, no un dato medido. */
+export function temporalBounds(model: any, assumeNaiveUtc = false): {status: 'verified' | 'unknown'; train_end_ms?: number; available_at_ms?: number; derived?: string} {
+  const meta = model?.meta ?? model?.metadata ?? {};
+  const train = meta.train_end_ms;
+  let available = meta.available_at_ms;
+  // trained_at con Z (formato autoritativo) aporta available_at_ms.
+  if (available === undefined && typeof meta.trained_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(meta.trained_at)) {
+    available = Date.parse(meta.trained_at);
+  }
+  // trained_at sin Z: solo con opt-in, asumiendo UTC.
+  if (available === undefined && assumeNaiveUtc && typeof meta.trained_at === 'string') {
+    const parsed = Date.parse(meta.trained_at);
+    if (Number.isSafeInteger(parsed) && parsed > 0) available = parsed;
+  }
+  // train_end_ms: autoritativo si está; si falta, con opt-in se usa el corte conservador (= available).
+  let trainEnd = Number.isSafeInteger(train) && train >= 0 ? train : undefined;
+  let derived: string | undefined;
+  if (trainEnd === undefined && assumeNaiveUtc && Number.isSafeInteger(available)) {
+    trainEnd = available;
+    derived = 'derived_from_trained_at_conservative_cutoff';
+  }
+  if (!Number.isSafeInteger(trainEnd) || trainEnd < 0 || !Number.isSafeInteger(available) || available < trainEnd)
+    return { status: 'unknown' };
+  return { status: 'verified', train_end_ms: trainEnd, available_at_ms: available, ...(derived ? { derived } : {}) };
 }
 export function completedTrades(trades: any[], from: number, to: number, terminal: number) {
   return trades.filter(t => {
@@ -81,12 +111,12 @@ export function chronologicalWindows(entries: readonly {ts: number}[], available
 
 /** Injectable replay keeps producer tests hermetic: no credentials, datasets or writes. */
 export function evaluateSweep(input: {ticker: string; asset: any; rawModel: Buffer; modelPath: string;
-  entries: any[]; logs: Map<string, string[]>; now: number}, replay: typeof runBacktest = runBacktest) {
-  const { ticker, asset, rawModel, modelPath, entries, logs, now } = input;
+  entries: any[]; logs: Map<string, string[]>; now: number; assumeTrainedAt?: boolean}, replay: typeof runBacktest = runBacktest) {
+  const { ticker, asset, rawModel, modelPath, entries, logs, now, assumeTrainedAt = false } = input;
   const modelSha256 = sha(rawModel);
   const model = JSON.parse(rawModel.toString('utf8'));
-  const provenance = modelAvailability(model);
-  if (provenance.status !== 'verified') return { status: 'insufficient', reasons: ['authoritative model availability unknown'] };
+  const provenance = temporalBounds(model, assumeTrainedAt);
+  if (provenance.status !== 'verified') return { status: 'insufficient', reasons: [`modelo sin proveniencia temporal (train_end_ms ausente)${assumeTrainedAt ? '' : '; usá --assume-trained-at para un corte conservador de trained_at'}`] };
   const windows = chronologicalWindows(entries, provenance.available_at_ms!, now);
   if (!windows) return { status: 'insufficient', reasons: ['insufficient post-availability chronology'] };
   // Freeze one full production projection. Each replay receives an isolated copy
@@ -126,7 +156,7 @@ export function evaluateSweep(input: {ticker: string; asset: any; rawModel: Buff
     const gate = trial(windows.validation.from, windows.validation.to, best.threshold);
     if (!baseline || !gate) return { status: 'insufficient', reasons: ['validation warmup incomplete'] };
     const body = { schemaVersion: 2, ticker, evaluatedAt: now, configFingerprint: configFingerprint(asset),
-      model: { sha256: modelSha256, availableAt: provenance.available_at_ms!, trainingCutoffAt: provenance.train_end_ms! },
+      model: { sha256: modelSha256, availableAt: provenance.available_at_ms!, trainingCutoffAt: provenance.train_end_ms!, ...(provenance.derived ? { cutoffAssumption: provenance.derived } : {}) },
       selection: { method: 'chronological-holdout', selectedThreshold: best.threshold, ...windows.selection },
       validation: { independent: true, threshold: best.threshold, ...windows.validation, baseline, gate } };
     const evidence = { ...body, evidenceId: sha(stableCanonical(body)) };
@@ -160,7 +190,7 @@ export async function main(args = process.argv.slice(2)) {
   const logs = loadSelectionLogs({ticker, logsDir: dir});
   if (logs.size !== 5) throw new Error('all five production TF datasets are required');
   const entries = await prepareEntries(logs);
-  const result = evaluateSweep({ticker, asset: evalAsset, rawModel, modelPath, entries, logs, now: Date.now()});
+  const result = evaluateSweep({ticker, asset: evalAsset, rawModel, modelPath, entries, logs, now: Date.now(), assumeTrainedAt: options.assumeTrainedAt});
   for (const [file, hash] of hashes) if (sha(fs.readFileSync(file)) !== hash) throw new Error(`input changed during replay: ${file}`);
   const current = await db.doc(`asset_configs/${ticker}`).get();
   if (!current.exists || sha(stableCanonical(json(current.data()))) !== configHash) throw new Error('asset config changed during replay');
