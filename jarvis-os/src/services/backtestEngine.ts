@@ -44,7 +44,7 @@ import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../s
 import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
 import { canonicalZoneMedal } from '../../../src/engine/smc/zone_protocol';
-import { routeSmartEntry, resolveDirectTrigger } from '../../../src/engine/SmartRouting';
+import { routeSmartEntry, resolveDirectTrigger, computeFinalScore } from '../../../src/engine/SmartRouting';
 import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';
 import type { ExecutionQuote, ExecutionMarketSnapshot, ExecutionPositionState, ExecutionObservation, SmartRoutingDecision } from '../../../src/engine/ExecutionTypes';
@@ -1713,22 +1713,7 @@ function processAlert(
     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
     else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
 
-    // Penalización VWAP multi-TF: NO existe en live → se mantiene inline (no es evento)
-    let vwapPenalty = 0;
 
-    const VWAP_TTL: Record<string, number> = { '15': 2*3600e3, '60': 8*3600e3, '240': 48*3600e3 };
-    const freshVwap = (tf: string) => (nowMs - (state.vwapTs?.[tf] ?? 0) < (VWAP_TTL[tf] ?? 4*3600e3)) ? state.vwapStatus?.[tf] : undefined;
-    
-    const vwap1H = freshVwap('60');
-    const vwap4H = freshVwap('240');
-
-    if (currentDirection === 'BUY') {
-      if (vwap1H === 'OVER' && vwap4H === 'OVER') vwapPenalty += 5;
-    } else if (currentDirection === 'SELL') {
-      if (vwap1H === 'UNDER' && vwap4H === 'UNDER') vwapPenalty += 5;
-    }
-
-    // Apply Anti-Bias Filters
     
     const sessionConfig = config.sessions?.[currentSession] ?? config.sessions?.['ALL'];
     if (currentDirection === 'SELL') {
@@ -1787,41 +1772,35 @@ function processAlert(
       addScoreEvent(activeScore, { id: 'Macro_OTE_Confluence', pts: 6, tf: eventTf, ts: nowMs });
     }
 
-    let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2 - vwapPenalty;
-
-    // Trap Zone penalty (Caso C - ported from live)
-    if (chOrigin && chExtreme) {
-      const chLow = Math.min(chOrigin, chExtreme);
-      const chHigh = Math.max(chOrigin, chExtreme);
-      const trapZoneCount = state.zones.filter(z =>
-        z.dir !== currentDirection &&
-        z.top >= chLow && z.btm <= chHigh
-      ).length;
-      if (trapZoneCount > 0) totalPoints -= trapZoneCount * 2;
-    }
-
-    if (hasSpatialBacking) totalPoints += spatialBonus;
-    else {
-      const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
-      const hasSeqBacking = activeScore.events.some(e => e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') || e.id.includes('DIV_') || e.id.includes('Sweep_'));
-      if (!hasSeqBacking) {
-        const penalty = isCrypto ? 1 : 3;
-        // Orphan penalty bypass for high score (ported from live)
-        const wouldBeAfterPenalty = totalPoints - penalty;
-        if (totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
-          // High-score bypass: penalty nullified
-        } else {
-          totalPoints -= penalty;
-        }
-      }
-    }
-    if (isDAgainst) totalPoints -= 2;
-    if (is4HAgainst && is1HAgainst) totalPoints -= 3;
-    // 🆕 sep-2026 biasGateStrict (A/B live-vs-backtest): bloquea entradas con 4H y 1H en contra.
-    // Espejo del flag en src/db/trading.ts (off por defecto).
-    const biasGateStrict = (config as any).biasGateStrict === true;
-    const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
-    if (biasGateStrict) console.log(`[BIASGATE-DBG] eval ${ticker} ${currentDirection} 4Hagainst=${is4HAgainst} 1Hagainst=${is1HAgainst}`);
+    // Puntaje final (FUENTE ÚNICA computeFinalScore, orden del vivo: espacial → bias → trampa).
+    const chLowScore = chOrigin != null && chExtreme != null ? Math.min(chOrigin, chExtreme) : null;
+    const chHighScore = chOrigin != null && chExtreme != null ? Math.max(chOrigin, chExtreme) : null;
+    const trapZoneCount = (chLowScore !== null && chHighScore !== null) ? state.zones.filter(z =>
+      z.dir !== currentDirection && z.top >= chLowScore && z.btm <= chHighScore
+    ).length : 0;
+    const hasSequentialBacking = activeScore.events.some(e =>
+      e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') ||
+      e.id.includes('ZoneTouched_') || e.id.includes('OTE_') ||
+      (e.id.includes('DIV_') && !e.id.includes('_3')) ||
+      (e.id.includes('Sweep_') && !e.id.includes('_3')) ||
+      (e.id.includes('TL_Sweep_') && !e.id.includes('_3'))
+    );
+    const score = computeFinalScore({
+      computePointsValue: computePoints(activeScore, nowMs),
+      baseBiasPoints,
+      hasSpatialBacking,
+      spatialBonus,
+      hasSequentialBacking,
+      isDAgainst,
+      is4HAgainst,
+      is1HAgainst,
+      trapZoneCount,
+      isCrypto: ticker.includes('BTC') || ticker.includes('ETH'),
+      biasGateStrict: (config as any).biasGateStrict === true,
+    });
+    const totalPoints = score.totalPoints;
+    const biasBlocked = score.biasBlocked;
+    if ((config as any).biasGateStrict) console.log(`[BIASGATE-DBG] eval ${ticker} ${currentDirection} 4Hagainst=${is4HAgainst} 1Hagainst=${is1HAgainst}`);
 
     // Paridad con vivo: el vivo NO aplica scoreMultiplier ni ajuste de umbral por
     // expR de sesión. Estos eran exclusivos del backtest y causaban divergencia.

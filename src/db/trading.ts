@@ -1,7 +1,7 @@
 import { db } from './memory.js';
 import { isRiderExit, resolveRiderPolicy, type RiderPolicy, type RiderTransition } from '../engine/RiderState.js';
 import { canonicalZoneMedal, parseSyncZonesPayload, parseNativeZoneBreak, matchesNativeBrokenZone, isNativeZoneAlert, assertNativeZoneSnapshot, migrateZoneProtocolState, hasLegacyUnresolvedZoneEvidence } from '../engine/smc/zone_protocol.js';
-import { routeSmartEntry, resolveDirectTrigger } from '../engine/SmartRouting.js';
+import { routeSmartEntry, resolveDirectTrigger, computeFinalScore } from '../engine/SmartRouting.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { riskClusterOf, CLUSTER_RISK_CAPS, computeOpenRisk, isTerminalNoFill } from '../engine/RiskCaps.js';
@@ -3438,43 +3438,28 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                     addScoreEvent(activeScore, { id: 'Macro_OTE_Confluence', pts: 6, tf: eventTf, ts: nowMs });
                 }
 
-                let totalPoints = computePoints(activeScore, nowMs) + baseBiasPoints + 2;
-                let orphanPenalty = 0;
-                let rawPenalty = 0;
-
-                // 🛡️ 3. BONO ESPACIAL + PENALIZACIONES
-                // El bono espacial reemplaza la penalización cuando hay respaldo por mapa
-                if (hasSpatialBacking && spatialBonus > 0) {
-                    totalPoints += spatialBonus; // +5 a +10 pts según TF
-                    orphanPenalty = 0; // sin penalización porque el mapa respalda
-                } else {
-                    // 🔧 FIX: Penalización por CHoCH huérfano (sin zonas en memoria).
-                    // Crypto (BTC/ETH): -1 pt (mercado 24/7, CHoCHs más frecuentes, zonas más volátiles)
-                    // Forex/Índices: -3 pts (sesiones definidas, zonas más estables)
-                    // PERO: si el puntaje bruto sin penalizar ya es ≥12, la penalización se ANULA.
-                    const isCrypto = ticker.includes('BTC') || ticker.includes('ETH');
-                    rawPenalty = !hasHTFBacking ? (isCrypto ? 1 : 3) : 0;
-                    const wouldBeAfterPenalty = totalPoints - rawPenalty;
-                    if (rawPenalty > 0 && totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
-                        // ⚡ BYPASS: puntaje alto vence la penalización
-                        orphanPenalty = 0;
-                    } else {
-                        orphanPenalty = rawPenalty;
-                    }
-                    if (orphanPenalty > 0) totalPoints -= orphanPenalty;
-                }
-                if (isDAgainst) totalPoints -= 2;
-                if (is4HAgainst && is1HAgainst) totalPoints -= 3;
-                // 🆕 sep-2026 biasGateStrict (flag OFF por defecto; para A/B backtest):
-                // bloquea entradas con 4H y 1H en contra (más estricto que la penalización).
-                const biasGateStrict = (config as any).biasGateStrict === true;
-                const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
+                // Puntaje final (FUENTE ÚNICA computeFinalScore, mismo orden que el backtest).
+                const score = computeFinalScore({
+                    computePointsValue: computePoints(activeScore, nowMs),
+                    baseBiasPoints,
+                    hasSpatialBacking,
+                    spatialBonus,
+                    hasSequentialBacking,
+                    isDAgainst,
+                    is4HAgainst,
+                    is1HAgainst,
+                    trapZoneCount: caseC_TrapZone,
+                    isCrypto: ticker.includes('BTC') || ticker.includes('ETH'),
+                    biasGateStrict: (config as any).biasGateStrict === true,
+                });
+                const totalPoints = score.totalPoints;
+                const biasBlocked = score.biasBlocked;
+                const orphanPenalty = score.orphanPenalty;
+                const rawPenalty = score.rawPenalty;
+                const trapPenalty = score.trapPenalty;
                 if (biasBlocked) {
                     console.log(`[RADAR] 🚫 BiasGate estricto: 4H y 1H en contra → entrada bloqueada en ${ticker} ${currentDirection}.`);
                 }
-                // Penalización por zona trampa (Caso C)
-                const trapPenalty = caseC_TrapZone > 0 ? caseC_TrapZone * 2 : 0;
-                if (trapPenalty > 0) totalPoints -= trapPenalty;
 
                 // 📊 4. ARMADO DE REPORTE PARA TELEGRAM
                 const getIcon = (tf: string) => state.marketBias[tf] === 'BUY' ? '🟢' : state.marketBias[tf] === 'SELL' ? '🔴' : '⚪';
@@ -4759,7 +4744,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             return;
         }
 
-        // ═══ TIMESFM FILTER (F1) — post-killswitches, pre-ejecución ═══
+        // ═══ TIMESFM FILTER (F1) — post-killswitches, pre-ejecución ══���
         // Espejo del gate en backtestEngine.ts createTrade. Regla de oro: si el puente
         // falla / forecast viejo / timeout → se loguea DEGRADADO y el trade SIGUE (nunca frenar).
         const tfmCfg = resolveTimesfmConfig((config as any).timesfm);

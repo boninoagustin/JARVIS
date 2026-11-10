@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { routeSmartEntry, resolveDirectTrigger } from './SmartRouting.js';
+import { routeSmartEntry, resolveDirectTrigger, computeFinalScore } from './SmartRouting.js';
 
 const base = {
   direction: 'BUY' as const, currentSession: 'NY', totalPoints: 10, minPtsRequired: 8,
@@ -53,4 +53,17 @@ const trigNoSes = resolveDirectTrigger({ direction: 'BUY', entryTrigger: 'SMART'
 assert.equal(trigNoSes.triggerEnabled, true);
 assert.equal(trigNoSes.minPtsRequired, 4);
 
-console.log('PASS routeSmartEntry + resolveDirectTrigger: decisión SMART compartida (hermético)');
+// computeFinalScore: orden del vivo (espacial → bias → trampa) + penalización huérfano.
+const s1 = computeFinalScore({ computePointsValue: 3, baseBiasPoints: 0, hasSpatialBacking: false, spatialBonus: 0,
+  hasSequentialBacking: false, isDAgainst: false, is4HAgainst: false, is1HAgainst: false, trapZoneCount: 1, isCrypto: false, biasGateStrict: false });
+assert.equal(s1.totalPoints, 0); // 3+2=5 → -3 huérfano → 2 → -2 trampa → 0
+assert.equal(s1.orphanPenalty, 3);
+assert.equal(s1.trapPenalty, 2);
+
+// High-score bypass: raw 3 se anula (totalPoints>=12 y post>=5).
+const s2 = computeFinalScore({ computePointsValue: 20, baseBiasPoints: 0, hasSpatialBacking: false, spatialBonus: 0,
+  hasSequentialBacking: false, isDAgainst: false, is4HAgainst: false, is1HAgainst: false, trapZoneCount: 0, isCrypto: false, biasGateStrict: false });
+assert.equal(s2.totalPoints, 22); // 20+2, sin penalización por bypass
+assert.equal(s2.orphanPenalty, 0);
+
+console.log('PASS routeSmartEntry + resolveDirectTrigger + computeFinalScore: decisión SMART compartida (hermético)');

@@ -92,6 +92,56 @@ export function resolveDirectTrigger(input: {
   return { triggerEnabled, minPtsRequired, liveTriggerCfg };
 }
 
+/** Puntaje final de la señal directa (totalPoints + biasBlocked), FUENTE ÚNICA.
+ * Orden y lógica IGUAL al vivo (trading.ts ~3441-3477): espacial → bias → trampa. */
+export function computeFinalScore(input: {
+  computePointsValue: number;
+  baseBiasPoints: number;
+  hasSpatialBacking: boolean;
+  spatialBonus: number;
+  hasSequentialBacking: boolean;
+  isDAgainst: boolean;
+  is4HAgainst: boolean;
+  is1HAgainst: boolean;
+  trapZoneCount: number;
+  isCrypto: boolean;
+  biasGateStrict: boolean;
+}): { totalPoints: number; biasBlocked: boolean; orphanPenalty: number; rawPenalty: number; trapPenalty: number } {
+  const { computePointsValue, baseBiasPoints, hasSpatialBacking, spatialBonus,
+    hasSequentialBacking, isDAgainst, is4HAgainst, is1HAgainst, trapZoneCount, isCrypto, biasGateStrict } = input;
+
+  let totalPoints = computePointsValue + baseBiasPoints + 2;
+
+  const hasHTFBacking = hasSpatialBacking || hasSequentialBacking;
+
+  // Bono espacial + penalización de huérfano (orden del vivo: espacial primero).
+  let orphanPenalty = 0;
+  let rawPenalty = 0;
+  if (hasSpatialBacking && spatialBonus > 0) {
+    totalPoints += spatialBonus;
+  } else {
+    rawPenalty = !hasHTFBacking ? (isCrypto ? 1 : 3) : 0;
+    const wouldBeAfterPenalty = totalPoints - rawPenalty;
+    if (rawPenalty > 0 && totalPoints >= 12 && wouldBeAfterPenalty >= 5) {
+      // bypass por puntaje alto: la penalización se anula
+    } else if (rawPenalty > 0) {
+      orphanPenalty = rawPenalty;
+      totalPoints -= rawPenalty;
+    }
+  }
+
+  if (isDAgainst) totalPoints -= 2;
+  if (is4HAgainst && is1HAgainst) totalPoints -= 3;
+
+  // Penalización por zona trampa (orden del vivo: al final).
+  const trapPenalty = trapZoneCount > 0 ? trapZoneCount * 2 : 0;
+  if (trapPenalty > 0) totalPoints -= trapPenalty;
+
+  const biasBlocked = biasGateStrict && is4HAgainst && is1HAgainst;
+
+  return { totalPoints, biasBlocked, orphanPenalty, rawPenalty, trapPenalty };
+}
+
 export function routeSmartEntry(input: SmartRouteInput): SmartRouteResult {
   const { direction, currentSession, totalPoints, minPtsRequired, riskDist, currentPrice,
     signalTfMinutes, decimals, nowMs, zones, biasTs, atr14, climaxRange, alertLine, config } = input;
