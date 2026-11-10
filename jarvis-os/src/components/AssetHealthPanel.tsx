@@ -312,8 +312,8 @@ export default function AssetHealthPanel() {
                   <strong style={{ display: 'block', color: recommendation.color }}>{recommendation.label}</strong>
                   <span style={{ display: 'block', marginTop: 4, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{recommendation.reason}</span>
                   {roster[ticker]?.paperReady && (
-                    <span style={{ display: 'block', marginTop: 4, fontSize: '0.72rem', color: '#38bdf8' }} title="Evidencia simulada (paper) del último trimestre: el activo apagado mostró desempeño positivo. Es una propuesta de activación, no P&L real.">
-                      🧪 Paper-ready: {roster[ticker].paperTrades} trades · WR {(Number(roster[ticker].paperWr) * 100).toFixed(0)}% · +{Number(roster[ticker].paperExp).toFixed(2)}R/tr
+                    <span style={{ display: 'block', marginTop: 4, fontSize: '0.72rem', color: '#38bdf8' }} title="Excepción al roster: la detección es floja, pero la gestión mejorada gana en datos forward (simulados). Activarla es decisión tuya; no es P&L real.">
+                      🧪 Paper-ready (excepción): gestión gana pese a detección floja · {roster[ticker].paperTrades} trades · WR {(Number(roster[ticker].paperWr) * 100).toFixed(0)}% · +{Number(roster[ticker].paperExp).toFixed(2)}R/tr
                     </span>
                   )}
                   {roster[ticker]?.generatedAt && <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Roster: {ago(roster[ticker].generatedAt)}</span>}
@@ -401,8 +401,8 @@ export default function AssetHealthPanel() {
                     <button className="btn" onClick={() => deactivate(ticker)} title="Pausa nuevas entradas; no envía órdenes de cierre">Pausar nuevas entradas</button>
                   )}
                   {roster[ticker]?.paperReady && !on && (
-                    <button className="btn btn-primary" onClick={() => activateByPaper(ticker)} title={roster[ticker]?.paperReason || 'Candidato certificado forward + evidencia paper positiva'}>
-                      🧪 Activar por evidencia paper
+                    <button className="btn btn-primary" onClick={() => activateByPaper(ticker)} title="Excepción al roster: detección floja pero gestión validada forward. Activarlo es tu decisión con el riesgo actual, sin convertirlo en TRADE.">
+                      🧪 Activar (excepción por paper)
                     </button>
                   )}
                   <details style={{ fontSize: '0.72rem' }}>
