@@ -97,16 +97,40 @@ async function register(ticker: string) {
   const registeredAt = sinceArg ? Date.parse(`${sinceArg}T00:00:00Z`) : Date.now();
   if (!Number.isFinite(registeredAt)) throw new Error('--since inválido (YYYY-MM-DD)');
 
-  const doc = {
+  // Captura del candidato CONGELADO + proveniencia para el paper forward (09-nov-2026).
+  // Sin esto, paper_replay invalida el registro (fail-closed) en vez de simular.
+  const { mapAssetConfig } = await import('../periodic_opt/selection_context.js');
+  const { configFingerprint } = await import('../hyperopt/evaluation_protocol.js');
+  const { RpcWorker } = await import('../periodic_opt/eval_production.js');
+  const { registrationIdentity } = await import('./paper_replay.js');
+  const logsDir = path.join(REPO, 'logs', ticker.toLowerCase(), 'history_exported');
+  let cache: string | undefined;
+  if (candidate.timesfm?.enabled) {
+    const p = candidate.timesfm.cachePath ?? path.join(REPO, 'logs', ticker.toLowerCase(), 'forecasts', 'forecasts_m5.jsonl');
+    if (fs.existsSync(p)) cache = path.resolve(p);
+  }
+  const engineConfig = mapAssetConfig(ticker, candidate, cache);
+  const w = new RpcWorker();
+  let init: any;
+  try { init = await w.call('init', { ticker, log_dir: logsDir }); } finally { w.close(); }
+  const canonical = (xs: any[]) => (xs || []).map((x: any) => ({ path: x.path, sha256: x.sha256 }));
+
+  const doc: any = {
     ticker, status: 'SHADOW',
     registered_at_ms: registeredAt,
     source_report_timestamp: report.timestamp,
     candidate_asset_snapshot: candidate,
     candidate_fingerprint: report.final_asset_fingerprint ?? null,
+    candidate_engine_snapshot: engineConfig,
+    candidate_engine_fingerprint: configFingerprint(engineConfig),
+    source_files: canonical(init?.provenance?.source_files),
+    model_files: canonical(init?.provenance?.model_files),
+    cache_files: canonical(init?.provenance?.cache_files),
     production_asset_snapshot: JSON.parse(JSON.stringify(prod)),
     baseline: digest(report.production_validation),
     evaluations: [], weeks_elapsed: 0,
   };
+  doc.registration_fingerprint = configFingerprint(registrationIdentity(doc));
   console.log(`[register] ${ticker} · RECOMMEND de ${new Date(report.timestamp).toISOString().slice(0, 10)} · corte forward desde ${new Date(registeredAt).toISOString().slice(0, 10)}`);
   console.log(`[register] baseline producción: n=${doc.baseline.n} exp=${doc.baseline.expectancy}`);
   if (!APPLY) { console.log('[dry-run] agregá --apply para registrar en Firestore'); return; }
