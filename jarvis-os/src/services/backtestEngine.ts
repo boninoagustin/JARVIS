@@ -44,6 +44,7 @@ import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../s
 import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
 import { canonicalZoneMedal } from '../../../src/engine/smc/zone_protocol';
+import { routeSmartEntry } from '../../../src/engine/SmartRouting';
 import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';
 import type { ExecutionQuote, ExecutionMarketSnapshot, ExecutionPositionState, ExecutionObservation, SmartRoutingDecision } from '../../../src/engine/ExecutionTypes';
@@ -1943,97 +1944,25 @@ function processAlert(
             takeChoch = decision.takeDirectNow;
             disableOte = decision.takeDirectNow;
         } else if (config.entryTrigger === 'SMART') {
-            function parseTfToMinutes(tfStr: string): number {
-                if (!tfStr) return 0;
-                const upper = tfStr.toUpperCase();
-                if (upper === 'D' || upper === '1D') return 1440;
-                if (upper === 'W' || upper === '1W') return 10080;
-                const val = parseInt(upper);
-                if (!isNaN(val)) {
-                    if (upper.includes('H')) return val * 60;
-                    return val;
-                }
+            const signalTfMinutes = (() => {
+                const tf = parseTF(eventTf).toUpperCase();
+                if (tf === 'D' || tf === '1D') return 1440;
+                if (tf === 'W' || tf === '1W') return 10080;
+                const val = parseInt(tf);
+                if (!isNaN(val)) return tf.includes('H') ? val * 60 : val;
                 return 0;
-            }
-
-            const signalTfMs = parseTfToMinutes(parseTF(eventTf));
-            
-            const oppositeZones = state.zones.filter(z => {
-                if (z.dir === currentDirection) return false;
-                if (z.medal === 'SMC_DIV') return false; 
-                
-                const zTfMs = parseTfToMinutes(z.tf || '');
-                const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD') || canonicalZoneMedal(z.medal) === 'GodZone';
-                
-                return isStrong || zTfMs >= signalTfMs;
-            });
-
-            let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
-            for (const z of oppositeZones) {
-                if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
-                else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
-            }
-            
-            let rrChoch = 3.0; // Paridad con vivo (trading.ts:3720): default optimista 3.0
-            if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
-                const rewardDist = Math.abs(closestZonePrice - currentPrice);
-                rrChoch = riskDist > 0 ? rewardDist / riskDist : 0;
-                tp2 = closestZonePrice.toFixed(decimals);
-            }
-        
-            const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5;
-            const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
-
-            // 🆕 sep-2026 SMART REAL portado del live (src/db/trading.ts ~2780): decide caso
-            // por caso. Orden de ramas IGUAL al live:
-            //  1) riesgo excesivo (riskDist > 1.5×ATR o maxSmartRisk%) → OTE forzado
-            //  2) vela de quiebre CLIMAX (tag 'Vol: CLIMAX' en la alerta) → OTE forzado
-            //     (hoy 0 ocurrencias en los CSVs; el código queda listo por si el export lo trae)
-            //  3) rrChoch >= 1.5 (fijo, igual que live) o momentum extremo → entrada directa
-            //  4) resto → esperar retroceso OTE
-            // smartOteOnly=true (SOLO experimentos A/B) fuerza el camino OTE puro.
-            const smartMaxRisk = (config as any).maxSmartRiskPercent !== undefined ? (config as any).maxSmartRiskPercent : 0.15;
-            const smartLimitByPct = currentPrice * (smartMaxRisk / 100);
-            let smartAtr = 0;
-            for (let i = state.zones.length - 1; i >= 0; i--) { if (state.zones[i].atr) { smartAtr = state.zones[i].atr!; break; } }
-            const smartMaxRiskDist = smartAtr > 0 ? smartAtr * 1.5 : smartLimitByPct;
-            // 🆕 sep-2026 climax por rango: tag del live (si llega) O rango de la última vela
-            // del TF > 2×ATR (medible en backtest — el tag no viaja en los CSVs).
+            })();
             const smartHhl = state.htfHighLow?.[eventTf];
-            const smartRange = smartHhl ? smartHhl[0] - smartHhl[1] : 0;
-            const smartAtrForClimax = state.atr14 ?? smartAtr;
-            const smartIsClimax = entry.line.includes('Vol: CLIMAX')
-                || (smartAtrForClimax > 0 && smartRange > smartAtrForClimax * 2);
-
-            // 🆕 sep-2026 flags de experimento (off por defecto, medibles en A/B):
-            // smartAsiaStrict: en ASIA exigir R:R >= 2.0 en vez de 1.5 para la entrada directa.
-            // smartBiasFreshGuard: si el bias 4H/1H cambió hace < N ms → forzar OTE.
-            const rrThreshold = ((config as any).smartAsiaStrict === true && currentSession === 'ASIA') ? 2.0 : 1.5;
-            const biasFreshWindow = (config as any).smartBiasFreshWindowMs ?? 4 * 3600e3;
-            const biasFreshGuard = (config as any).smartBiasFreshGuard === true
-                && ((state.biasTs?.['240'] && nowMs - state.biasTs['240'] < biasFreshWindow)
-                    || (state.biasTs?.['60'] && nowMs - state.biasTs['60'] < biasFreshWindow));
-
-            if ((config as any).smartOteOnly === true) {
-                takeChoch = false;
-                disableOte = false;
-            } else if (riskDist > smartMaxRiskDist) {
-                takeChoch = false;
-                disableOte = false;
-            } else if (smartIsClimax) {
-                takeChoch = false;
-                disableOte = false;
-            } else if (biasFreshGuard && !hasExtremeMomentum) {
-                // bias HTF recién cambiado → riesgo de trampa → OTE (el momentum extremo lo vence)
-                takeChoch = false;
-                disableOte = false;
-            } else if (rrChoch >= rrThreshold || hasExtremeMomentum) {
-                takeChoch = true;
-                disableOte = true;
-            } else {
-                takeChoch = false;
-                disableOte = false;
-            }
+            const smart = routeSmartEntry({
+                direction: currentDirection as 'BUY' | 'SELL',
+                currentSession, totalPoints, minPtsRequired, riskDist, currentPrice,
+                signalTfMinutes, decimals, nowMs,
+                zones: state.zones, biasTs: state.biasTs, atr14: state.atr14,
+                climaxRange: smartHhl ? smartHhl[0] - smartHhl[1] : 0,
+                alertLine: entry.line, config,
+            });
+            takeChoch = smart.takeChoch;
+            disableOte = smart.disableOte;
         } else if (config.entryTrigger === 'OTE') {
             takeChoch = false;
             disableOte = false;

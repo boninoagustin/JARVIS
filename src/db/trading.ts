@@ -1,6 +1,7 @@
 import { db } from './memory.js';
 import { isRiderExit, resolveRiderPolicy, type RiderPolicy, type RiderTransition } from '../engine/RiderState.js';
 import { canonicalZoneMedal, parseSyncZonesPayload, parseNativeZoneBreak, matchesNativeBrokenZone, isNativeZoneAlert, assertNativeZoneSnapshot, migrateZoneProtocolState, hasLegacyUnresolvedZoneEvidence } from '../engine/smc/zone_protocol.js';
+import { routeSmartEntry } from '../engine/SmartRouting.js';
 import { bot } from '../bot/telegram.js';
 import { config, config as envConfig } from '../config.js';
 import { riskClusterOf, CLUSTER_RISK_CAPS, computeOpenRisk, isTerminalNoFill } from '../engine/RiskCaps.js';
@@ -3684,98 +3685,39 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 oteData.executionTf = setupTf;
                                 smartReport = `\nExecution microstructure_v1: ${decision.reason}`;
                             } else if (config.entryTrigger === 'SMART') {
-                                function parseTfToMinutes(tfStr: string): number {
-                                    if (!tfStr) return 0;
-                                    const upper = tfStr.toUpperCase();
-                                    if (upper === 'D' || upper === '1D') return 1440;
-                                    if (upper === 'W' || upper === '1W') return 10080;
-                                    const val = parseInt(upper);
-                                    if (!isNaN(val)) {
-                                        if (upper.includes('H')) return val * 60;
-                                        return val;
-                                    }
+                                const signalTfMinutes = (() => {
+                                    const tf = String(readableTf).toUpperCase();
+                                    if (tf === 'D' || tf === '1D') return 1440;
+                                    if (tf === 'W' || tf === '1W') return 10080;
+                                    const val = parseInt(tf);
+                                    if (!isNaN(val)) return tf.includes('H') ? val * 60 : val;
                                     return 0;
-                                }
-
-                                const signalTfMs = parseTfToMinutes(readableTf);
-
-                                // 🔧 MEJORA 1: Filtrar Paredes de Papel (Ignorar debiles y de menor TF)
-                                const oppositeZones = state.zones.filter((z: any) => {
-                                    if (z.dir === currentDirection) return false;
-                                    if (z.medal === 'SMC_DIV') return false; // Divergencias no son zonas duras
-
-                                    const zTfMs = parseTfToMinutes(z.tf || '');
-                                    const isStrong = z.lvl === 'Strong' || z.medal?.includes('GOD') || canonicalZoneMedal(z.medal) === 'GodZone';
-
-                                    // Consideramos el obstáculo SI es fuerte O SI es de igual/mayor temporalidad
-                                    return isStrong || zTfMs >= signalTfMs;
+                                })();
+                                const smart = routeSmartEntry({
+                                    direction: currentDirection as 'BUY' | 'SELL',
+                                    currentSession, totalPoints, minPtsRequired, riskDist, currentPrice,
+                                    signalTfMinutes, decimals, nowMs,
+                                    zones: state.zones, biasTs: state.biasTs, atr14: state.atr14,
+                                    climaxRange: (state.prevClosedHigh ?? 0) - (state.prevClosedLow ?? 0),
+                                    alertLine: alertText, config,
                                 });
-
-                                let closestZonePrice = currentDirection === 'BUY' ? Infinity : 0;
-                                for (const z of oppositeZones) {
-                                    if (currentDirection === 'BUY' && z.btm > currentPrice && z.btm < closestZonePrice) closestZonePrice = z.btm;
-                                    else if (currentDirection === 'SELL' && z.top < currentPrice && z.top > closestZonePrice) closestZonePrice = z.top;
-                                }
-
-                                let rrChoch = 3.0; // Default optimista
-                                if (closestZonePrice !== Infinity && closestZonePrice !== 0) {
-                                    const rewardDist = Math.abs(closestZonePrice - currentPrice);
-                                    rrChoch = riskDist > 0 ? rewardDist / riskDist : 3.0;
-                                }
-
-                                // 🔧 MEJORA 2: Locomotora Institucional (Ignorar mal RR si el momentum es brutal)
-                                const MOMENTUM_EXTREMO_UMBRAL = (minPtsRequired || 8) + 5; // ej: si min es 8, 13 es extremo
-                                const hasExtremeMomentum = totalPoints >= MOMENTUM_EXTREMO_UMBRAL;
-
-                                // 🆕 sep-2026 flags de experimento (OFF por defecto, medibles en A/B):
-                                const rrThresholdLive = ((config as any).smartAsiaStrict === true && currentSession === 'ASIA') ? 2.0 : 1.5;
-                                const biasFreshWindowMsLive = (config as any).smartBiasFreshWindowMs ?? 4 * 3600e3;
-                                const biasFreshGuardLive = (config as any).smartBiasFreshGuard === true
-                                    && ((state.biasTs?.['240'] && nowMs - state.biasTs['240'] < biasFreshWindowMsLive)
-                                        || (state.biasTs?.['60'] && nowMs - state.biasTs['60'] < biasFreshWindowMsLive));
-
-                                // 🔧 MEJORA 3: Límite de distancia al origen (Forzar OTE si el SL queda demasiado lejos)
-                                const maxSmartRisk = config.maxSmartRiskPercent !== undefined ? config.maxSmartRiskPercent : 0.15;
-                                const limitByPercent = currentPrice * (maxSmartRisk / 100);
-
-                                let latestAtr = 0;
-                                for (let i = state.zones.length - 1; i >= 0; i--) {
-                                    if (state.zones[i].atr) { latestAtr = state.zones[i].atr!; break; }
-                                }
-
-                                const maxAllowedRiskDist = latestAtr > 0 ? latestAtr * 1.5 : limitByPercent;
-
-                                // 🆕 sep-2026 climax por rango (paridad backtest): el tag 'Vol: CLIMAX' no
-                                // viaja en los CSVs exportados → el backtest usa rango > 2×ATR. Acá: ambos.
-                                const climaxByRangeLive = latestAtr > 0
-                                    && ((state.prevClosedHigh ?? 0) - (state.prevClosedLow ?? 0)) > latestAtr * 2;
-
-                                if (riskDist > maxAllowedRiskDist) {
-                                    const limitType = latestAtr > 0 ? '1.5x ATR' : `${maxSmartRisk}%`;
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> Distancia al origen excesiva (${riskDist.toFixed(decimals)} > ${maxAllowedRiskDist.toFixed(decimals)} [${limitType}]). Vela demasiado extendida. Se fuerza retroceso OTE.`;
-                                    takeChoch = false;
-                                    disableOte = false;
-                                } else if (isClimaxCandle || climaxByRangeLive) {
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> Vela de quiebre (CHoCH/BOS) con VOLUMEN EXTREMO detectada. Posible agotamiento. Se fuerza espera a retroceso OTE.`;
-                                    takeChoch = false;
-                                    disableOte = false;
-                                } else if (biasFreshGuardLive && !hasExtremeMomentum) {
-                                    // 🆕 sep-2026 smartBiasFreshGuard: bias HTF recién cambiado → OTE
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> Bias 4H/1H recién cambiado (ventana ${(biasFreshWindowMsLive / 3600e3).toFixed(0)}h). Riesgo de trampa — se espera retroceso OTE.`;
-                                    takeChoch = false;
-                                    disableOte = false;
-                                } else if (rrChoch >= rrThresholdLive || hasExtremeMomentum) {
-                                    if (rrChoch < 1.5) {
-                                        smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Obstáculo detectado, pero ignorado por MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
-                                    } else {
-                                        smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Camino despejado. Se toma el CHoCH directo (OTE desactivado).`;
-                                    }
-                                    takeChoch = true;
-                                    disableOte = true;
+                                takeChoch = smart.takeChoch;
+                                disableOte = smart.disableOte;
+                                const rrTxt = smart.rrChoch.toFixed(1);
+                                if (smart.reason === 'ote_risk') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Distancia al origen excesiva. Vela demasiado extendida. Se fuerza retroceso OTE.`;
+                                } else if (smart.reason === 'ote_climax') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Vela de quiebre con volumen extremo. Se fuerza espera a retroceso OTE.`;
+                                } else if (smart.reason === 'ote_bias') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> Bias 4H/1H recién cambiado. Se espera retroceso OTE.`;
+                                } else if (smart.reason === 'direct') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrTxt}x. Camino despejado. Se toma el CHoCH directo (OTE desactivado).`;
+                                } else if (smart.reason === 'direct_momentum') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrTxt}x. MOMENTUM EXTREMO (${totalPoints} pts). Se toma el CHoCH directo.`;
+                                } else if (smart.reason === 'ote_only') {
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> smartOteOnly. OTE puro.`;
                                 } else {
-                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrChoch.toFixed(1)}x. Riesgo alto para CHoCH directo, esperando pullback a OTE.`;
-                                    takeChoch = false;
-                                    disableOte = false;
+                                    smartReport = `\n🧠 <b>Modo SMART:</b> RR Estimado ${rrTxt}x. Riesgo alto para CHoCH directo, esperando pullback a OTE.`;
                                 }
                             } else if (config.entryTrigger === 'OTE') {
                                 takeChoch = false;
