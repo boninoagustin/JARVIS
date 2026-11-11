@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField } from 'firebase/firestore';
 import { validateMLGateEvaluation } from '../services/mlGateDeployment';
-import { canRecalibrateML, currentMLComparison, type MLCalibrationStatus } from '../services/mlCalibration';
+import { canRecalibrateML, currentMLComparison, type MLCalibrationStatus, type MLCandidateComparison } from '../services/mlCalibration';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
@@ -183,6 +183,36 @@ function WeeklyOperationalStatus({ report, autoState = {}, config = {}, stateErr
     </div>;
 }
 
+function MLCandidateEvaluation({ comparison: c }: { comparison: MLCandidateComparison }) {
+    const a = c.calibration, v = c.validation;
+    const range = (from: number, to: number) => `${new Date(from).toLocaleString()} → ${new Date(to).toLocaleString()} (fin exclusivo)`;
+    return <>
+        <strong>1. Calibración: 0,50 / 0,65 / 0,80 y sin gate</strong>
+        <div style={{ color: '#777' }}>{range(a.fromMs, a.toMs)}</div>
+        <table style={{ width: '100%', fontSize: '0.75rem' }}>
+            <thead><tr><th>Opción</th><th>Trades</th><th>PnL</th><th>Muestra</th></tr></thead>
+            <tbody>
+                <tr><td>Sin gate</td><td>{a.baseline.n}</td><td>{a.baseline.pnlR.toFixed(2)}R</td><td>{a.baseline.n >= 20 ? 'Apta' : 'Insuficiente'}</td></tr>
+                {a.runs.map(r => <tr key={r.threshold}><td>{r.threshold.toFixed(2)}</td><td>{r.metrics.n}</td><td>{r.metrics.pnlR.toFixed(2)}R</td><td title={r.reason}>{r.eligible ? 'Apta' : 'Insuficiente'}</td></tr>)}
+            </tbody>
+        </table>
+        <div>Elección solo en calibración: <b>{a.selectionMade === false ? 'Sin elección: faltan datos' : a.selectedMode === 'off' ? 'Sin gate' : `Umbral ${a.selectedThreshold!.toFixed(2)}`}</b></div>
+        <strong>2. Validación posterior: sin volver a elegir</strong>
+        <div style={{ color: '#777' }}>{range(v.fromMs, v.toMs)}</div>
+        {v.baseline ? <div>Sin gate: {v.baseline.pnlR.toFixed(2)}R · {v.baseline.n} trades · DD {v.baseline.mdd.toFixed(2)}R</div> : <div>Validación no disponible</div>}
+        {v.selected && <>
+            <div>Umbral elegido: {v.selected.pnlR.toFixed(2)}R · {v.selected.n} trades · DD {v.selected.mdd.toFixed(2)}R</div>
+            <div style={{ color: v.deltaR! < 0 ? '#ff5555' : '#aaa' }}>Diferencia: {v.deltaR! > 0 ? '+' : ''}{v.deltaR!.toFixed(2)}R</div>
+        </>}
+        {a.selectedMode === 'off' && a.selectionMade !== false && <div>No se evalúa otro umbral en validación: ganó operar sin gate.</div>}
+        <div style={{ color: '#eab308' }}>
+            {c.status === 'insufficient' || c.recommendation === 'INSUFFICIENT_EVIDENCE' ? 'Evidencia insuficiente. ' : c.recommendation === 'KEEP_OFF' ? 'Recomendación: mantener apagado. ' : 'Requiere revisión antes de activarlo. '}{c.reason}
+        </div>
+        <div style={{ color: '#888' }}>Comparación cronológica retrospectiva, no prueba prospectiva. No activa modelos.</div>
+        <div style={{ color: '#777' }}>Evaluado: {new Date(c.evaluatedAt).toLocaleString()}</div>
+    </>;
+}
+
 export default function PeriodicOptPanel() {
     const { toast } = useToast();
     const [reports, setReports] = useState<OptReport[]>([]);
@@ -214,8 +244,8 @@ export default function PeriodicOptPanel() {
     };
     const recalibrateML = async (ticker: string) => {
         const bootstrap = mlReadiness[ticker]?.bootstrapRequired === true;
-        const bootstrapWarning = bootstrap ? '\n\nCalibración inicial: no se conoce el período de los datos del modelo anterior (o no hay modelo). Autorizás iniciar una nueva referencia sin exigir comparación de frescura con ese modelo. Se mantienen los mínimos por partición y ambas clases.' : '';
-        if (!confirm(`Recalibrar gate ML — ${ticker}\n\nSe volverán a comprobar los datos y se entrenará un candidato aislado. No activa el gate ni reemplaza el modelo en uso.${bootstrapWarning}\n\n¿Continuar?`)) return;
+        const bootstrapWarning = bootstrap ? '\n\nCalibración inicial o migración al protocolo de tres períodos: autorizás iniciar una nueva referencia cuando el modelo previo no tiene procedencia comparable. Se mantienen los mínimos por partición y ambas clases; no se autoriza activar el modelo.' : '';
+        if (!confirm(`Recalibrar gate ML — ${ticker}\n\nSe entrenará un modelo una sola vez, se probarán 0,50 / 0,65 / 0,80 y sin gate en calibración, y se comprobará la elección en otro período posterior. Si faltan muestras, no habrá recomendación de activación. No activa el gate ni reemplaza el modelo en uso.${bootstrapWarning}\n\n¿Continuar?`)) return;
         setMlBusy(ticker);
         try {
             const response = await fetch(`${mlApi}/recalibrate?ticker=${encodeURIComponent(ticker)}&bootstrap=${bootstrap}`, { method: 'POST', headers: { 'X-Jarvis-ML': 'recalibrate' } });
@@ -788,13 +818,15 @@ export default function PeriodicOptPanel() {
                             const ev = mlEvals[t];
                             const on = mlGateOn[t] === true;
                             const readiness = mlReadiness[t];
-                            const training = ['running', 'queued'].includes((readiness?.job?.state ?? '').toLowerCase());
+                            const training = ['running', 'queued', 'comparing'].includes((readiness?.job?.state ?? '').toLowerCase());
                             const canRecalibrate = canRecalibrateML(readiness) && mlBusy !== t && !mlReadinessError;
                             const config = configMetadata[t]?.currentSnapshot;
                             const advice = validateMLGateEvaluation(ev, { ticker: t, config });
                             const comparison = currentMLComparison(readiness, t);
-                            const candidateActivation = !!comparison && advice.ok && ev?.model?.sha256 === comparison.candidateSha256
-                                && ev?.validation?.threshold === comparison.threshold;
+                            const candidateActivation = comparison?.status === 'valid' && comparison.calibration.selectedMode === 'gate'
+                                && comparison.recommendation === 'REVIEW_CANDIDATE' && advice.ok
+                                && ev?.model?.sha256 === comparison.candidateSha256
+                                && ev?.validation?.threshold === comparison.selectedThreshold;
                             return (
                                 <tr key={t} style={{ borderBottom: '1px solid #1a1a1a' }}>
                                     <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}
@@ -809,15 +841,17 @@ export default function PeriodicOptPanel() {
                                         {readiness?.candidate ? <>
                                             Candidato {readiness.candidate.sha256.slice(0, 10)}
                                             <div>Resultado separado del gate en uso</div>
-                                            {comparison && <div>Umbral fijo: {comparison.threshold}</div>}
+                                            <div>Umbrales del nuevo flujo: 0,50 / 0,65 / 0,80 y sin gate</div>
+                                            {comparison && <div>Elección: {comparison.calibration.selectionMade === false ? 'sin elección: faltan datos' : comparison.calibration.selectedMode === 'gate' ? comparison.selectedThreshold : 'sin gate'}</div>}
                                         </> : 'Sin candidato recalibrado'}
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.78rem', color: '#aaa' }}>
-                                        {readiness?.train && readiness?.validation ? <>
+                                        {readiness?.train && readiness?.calibration && readiness?.validation ? <>
                                             <div style={{ color: '#777' }}>Muestra histórica cerrada</div>
                                             <div>Entrenamiento: {readiness.train.accepted}/{readiness.train.required ?? 50} · faltan {readiness.train.missing}</div>
-                                            <div>Validación: {readiness.validation.accepted}/{readiness.validation.required ?? 20} · faltan {readiness.validation.missing}</div>
-                                            <div>WIN/LOSS: {readiness.train.wins}/{readiness.train.losses} · {readiness.validation.wins}/{readiness.validation.losses}</div>
+                                            <div>Calibración: {readiness.calibration.accepted}/{readiness.calibration.required ?? 20} · faltan {readiness.calibration.missing}</div>
+                                            <div>Validación posterior: {readiness.validation.accepted}/{readiness.validation.required ?? 30} · faltan {readiness.validation.missing}</div>
+                                            <div>WIN/LOSS: {readiness.train.wins}/{readiness.train.losses} · {readiness.calibration.wins}/{readiness.calibration.losses} · {readiness.validation.wins}/{readiness.validation.losses}</div>
                                         </> : <div>{mlReadinessError ?? (readiness?.state === 'NOT_TRADE' ? 'Contador disponible al pasar a TRADE' : readiness?.state === 'ERROR' ? 'No se pudo calcular la muestra' : 'Calculando datos…')}</div>}
                                         <div>{readiness?.reason}</div>
                                         {readiness?.updatedAt && <div style={{ color: '#777' }}>Actualizado: {new Date(readiness.updatedAt).toLocaleString()}</div>}
@@ -827,19 +861,7 @@ export default function PeriodicOptPanel() {
                                         </button>
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.8rem' }}>
-                                        {comparison ? <>
-                                            <strong>{comparison.baseline.pnlR.toFixed(2)}R → {comparison.gate.pnlR.toFixed(2)}R</strong>{' '}
-                                            <span style={{ color: comparison.deltaR < 0 ? '#ff5555' : '#aaa' }}>Δ {comparison.deltaR > 0 ? '+' : ''}{comparison.deltaR.toFixed(2)}R</span>
-                                            <div>Trades: {comparison.baseline.n} → {comparison.gate.n} · WR: {comparison.baseline.wr.toFixed(1)}% → {comparison.gate.wr.toFixed(1)}%</div>
-                                            <div>PF: {comparison.baseline.pf?.toFixed(2) ?? 'sin pérdidas'} → {comparison.gate.pf?.toFixed(2) ?? 'sin pérdidas'} · DD: {comparison.baseline.mdd.toFixed(2)}R → {comparison.gate.mdd.toFixed(2)}R</div>
-                                            <div>{new Date(comparison.fromMs).toLocaleString()} → {new Date(comparison.toMs).toLocaleString()} (fin exclusivo)</div>
-                                            <div style={{ color: '#eab308' }}>
-                                                {comparison.recommendation === 'KEEP_OFF' ? 'Recomendación: mantener apagado. ' : comparison.recommendation === 'INSUFFICIENT_EVIDENCE' ? 'Evidencia insuficiente para activarlo. ' : 'Requiere evaluación independiente antes de activarlo. '}
-                                                {comparison.reason}
-                                            </div>
-                                            <div style={{ color: '#888' }}>Validación retrospectiva del candidato. No es prueba prospectiva ni autorización de activación.</div>
-                                            <div style={{ color: '#777' }}>Evaluado: {new Date(comparison.evaluatedAt).toLocaleString()}</div>
-                                        </> : <span style={{ color: '#888' }}>{readiness?.comparison?.reason ?? (readiness?.candidate ? 'Comparación del candidato pendiente' : 'Sin candidato evaluado')}. No se muestran PnL de modelos anteriores.</span>}
+                                        {comparison ? <MLCandidateEvaluation comparison={comparison} /> : <span style={{ color: '#888' }}>{readiness?.comparison?.reason ?? (readiness?.candidate ? 'Se requiere recalibrar con tres períodos y tres umbrales' : 'Sin candidato evaluado')}. No se muestran PnL de protocolos anteriores.</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
                                         {on
@@ -856,7 +878,7 @@ export default function PeriodicOptPanel() {
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '10px', marginBottom: 0 }}>
                     {mlTickers.length === 0
                         ? 'Sin activos — la lista sale de optimization_config/active_tickers.'
-                        : 'Recalibrar exige ≥50 operaciones cerradas en entrenamiento (mínimo del modelo en el bot) y ≥20 en validación, con WIN y LOSS en ambas particiones, y datos nuevos cuando corresponda. No basta con sumar trades totales. El candidato se guarda por separado: no activa el gate ni reemplaza modelos. Activar sigue exigiendo evidencia separada vigente. ON/OFF indica el estado solicitado, no confirma recepción del bot.'}
+                        : 'Recalibrar exige tres períodos separados: ≥50 operaciones de entrenamiento, ≥20 de calibración y ≥30 de validación posterior, con WIN y LOSS en cada uno. Entrena una vez y elige entre 0,50 / 0,65 / 0,80 y sin gate usando solo calibración. La opción elegida se comprueba después, sin volver a elegir. Cada brazo con gate debe conservar muestra suficiente; si no, la evidencia es insuficiente. No activa el gate ni reemplaza modelos. ON/OFF indica lo solicitado, no confirma recepción del bot.'}
                 </p>
             </div>
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>

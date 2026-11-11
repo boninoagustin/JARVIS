@@ -281,16 +281,27 @@ def train_candidate(data: dict, output_path: Path, ticker: str, old_model: dict 
                     config: dict, n_estimators: int = 100, max_depth: int = 4,
                     learning_rate: float = .1, random_seed: int = 42,
                     min_train_samples: int = 20, min_validation_samples: int = 20,
-                    min_new_trades: int = 15, force: bool = False) -> dict:
+                    min_new_trades: int = 15, force: bool = False,
+                    threshold_calibration_protocol: dict | None = None) -> dict:
     import xgboost as xgb
     output_path = ensure_candidate_path(output_path)
     manifest = validate_manifest(data["manifest"], ticker)
+    # Optional new protocol metadata is written atomically WITH the candidate,
+    # never patched into an already saved immutable artifact.
+    protocol = None
+    if threshold_calibration_protocol is not None:
+        expected = dict(version=1, thresholds=[.5, .65, .8], minCalibrationTrades=20, minValidationTrades=30)
+        if threshold_calibration_protocol != expected or manifest['validation_end_ms'] >= manifest['test_end_ms']:
+            raise ProtocolError('threshold calibration requires exact three-window protocol and nonempty final holdout')
+        protocol = json.loads(json.dumps(expected))
     config = data.get("effective_config", config)
     train, validation = data["train"], data["validation"]
     guard_samples(train, "train", min_train_samples)
     guard_samples(validation, "validation", min_validation_samples)
     freshness = guard_freshness(data, old_model, min_new_trades, force)
-    threshold = validate_export(old_model)[1] if old_model is not None else .65
+    # Protocol v1 chooses .50/.65/.80 later on B; model metadata keeps a neutral
+    # fixed .65 default regardless of the previous deployment's chosen override.
+    threshold = .65 if protocol is not None else validate_export(old_model)[1] if old_model is not None else .65
     X_train = np.array([[row[f] for f in FEATURE_NAMES] for row in train], dtype=np.float32)
     y_train = np.array([r["label"] for r in train], dtype=np.int32)
     X_val = np.array([[row[f] for f in FEATURE_NAMES] for row in validation], dtype=np.float64)
@@ -364,12 +375,14 @@ def train_candidate(data: dict, output_path: Path, ticker: str, old_model: dict 
                           model_sha256=model_fingerprint(export), paired_validation=paired,
                           validation_metrics=new_metrics, accuracy=new_metrics["accuracy"],
                           precision=new_metrics["precision"], recall=new_metrics["recall"], f1=new_metrics["f1"],
-                          threshold_source="current_model" if old_model else "runtime_default",
+                          threshold_source="protocol_default_before_B_selection" if protocol is not None else "current_model" if old_model else "runtime_default",
                           inference_profile=INFERENCE_PROFILE, runtime_native_parity_verified=True,
                           training_parameters=dict(n_estimators=n_estimators, max_depth=max_depth,
                                                    learning_rate=learning_rate, random_seed=random_seed,
                                                    base_score=.5, n_jobs=1),
                           xgboost_version=xgb.__version__, refit_on_validation=False)
+    if protocol is not None:
+        export['meta']['threshold_calibration_protocol'] = protocol
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("x") as stream:
         json.dump(export, stream, indent=2, allow_nan=False)

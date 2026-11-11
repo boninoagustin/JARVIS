@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -17,7 +18,36 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / 'data/ml_calibration'
 STATUS = CACHE / 'status.json'
 MIN_TRAIN = 50  # MLFilter.ts runtime model-load minimum
-MIN_VALIDATION = 20
+MIN_CALIBRATION = 20
+MIN_VALIDATION = 30
+THRESHOLD_PROTOCOL = {'version': 1, 'thresholds': [.5, .65, .8],
+                      'minCalibrationTrades': MIN_CALIBRATION, 'minValidationTrades': MIN_VALIDATION}
+
+
+def current_protocol(model):
+    meta = (model or {}).get('meta', {})
+    m = meta.get('evaluation_manifest', {})
+    return (meta.get('threshold_calibration_protocol') == THRESHOLD_PROTOCOL
+            and isinstance(m.get('validation_end_ms'), int)
+            and isinstance(m.get('test_end_ms'), int)
+            and m['validation_end_ms'] < m['test_end_ms'])
+
+
+def three_window_manifest(manifest, ticker):
+    import train_ml_model as trainer
+    old = trainer.validate_manifest(manifest, ticker)
+    start, end = old['train_end_ms'], old['validation_end_ms']
+    middle = start + (end - start) // 2
+    if not start < middle < end:
+        raise trainer.ProtocolError('History cannot supply three nonempty chronological windows')
+    return dict(old, validation_end_ms=middle, test_end_ms=end, test_independence='unverified')
+
+
+def training_data(data):
+    # Final C counts/labels must not reach fitting, paired accuracy or freshness.
+    allowed = {'train', 'validation', 'manifest', 'counts', 'max_label_closed_at_ms',
+               'embargo_ms', 'effective_config', 'dataset_source', 'old_model_source', 'old_source_sha256'}
+    return {key: value for key, value in data.items() if key in allowed}
 
 
 def now():
@@ -54,15 +84,29 @@ def partition(rows, minimum):
 
 def readiness(data, old):
     import train_ml_model as trainer
-    result = {'train': partition(data['train'], MIN_TRAIN), 'validation': partition(data['validation'], MIN_VALIDATION),
+    result = {'train': partition(data['train'], MIN_TRAIN),
+              'calibration': partition(data['validation'], MIN_CALIBRATION),
+              'validation': dict(data['final_readiness']),
               'ready': False, 'state': 'INSUFFICIENT', 'updatedAt': now(),
               'manifest': data['manifest'], 'counts': data['counts'],
-              'recommendation': 'NOT_EVALUATED', 'minimumTrain': MIN_TRAIN, 'minimumValidation': MIN_VALIDATION}
+              'thresholdProtocol': THRESHOLD_PROTOCOL,
+              'recommendation': 'NOT_EVALUATED', 'minimumTrain': MIN_TRAIN,
+              'minimumCalibration': MIN_CALIBRATION, 'minimumValidation': MIN_VALIDATION}
     try:
-        for name, minimum in (('train', MIN_TRAIN), ('validation', MIN_VALIDATION)):
-            trainer.guard_samples(data[name], name, minimum)
-        trainer.guard_freshness(data, old, 15, False)
-        result.update(ready=True, state='READY', reason='Muestras y procedencia suficientes; candidato sin activar')
+        for name, label, minimum in (('train', 'entrenamiento A', MIN_TRAIN), ('validation', 'calibración B', MIN_CALIBRATION)):
+            trainer.guard_samples(data[name], label, minimum)
+        final = result['validation']
+        if final['accepted'] < MIN_VALIDATION or not final['bothClasses']:
+            raise trainer.InsufficientSamples(f"HOLD: final C requires >= {MIN_VALIDATION} closed labelled samples and both WIN/LOSS classes; n={final['accepted']}")
+        # Explicit one-time migration is allowed only after all three guards.
+        # It does not recast the old two-window candidate as untouched holdout.
+        if old is not None and not current_protocol(old):
+            result.update(ready=True, bootstrapRequired=True, protocolBootstrapRequired=True,
+                state='PROTOCOL_BOOTSTRAP_REQUIRED',
+                reason='Confirmar nueva calibración de tres ventanas; el candidato anterior no tiene holdout C independiente. No se reducen mínimos ni se activa el gate.')
+            return result
+        trainer.guard_freshness(training_data(data), old, 15, False)
+        result.update(ready=True, state='READY', reason='Tres ventanas y procedencia suficientes; candidato sin activar')
     except trainer.InsufficientSamples as exc:
         result['reason'] = str(exc)
         if 'FRESHNESS' in str(exc):
@@ -78,7 +122,50 @@ def collect(ticker, asset):
     directory = ROOT / 'logs' / ticker.lower() / 'history_exported'
     if not directory.is_dir():
         raise ValueError('No exported history available')
-    data = trainer.collect_temporal_trades(directory, ticker, config)
+    rpc = trainer.WorkerRPC()
+    try:
+        params = {'ticker': ticker, 'log_dir': str(directory)}
+        cache = (config.get('timesfm') or {}).get('cachePath')
+        if cache:
+            params['timesfm_cache'] = cache
+        default = rpc('init', params)
+        manifest = three_window_manifest(default.get('evaluation_manifest', default.get('manifest')), ticker)
+        # The existing collector fits Train A / Validation B only. Keep its RPC
+        # alive long enough to project C into readiness counts, never fit rows.
+        def collect_rpc(method, arguments):
+            return {} if method == 'shutdown' else rpc(method, arguments)
+        data = trainer.collect_temporal_trades(directory, ticker, config, manifest, rpc=collect_rpc)
+        final = rpc('evaluate_final', {'config': dict(config, mlGate={'enabled': False})})
+        source = data['dataset_source']
+        context = source['partitions']['validation']
+        if (final.get('evaluation_manifest') != manifest
+                or final.get('provenance') != source.get('worker_provenance')
+                or final.get('effective_config') != data['effective_config']
+                or final.get('config_fingerprint') != context.get('config_fingerprint')
+                or final.get('ml_provenance', {}).get('enabled') is not False
+                or final.get('test_evidence', {}).get('partition') != 'test'):
+            raise trainer.ProtocolError('Final C readiness context/provenance mismatch')
+        rows = final.get('test_trades')
+        if not isinstance(rows, list):
+            raise trainer.ProtocolError('Final C closed trade records missing')
+        accepted = []
+        start, end = manifest['validation_end_ms'], manifest['test_end_ms']
+        for trade in rows:
+            ts = trade.get('timestamp')
+            close = trade.get('closeTimestamp', trade.get('closedAt', trade.get('closeTs')))
+            r = trade.get('rMultiple')
+            # evaluate_final deliberately returns normalized CLOSED records, not
+            # raw result strings/features. Use return SIGN only to count labels;
+            # discard magnitudes immediately (never compute C PnL for readiness).
+            if (trade.get('label_status') == 'closed' and type(r) in (int, float)
+                    and math.isfinite(r) and r != 0 and type(ts) is int and type(close) is int
+                    and start <= ts < end and ts <= close < end):
+                accepted.append({'label': int(r > 0)})
+        data['final_readiness'] = partition(accepted, MIN_VALIDATION)
+        data['final_readiness']['labelPolicy'] = 'closed_nonzero_return_sign_only'
+        rpc('shutdown', {})
+    finally:
+        rpc.close()
     # Never substitute the generic model of another asset.
     path = trainer.MODELS_DIR / f'ml_model_{ticker}.json'
     # The latest isolated candidate is the freshness/paired-comparison reference
@@ -118,6 +205,8 @@ def candidate_binding(ticker, config):
     meta = model.get('meta', {})
     if meta.get('ticker') != ticker:
         return binding, 'Candidate ticker mismatch'
+    if not current_protocol(model):
+        return binding, 'Protocolo anterior de dos ventanas: resultado obsoleto; no prueba selección de umbral con holdout C independiente'
     if strategy_config(meta.get('config', {})) != strategy_config(config):
         return binding, 'Current production config differs from candidate frozen config'
     files = meta.get('dataset_source', {}).get('worker_provenance', {}).get('dataset_files', [])
@@ -153,28 +242,30 @@ def preserve_comparison(row, previous, ticker, config):
         row['currentCandidateSha256'] = binding['sha256']
         comparison = previous.get('comparison')
         if comparison:
+            if comparison.get('schemaVersion') != 2 or comparison.get('scope') != 'temporal_threshold_holdout':
+                issue = 'Comparación obsoleta: se exige selección en calibración B y validación final C separadas'
             if comparison.get('candidateSha256') != binding['sha256'] or comparison.get('candidate') != binding['path']:
                 issue = 'Comparison belongs to a different candidate'
             row['comparison'] = dict(comparison)
             if issue:
                 row['comparison'].update(status='unavailable', recommendation='INSUFFICIENT_EVIDENCE', reason=issue)
         elif issue:
-            row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
+            row['comparison'] = {'schemaVersion': 2, 'status': 'unavailable', 'ticker': ticker,
                 'candidate': binding['path'], 'candidateSha256': binding['sha256'],
-                'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': issue}
+                'scope': 'temporal_threshold_holdout', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': issue}
     except Exception as exc:
-        row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
-            'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
+        row['comparison'] = {'schemaVersion': 2, 'status': 'unavailable', 'ticker': ticker,
+            'scope': 'temporal_threshold_holdout', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
 
 
 def run_comparison(ticker, path, config):
     try:
         return _run_comparison(ticker, path, config)
     except Exception as exc:
-        return {'schemaVersion': 1, 'status': 'error', 'ticker': ticker,
+        return {'schemaVersion': 2, 'status': 'error', 'ticker': ticker,
             'candidate': str(path.relative_to(ROOT)),
             'candidateSha256': hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
-            'threshold': .65, 'evaluatedAt': now(), 'scope': 'retrospective_validation',
+            'selectedThreshold': None, 'evaluatedAt': now(), 'scope': 'temporal_threshold_holdout',
             'applyEligible': False, 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
 
 
@@ -191,9 +282,9 @@ def _run_comparison(ticker, path, config):
                 '--candidate', str(path), '--sha256', expected_sha, '--current-config', str(current)],
                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=660, check=True)
         except (OSError, subprocess.SubprocessError) as exc:
-            return {'schemaVersion': 1, 'status': 'error', 'ticker': ticker,
+            return {'schemaVersion': 2, 'status': 'error', 'ticker': ticker,
                 'candidate': str(path.relative_to(ROOT)), 'candidateSha256': expected_sha,
-                'threshold': .65, 'evaluatedAt': now(), 'scope': 'retrospective_validation',
+                'selectedThreshold': None, 'evaluatedAt': now(), 'scope': 'temporal_threshold_holdout',
                 'applyEligible': False, 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
     marker = next((line for line in reversed(result.stdout.splitlines()) if line.startswith('ML_CANDIDATE_RESULT=')), None)
     if marker is None:
@@ -218,10 +309,14 @@ def compare_existing(ticker):
     prior_binding = row.get('candidate')
     preserve_comparison(row, row.copy(), ticker, roster[ticker]['config'])
     if prior_binding and prior_binding.get('path') == str(path.relative_to(ROOT)) and prior_binding.get('sha256') != hashlib.sha256(path.read_bytes()).hexdigest():
-        row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
+        row['comparison'] = {'schemaVersion': 2, 'status': 'unavailable', 'ticker': ticker,
             'candidate': row['candidate']['path'], 'candidateSha256': row['candidate']['sha256'],
-            'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE',
+            'scope': 'temporal_threshold_holdout', 'recommendation': 'INSUFFICIENT_EVIDENCE',
             'reason': 'Immutable candidate raw bytes changed since saved binding'}
+        save(state)
+        return row['comparison']
+    _, issue = candidate_binding(ticker, roster[ticker]['config'])
+    if issue:
         save(state)
         return row['comparison']
     row['comparison'] = run_comparison(ticker, path, roster[ticker]['config'])
@@ -235,7 +330,8 @@ def compare_existing(ticker):
 def refresh():
     roster = snapshot()['assets']
     previous = read_status().get('assets', {})
-    state = {'assets': {}, 'state': 'RUNNING', 'startedAt': now()}
+    state = {'assets': {}, 'state': 'RUNNING', 'startedAt': now(),
+             'schemaVersion': 2, 'thresholdProtocol': THRESHOLD_PROTOCOL}
     for ticker, asset in roster.items():
         state['assets'][ticker] = {**previous.get(ticker, {}), 'trade': asset['trade'],
             'ready': False, 'state': 'PENDING' if asset['trade'] else 'NOT_TRADE'}
@@ -283,9 +379,10 @@ def recalibrate(ticker, bootstrap=False):
             raise ValueError('Active model changed during collection')
         output = CACHE / 'candidates' / f'{ticker}-{now()}.json'
         output.parent.mkdir(parents=True, exist_ok=True)
-        candidate = trainer.train_candidate(data, output, ticker, old, roster[ticker]['config'],
-                                            min_train_samples=MIN_TRAIN, min_validation_samples=MIN_VALIDATION,
-                                            min_new_trades=15, force=bool(bootstrap and result.get('bootstrapRequired')))
+        candidate = trainer.train_candidate(training_data(data), output, ticker, old, roster[ticker]['config'],
+                                            min_train_samples=MIN_TRAIN, min_validation_samples=MIN_CALIBRATION,
+                                            min_new_trades=15, force=bool(bootstrap and result.get('bootstrapRequired')),
+                                            threshold_calibration_protocol=dict(THRESHOLD_PROTOCOL))
         # Explicit user-confirmed unknown-provenance bootstrap only; known-data
         # freshness and identical-source guards are never bypassed.
         state['assets'][ticker].update(ready=False, bootstrapRequired=False, state='CALIBRATED',
@@ -293,7 +390,7 @@ def recalibrate(ticker, bootstrap=False):
         state['assets'][ticker]['job'] = {'state': 'CANDIDATE_SAVED', 'finishedAt': now(),
             'candidate': str(output.relative_to(ROOT)), 'promoted': False,
             'recommendation': 'NEEDS_RETURN_VALIDATION',
-            'reason': 'Candidato aislado; comparación retrospectiva sin activación.'}
+            'reason': 'Un solo entrenamiento; selección .50/.65/.80 en B y comprobación posterior en C, sin activación.'}
         preserve_comparison(state['assets'][ticker], {}, ticker, roster[ticker]['config'])
         save(state)
         state['assets'][ticker]['comparison'] = run_comparison(ticker, output, roster[ticker]['config'])
