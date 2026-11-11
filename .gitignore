@@ -43,3 +43,6 @@ scripts/hyperopt/models/quarantine/
 
 # 02-nov-2026: artefactos de auditoría generados (JSON de 35 MB c/u)
 audit_results/
+
+# ML readiness cache and isolated recalibration artifacts (runtime only)
+data/ml_calibration/

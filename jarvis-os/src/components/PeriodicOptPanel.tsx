@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField } from 'firebase/firestore';
 import { validateMLGateEvaluation } from '../services/mlGateDeployment';
+import { canRecalibrateML, type MLCalibrationStatus } from '../services/mlCalibration';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
@@ -196,6 +197,35 @@ export default function PeriodicOptPanel() {
     // 🆕 16-sep-2026: GATE ML por activo (ml_gate_evals = sweep publicado; mlGateOn = mlGateEnabled en asset_configs)
     const [mlEvals, setMlEvals] = useState<Record<string, any>>({});
     const [mlGateOn, setMlGateOn] = useState<Record<string, boolean>>({});
+    const [mlReadiness, setMlReadiness] = useState<Record<string, MLCalibrationStatus>>({});
+    const [mlReadinessError, setMlReadinessError] = useState<string | null>(null);
+    const [mlBusy, setMlBusy] = useState<string | null>(null);
+    const mlApi = `http://${window.location.hostname}:8000/api/ml-gate`;
+    const refreshMLReadiness = async () => {
+        try {
+            const response = await fetch(`${mlApi}/status`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const body = await response.json();
+            if (!body.assets || typeof body.assets !== 'object') throw new Error('Respuesta inválida');
+            setMlReadiness(body.assets); setMlReadinessError(null);
+        } catch (error: any) {
+            setMlReadiness({}); setMlReadinessError(`Contador no disponible: ${error.message}`);
+        }
+    };
+    const recalibrateML = async (ticker: string) => {
+        const bootstrap = mlReadiness[ticker]?.bootstrapRequired === true;
+        const bootstrapWarning = bootstrap ? '\n\nCalibración inicial: no se conoce el período de los datos del modelo anterior (o no hay modelo). Autorizás iniciar una nueva referencia sin exigir comparación de frescura con ese modelo. Se mantienen los mínimos por partición y ambas clases.' : '';
+        if (!confirm(`Recalibrar gate ML — ${ticker}\n\nSe volverán a comprobar los datos y se entrenará un candidato aislado. No activa el gate ni reemplaza el modelo en uso.${bootstrapWarning}\n\n¿Continuar?`)) return;
+        setMlBusy(ticker);
+        try {
+            const response = await fetch(`${mlApi}/recalibrate?ticker=${encodeURIComponent(ticker)}&bootstrap=${bootstrap}`, { method: 'POST', headers: { 'X-Jarvis-ML': 'recalibrate' } });
+            const body = await response.json();
+            if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail ?? body));
+            toast(`Recalibración solicitada para ${ticker}. No se activará automáticamente.`, 'info');
+            await refreshMLReadiness();
+        } catch (error: any) { toast(`No se inició la recalibración: ${error.message}`, 'error'); }
+        finally { setMlBusy(null); }
+    };
     // 🆕 16-sep-2026: FILTRO CORRELACIÓN por activo (corr_gate_evals = contrafactual; corrOn = correlationFilter.shadow===false)
     const [corrEvals, setCorrEvals] = useState<Record<string, any>>({});
     const [corrOn, setCorrOn] = useState<Record<string, boolean>>({});
@@ -271,7 +301,11 @@ export default function PeriodicOptPanel() {
     const exitsTickers = [...new Set([...activeList, ...Object.keys(exitsEvals).filter(k => k !== '_GLOBAL')])].sort();
     const rollTickers = [...new Set([...activeList, ...Object.keys(rollEvals).filter(k => k !== '_GLOBAL')])].sort();
 
-    useEffect(() => { void refreshAll(); }, []);
+    useEffect(() => {
+        void refreshAll(); void refreshMLReadiness();
+        const timer = window.setInterval(() => { void refreshMLReadiness(); }, 30000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     const statusBadge = (r: OptReport) => <span style={{ ...badge, color: '#aaa', borderColor: '#444' }}>
         {reportVerdict(r.status, reportScope(r, activeList).current)}
@@ -736,7 +770,7 @@ export default function PeriodicOptPanel() {
             <div className="premium-card" style={{ marginTop: '18px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                     <h3 style={{ margin: 0 }}>🧠 GATE ML POR ACTIVO</h3>
-                    <span style={{ fontSize: '0.72rem', color: '#777' }}>sweep → ml_gate_evals · estado almacenado, sin recepción del bot</span>
+                    <button className="btn" onClick={() => void refreshMLReadiness()}>Actualizar contador ML</button>
                 </div>
                 <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse', marginTop: '10px' }}>
                     <thead>
@@ -744,6 +778,7 @@ export default function PeriodicOptPanel() {
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>ACTIVO</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>GATE</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>MODELO</th>
+                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>DATOS PARA RECALIBRAR</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>SWEEP: SIN GATE → MEJOR GATE</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}></th>
                         </tr>
@@ -752,6 +787,9 @@ export default function PeriodicOptPanel() {
                         {mlTickers.map(t => {
                             const ev = mlEvals[t];
                             const on = mlGateOn[t] === true;
+                            const readiness = mlReadiness[t];
+                            const training = ['running', 'queued'].includes((readiness?.job?.state ?? '').toLowerCase());
+                            const canRecalibrate = canRecalibrateML(readiness) && mlBusy !== t && !mlReadinessError;
                             const config = configMetadata[t]?.currentSnapshot;
                             const advice = validateMLGateEvaluation(ev, { ticker: t, config });
                             const baseline = ev?.schemaVersion === 2 ? ev.validation?.baseline : ev?.sinGate;
@@ -760,7 +798,9 @@ export default function PeriodicOptPanel() {
                             const deltaGood = advice.ok;
                             return (
                                 <tr key={t} style={{ borderBottom: '1px solid #1a1a1a' }}>
-                                    <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}</td>
+                                    <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}
+                                        <div style={{ fontSize: '0.65rem', color: readiness?.trade ? '#00e676' : '#888' }}>{readiness ? readiness.trade ? 'TRADE' : 'FUERA DE TRADE' : 'ESTADO PENDIENTE'}</div>
+                                    </td>
                                     <td style={{ padding: '8px 4px' }}>
                                         {on
                                             ? <span style={{ color: '#00e676', fontWeight: 700 }}>● ON</span>
@@ -769,6 +809,20 @@ export default function PeriodicOptPanel() {
                                     <td style={{ padding: '8px 4px', color: '#aaa', fontSize: '0.78rem' }}>
                                         {ev?.schemaVersion === 2 ? `Modelo ${ev.model?.sha256?.slice(0, 10) ?? 'sin identidad'}` : ev?.modelo ?? '—'}
                                         {ev?.schemaVersion === 2 && <div>Umbral evaluado: {ev.validation?.threshold ?? '—'}</div>}
+                                    </td>
+                                    <td style={{ padding: '8px 4px', fontSize: '0.78rem', color: '#aaa' }}>
+                                        {readiness?.train && readiness?.validation ? <>
+                                            <div style={{ color: '#777' }}>Muestra histórica cerrada</div>
+                                            <div>Entrenamiento: {readiness.train.accepted}/{readiness.train.required ?? 50} · faltan {readiness.train.missing}</div>
+                                            <div>Validación: {readiness.validation.accepted}/{readiness.validation.required ?? 20} · faltan {readiness.validation.missing}</div>
+                                            <div>WIN/LOSS: {readiness.train.wins}/{readiness.train.losses} · {readiness.validation.wins}/{readiness.validation.losses}</div>
+                                        </> : <div>{mlReadinessError ?? (readiness?.state === 'NOT_TRADE' ? 'Contador disponible al pasar a TRADE' : readiness?.state === 'ERROR' ? 'No se pudo calcular la muestra' : 'Calculando datos…')}</div>}
+                                        <div>{readiness?.reason}</div>
+                                        {readiness?.updatedAt && <div style={{ color: '#777' }}>Actualizado: {new Date(readiness.updatedAt).toLocaleString()}</div>}
+                                        {readiness?.job && <div>Recalibración: {readiness.job.state}{readiness.job.reason ? ` · ${readiness.job.reason}` : ''}</div>}
+                                        <button className="btn" disabled={!canRecalibrate} onClick={() => void recalibrateML(t)} title={readiness?.reason ?? 'Esperando comprobación de datos'}>
+                                            {training || mlBusy === t ? 'Recalibrando…' : 'Recalibrar gate'}
+                                        </button>
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.8rem' }}>
                                         {ev
@@ -798,7 +852,7 @@ export default function PeriodicOptPanel() {
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '10px', marginBottom: 0 }}>
                     {mlTickers.length === 0
                         ? 'Sin activos — la lista sale de optimization_config/active_tickers.'
-                        : 'Activar instala el modelo identificado y el umbral que pasaron la evaluación separada. Si falta evidencia, cambió la configuración o el modelo no coincide en el bot, no se usa ese despliegue. ON/OFF indica lo solicitado en almacenamiento, no confirma recepción del bot.'}
+                        : 'Recalibrar exige ≥50 operaciones cerradas en entrenamiento (mínimo del modelo en el bot) y ≥20 en validación, con WIN y LOSS en ambas particiones, y datos nuevos cuando corresponda. No basta con sumar trades totales. El candidato se guarda por separado: no activa el gate ni reemplaza modelos. Activar sigue exigiendo evidencia separada vigente. ON/OFF indica el estado solicitado, no confirma recepción del bot.'}
                 </p>
             </div>
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>

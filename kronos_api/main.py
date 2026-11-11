@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import time
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -294,3 +294,93 @@ async def detection_optimize(ticker: str):
                 "detail": f"Optimización de {ticker} lanzada (~10-15 min). Ver /tmp/detection_opt_{ticker}.log"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo lanzar: {e}")
+
+
+# ML calibration is bounded, serialized, read-only except isolated candidates.
+# This installation has no dashboard login. Same-origin/custom-header CSRF guard
+# follows its trusted-dashboard deployment; this is NOT user authentication.
+import re
+import threading
+from pathlib import Path
+
+_ML_LOCK = threading.Lock()
+_ML_PROCESS = None
+_ML_REFRESH_AT = 0.0
+_ML_FIT_AT = {}
+_ML_CACHE = Path(JARVIS_DIR) / 'data/ml_calibration/status.json'
+
+
+def _ml_origin(request, mutation=False):
+    origin = request.headers.get('origin', '')
+    if not re.fullmatch(r'http://(169\.58\.163\.132|100\.\d+\.\d+\.\d+|localhost|127\.0\.0\.1):5173', origin):
+        raise HTTPException(status_code=403, detail='Trusted dashboard Origin required')
+    if mutation and request.headers.get('x-jarvis-ml') != 'recalibrate':
+        raise HTTPException(status_code=403, detail='X-Jarvis-ML: recalibrate required')
+
+
+def _ml_cached():
+    try:
+        value = json.loads(_ML_CACHE.read_text())
+        if not isinstance(value.get('assets'), dict):
+            raise ValueError('invalid cache')
+        return value
+    except (OSError, ValueError):
+        return {'assets': {}, 'state': 'PENDING'}
+
+
+def _ml_running():
+    return _ML_PROCESS is not None and _ML_PROCESS.poll() is None
+
+
+def _ml_start(action, ticker=None, bootstrap=False):
+    global _ML_PROCESS
+    args = [os.path.join(JARVIS_DIR, 'scripts/hyperopt/.venv/bin/python'),
+            os.path.join(JARVIS_DIR, 'scripts/ml_calibration_status.py'), action]
+    if ticker:
+        args += ['--ticker', ticker]
+    if bootstrap:
+        args += ['--bootstrap']
+    log_path = Path(JARVIS_DIR) / 'data/ml_calibration/worker.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open('a') as log:
+        _ML_PROCESS = subprocess.Popen(args, cwd=JARVIS_DIR, env=_detection_env(),
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+@app.get('/api/ml-gate/status')
+async def ml_gate_status(request: Request):
+    """Cached exact worker counters; one background refresh per 15 minutes."""
+    global _ML_REFRESH_AT
+    _ml_origin(request)
+    with _ML_LOCK:
+        cached = _ml_cached()
+        stale = time.time()*1000-cached.get('updatedAt', 0) >= 900000
+        if not _ml_running() and stale and time.monotonic()-_ML_REFRESH_AT >= 900:
+            _ml_start('refresh')
+            _ML_REFRESH_AT = time.monotonic()
+        cached['refreshing'] = _ml_running()
+        return cached
+
+
+@app.post('/api/ml-gate/recalibrate')
+async def ml_gate_recalibrate(request: Request, ticker: str, bootstrap: bool = False):
+    """Recheck exact data then fit an isolated candidate; never activate it."""
+    _ml_origin(request, mutation=True)
+    ticker = ticker.strip().upper()
+    if not re.fullmatch(r'[A-Z0-9]{1,24}', ticker):
+        raise HTTPException(status_code=400, detail='Invalid ticker')
+    with _ML_LOCK:
+        row = _ml_cached()['assets'].get(ticker)
+        if row is None or not row.get('trade'):
+            raise HTTPException(status_code=404, detail='Official TRADE asset required; refresh status first')
+        if _ml_running():
+            raise HTTPException(status_code=409, detail='Serialized ML worker already running')
+        if not row.get('ready') or time.time()*1000-row.get('updatedAt', 0) > 3600000:
+            raise HTTPException(status_code=409, detail='Readiness is insufficient or stale; refresh status first')
+        if row.get('bootstrapRequired') and not bootstrap:
+            raise HTTPException(status_code=409, detail='Explicit bootstrap=true confirmation required for unknown old provenance')
+        if time.monotonic()-_ML_FIT_AT.get(ticker, -3600) < 3600:
+            raise HTTPException(status_code=429, detail='One recalibration per asset per hour')
+        _ml_start('recalibrate', ticker, bootstrap)
+        _ML_FIT_AT[ticker] = time.monotonic()
+        return {'status': 'started', 'ticker': ticker, 'promoted': False}
