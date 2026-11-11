@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField } from 'firebase/firestore';
 import { validateMLGateEvaluation } from '../services/mlGateDeployment';
-import { canRecalibrateML, type MLCalibrationStatus } from '../services/mlCalibration';
+import { canRecalibrateML, currentMLComparison, type MLCalibrationStatus } from '../services/mlCalibration';
 import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
@@ -779,7 +779,7 @@ export default function PeriodicOptPanel() {
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>GATE</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>MODELO</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>DATOS PARA RECALIBRAR</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>SWEEP: SIN GATE → MEJOR GATE</th>
+                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>CANDIDATO ACTUAL: SIN GATE → CON GATE</th>
                             <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}></th>
                         </tr>
                     </thead>
@@ -792,10 +792,9 @@ export default function PeriodicOptPanel() {
                             const canRecalibrate = canRecalibrateML(readiness) && mlBusy !== t && !mlReadinessError;
                             const config = configMetadata[t]?.currentSnapshot;
                             const advice = validateMLGateEvaluation(ev, { ticker: t, config });
-                            const baseline = ev?.schemaVersion === 2 ? ev.validation?.baseline : ev?.sinGate;
-                            const gate = ev?.schemaVersion === 2 ? ev.validation?.gate : ev?.bestGate;
-                            const delta = typeof baseline?.pnlR === 'number' && typeof gate?.pnlR === 'number' ? gate.pnlR - baseline.pnlR : undefined;
-                            const deltaGood = advice.ok;
+                            const comparison = currentMLComparison(readiness, t);
+                            const candidateActivation = !!comparison && advice.ok && ev?.model?.sha256 === comparison.candidateSha256
+                                && ev?.validation?.threshold === comparison.threshold;
                             return (
                                 <tr key={t} style={{ borderBottom: '1px solid #1a1a1a' }}>
                                     <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}
@@ -807,8 +806,11 @@ export default function PeriodicOptPanel() {
                                             : <span style={{ color: '#888' }}>○ OFF</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', color: '#aaa', fontSize: '0.78rem' }}>
-                                        {ev?.schemaVersion === 2 ? `Modelo ${ev.model?.sha256?.slice(0, 10) ?? 'sin identidad'}` : ev?.modelo ?? '—'}
-                                        {ev?.schemaVersion === 2 && <div>Umbral evaluado: {ev.validation?.threshold ?? '—'}</div>}
+                                        {readiness?.candidate ? <>
+                                            Candidato {readiness.candidate.sha256.slice(0, 10)}
+                                            <div>Resultado separado del gate en uso</div>
+                                            {comparison && <div>Umbral fijo: {comparison.threshold}</div>}
+                                        </> : 'Sin candidato recalibrado'}
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.78rem', color: '#aaa' }}>
                                         {readiness?.train && readiness?.validation ? <>
@@ -825,24 +827,26 @@ export default function PeriodicOptPanel() {
                                         </button>
                                     </td>
                                     <td style={{ padding: '8px 4px', fontSize: '0.8rem' }}>
-                                        {ev
-                                            ? <span>
-                                                {typeof baseline?.pnlR === 'number' ? baseline.pnlR.toFixed(1) : '—'}R → {typeof gate?.pnlR === 'number' ? gate.pnlR.toFixed(1) : '—'}R{' '}
-                                                {delta !== undefined && <span style={{ color: deltaGood ? '#00e676' : delta < 0 ? '#ff5555' : '#aaa', fontWeight: 700 }}>
-                                                    ({delta > 0 ? '+' : ''}{delta.toFixed(1)}R)
-                                                </span>}
-                                                <div style={{ color: advice.ok ? '#00e676' : '#eab308' }}>{advice.ok ? 'Mejora verificada en datos separados; se puede solicitar la activación.' : advice.reason}</div>
-                                                {ev.schemaVersion === 2 && <div>Muestra: {baseline?.n ?? '—'} sin filtro / {gate?.n ?? '—'} con filtro · mínimo 30 en ambos.</div>}
-                                                <span style={{ color: '#666', fontSize: '0.68rem' }}> · {!isFreshReport(ev.evaluatedAt) && 'HISTÓRICO / VENCIDO · '}{new Date(ev.evaluatedAt).toLocaleString()}</span>
-                                            </span>
-                                            : <span style={{ color: '#666' }}>sin evaluación</span>}
+                                        {comparison ? <>
+                                            <strong>{comparison.baseline.pnlR.toFixed(2)}R → {comparison.gate.pnlR.toFixed(2)}R</strong>{' '}
+                                            <span style={{ color: comparison.deltaR < 0 ? '#ff5555' : '#aaa' }}>Δ {comparison.deltaR > 0 ? '+' : ''}{comparison.deltaR.toFixed(2)}R</span>
+                                            <div>Trades: {comparison.baseline.n} → {comparison.gate.n} · WR: {comparison.baseline.wr.toFixed(1)}% → {comparison.gate.wr.toFixed(1)}%</div>
+                                            <div>PF: {comparison.baseline.pf?.toFixed(2) ?? 'sin pérdidas'} → {comparison.gate.pf?.toFixed(2) ?? 'sin pérdidas'} · DD: {comparison.baseline.mdd.toFixed(2)}R → {comparison.gate.mdd.toFixed(2)}R</div>
+                                            <div>{new Date(comparison.fromMs).toLocaleString()} → {new Date(comparison.toMs).toLocaleString()} (fin exclusivo)</div>
+                                            <div style={{ color: '#eab308' }}>
+                                                {comparison.recommendation === 'KEEP_OFF' ? 'Recomendación: mantener apagado. ' : comparison.recommendation === 'INSUFFICIENT_EVIDENCE' ? 'Evidencia insuficiente para activarlo. ' : 'Requiere evaluación independiente antes de activarlo. '}
+                                                {comparison.reason}
+                                            </div>
+                                            <div style={{ color: '#888' }}>Validación retrospectiva del candidato. No es prueba prospectiva ni autorización de activación.</div>
+                                            <div style={{ color: '#777' }}>Evaluado: {new Date(comparison.evaluatedAt).toLocaleString()}</div>
+                                        </> : <span style={{ color: '#888' }}>{readiness?.comparison?.reason ?? (readiness?.candidate ? 'Comparación del candidato pendiente' : 'Sin candidato evaluado')}. No se muestran PnL de modelos anteriores.</span>}
                                     </td>
                                     <td style={{ padding: '8px 4px', textAlign: 'right' }}>
                                         {on
                                             ? <button className="btn" onClick={() => toggleMLGate(t, false)} title="Vuelve al filtro heurístico (sin ML). Es seguro y reversible.">Apagar gate</button>
-                                            : advice.ok
+                                            : candidateActivation
                                                 ? <button className="btn" onClick={() => toggleMLGate(t, true)}>Activar modelo y umbral evaluados</button>
-                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={advice.reason}>Activación bloqueada</span>}
+                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title="Se necesita evidencia separada vigente para el mismo candidato, configuración y umbral.">Activación bloqueada</span>}
                                     </td>
                                 </tr>
                             );

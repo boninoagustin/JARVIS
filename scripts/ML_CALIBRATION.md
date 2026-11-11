@@ -18,6 +18,18 @@ Unknown legacy data provenance / first calibration requires explicit bootstrap c
 
 The installation has no dashboard login. The endpoints use the existing trusted-dashboard deployment model with an allowed Origin, custom POST header, strict ticker validation, rate limits and worker serialization. Origin checks are CSRF protection, NOT authentication or internet access control. Network access should be restricted to trusted operators.
 
+## Candidate return comparison
+
+Recalibration now evaluates the saved candidate against ML OFF in its declared Validation window, using the same immutable strategy config, dataset and pre-validation warmup. Each arm runs in a separate Node process. The ON arm must load the exact candidate raw SHA256 through the production loader and prove the gate/threshold are active; missing or rejected models cannot silently pass as a no-op. The threshold stays fixed at 0.65; this comparison does not tune it.
+
+The status worker also supports `compare --ticker JP225` to evaluate an existing candidate without fitting again. The candidate remains immutable. Results are stored separately in the calibration cache and survive status refresh only while candidate, data, replay source and current config remain compatible.
+
+The panel shows **only the current candidate's comparison**, bound to both its path and raw SHA256. Legacy `ml_gate_evals` PnL and model names are not displayed in this section. Stored old evidence is retained for audit, not deleted or reinterpreted as evidence for a new model.
+
+Return metrics use genuinely completed finite-R replay trades including BE/TIMEOUT/REVERSAL, excluding OPEN/unlabelled and terminal-censored trades. Thus sample counts can differ from training's WIN/LOSS-only labels. This runs the full strategy for both arms rather than filtering baseline trades after the fact, so blocked entries can affect subsequent strategy decisions.
+
+This is a **retrospective Validation diagnostic**, not prospective execution evidence or an untouched final Test. The candidate was trained in the present; historical inference is deliberately reconstructed after its declared training cutoff, not claimed to have been available then. Accuracy or positive validation PnL alone never authorizes deployment. Activation still requires valid, separate evidence for the exact candidate, threshold and current config. No deployment/config/order changes are part of comparison.
+
 ## Verification
 
 - `node --import tsx --test jarvis-os/src/services/mlCalibration.test.ts`

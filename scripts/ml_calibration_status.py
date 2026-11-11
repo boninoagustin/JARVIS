@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import time
 import traceback
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / 'data/ml_calibration'
@@ -95,6 +96,142 @@ def collect(ticker, asset):
     return data, old, path, old_bytes
 
 
+def latest_candidate(ticker):
+    paths = sorted((CACHE / 'candidates').glob(f'{ticker}-*.json'))
+    return paths[-1] if paths else None
+
+
+def strategy_config(config):
+    value = json.loads(json.dumps(config))
+    for field in ('mlGate', 'mlGateEnabled', 'mlGateDeployment'):
+        value.pop(field, None)
+    return value
+
+
+def candidate_binding(ticker, config):
+    path = latest_candidate(ticker)
+    if path is None:
+        return None, None
+    raw = path.read_bytes()
+    binding = {'path': str(path.relative_to(ROOT)), 'sha256': hashlib.sha256(raw).hexdigest()}
+    model = json.loads(raw)
+    meta = model.get('meta', {})
+    if meta.get('ticker') != ticker:
+        return binding, 'Candidate ticker mismatch'
+    if strategy_config(meta.get('config', {})) != strategy_config(config):
+        return binding, 'Current production config differs from candidate frozen config'
+    files = meta.get('dataset_source', {}).get('worker_provenance', {}).get('dataset_files', [])
+    if not files:
+        return binding, 'Missing frozen dataset provenance'
+    for item in files:
+        p = Path(item['path'])
+        if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != item.get('sha256'):
+            return binding, 'Frozen candidate dataset changed'
+    actual = sorted(str(p) for p in (ROOT/'logs'/ticker.lower()/'history_exported').glob('*.csv'))
+    if actual != sorted(item['path'] for item in files):
+        return binding, 'Frozen candidate dataset file set changed'
+    # UI-only changes must not stale inference; actual replay/feature changes must.
+    sources = meta.get('dataset_source', {}).get('worker_provenance', {}).get('source_files', [])
+    for item in sources:
+        p = Path(item['path'])
+        critical = '/src/engine/' in str(p) or p.name in ('backtestEngine.ts', 'backtestTypes.ts', 'replayWindow.ts') or str(p).endswith(('/scripts/periodic_opt/selection_context.ts', '/scripts/hyperopt/evaluation_protocol.ts'))
+        if critical and (not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != item.get('sha256')):
+            return binding, 'Frozen candidate replay source changed'
+    return binding, None
+
+
+def preserve_comparison(row, previous, ticker, config):
+    try:
+        binding, issue = candidate_binding(ticker, config)
+        if binding is None:
+            return
+        prior_binding = previous.get('candidate')
+        if prior_binding and prior_binding.get('path') == binding['path'] and prior_binding.get('sha256') != binding['sha256']:
+            issue = 'Immutable candidate raw bytes changed since saved binding'
+            binding = prior_binding
+        row['candidate'] = binding
+        row['currentCandidateSha256'] = binding['sha256']
+        comparison = previous.get('comparison')
+        if comparison:
+            if comparison.get('candidateSha256') != binding['sha256'] or comparison.get('candidate') != binding['path']:
+                issue = 'Comparison belongs to a different candidate'
+            row['comparison'] = dict(comparison)
+            if issue:
+                row['comparison'].update(status='unavailable', recommendation='INSUFFICIENT_EVIDENCE', reason=issue)
+        elif issue:
+            row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
+                'candidate': binding['path'], 'candidateSha256': binding['sha256'],
+                'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': issue}
+    except Exception as exc:
+        row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
+            'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
+
+
+def run_comparison(ticker, path, config):
+    try:
+        return _run_comparison(ticker, path, config)
+    except Exception as exc:
+        return {'schemaVersion': 1, 'status': 'error', 'ticker': ticker,
+            'candidate': str(path.relative_to(ROOT)),
+            'candidateSha256': hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+            'threshold': .65, 'evaluatedAt': now(), 'scope': 'retrospective_validation',
+            'applyEligible': False, 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
+
+
+def _run_comparison(ticker, path, config):
+    raw = path.read_bytes()
+    expected_sha = hashlib.sha256(raw).hexdigest()
+    env = os.environ.copy()
+    env['PATH'] = '/root/.nvm/versions/node/v24.19.0/bin:' + env.get('PATH', '')
+    with tempfile.TemporaryDirectory(prefix='jarvis-ml-compare-') as directory:
+        current = Path(directory) / 'config.json'
+        current.write_text(json.dumps(config))
+        try:
+            result = subprocess.run(['node', '--import', 'tsx', str(ROOT/'scripts/ml_candidate_compare.ts'),
+                '--candidate', str(path), '--sha256', expected_sha, '--current-config', str(current)],
+                cwd=ROOT, env=env, capture_output=True, text=True, timeout=660, check=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {'schemaVersion': 1, 'status': 'error', 'ticker': ticker,
+                'candidate': str(path.relative_to(ROOT)), 'candidateSha256': expected_sha,
+                'threshold': .65, 'evaluatedAt': now(), 'scope': 'retrospective_validation',
+                'applyEligible': False, 'recommendation': 'INSUFFICIENT_EVIDENCE', 'reason': str(exc)[:500]}
+    marker = next((line for line in reversed(result.stdout.splitlines()) if line.startswith('ML_CANDIDATE_RESULT=')), None)
+    if marker is None:
+        raise ValueError('Candidate comparison result missing')
+    comparison = json.loads(marker.split('=', 1)[1])
+    if comparison.get('candidateSha256') != expected_sha or hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha:
+        raise ValueError('Candidate changed during comparison')
+    return comparison
+
+
+def compare_existing(ticker):
+    if not ticker or not ticker.isalnum():
+        raise ValueError('Invalid ticker')
+    roster = snapshot()['assets']
+    if ticker not in roster or not roster[ticker]['trade']:
+        raise ValueError('Ticker is not a TRADE asset')
+    path = latest_candidate(ticker)
+    if path is None:
+        raise ValueError('No calibration candidate exists')
+    state = read_status()
+    row = state['assets'].setdefault(ticker, {})
+    prior_binding = row.get('candidate')
+    preserve_comparison(row, row.copy(), ticker, roster[ticker]['config'])
+    if prior_binding and prior_binding.get('path') == str(path.relative_to(ROOT)) and prior_binding.get('sha256') != hashlib.sha256(path.read_bytes()).hexdigest():
+        row['comparison'] = {'schemaVersion': 1, 'status': 'unavailable', 'ticker': ticker,
+            'candidate': row['candidate']['path'], 'candidateSha256': row['candidate']['sha256'],
+            'scope': 'retrospective_validation', 'recommendation': 'INSUFFICIENT_EVIDENCE',
+            'reason': 'Immutable candidate raw bytes changed since saved binding'}
+        save(state)
+        return row['comparison']
+    row['comparison'] = run_comparison(ticker, path, roster[ticker]['config'])
+    # Re-snapshot production after the replay: a concurrent config edit invalidates it.
+    latest = snapshot()['assets'].get(ticker)
+    preserve_comparison(row, row.copy(), ticker, latest['config'] if latest else {})
+    save(state)
+    return row['comparison']
+
+
 def refresh():
     roster = snapshot()['assets']
     previous = read_status().get('assets', {})
@@ -106,6 +243,7 @@ def refresh():
     for ticker, asset in roster.items():
         if not asset['trade']:
             state['assets'][ticker].update(reason='Fuera de TRADE (enabled/disabledReason)', updatedAt=now())
+            preserve_comparison(state['assets'][ticker], previous.get(ticker, {}), ticker, asset.get('config') or {})
             continue
         try:
             data, old, _, _ = collect(ticker, asset)
@@ -115,10 +253,12 @@ def refresh():
                 result['job'] = previous[ticker]['job']
                 if result['job'].get('state') in ('RUNNING', 'QUEUED'):
                     result['job'] = {'state': 'INTERRUPTED', 'reason': 'Worker anterior interrumpido; estado recuperado', 'finishedAt': now()}
+            preserve_comparison(result, previous.get(ticker, {}), ticker, asset['config'])
             state['assets'][ticker] = result
         except Exception as exc:
             state['assets'][ticker] = {'state': 'ERROR', 'trade': True, 'ready': False,
                 'reason': str(exc)[:500], 'updatedAt': now()}
+            preserve_comparison(state['assets'][ticker], previous.get(ticker, {}), ticker, asset['config'])
         save(state)
     state.update(state='IDLE', updatedAt=now())
     save(state)
@@ -153,7 +293,12 @@ def recalibrate(ticker, bootstrap=False):
         state['assets'][ticker]['job'] = {'state': 'CANDIDATE_SAVED', 'finishedAt': now(),
             'candidate': str(output.relative_to(ROOT)), 'promoted': False,
             'recommendation': 'NEEDS_RETURN_VALIDATION',
-            'reason': 'Candidato aislado; falta validación PnL fuera de muestra. No se activó el gate.'}
+            'reason': 'Candidato aislado; comparación retrospectiva sin activación.'}
+        preserve_comparison(state['assets'][ticker], {}, ticker, roster[ticker]['config'])
+        save(state)
+        state['assets'][ticker]['comparison'] = run_comparison(ticker, output, roster[ticker]['config'])
+        latest = snapshot()['assets'].get(ticker)
+        preserve_comparison(state['assets'][ticker], state['assets'][ticker].copy(), ticker, latest['config'] if latest else {})
     except trainer.InsufficientSamples as exc:
         state['assets'][ticker]['job'] = {'state': 'HOLD', 'reason': str(exc), 'finishedAt': now(), 'promoted': False}
     except Exception as exc:
@@ -163,7 +308,7 @@ def recalibrate(ticker, bootstrap=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['refresh', 'recalibrate'])
+    parser.add_argument('action', choices=['refresh', 'recalibrate', 'compare'])
     parser.add_argument('--ticker')
     parser.add_argument('--bootstrap', action='store_true', help='explicit user confirmation of unknown provenance only')
     args = parser.parse_args()
@@ -176,6 +321,8 @@ def main():
         try:
             if args.action == 'refresh':
                 refresh()
+            elif args.action == 'compare':
+                print(json.dumps(compare_existing(args.ticker), allow_nan=False))
             else:
                 recalibrate(args.ticker, args.bootstrap)
             return 0

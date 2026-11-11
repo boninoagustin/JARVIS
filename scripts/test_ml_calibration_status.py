@@ -72,5 +72,79 @@ class ReadinessTests(unittest.TestCase):
         check(Request({'origin':'http://localhost:5173','x-jarvis-ml':'recalibrate'}), True)
 
 
+class CandidateComparisonTests(unittest.TestCase):
+    def test_preserve_comparison_binds_path_hash_and_rejects_changed_config_dataset(self):
+        binding = {'path': 'data/ml_calibration/candidates/JP225-1.json', 'sha256': 'a'*64}
+        comparison = {'status': 'valid', 'candidate': binding['path'], 'candidateSha256': binding['sha256'], 'deltaR': -2.3}
+        prior = {'candidate': binding, 'comparison': comparison}
+        row = {}
+        with patch.object(status, 'candidate_binding', return_value=(binding, None)):
+            status.preserve_comparison(row, prior, 'JP225', {})
+        self.assertEqual(row['comparison']['status'], 'valid')
+        self.assertEqual(row['currentCandidateSha256'], 'a'*64)
+        for issue in ('Current production config differs', 'Frozen candidate dataset changed'):
+            with patch.object(status, 'candidate_binding', return_value=(binding, issue)):
+                status.preserve_comparison(row, prior, 'JP225', {})
+            self.assertEqual(row['comparison']['status'], 'unavailable')
+            self.assertEqual(row['comparison']['reason'], issue)
+        changed = dict(binding, sha256='b'*64)
+        with patch.object(status, 'candidate_binding', return_value=(changed, None)):
+            status.preserve_comparison(row, prior, 'JP225', {})
+        self.assertEqual(row['comparison']['status'], 'unavailable')
+        self.assertIn('Immutable', row['comparison']['reason'])
+        self.assertEqual(row['candidate']['sha256'], 'a'*64)
+
+    def test_refresh_retains_bound_comparison(self):
+        binding = {'path': 'data/ml_calibration/candidates/JP225-1.json', 'sha256': 'a'*64}
+        comparison = {'status': 'valid', 'candidate': binding['path'], 'candidateSha256': binding['sha256']}
+        prior = {'assets': {'JP225': {'candidate': binding, 'comparison': comparison}}}
+        saved = []
+        with patch.object(status, 'snapshot', return_value={'assets': {'JP225': {'trade': True, 'config': {}}}}), patch.object(status, 'read_status', return_value=prior), patch.object(status, 'collect', return_value=({}, None, None, None)), patch.object(status, 'readiness', return_value={'ready': False}), patch.object(status, 'candidate_binding', return_value=(binding, None)), patch.object(status, 'save', side_effect=lambda value:saved.append(value)):
+            status.refresh()
+        self.assertEqual(saved[-1]['assets']['JP225']['comparison']['status'], 'valid')
+
+    def test_comparison_errors_are_explicit_not_success_or_permanent_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'JP225-1.json'
+            path.write_text('{}')
+            with patch.object(status, 'ROOT', Path(tmp)), patch.object(status, '_run_comparison', side_effect=RuntimeError('replay unavailable')):
+                result = status.run_comparison('JP225', path, {})
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['reason'], 'replay unavailable')
+        self.assertEqual(result['recommendation'], 'INSUFFICIENT_EVIDENCE')
+
+    def test_recalibrate_compares_only_after_candidate_is_saved(self):
+        import json
+        saved = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = {'assets': {'JP225': {}}}
+            def train(data, output, *args, **kwargs):
+                output.write_text('{}')
+                return {}
+            def replay(ticker, path, config):
+                self.assertTrue(path.is_file())
+                self.assertEqual(saved[-1]['assets'][ticker]['job']['state'], 'CANDIDATE_SAVED')
+                return {'status': 'valid', 'deltaR': -1}
+            with patch.object(status, 'ROOT', root), patch.object(status, 'CACHE', root/'data/ml_calibration'), patch.object(status, 'snapshot', return_value={'assets': {'JP225': {'trade': True, 'config': {}}}}), patch.object(status, 'read_status', return_value=state), patch.object(status, 'collect', return_value=({}, None, root/'absent.json', None)), patch.object(status, 'readiness', return_value={'ready': True}), patch.object(status, 'preserve_comparison'), patch.object(status, 'run_comparison', side_effect=replay) as compare, patch.object(status, 'save', side_effect=lambda value:saved.append(json.loads(json.dumps(value)))), patch('train_ml_model.train_candidate', side_effect=train):
+                status.recalibrate('JP225')
+            compare.assert_called_once()
+            self.assertEqual(saved[-1]['assets']['JP225']['comparison']['deltaR'], -1)
+            self.assertFalse(saved[-1]['assets']['JP225']['job']['promoted'])
+
+    def test_existing_candidate_compare_never_retrains(self):
+        import json, hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/'JP225-1.json'; path.write_text('{}')
+            binding = {'path': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+            state = {'assets': {'JP225': {'candidate': binding}}}
+            result = {'status': 'valid', 'candidate': path.name, 'candidateSha256': binding['sha256'], 'deltaR': -1}
+            with patch.object(status, 'ROOT', root), patch.object(status, 'snapshot', return_value={'assets': {'JP225': {'trade': True, 'config': {}}}}), patch.object(status, 'latest_candidate', return_value=path), patch.object(status, 'read_status', return_value=state), patch.object(status, 'candidate_binding', return_value=(binding, None)), patch.object(status, 'run_comparison', return_value=result) as replay, patch.object(status, 'save'), patch('train_ml_model.train_candidate') as train:
+                actual = status.compare_existing('JP225')
+            self.assertEqual(actual['deltaR'], -1)
+            replay.assert_called_once(); train.assert_not_called()
+
+
 if __name__=='__main__':
     unittest.main()
