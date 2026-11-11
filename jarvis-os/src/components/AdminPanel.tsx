@@ -398,19 +398,6 @@ export default function AdminPanel() {
           </div>
         </div>
 
-        {/* 🤖 TIMESFM (solo lectura — se gestiona con el tooling del shadow) */}
-        <div style={{ ...cardClass, marginTop: '20px', borderColor: '#7c4dff30' }}>
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#7c4dff', marginBottom: '8px', fontSize: '0.9rem' }}>
-            🤖 TimesFM (solo lectura)
-          </h3>
-          <pre style={{ fontSize: '0.75rem', color: '#aaa', background: '#000', padding: '12px', borderRadius: '6px', overflowX: 'auto', margin: 0 }}>
-            {assetConfig.timesfm ? JSON.stringify(assetConfig.timesfm, null, 2) : '(sin config TimesFM)'}
-          </pre>
-          <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '6px' }}>
-            Este bloque se gestiona desde el tooling del shadow (enable_shadow.js / run_ab.py) — no se edita acá.
-          </div>
-        </div>
-
         {/* SESIONES */}
         <h3 style={{ fontSize: '0.9rem', color: '#e6e6e6', marginTop: '10px', borderBottom: '1px solid #222', paddingBottom: '8px' }}>
           Configuración por Sesión

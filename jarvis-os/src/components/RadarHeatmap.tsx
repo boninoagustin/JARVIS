@@ -312,15 +312,6 @@ export default function RadarHeatmap() {
                             ↔ {bs.spreadPips} {bs.spreadUnit || 'pips'}
                           </span>);
                       }
-                      if (bs.tfm) {
-                        const tfm = bs.tfm;
-                        const icon = tfm.degraded ? '⚠️' : tfm.action === 'REJECT' ? '✗' : tfm.action === 'APPROVE' ? '✓' : '↓';
-                        badges.push(
-                          <span key="tfm" title={`TimesFM ${tfm.dryRun ? '(shadow) ' : ''}${tfm.action} · riesgo ×${tfm.riskMult}${tfm.degraded ? ' · degradado' : ''}`}
-                            style={{ ...estadoBadge, background: 'rgba(124,77,255,0.12)', color: '#b39dff', borderColor: 'rgba(124,77,255,0.35)' }}>
-                            🧊 {icon}
-                          </span>);
-                      }
                       return <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>{badges}</div>;
                     })()}
                   </td>

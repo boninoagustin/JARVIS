@@ -199,9 +199,6 @@ export default function PeriodicOptPanel() {
     // 🆕 16-sep-2026: FILTRO CORRELACIÓN por activo (corr_gate_evals = contrafactual; corrOn = correlationFilter.shadow===false)
     const [corrEvals, setCorrEvals] = useState<Record<string, any>>({});
     const [corrOn, setCorrOn] = useState<Record<string, boolean>>({});
-    // 🆕 16-sep-2026: FILTRO TIMESFM por activo (timesfm_gate_evals = contrafactual; tfmOn = timesfm.enabled)
-    const [tfmEvals, setTfmEvals] = useState<Record<string, any>>({});
-    const [tfmOn, setTfmOn] = useState<Record<string, boolean>>({});
     // 🆕 16-sep-2026: señales bloqueadas (blocked_signals_evals = contrafactual simulado)
     const [blkEvals, setBlkEvals] = useState<any>(null);
     // 🆕 16-sep-2026: salidas (exits_gate_evals) y rollover A/D (rollover_evals)
@@ -223,12 +220,12 @@ export default function PeriodicOptPanel() {
         setLoading(true);
         try {
             const names = ['opt_reports', 'auto_state', 'asset_configs', 'active_tickers', 'health_check',
-                'ml_gate_evals', 'corr_gate_evals', 'timesfm_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals'];
+                'ml_gate_evals', 'corr_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals'];
             const results = await Promise.allSettled([
                 getDocs(collection(db, 'opt_reports')), getDoc(doc(db, 'optimization_config', 'auto_state')),
                 getDocs(collection(db, 'asset_configs')), getDoc(doc(db, 'optimization_config', 'active_tickers')),
                 getDoc(doc(db, 'health_check', 'latest')), getDocs(collection(db, 'ml_gate_evals')),
-                getDocs(collection(db, 'corr_gate_evals')), getDocs(collection(db, 'timesfm_gate_evals')),
+                getDocs(collection(db, 'corr_gate_evals')),
                 getDoc(doc(db, 'blocked_signals_evals', '_GLOBAL')), getDocs(collection(db, 'exits_gate_evals')),
                 getDocs(collection(db, 'rollover_evals')),
             ]);
@@ -247,12 +244,11 @@ export default function PeriodicOptPanel() {
             setAssetEnabled(Object.fromEntries(configs.map(([id, c]) => [id, c.enabled !== false])));
             setMlGateOn(Object.fromEntries(configs.map(([id, c]) => [id, c.mlGateEnabled === true])));
             setCorrOn(Object.fromEntries(configs.map(([id, c]) => [id, c.correlationFilter?.shadow === false])));
-            setTfmOn(Object.fromEntries(configs.map(([id, c]) => [id, c.timesfm?.enabled === true])));
             setRollOn(Object.fromEntries(configs.map(([id, c]) => [id, { A: c.rolloverBeEnabled !== false, D: c.rolloverEntryBlock !== false }])));
             const tickers = document(3)?.tickers;
             setActiveList(Array.isArray(tickers) ? tickers.filter((t: unknown) => typeof t === 'string') : []);
-            setHealth(document(4)); setMlEvals(entries(5)); setCorrEvals(entries(6)); setTfmEvals(entries(7));
-            setBlkEvals(document(8)); setExitsEvals(entries(9)); setRollEvals(entries(10));
+            setHealth(document(4)); setMlEvals(entries(5)); setCorrEvals(entries(6));
+            setBlkEvals(document(7)); setExitsEvals(entries(8)); setRollEvals(entries(9));
             const failures = results.flatMap((r, i) => r.status === 'rejected' ? [names[i]] : []);
             setStateError(failures.length ? `Lecturas no disponibles (datos anteriores descartados): ${failures.join(', ')}` : null);
         } catch (err) {
@@ -270,9 +266,6 @@ export default function PeriodicOptPanel() {
     const corrTickers = [...new Set([...activeList, ...Object.keys(assetEnabled), ...Object.keys(corrEvals).filter(k => k !== '_GLOBAL')])].sort();
     const fmtUsd = (v?: number) => (v === undefined || v === null) ? '—' : `${v >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`;
     const fmtRc = (v?: number) => (v === undefined || v === null) ? '' : ` / ${v >= 0 ? '+' : ''}${Number(v).toFixed(1)}R`;
-
-    // 🆕 16-sep-2026: lista para la tabla TIMESFM
-    const tfmTickers = [...new Set([...activeList, ...Object.keys(assetEnabled), ...Object.keys(tfmEvals).filter(k => k !== '_GLOBAL')])].sort();
 
     // 🆕 16-sep-2026: lista para las tablas SALIDAS y ROLLOVER
     const exitsTickers = [...new Set([...activeList, ...Object.keys(exitsEvals).filter(k => k !== '_GLOBAL')])].sort();
@@ -363,22 +356,6 @@ export default function PeriodicOptPanel() {
             setCorrOn(p => ({ ...p, [ticker]: on }));
             toast(`Correlación ${on ? 'ON' : 'observa'} en ${ticker}`, on ? 'success' : 'info');
         } catch (e) { console.error(e); toast(`Error correlación ${ticker}`, 'error'); }
-    };
-
-    const toggleTimesfm = async (ticker: string, on: boolean) => {
-        const ev = tfmEvals[ticker];
-        const delta = Number(ev?.mult?.usd) || 0;
-        const advice = on ? activationRecommendation(ev?.evaluatedAt, ev?.n, delta) : filterEvidence(ev?.evaluatedAt, ev?.n);
-        if (!confirmAction(`TimesFM ${on ? 'ON' : 'OFF'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
-            `timesfm.enabled=${on} (read-modify-write para no pisar el resto del bloque timesfm).`)) return;
-        try {
-            const ref = doc(db, 'asset_configs', ticker);
-            const snap = await getDoc(ref);
-            const cur = snap.exists() ? ((snap.data() as any).timesfm ?? {}) : {};
-            await setDoc(ref, { timesfm: { ...cur, enabled: on } }, { merge: true });
-            setTfmOn(p => ({ ...p, [ticker]: on }));
-            toast(`TimesFM ${on ? 'ON' : 'OFF'} en ${ticker}`, on ? 'success' : 'info');
-        } catch (e) { console.error(e); toast(`Error TimesFM ${ticker}`, 'error'); }
     };
 
     const toggleRollover = async (ticker: string, rule: 'A' | 'D', on: boolean) => {
@@ -602,11 +579,6 @@ export default function PeriodicOptPanel() {
                                 🛡️ <b>KS propuesta:</b> maxDLR {r.ks_proposal.maxDailyLossR}R · maxCL {r.ks_proposal.maxConsecutiveLosses}
                             </span>
                         )}
-                        {r.shadow_week && (
-                            <span title="Shadow TimesFM — decisiones de los últimos 7 días">
-                                🌙 <b>Shadow 7d:</b> {r.shadow_week.n} decisiones ({r.shadow_week.approve}✓/{r.shadow_week.downgrade}↓/{r.shadow_week.reject}✗)
-                            </span>
-                        )}
                         {r.oos_split && (
                             <span title="Partición informada por el reporte; independencia no acreditada">
                                 📊 <b>Partición del reporte:</b> {r.oos_split.train} train / {r.oos_split.test} test
@@ -622,11 +594,6 @@ export default function PeriodicOptPanel() {
                             <span title={r.montecarlo.verdict || 'Monte Carlo'}>
                                 🎲 <b>Monte Carlo:</b> {r.montecarlo.verdict_short}
                                 {r.montecarlo.survival !== undefined && ` (${(r.montecarlo.survival * 100).toFixed(0)}% survival, n=${r.montecarlo.n ?? '—'})`}
-                            </span>
-                        )}
-                        {r.timesfm_apply?.minScoreToOverrideReject !== undefined && r.timesfm_apply?.minScoreToOverrideReject !== null && (
-                            <span title="Umbral propuesto para el candidato semanal; consultar el estado de aplicación automática">
-                                🌙 <b>TimesFM umbral propuesto:</b> {r.timesfm_apply.minScoreToOverrideReject}
                             </span>
                         )}
                         {r.bias_confluence?.recommended?.bc && (
@@ -895,67 +862,6 @@ export default function PeriodicOptPanel() {
                 </p>
                 <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '6px', marginBottom: 0 }}>
                     Contrafactual diagnóstico: activar el filtro es una decisión tuya; el bot la toma en caliente. Un Δ favorable no es garantía de rendimiento futuro.
-                </p>
-            </div>
-            {/* 🆕 16-sep-2026: TIMESFM POR ACTIVO — contrafactual + botón (asset_configs.timesfm.enabled) */}
-            <div className="premium-card" style={{ marginTop: '18px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                    <h3 style={{ margin: 0 }}>🧊 TIMESFM POR ACTIVO</h3>
-                    <span style={{ fontSize: '0.72rem', color: '#777' }}>eval → timesfm_gate_evals · diagnóstico / estado almacenado</span>
-                </div>
-                <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse', marginTop: '10px' }}>
-                    <thead>
-                        <tr style={{ textAlign: 'left', color: '#777', fontSize: '0.72rem' }}>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>ACTIVO</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>FILTRO</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>EVALUADAS</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>Δ POR RISK MULT</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}>RECHAZOS</th>
-                            <th style={{ padding: '6px 4px', borderBottom: '1px solid #222' }}></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {tfmTickers.map(t => {
-                            const ev = tfmEvals[t];
-                            const on = tfmOn[t] === true;
-                            const mult = ev?.mult;
-                            return (
-                                <tr key={t} style={{ borderBottom: '1px solid #1a1a1a' }}>
-                                    <td style={{ padding: '8px 4px', fontWeight: 700 }}>{t}</td>
-                                    <td style={{ padding: '8px 4px' }}>
-                                        {on
-                                            ? <span style={{ color: '#00e676', fontWeight: 700 }}>● ACTIVO</span>
-                                            : <span style={{ color: '#888' }}>○ apagado</span>}
-                                    </td>
-                                    <td style={{ padding: '8px 4px', color: '#aaa' }}>
-                                        {ev ? ev.n : '—'}
-                                        {ev?.degraded > 0 ? <span style={{ color: '#ffaa00', fontSize: '0.7rem' }}> ({ev.degraded} degrad.)</span> : null}
-                                    </td>
-                                    <td style={{ padding: '8px 4px', fontFamily: 'monospace', color: (mult?.usd ?? 0) > 0 ? '#00e676' : (mult?.n ?? 0) > 0 ? '#ff5555' : '#888', fontSize: '0.8rem' }}>
-                                        {ev ? (mult?.n > 0 ? `${fmtUsd(mult.usd)}${fmtRc(mult.R)} (${mult.n})` : '—') : '—'}
-                                    </td>
-                                    <td style={{ padding: '8px 4px', color: (ev?.reject ?? 0) > 0 ? '#ffaa00' : '#888', fontFamily: 'monospace' }}>
-                                        {ev && ev.reject > 0 ? `${ev.reject} bloqueadas` : ev ? '0' : '—'}
-                                    </td>
-                                    <td style={{ padding: '8px 4px', textAlign: 'right' }}>
-                                        {on
-                                            ? <button className="btn" disabled={!filterEvidence(ev?.evaluatedAt, ev?.n).actionable} onClick={() => toggleTimesfm(t, false)} title={filterEvidence(ev?.evaluatedAt, ev?.n).reason ?? ''}>Apagar TimesFM</button>
-                                            : activationRecommendation(ev?.evaluatedAt, ev?.n, Number(ev?.mult?.usd) || 0).recommend
-                                                ? <button className="btn" onClick={() => toggleTimesfm(t, true)}>Activar TimesFM</button>
-                                                : <span style={{ color: '#888', fontSize: '0.72rem' }} title={activationRecommendation(ev?.evaluatedAt, ev?.n, Number(ev?.mult?.usd) || 0).reason ?? ''}>No activar</span>}
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-                <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '10px', marginBottom: 0 }}>
-                    {tfmEvals['_GLOBAL']
-                        ? `Desde el 14/9: ${tfmEvals['_GLOBAL'].n} evaluadas · Δ por riskMult ${fmtUsd(tfmEvals['_GLOBAL'].mult?.usd)} · ${tfmEvals['_GLOBAL'].reject} rechazadas (su contrafactual solo lo mide el backtest por ablación) · ${tfmEvals['_GLOBAL'].degraded} degradadas.`
-                        : 'Aún sin evaluación — se publica con el pipeline dominical.'}
-                </p>
-                <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '6px', marginBottom: 0 }}>
-                    El Δ mide el ajuste de TAMAÑO (riskMult) sobre trades ejecutados: verde = achicar apuestas ahorró; rojo = costó ganancias. Los rechazos (REJECT) nunca ejecutaron — se cuentan, su costo/beneficio se mide con ablación en backtest.
                 </p>
             </div>
             {/* 🆕 16-sep-2026: SEÑALES BLOQUEADAS (contrafactual simulado con velas M5 reales) */}
