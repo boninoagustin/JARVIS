@@ -144,7 +144,7 @@ export function computeFinalScore(input: {
 
 export function routeSmartEntry(input: SmartRouteInput): SmartRouteResult {
   const { direction, currentSession, totalPoints, minPtsRequired, riskDist, currentPrice,
-    signalTfMinutes, decimals, nowMs, zones, biasTs, atr14, climaxRange, alertLine, config } = input;
+    signalTfMinutes, nowMs, zones, biasTs, atr14, climaxRange, alertLine, config } = input;
 
   // Paredes de papel: obstáculo si es fuerte O de igual/mayor temporalidad (misma que vivo).
   const oppositeZones = zones.filter(z => {

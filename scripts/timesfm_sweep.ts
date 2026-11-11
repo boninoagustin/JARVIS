@@ -81,9 +81,13 @@ export function evaluateTimesfmAB(input: {
   const frozenHash = sha(stableCanonical(common));
 
   const trial = (timesfmOn: boolean): TmMetrics | undefined => {
+    // FIX: preservar la config de producción (counterMult/lowConvictionMult/minScoreToOverrideReject);
+    // solo togglear enabled + inyectar cachePath. Antes se reemplazaba por {enabled,cachePath}
+    // y caía a los DEFAULTS agresivos (counterMult 0.25 / lowConvictionMult 0.6), midiendo OTRA cosa.
+    const baseTf = json(common.timesfm ?? {});
     const cfg = readOnlyReplayConfig({
       ...json(common),
-      timesfm: timesfmOn ? { enabled: true, cachePath } : { enabled: false },
+      timesfm: timesfmOn ? { ...baseTf, enabled: true, cachePath } : { ...baseTf, enabled: false },
     });
     const window = planReplayWindow(entries, from, to);
     const result = replay(logs, cfg, undefined, entries, window);

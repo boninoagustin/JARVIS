@@ -43,7 +43,6 @@ import {buildRolloverFreezeContext} from '../../../src/engine/RolloverRuntimeCon
 import {shouldFreezeRolloverObservation,evaluateRolloverTriage} from '../../../src/engine/RolloverTriagePolicy';
 import { predictRegime,REGIME_FEATURE_SCHEMA } from '../../../src/engine/MLRegimeFeatures';
 import { parseExecutionEnvelope, ingestExecutionContext, getExecutionSnapshot } from '../../../src/engine/ExecutionContext';
-import { canonicalZoneMedal } from '../../../src/engine/smc/zone_protocol';
 import { routeSmartEntry, resolveDirectTrigger, computeFinalScore } from '../../../src/engine/SmartRouting';
 import { resolveExecutionPolicy, createExecutionPositionState, advanceExecutionPositionState, computeExecutionTargets, evaluateSmartEntryRouting, evaluateDynamicBreakeven, computeMultiAssetTrailingSl } from '../../../src/engine/ExecutionMicrostructure';
 import { validateExecutionInstrument, estimatePendingExecutionCosts, validateExecutionStop } from '../../../src/engine/ExecutionCosts';

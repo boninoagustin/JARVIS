@@ -36,6 +36,8 @@ export interface BacktestTrade {
    *  AlphaModel.evaluateImpulseCore. La clasificación triggerType usa este campo cuando existe
    *  (los eventos del Pine mezclan TFs y ensuciaban la etiqueta). */
   execTrigger?: string;
+  /** 🆕 paridad con vivo: entrada directa CHoCH/BOS (true) vs OTE (false). */
+  isChochEntry?: boolean;
 }
 
 export interface BaseTriggerConfig {
