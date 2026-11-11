@@ -1,0 +1,14 @@
+{"ticker": "AUDCAD", "status": "insufficient", "reasons": ["cobertura insuficiente: 19/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "AUDJPY", "status": "insufficient", "reasons": ["cobertura insuficiente: 15/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "BTCUSD", "status": "valid", "baseline_n": 52, "candidate_n": 52, "baseline_pnlR": 29.993445032467086, "candidate_pnlR": 29.13671951055982, "delta": -0.8567255219072649}
+{"ticker": "EUROPE50", "status": "insufficient", "reasons": ["forecasts as-of tras warmup insuficientes: 19/30"]}
+{"ticker": "EURUSD", "status": "insufficient", "reasons": ["cobertura insuficiente: 15/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "GBPJPY", "status": "insufficient", "reasons": ["cobertura insuficiente: 25/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "GBPUSD", "status": "insufficient", "reasons": ["cobertura insuficiente: 23/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "GER40", "status": "insufficient", "reasons": ["forecasts as-of tras warmup insuficientes: 25/30"]}
+{"ticker": "NZDUSD", "status": "insufficient", "reasons": ["cobertura insuficiente: 7/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "US500", "status": "insufficient", "reasons": ["cobertura insuficiente: 9/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "USDCAD", "status": "insufficient", "reasons": ["cobertura insuficiente: 1/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "USDJPY", "status": "insufficient", "reasons": ["muestra insuficiente: m\u00ednimo 30 trades en baseline (25) Y candidato (25)"]}
+{"ticker": "USOIL", "status": "insufficient", "reasons": ["cobertura insuficiente: 15/30 forecasts as-of v\u00e1lidos"]}
+{"ticker": "XAUUSD", "status": "valid", "baseline_n": 45, "candidate_n": 45, "baseline_pnlR": 36.397437037120916, "candidate_pnlR": 36.34569718625103, "delta": -0.051739850869886084}
