@@ -1,0 +1,23 @@
+[Unit]
+Description=JARVIS read-only active ML gate weekly monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JARVIS
+Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/JARVIS/scripts/hyperopt/.venv/bin/python /opt/JARVIS/scripts/ml_gate_monitor.py refresh
+TimeoutStartSec=6h
+SuccessExitStatus=3
+Nice=10
+CPUQuota=150%
+MemoryMax=4G
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/JARVIS/data/ml_gate_monitor /opt/JARVIS/data/ml_calibration
+
+[Install]
+WantedBy=multi-user.target

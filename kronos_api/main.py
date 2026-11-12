@@ -384,3 +384,72 @@ async def ml_gate_recalibrate(request: Request, ticker: str, bootstrap: bool = F
         _ml_start('recalibrate', ticker, bootstrap)
         _ML_FIT_AT[ticker] = time.monotonic()
         return {'status': 'started', 'ticker': ticker, 'promoted': False}
+
+
+# Read-only operational gate monitor; separate cache, same CPU serialization lock.
+import fcntl
+_ML_MONITOR_PROCESS = None
+_ML_MONITOR_CACHE = Path(JARVIS_DIR) / 'data/ml_gate_monitor/status.json'
+_ML_MONITOR_RATE = Path(JARVIS_DIR) / 'data/ml_gate_monitor/request_rate.json'
+
+
+def _ml_monitor_cached():
+    try:
+        body = json.loads(_ML_MONITOR_CACHE.read_text())
+        if not isinstance(body.get('assets'), dict):
+            raise ValueError('Invalid monitor cache')
+        return body
+    except (OSError, ValueError):
+        return {'schemaVersion': 1, 'scope': 'post_activation_replay', 'state': 'PENDING',
+                'assets': {}, 'activeGateCount': 0, 'automaticAction': False}
+
+
+def _ml_monitor_running():
+    return _ML_MONITOR_PROCESS is not None and _ML_MONITOR_PROCESS.poll() is None
+
+
+def _ml_monitor_lock_available():
+    path = Path(JARVIS_DIR) / 'data/ml_calibration/worker.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return True
+
+
+@app.get('/api/ml-gate/monitor/status')
+async def ml_gate_monitor_status(request: Request):
+    _ml_origin(request)
+    with _ML_LOCK:
+        body = _ml_monitor_cached()
+        body['refreshing'] = _ml_monitor_running()
+        return body
+
+
+@app.post('/api/ml-gate/monitor/refresh')
+async def ml_gate_monitor_refresh(request: Request):
+    global _ML_MONITOR_PROCESS
+    _ml_origin(request, mutation=True)
+    with _ML_LOCK:
+        if _ml_monitor_running() or _ml_running() or not _ml_monitor_lock_available():
+            raise HTTPException(status_code=409, detail='Serialized ML worker already running')
+        try:
+            last = json.loads(_ML_MONITOR_RATE.read_text()).get('requestedAtMs', 0)
+        except (OSError, ValueError):
+            last = 0
+        at = int(time.time()*1000)
+        if at-last < 3600000:
+            raise HTTPException(status_code=429, detail='One monitor refresh per hour')
+        _ML_MONITOR_RATE.parent.mkdir(parents=True, exist_ok=True)
+        args = [os.path.join(JARVIS_DIR, 'scripts/hyperopt/.venv/bin/python'),
+                os.path.join(JARVIS_DIR, 'scripts/ml_gate_monitor.py'), 'refresh']
+        with (_ML_MONITOR_RATE.parent/'worker.log').open('a') as log:
+            _ML_MONITOR_PROCESS = subprocess.Popen(args, cwd=JARVIS_DIR, env=_detection_env(),
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        tmp = _ML_MONITOR_RATE.with_suffix('.tmp')
+        tmp.write_text(json.dumps({'requestedAtMs': at}))
+        os.replace(tmp, _ML_MONITOR_RATE)
+        return {'status': 'started', 'automaticAction': False, 'detail': 'Read-only monitor; no model/config/order changes'}

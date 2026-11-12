@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField, serverTimestamp } from 'firebase/firestore';
 import { validateMLGateEvaluation } from '../services/mlGateDeployment';
+import { buildMLActivationRecord } from '../services/mlGateMonitoring';
+import MLGateMonitorPanel from './MLGateMonitorPanel';
 import { canRecalibrateML, currentMLComparison, type MLCalibrationStatus, type MLCandidateComparison } from '../services/mlCalibration';
 import { db } from '../firebase';
 import { useToast } from './Toast';
@@ -380,7 +382,12 @@ export default function PeriodicOptPanel() {
                 const cs = await getDoc(configRef);
                 if (!cs.exists()) throw new Error('Falta configuración.');
                 if (!confirm(`Apagar gate ML — ${ticker}\n\nVuelve al filtro heurístico (sin ML). Es reversible y no cambia el riesgo ni activa/desactiva el activo. ¿Confirmás?`)) return;
-                await setDoc(configRef, { mlGateEnabled: false, mlGateDeployment: deleteField() }, { merge: true });
+                await runTransaction(db, async tx => {
+                    const current = await tx.get(configRef);
+                    if (!current.exists()) throw new Error('Falta configuración.');
+                    tx.update(configRef, { mlGateEnabled: false, mlGateDeployment: deleteField() });
+                    tx.set(doc(db, 'ml_gate_monitor_refs', ticker), { schemaVersion: 1, ticker, enabled: false, updatedAt: serverTimestamp() }, { merge: true });
+                });
                 setMlGateOn(p => ({ ...p, [ticker]: false }));
                 toast(`Gate ML OFF solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
                 void refreshAll();
@@ -393,18 +400,25 @@ export default function PeriodicOptPanel() {
             const checked = validateMLGateEvaluation(evidence, { ticker, config: cs.data() });
             if (!checked.ok) throw new Error(checked.reason);
             if (!confirm(`Activar gate ML — ${ticker}\n\nSe instalará exactamente el modelo evaluado y su umbral ${checked.deployment?.threshold}. El bot verificará la identidad del modelo antes de usarlo. No cambia el riesgo ni activa el activo. ¿Confirmás?`)) return;
+            const activationRef = doc(collection(db, 'ml_gate_activations'));
             await runTransaction(db, async tx => {
                 const current = await tx.get(configRef);
                 const latest = await tx.get(evidenceRef);
+                const priorActivation = await tx.get(activationRef);
+                if (priorActivation.exists()) throw new Error('La identidad de activación ya existe; actualizá y reintentá.');
                 if (!current.exists() || !latest.exists() || JSON.stringify(latest.data()) !== JSON.stringify(evidence)
                     || current.data().mlGateEnabled !== cs.data().mlGateEnabled)
                     throw new Error('La evidencia o la configuración cambiaron mientras confirmabas. Actualizá y revisá de nuevo.');
                 const gate = validateMLGateEvaluation(latest.data(), { ticker, config: current.data() });
-                if (!gate.ok) throw new Error(gate.reason);
+                if (!gate.ok || !gate.deployment) throw new Error(gate.reason || 'Falta despliegue verificable');
+                const registration = buildMLActivationRecord(ticker, activationRef.id, current.data(), gate.deployment);
+                tx.set(activationRef, { ...registration, requestedAt: serverTimestamp() });
+                tx.set(doc(db, 'ml_gate_monitor_refs', ticker), { schemaVersion: 1, ticker, activationId: activationRef.id, enabled: true, updatedAt: serverTimestamp() });
                 tx.update(configRef, { mlGateEnabled: true, mlGateDeployment: gate.deployment });
             });
             setMlGateOn(p => ({ ...p, [ticker]: true }));
             toast(`Gate ML ON solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
+            void fetch(`${mlApi}/monitor/refresh`, { method: 'POST', headers: { 'X-Jarvis-ML': 'recalibrate' } }).catch(error => console.warn('Seguimiento pendiente de revisión periódica', error));
             void refreshAll();
         } catch (e: any) { console.error(e); toast(`No se cambió el gate ML: ${e.message}`, 'error'); }
     };
@@ -881,6 +895,7 @@ export default function PeriodicOptPanel() {
                         : 'Recalibrar exige tres períodos separados: ≥50 operaciones de entrenamiento, ≥20 de calibración y ≥30 de validación posterior, con WIN y LOSS en cada uno. Entrena una vez y elige entre 0,50 / 0,65 / 0,80 y sin gate usando solo calibración. La opción elegida se comprueba después, sin volver a elegir. Cada brazo con gate debe conservar muestra suficiente; si no, la evidencia es insuficiente. No activa el gate ni reemplaza modelos. ON/OFF indica lo solicitado, no confirma recepción del bot.'}
                 </p>
             </div>
+            <MLGateMonitorPanel configs={Object.fromEntries(Object.entries(configMetadata).map(([ticker, metadata]) => [ticker, metadata.currentSnapshot]))} candidates={mlReadiness} />
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>
             {/* 🆕 16-sep-2026: FILTRO CORRELACIÓN POR ACTIVO — contrafactual + botón (shadow:false bloquea en vivo) */}
             <div className="premium-card" style={{ marginTop: '18px' }}>
