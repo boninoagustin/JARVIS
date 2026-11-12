@@ -46,3 +46,5 @@ audit_results/
 
 # ML readiness cache and isolated recalibration artifacts (runtime only)
 data/ml_calibration/
+# Active-gate monitoring snapshots, archives and weekly history (runtime only)
+data/ml_gate_monitor/

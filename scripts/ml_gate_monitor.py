@@ -162,7 +162,7 @@ def classify(assessment, at):
     windows = assessment.get('windows') or {}
     pairs = [windows.get('cumulative'), windows.get('recent')]
     through = (assessment.get('provenance') or {}).get('dataThroughMs', assessment.get('dataThroughMs'))
-    if assessment.get('dataStale') is True or assessment.get('dataStale7d') is True or not integer(through) or at - through > WEEK_MS:
+    if assessment.get('dataStale') is True or assessment.get('dataStale7d') is True or not integer(through) or through > at or at - through > WEEK_MS:
         return 'INSUFFICIENT_DATA'
     for window in pairs:
         if not isinstance(window, dict) or not all(metrics_valid(window.get(k)) for k in ('baseline', 'active')):
@@ -180,15 +180,23 @@ def classify(assessment, at):
     return 'OBSERVE'
 
 
-def advise(assessment, previous, at):
+def advise(assessment, previous, at, epoch_id=None):
     signal = classify(assessment, at)
     state = dict(previous or {})
+    if ((epoch_id is not None and state.get('epochId') != epoch_id)
+            or state.get('lastCountedAt', 0) > at or state.get('assessedAt', 0) > at):
+        state = {}
     count = int(state.get('confirmationCount', 0))
     prior_signal = state.get('signal')
     last_counted = state.get('lastCountedAt', 0)
     cumulative = (assessment.get('windows') or {}).get('cumulative') or {}
     totals = {k: (cumulative.get(k) or {}).get('n', 0) for k in ('baseline', 'active')}
     through = (assessment.get('provenance') or {}).get('dataThroughMs', assessment.get('dataThroughMs'))
+    old_totals = state.get('countedTotals') or {}
+    if (last_counted and (any(totals[k] < old_totals.get(k, 0) for k in totals)
+            or (integer(through) and through < state.get('countedDataThroughMs', 0)))):
+        # Truncated/replaced history is not a new confirmation of old evidence.
+        count = 0; prior_signal = None; last_counted = 0; state = {}
     negative = signal in ('RECALIBRATE_SIGNAL', 'DISABLE_SIGNAL')
     counted = False
     if not negative:
@@ -215,6 +223,8 @@ def advise(assessment, previous, at):
         recommendation = 'OBSERVE_PENDING_CONFIRMATION'
     state.update(signal=signal, confirmationCount=count, recommendation=recommendation,
                  assessedAt=at, counted=counted, automaticAction=False, applyEligible=False)
+    if epoch_id is not None:
+        state['epochId'] = epoch_id
     return state
 
 
@@ -238,12 +248,86 @@ def replay(params):
     env['PATH'] = '/root/.nvm/versions/node/v24.19.0/bin:' + env.get('PATH', '')
     with tempfile.TemporaryDirectory(prefix='jarvis-monitor-') as directory:
         file = Path(directory)/'input.json'; file.write_text(json.dumps(params))
-        result = subprocess.run(['node', '--import', 'tsx', str(ROOT/'scripts/ml_active_monitor.ts'), '--inputfile', str(file)],
+        result = subprocess.run(['node', '--import', 'tsx', str(ROOT/'scripts/ml_active_monitor.ts'), '--input', str(file)],
                                 cwd=ROOT, env=env, text=True, capture_output=True, check=True, timeout=660)
     marker = next((s for s in reversed(result.stdout.splitlines()) if s.startswith('ML_ACTIVE_MONITOR_RESULT=')), None)
     if marker is None:
         raise MonitorIssue('REPLAY_ERROR', 'Respuesta de replay de seguimiento ausente')
     return json.loads(marker.split('=', 1)[1])
+
+
+def validate_result(result, params, at):
+    """Check the real engine boundary, not just the headline model hash."""
+    expected = {'schemaVersion': 1, 'scope': 'post_activation_replay',
+                'ticker': params['ticker'], 'activationId': params['activationId'],
+                'modelSha256': params['modelSha256'], 'threshold': params['threshold']}
+    if not isinstance(result, dict) or any(result.get(k) != v for k, v in expected.items()):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Identidad del replay distinta de la solicitud')
+    if result.get('automaticAction') is not False or result.get('applyEligible') is not False:
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'El seguimiento no puede autorizar acciones automáticas')
+    if result.get('status') != 'valid':
+        return False
+    if (result.get('engineFingerprint') != params['engineFingerprint']
+            or result.get('configFingerprint') != params['configFingerprint']
+            or result.get('rules', {}).get('version') != POLICY['version']
+            or result.get('rules', {}).get('minimumCompletedPerArm') != 30
+            or not integer(result.get('evaluatedAt')) or result['evaluatedAt'] > at):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Motor, reglas o fecha del replay no verificables')
+    windows = result.get('windows') or {}
+    cumulative, recent = windows.get('cumulative') or {}, windows.get('recent') or {}
+    end = cumulative.get('toMs'); through = result.get('dataThroughMs')
+    if (cumulative.get('fromMs') != params['fromMs'] or not integer(end)
+            or not params['fromMs'] < end <= min(params['toMs'], at)
+            or not integer(through) or through + 1 != end or through > at
+            or recent.get('toMs') != end
+            or recent.get('fromMs') != max(params['fromMs'], end-RECENT_MS)):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Período o cobertura del replay no coincide con el seguimiento')
+    provenance = result.get('provenance') or {}
+    for field, minimum in (('datasetFiles', 5), ('sourceFiles', 1), ('auxiliaryFiles', 0)):
+        files = provenance.get(field)
+        if (not isinstance(files, list) or len(files) < minimum
+                or any(not isinstance(f, dict) or not isinstance(f.get('path'), str)
+                       or not re.fullmatch('[a-f0-9]{64}', str(f.get('sha256', ''))) for f in files)
+                or len({f['path'] for f in files}) != len(files)):
+            raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Snapshot de datos/código/auxiliares incompleto')
+    source_hash = sha(json.dumps(provenance['sourceFiles'], sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode())
+    if (source_hash != params['engineFingerprint']
+            or provenance.get('engineFingerprint') != params['engineFingerprint']
+            or provenance.get('configFingerprint') != params['configFingerprint']):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Identidad del snapshot de código/configuración no coincide')
+    proofs = result.get('gateProofs')
+    if not isinstance(proofs, list):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Faltan pruebas de ambos brazos del replay')
+    for window in (cumulative, recent):
+        for mode in ('baseline', 'active'):
+            value = window.get(mode)
+            if (not metrics_valid(value) or not finite(value.get('wr')) or not 0 <= value['wr'] <= 100
+                    or not finite(value.get('pf')) or value['pf'] < 0):
+                raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Métricas inválidas del replay')
+        if (not finite(window.get('deltaR'))
+                or abs(window['deltaR']-(window['active']['pnlR']-window['baseline']['pnlR'])) > 1e-6
+                or window.get('status') != ('sufficient' if min(window['baseline']['n'], window['active']['n']) >= 30 else 'insufficient')):
+            raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Diferencia o mínimo de muestra incoherente')
+        matched = []
+        for enabled, key in ((False, 'baseline'), (True, 'active')):
+            options = [p for p in proofs if p.get('fromMs') == window['fromMs']
+                       and p.get('toMs') == end and p.get('gateVerified') is enabled]
+            expected_sha = params['modelSha256'] if enabled else None
+            expected_threshold = params['threshold'] if enabled else None
+            if (len(options) != 1 or options[0].get('modelSha256') != expected_sha
+                    or options[0].get('threshold') != expected_threshold
+                    or options[0].get('metrics') != window[key]):
+                raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Prueba del modelo/umbral OFF/ON incompleta')
+            matched.append(options[0])
+        off, active = matched
+        if (not integer(off.get('terminalMs')) or not window['fromMs'] <= off['terminalMs'] < end
+                or not integer(off.get('warmupStartMs')) or off['warmupStartMs'] >= window['fromMs']
+                or off['terminalMs'] != active.get('terminalMs')
+                or off['warmupStartMs'] != active.get('warmupStartMs')):
+            raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Contexto terminal/warmup distinto entre brazos')
+    if result.get('baseSignal') != classify(result, at):
+        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'La señal no coincide con las reglas predefinidas')
+    return True
 
 
 def compare_candidate(asset, epoch, directory, deployment, until, at):
@@ -256,7 +340,8 @@ def compare_candidate(asset, epoch, directory, deployment, until, at):
     if info.get('strategyFingerprint') != epoch['identity']['strategyFingerprint']:
         return unavailable('La configuración del candidato difiere de la del modelo activo')
     available, cutoff, selected_at = info.get('availableAtMs'), info.get('trainEndMs'), info.get('selectionAtMs')
-    if not all(integer(v) for v in (available, cutoff, selected_at)) or cutoff > available or selected_at > at:
+    if (not all(integer(v) for v in (available, cutoff, selected_at)) or cutoff > available or available > at or selected_at > at
+            or not finite(info.get('threshold')) or not 0 < info['threshold'] < 1):
         return unavailable('Procedencia temporal del candidato/selección desconocida')
     try:
         candidate_path = Path(info['modelPath']).resolve()
@@ -278,7 +363,7 @@ def compare_candidate(asset, epoch, directory, deployment, until, at):
             observed = at
             with observed_file.open('x') as out:
                 json.dump({'selectionIdentity': selection_id, 'firstSelectionObservedMs': observed}, out)
-        if not integer(observed):
+        if not integer(observed) or observed < selected_at or observed > at:
             return unavailable('Registro de observación de selección inválido')
         start = max(epoch['fromMs'], available, selected_at, observed)
         if start >= until:
@@ -296,17 +381,18 @@ def compare_candidate(asset, epoch, directory, deployment, until, at):
                   'fromMs': start, 'toMs': until, 'recentFromMs': max(start, until-RECENT_MS),
                   'dataDir': asset['dataDir'], 'engineFingerprint': epoch['identity']['engineFingerprint'],
                   'configFingerprint': epoch['identity']['strategyFingerprint']}
-        active_result = replay(dict(common, modelPath=epoch['modelArchive'], modelSha256=deployment['modelSha256'], threshold=deployment['threshold']))
-        candidate_result = replay(dict(common, modelPath=str(archive), modelSha256=info['modelSha256'], threshold=info['threshold']))
-        for result, identity, threshold in ((active_result, deployment['modelSha256'], deployment['threshold']), (candidate_result, info['modelSha256'], info['threshold'])):
-            if (result.get('status') != 'valid' or result.get('modelSha256') != identity or result.get('threshold') != threshold
-                    or result.get('engineFingerprint') != epoch['identity']['engineFingerprint']
-                    or result.get('configFingerprint') != epoch['identity']['strategyFingerprint']):
+        active_params = dict(common, modelPath=epoch['modelArchive'], modelSha256=deployment['modelSha256'], threshold=deployment['threshold'])
+        candidate_params = dict(common, modelPath=str(archive), modelSha256=info['modelSha256'], threshold=info['threshold'])
+        active_result = replay(active_params)
+        candidate_result = replay(candidate_params)
+        for output, params in ((active_result, active_params), (candidate_result, candidate_params)):
+            if not validate_result(output, params, now()):
                 return unavailable('Uno de los replays del período común no es verificable')
         a, c = active_result['windows']['cumulative'], candidate_result['windows']['cumulative']
         if (active_result.get('dataThroughMs') != candidate_result.get('dataThroughMs')
                 or active_result.get('provenance', {}).get('datasetFiles') != candidate_result.get('provenance', {}).get('datasetFiles')
-                or active_result.get('provenance', {}).get('auxiliaryFiles') != candidate_result.get('provenance', {}).get('auxiliaryFiles')):
+                or active_result.get('provenance', {}).get('auxiliaryFiles') != candidate_result.get('provenance', {}).get('auxiliaryFiles')
+                or active_result.get('provenance', {}).get('sourceFiles') != candidate_result.get('provenance', {}).get('sourceFiles')):
             return unavailable('Los datos/snapshots de los replays no coinciden')
         if (a['fromMs'], a['toMs'], a['baseline']) != (c['fromMs'], c['toMs'], c['baseline']):
             return unavailable('La referencia sin gate o el período difieren entre comparaciones')
@@ -321,7 +407,7 @@ def compare_candidate(asset, epoch, directory, deployment, until, at):
                 'selectedAtMs': selected_at, 'evaluatedAt': at, 'activeModelSha256': deployment['modelSha256'],
                 'epochId': epoch['epochId'], 'activeEpochId': epoch['epochId'],
                 'engineFingerprint': epoch['identity']['engineFingerprint'], 'configFingerprint': epoch['identity']['strategyFingerprint'],
-                'provenance': {'datasetFiles': active_result.get('provenance', {}).get('datasetFiles'), 'dataThroughMs': active_result.get('dataThroughMs')},
+                'provenance': {**active_result.get('provenance', {}), 'dataThroughMs': active_result.get('dataThroughMs')},
                 'reason': 'Comparación en el mismo período posterior; requiere revisión manual, no autoriza reemplazo' if sufficient else 'Mínimo 30 operaciones en los tres brazos; no hay recomendación de reemplazo',
                 'automaticAction': False, 'applyEligible': False}
     except Exception as exc:
@@ -346,17 +432,13 @@ def assess_asset(ticker, asset, engine_fingerprint, at):
         row.update(state='STALE_DATA', recommendation='INSUFFICIENT_DATA', reason='La historia disponible tiene más de siete días de atraso')
         return row
     until = min(until, at)
-    result = replay({'ticker': ticker, 'activationId': activation_id, 'modelPath': str(archive),
+    params = {'ticker': ticker, 'activationId': activation_id, 'modelPath': str(archive),
         'modelSha256': deployment['modelSha256'], 'threshold': deployment['threshold'], 'config': epoch['config'],
         'fromMs': epoch['fromMs'], 'toMs': until, 'recentFromMs': max(epoch['fromMs'], until-RECENT_MS), 'dataDir': asset['dataDir'],
-        'engineFingerprint': engine_fingerprint, 'configFingerprint': asset['strategyFingerprint']})
-    if (result.get('schemaVersion') != 1 or result.get('scope') != 'post_activation_replay'
-            or result.get('ticker') != ticker or result.get('activationId') != activation_id
-            or result.get('modelSha256') != deployment['modelSha256'] or result.get('threshold') != deployment['threshold']
-            or result.get('engineFingerprint') != engine_fingerprint or result.get('configFingerprint') != asset['strategyFingerprint']
-            or result.get('rules', {}).get('version') != POLICY['version']):
-        raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'El replay no coincide con la época/configuración/modelo solicitados')
-    if result.get('status') != 'valid':
+        'engineFingerprint': engine_fingerprint, 'configFingerprint': asset['strategyFingerprint']}
+    result = replay(params)
+    assessed_at = now()
+    if not validate_result(result, params, assessed_at):
         row.update(state='REPLAY_UNAVAILABLE', recommendation='INSUFFICIENT_DATA', reason=result.get('reason', 'Replay no disponible'), assessment=result)
         return row
     windows = result.get('windows') or {}
@@ -367,13 +449,32 @@ def assess_asset(ticker, asset, engine_fingerprint, at):
             or recent.get('fromMs') != max(epoch['fromMs'], effective_to-RECENT_MS)):
         raise MonitorIssue('REPLAY_CONTEXT_MISMATCH', 'Períodos del replay no coinciden con la época observada')
     row['candidateComparison'] = compare_candidate(asset, epoch, directory, deployment, effective_to, at)
+    triple = row['candidateComparison']
+    if triple.get('status') in ('valid', 'insufficient'):
+        main_provenance, candidate_provenance = result.get('provenance') or {}, triple.get('provenance') or {}
+        if (triple.get('toMs') != effective_to or triple.get('engineFingerprint') != result.get('engineFingerprint')
+                or triple.get('configFingerprint') != result.get('configFingerprint')
+                or any(candidate_provenance.get(k) != main_provenance.get(k) for k in ('datasetFiles', 'sourceFiles', 'auxiliaryFiles'))):
+            row['candidateComparison'] = {'status': 'unavailable', 'reason': 'El snapshot del candidato difiere del seguimiento principal; se requiere otra revisión', 'automaticAction': False}
+    # Configuration can change while the read-only replays run. Do not append a
+    # confirmation to a superseded activation/strategy epoch.
+    latest = snapshot().get('assets', {}).get(ticker)
+    if latest is None:
+        raise MonitorIssue('ACTIVATION_MISMATCH', 'El activo desapareció durante la evaluación')
+    latest_id, latest_record, latest_deployment = validate_activation(ticker, latest)
+    if (latest_id != activation_id or latest_record['configFingerprint'] != record['configFingerprint']
+            or latest_deployment != deployment or latest.get('strategyFingerprint') != asset['strategyFingerprint']):
+        raise MonitorIssue('ACTIVATION_MISMATCH', 'La activación/configuración cambió durante la evaluación; no se confirma deterioro')
+    if sha(Path(latest['modelPath']).read_bytes()) != deployment['modelSha256']:
+        raise MonitorIssue('MODEL_HASH_MISMATCH', 'El modelo propio cambió durante la evaluación')
+    assessed_at = now()
     old = read_json(directory/'state.json')
-    advice = advise(result, old.get('advice'), at)
-    entry = {'evaluatedAt': at, 'epochId': epoch['epochId'], 'assessment': result, **advice}
+    advice = advise(result, old.get('advice'), assessed_at, epoch['epochId'])
+    entry = {'evaluatedAt': assessed_at, 'epochId': epoch['epochId'], 'assessment': result, **advice}
     history = bounded_history(old.get('history', []), entry)
-    atomic_json(directory/'state.json', {'advice': advice, 'history': history, 'updatedAt': at})
+    atomic_json(directory/'state.json', {'advice': advice, 'history': history, 'updatedAt': assessed_at})
     row.update(state='ASSESSED', recommendation=advice['recommendation'], reason=result.get('reason', ''), assessment=result,
-               confirmationCount=advice['confirmationCount'], signal=advice['signal'], lastAssessedAt=at,
+               confirmationCount=advice['confirmationCount'], signal=advice['signal'], lastAssessedAt=assessed_at,
                confirmationState=advice, history=history[-12:])
     return row
 
@@ -413,15 +514,27 @@ def refresh():
 
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument('action', choices=['refresh']); parser.parse_args()
+    # Manual API refreshes inherit the same low scheduling priority as the timer.
+    try:
+        if os.getpriority(os.PRIO_PROCESS, 0) < 10:
+            os.setpriority(os.PRIO_PROCESS, 0, 10)
+    except (AttributeError, OSError):
+        pass
+    parser = argparse.ArgumentParser(); parser.add_argument('action', choices=['refresh'])
+    parser.add_argument('--wait-lock', action='store_true', help='Timer only: wait for an existing ML job instead of skipping the weekly assessment')
+    args = parser.parse_args()
     SHARED_LOCK.parent.mkdir(parents=True, exist_ok=True)
     with SHARED_LOCK.open('a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if args.wait_lock else fcntl.LOCK_NB))
         except BlockingIOError:
             return 3
         try:
-            refresh(); return 0
+            body = refresh()
+            print(json.dumps({'state': body['state'], 'assets': len(body['assets']),
+                              'activeGateCount': body['activeGateCount'], 'updatedAt': body['updatedAt'],
+                              'automaticAction': False}))
+            return 0
         except Exception as exc:
             value = read_json(STATUS, {'schemaVersion': 1, 'assets': {}})
             value.update(state='ERROR', error=str(exc)[:500], updatedAt=now(), automaticAction=False)

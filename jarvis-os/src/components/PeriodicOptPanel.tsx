@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, doc, getDoc, setDoc, runTransaction, deleteField, serverTimestamp } from 'firebase/firestore';
 import { validateMLGateEvaluation } from '../services/mlGateDeployment';
-import { buildMLActivationRecord } from '../services/mlGateMonitoring';
+import { buildMLActivationRecord, type MonitorReference } from '../services/mlGateMonitoring';
 import MLGateMonitorPanel from './MLGateMonitorPanel';
 import { canRecalibrateML, currentMLComparison, type MLCalibrationStatus, type MLCandidateComparison } from '../services/mlCalibration';
 import { db } from '../firebase';
@@ -275,6 +275,7 @@ export default function PeriodicOptPanel() {
     const [exitApplying, setExitApplying] = useState<string | null>(null);
     const [appliedExitPolicies, setAppliedExitPolicies] = useState<Record<string, string>>({});
     const [loserApplied, setLoserApplied] = useState<Record<string, number>>({});
+    const [mlMonitorRefs, setMlMonitorRefs] = useState<Record<string, MonitorReference>>({});
 
     // All sections refresh as one read-only batch. Failed reads clear old values,
     // rather than displaying an earlier successful response as current evidence.
@@ -282,14 +283,14 @@ export default function PeriodicOptPanel() {
         setLoading(true);
         try {
             const names = ['opt_reports', 'auto_state', 'asset_configs', 'active_tickers', 'health_check',
-                'ml_gate_evals', 'corr_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals'];
+                'ml_gate_evals', 'corr_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals', 'ml_gate_monitor_refs'];
             const results = await Promise.allSettled([
                 getDocs(collection(db, 'opt_reports')), getDoc(doc(db, 'optimization_config', 'auto_state')),
                 getDocs(collection(db, 'asset_configs')), getDoc(doc(db, 'optimization_config', 'active_tickers')),
                 getDoc(doc(db, 'health_check', 'latest')), getDocs(collection(db, 'ml_gate_evals')),
                 getDocs(collection(db, 'corr_gate_evals')),
                 getDoc(doc(db, 'blocked_signals_evals', '_GLOBAL')), getDocs(collection(db, 'exits_gate_evals')),
-                getDocs(collection(db, 'rollover_evals')),
+                getDocs(collection(db, 'rollover_evals')), getDocs(collection(db, 'ml_gate_monitor_refs')),
             ]);
             const value = (i: number): any => results[i].status === 'fulfilled' ? results[i].value : null;
             const document = (i: number): any => value(i)?.exists() ? value(i).data() : null;
@@ -310,12 +311,12 @@ export default function PeriodicOptPanel() {
             const tickers = document(3)?.tickers;
             setActiveList(Array.isArray(tickers) ? tickers.filter((t: unknown) => typeof t === 'string') : []);
             setHealth(document(4)); setMlEvals(entries(5)); setCorrEvals(entries(6));
-            setBlkEvals(document(7)); setExitsEvals(entries(8)); setRollEvals(entries(9));
+            setBlkEvals(document(7)); setExitsEvals(entries(8)); setRollEvals(entries(9)); setMlMonitorRefs(entries(10));
             const failures = results.flatMap((r, i) => r.status === 'rejected' ? [names[i]] : []);
             setStateError(failures.length ? `Lecturas no disponibles (datos anteriores descartados): ${failures.join(', ')}` : null);
         } catch (err) {
             console.error('Error refreshing optimization diagnostics:', err);
-            setReports([]); setActiveList([]);
+            setReports([]); setActiveList([]); setMlMonitorRefs({});
             setStateError('No se pudo actualizar el panel. No usar sus diagnósticos para operar.');
             toast('Error al actualizar diagnósticos', 'error');
         } finally { setLoading(false); }
@@ -389,6 +390,7 @@ export default function PeriodicOptPanel() {
                     tx.set(doc(db, 'ml_gate_monitor_refs', ticker), { schemaVersion: 1, ticker, enabled: false, updatedAt: serverTimestamp() }, { merge: true });
                 });
                 setMlGateOn(p => ({ ...p, [ticker]: false }));
+                setMlMonitorRefs(p => ({ ...p, [ticker]: { ...p[ticker], enabled: false } }));
                 toast(`Gate ML OFF solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
                 void refreshAll();
                 return;
@@ -417,6 +419,7 @@ export default function PeriodicOptPanel() {
                 tx.update(configRef, { mlGateEnabled: true, mlGateDeployment: gate.deployment });
             });
             setMlGateOn(p => ({ ...p, [ticker]: true }));
+            setMlMonitorRefs(p => ({ ...p, [ticker]: { activationId: activationRef.id, enabled: true } }));
             toast(`Gate ML ON solicitado para ${ticker}; pendiente de recepción del bot.`, 'info');
             void fetch(`${mlApi}/monitor/refresh`, { method: 'POST', headers: { 'X-Jarvis-ML': 'recalibrate' } }).catch(error => console.warn('Seguimiento pendiente de revisión periódica', error));
             void refreshAll();
@@ -895,7 +898,7 @@ export default function PeriodicOptPanel() {
                         : 'Recalibrar exige tres períodos separados: ≥50 operaciones de entrenamiento, ≥20 de calibración y ≥30 de validación posterior, con WIN y LOSS en cada uno. Entrena una vez y elige entre 0,50 / 0,65 / 0,80 y sin gate usando solo calibración. La opción elegida se comprueba después, sin volver a elegir. Cada brazo con gate debe conservar muestra suficiente; si no, la evidencia es insuficiente. No activa el gate ni reemplaza modelos. ON/OFF indica lo solicitado, no confirma recepción del bot.'}
                 </p>
             </div>
-            <MLGateMonitorPanel configs={Object.fromEntries(Object.entries(configMetadata).map(([ticker, metadata]) => [ticker, metadata.currentSnapshot]))} candidates={mlReadiness} />
+            <MLGateMonitorPanel configs={Object.fromEntries(Object.entries(configMetadata).map(([ticker, metadata]) => [ticker, metadata.currentSnapshot]))} candidates={mlReadiness} references={mlMonitorRefs} />
             <p style={{ color: '#888' }}>Las siguientes evaluaciones son diagnósticos históricos/contrafactuales, no recomendaciones vigentes. Los estados ON/OFF son metadatos almacenados, no confirmación del bot.</p>
             {/* 🆕 16-sep-2026: FILTRO CORRELACIÓN POR ACTIVO — contrafactual + botón (shadow:false bloquea en vivo) */}
             <div className="premium-card" style={{ marginTop: '18px' }}>

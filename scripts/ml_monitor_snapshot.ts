@@ -7,20 +7,30 @@ import {configFingerprint} from '../jarvis-os/src/services/mlGateDeployment.js';
 import {mapAssetConfig,loadSelectionLogs} from './periodic_opt/selection_context.js';
 import {stableCanonical} from './hyperopt/evaluation_protocol.js';
 import {getCriticalSourceFingerprint,getCriticalSourceSnapshot,strategyConfig} from './ml_active_monitor.js';
+import {prepareEntries} from '../jarvis-os/src/services/backtestEngine.js';
+import {selectCalibration} from './ml_candidate_compare.js';
 const ROOT='/opt/JARVIS';
 const plain=(v:any)=>JSON.parse(JSON.stringify(v));
 const sha=(v:string)=>createHash('sha256').update(v).digest('hex');
 const strategy=(v:any)=>{const c=plain(v);for(const k of ['mlGate','mlGateEnabled','mlGateDeployment'])delete c[k];return c;};
 if(!admin.apps.length)admin.initializeApp({credential:admin.credential.cert(JSON.parse(fs.readFileSync(path.join(ROOT,'service-account.json'),'utf8')))});
 const db=admin.firestore(),nowMs=Date.now();
-const [configs,refs]=await Promise.all([db.collection('asset_configs').get(),db.collection('ml_gate_monitor_refs').get()]);
+const [configs,refs,roster]=await Promise.all([db.collection('asset_configs').get(),db.collection('ml_gate_monitor_refs').get(),db.doc('optimization_config/active_tickers').get()]);
 const pointers=new Map(refs.docs.map(d=>[d.id,d.data()]));
 const assets:Record<string,any>={};
 let calibration:any={assets:{}};try{calibration=JSON.parse(fs.readFileSync(path.join(ROOT,'data/ml_calibration/status.json'),'utf8'));}catch{}
 function candidateFor(ticker:string){
  try{
   const entry=calibration.assets?.[ticker],binding=entry?.candidate,c=entry?.comparison;
-  if(!binding||!c||c.schemaVersion!==2||c.scope!=='temporal_threshold_holdout'||!['valid','insufficient'].includes(c.status)||c.candidateSha256!==binding.sha256||c.candidate!==binding.path||c.calibration?.selectedMode!=='gate'||c.calibration?.selectedThreshold!==c.selectedThreshold||![.5,.65,.8].includes(c.selectedThreshold))return {status:'unavailable',reason:'No hay selección de umbral de candidato identificada y compatible'};
+  // A frozen historical comparison can become unavailable when NEW history is
+  // appended. Its already-observed threshold choice can still be tested forward;
+  // never reuse those historical PnL figures as monitoring evidence.
+  if(!binding||!c||c.schemaVersion!==2||c.scope!=='temporal_threshold_holdout'||!['valid','insufficient','unavailable'].includes(c.status)||c.candidateSha256!==binding.sha256||c.candidate!==binding.path||c.calibration?.selectedMode!=='gate'||c.calibration?.selectedThreshold!==c.selectedThreshold||![.5,.65,.8].includes(c.selectedThreshold)||!Number.isSafeInteger(c.evaluatedAt)||c.evaluatedAt>nowMs)return {status:'unavailable',reason:'No hay selección de umbral de candidato identificada y compatible'};
+  const calibration=c.calibration;
+  const validMetrics=(m:any)=>m&&Number.isInteger(m.n)&&m.n>=0&&Number.isFinite(m.pnlR);
+  if(!validMetrics(calibration.baseline)||!Array.isArray(calibration.runs)||calibration.runs.length!==3||[.5,.65,.8].some(t=>calibration.runs.filter((r:any)=>r.threshold===t).length!==1)||calibration.runs.some((r:any)=>!validMetrics(r.metrics)||typeof r.eligible!=='boolean'||r.eligible!==(r.metrics.n>=20)))return {status:'unavailable',reason:'Selección de calibración incompleta'};
+  const selected=selectCalibration(calibration.baseline,calibration.runs);
+  if(!selected.selectionMade||selected.selectedMode!=='gate'||selected.selectedThreshold!==c.selectedThreshold)return {status:'unavailable',reason:'El umbral no coincide con la selección original de calibración'};
   const file=path.resolve(ROOT,binding.path),base=path.join(ROOT,'data/ml_calibration/candidates')+path.sep;
   if(!file.startsWith(base))throw new Error('Candidate archive path outside isolated candidates');
   const raw=fs.readFileSync(file);if(createHash('sha256').update(raw).digest('hex')!==binding.sha256)throw new Error('Candidate raw SHA mismatch');
@@ -43,8 +53,11 @@ for(const doc of configs.docs){
   }
  }
  if(gateEnabled&&row.trade)row.candidate=candidateFor(ticker);
- if(gateEnabled&&row.trade){try{const logs=loadSelectionLogs({ticker,logsDir:row.dataDir});let last=-1;for(const rows of logs.values())for(const text of rows){const m=text.match(/TS:\s*(\d+)/i);if(m){let ts=Number(m[1]);if(ts<1e11)ts*=1000;if(Number.isSafeInteger(ts)&&ts<=nowMs)last=Math.max(last,ts);}}row.dataAvailableToMs=last<0?null:Math.min(nowMs,last+1);row.dataTfCount=logs.size;}catch(e:any){row.dataError=e.message;}}
+ if(gateEnabled&&row.trade){try{const logs=loadSelectionLogs({ticker,logsDir:row.dataDir});const entries=await prepareEntries(logs);const last=entries.reduce((last,e)=>Number.isSafeInteger(e.ts)&&e.ts<=nowMs?Math.max(last,e.ts):last,-1);row.dataAvailableToMs=last<0?null:Math.min(nowMs,last+1);row.dataTfCount=logs.size;}catch(e:any){row.dataError=e.message;}}
  assets[ticker]=row;
+}
+for(const ticker of roster.data()?.tickers??[]){
+ if(typeof ticker==='string'&&/^[A-Z0-9]{1,24}$/.test(ticker)&&!assets[ticker])assets[ticker]={ticker,gateEnabled:false,trade:false,hasConfig:false,ref:null,deployment:null};
 }
 // Use the replay engine's own fingerprint, not an independent approximation.
 const engineFingerprint=await getCriticalSourceFingerprint();

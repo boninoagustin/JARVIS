@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { currentActiveAssessment, monitorRecommendation, type MonitorRow, type MonitorWindow } from '../services/mlGateMonitoring';
+import { currentActiveAssessment, currentCandidateForwardComparison, monitorRecommendation, type MonitorRow, type MonitorWindow, type MonitorReference } from '../services/mlGateMonitoring';
 
 function WindowMetrics({ title, window: w }: { title: string; window: MonitorWindow }) {
     return <div style={{ marginTop: 8 }}>
@@ -13,8 +13,9 @@ function WindowMetrics({ title, window: w }: { title: string; window: MonitorWin
         <div style={{ color: w.deltaR < 0 ? '#ff7777' : '#aaa' }}>Contribución: {w.deltaR > 0 ? '+' : ''}{w.deltaR.toFixed(2)}R · {w.status === 'sufficient' ? 'Muestra suficiente' : 'Datos insuficientes (mínimo 30 por brazo)'}</div>
     </div>;
 }
-export default function MLGateMonitorPanel({ configs, candidates }: {
+export default function MLGateMonitorPanel({ configs, candidates, references }: {
     configs: Record<string, any>; candidates: Record<string, { candidate?: { sha256: string } }>;
+    references: Record<string, MonitorReference>;
 }) {
     const [rows, setRows] = useState<Record<string, MonitorRow>>({});
     const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -54,11 +55,9 @@ export default function MLGateMonitorPanel({ configs, candidates }: {
         {error && <p role="alert" style={{ color: '#eab308' }}>{error}</p>}
         {!error && tickers.length === 0 && <p style={{ color: '#aaa' }}>No hay gates ML activados. Al solicitar una activación manual se registrará su identidad y configuración para iniciar el seguimiento.</p>}
         {tickers.map(t => {
-            const row = rows[t], a = currentActiveAssessment(row, t, configs[t]);
+            const row = rows[t], a = currentActiveAssessment(row, t, configs[t], Date.now(), references[t]);
             const cc = row?.candidateComparison;
-            const candidateAligned = a && cc && ['valid', 'insufficient'].includes(cc.status) && cc.candidateSha256 === candidates[t]?.candidate?.sha256
-                && typeof cc.fromMs === 'number' && typeof cc.toMs === 'number' && cc.fromMs >= a.windows.cumulative.fromMs && cc.toMs <= a.windows.cumulative.toMs
-                && cc.fromMs < cc.toMs && [cc.baseline, cc.active, cc.candidate].every(m => m && Number.isInteger(m.n) && Number.isFinite(m.pnlR) && Number.isFinite(m.mdd));
+            const candidateAligned = currentCandidateForwardComparison(row, a, candidates[t]?.candidate?.sha256);
             return <article key={t} style={{ borderTop: '1px solid #333', paddingTop: 12, marginTop: 12 }}>
                 <strong>{t} · {row ? monitorRecommendation(row, a) : 'Esperando primera revisión'}</strong>
                 <div style={{ color: '#aaa', fontSize: '.75rem' }}>Modelo: {row?.modelSha256?.slice(0, 12) ?? 'sin identidad verificada'} · umbral {row?.threshold ?? '—'} · época {row?.epochId?.slice(0, 10) ?? '—'}</div>
@@ -79,6 +78,16 @@ export default function MLGateMonitorPanel({ configs, candidates }: {
                 </div>
             </article>;
         })}
+        <details style={{ fontSize: '.75rem', color: '#888', marginTop: 12 }}>
+            <summary>Reglas de recomendación (v1, fijadas antes de evaluar)</summary>
+            <ul>
+                <li>Mantener: contribución positiva en ambas ventanas y DD activo ≤ 1,25 × DD sin gate + 1R.</li>
+                <li>Recalibrar: contribución ≤ −2R en ambas ventanas, confirmada en dos revisiones semanales.</li>
+                <li>Recomendar apagar: contribución ≤ −5R y DD activo mayor que DD sin gate + 2R en ambas ventanas, con dos confirmaciones.</li>
+                <li>Las confirmaciones deben estar separadas por ≥7 días, con nuevos datos y nuevas operaciones cerradas en ambos brazos. No se cuentan ventanas superpuestas como confirmaciones independientes.</li>
+                <li>Sin al menos 30 operaciones por brazo en cada ventana, o con datos vencidos, no hay recomendación de rendimiento.</li>
+            </ul>
+        </details>
         <p style={{ color: '#777', fontSize: '.72rem', marginBottom: 0 }}>Reglas predefinidas: mínimo 30 operaciones por brazo en ambas ventanas; datos de hasta 7 días. Una alerta de deterioro requiere dos revisiones separadas por al menos 7 días y nuevas operaciones cerradas; refrescar varias veces no confirma una alerta. Las simulaciones no envían órdenes.</p>
     </section>;
 }

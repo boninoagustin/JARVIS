@@ -1,0 +1,66 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {configFingerprint, type MLGateDeployment} from './mlGateDeployment.ts';
+import {buildMLActivationRecord, currentActiveAssessment, currentCandidateForwardComparison, monitorRecommendation, type MonitorRow, type ActiveAssessment} from './mlGateMonitoring.ts';
+const DAY=86400000, NOW=1800000000000, START=NOW-56*DAY, ID='activation_1234567890';
+const base={enabled:true, entryTrigger:'SMART', minBuyPoints:8, riskPercent:.25};
+const deployment:MLGateDeployment={schemaVersion:2,modelSha256:'a'.repeat(64),threshold:.65,evidenceId:'b'.repeat(64),configFingerprint:configFingerprint(base),evaluatedAt:NOW-60*DAY};
+const config={...base,mlGateEnabled:true,mlGateDeployment:deployment,updatedAt:new Date(NOW)};
+const metrics=(pnlR:number,n=30)=>({n,pnlR,mdd:2,wr:60,pf:2});
+const window=(fromMs:number)=>({fromMs,toMs:NOW,baseline:metrics(5),active:metrics(7),deltaR:2,status:'sufficient'});
+const assessment:ActiveAssessment={schemaVersion:1,scope:'post_activation_replay',status:'valid',ticker:'JP225',activationId:ID,modelSha256:deployment.modelSha256,threshold:.65,configFingerprint:'c'.repeat(64),engineFingerprint:'d'.repeat(64),evaluatedAt:NOW-1,dataThroughMs:NOW-1,dataStale:false,windows:{cumulative:window(START),recent:window(NOW-28*DAY)},baseSignal:'MAINTAIN',reason:'Sigue aportando'};
+const row:MonitorRow={state:'ASSESSED',activationId:ID,epochId:'epoch123',modelSha256:deployment.modelSha256,threshold:.65,requestedAtMs:START-1,firstSeenMs:START,fromMs:START,runtimeAck:'unknown',activationConfigFingerprint:configFingerprint(base),currentConfigFingerprint:configFingerprint(base),assessment,recommendation:'MAINTAIN',confirmationCount:0};
+const reference={activationId:ID,enabled:true};
+const read=(r:MonitorRow=row,c:any=config,now=NOW,ref:any=reference)=>currentActiveAssessment(r,'JP225',c,now,ref);
+test('activation audit records exact deployment/config and strips only root audit controls',()=>{
+ const before=JSON.stringify(config);const record=buildMLActivationRecord('JP225',ID,config,deployment);
+ assert.equal(record.source,'dashboard_requested');assert.equal(record.status,'requested');
+ assert.equal(record.configFingerprint,configFingerprint(base));assert.deepEqual(record.configSnapshot,base);
+ assert.deepEqual(record.deployment,deployment);assert.notEqual(record.deployment,deployment);
+ assert.equal(JSON.stringify(config),before);assert.equal('requestedAt' in record,false);
+ for(const d of [{...deployment,threshold:0},{...deployment,threshold:NaN},{...deployment,modelSha256:'old'},{...deployment,evaluatedAt:0},{...deployment,configFingerprint:'different'}])assert.throws(()=>buildMLActivationRecord('JP225',ID,config,d));
+ assert.throws(()=>buildMLActivationRecord('../JP225',ID,config,deployment));
+ assert.throws(()=>buildMLActivationRecord('JP225','short',config,deployment));
+});
+test('current metrics bind manual activation reference, model, threshold and full strategy',()=>{
+ assert.equal(read(),assessment);
+ assert.equal(read(row,{...config,mlGateEnabled:false}),null);
+ assert.equal(read(row,{...config,minBuyPoints:9}),null);
+ assert.equal(read(row,{...config,mlGateDeployment:{...deployment,threshold:.5}}),null);
+ assert.equal(read(row,config,NOW,{activationId:'new_activation',enabled:true}),null);
+ assert.equal(read(row,config,NOW,{...reference,enabled:false}),null);
+ assert.equal(currentActiveAssessment(row,'JP225',config,NOW),null);
+ assert.equal(read({...row,activationConfigFingerprint:'stale'}),null);
+ assert.equal(read({...row,modelSha256:'f'.repeat(64)}),null);
+ assert.equal(read({...row,state:'MODEL_HASH_MISMATCH'}),null);
+ assert.equal(currentActiveAssessment(row,'EURUSD',config,NOW,reference),null);
+});
+test('stale, future, pre-epoch or inconsistent returns cannot be shown as current evidence',()=>{
+ assert.equal(read({...row,assessment:{...assessment,dataStale:true}}),null);
+ assert.equal(read({...row,assessment:{...assessment,dataThroughMs:NOW-8*DAY}}),null);
+ assert.equal(read({...row,assessment:{...assessment,evaluatedAt:NOW+1}}),null);
+ assert.equal(read({...row,assessment:{...assessment,evaluatedAt:NOW-9*DAY}}),null);
+ assert.equal(read({...row,assessment:{...assessment,windows:{...assessment.windows,cumulative:{...assessment.windows.cumulative,fromMs:START-1}}}}),null);
+ assert.equal(read({...row,assessment:{...assessment,windows:{...assessment.windows,recent:{...assessment.windows.recent,deltaR:99}}}}),null);
+});
+test('recommendations require both sufficient windows and actual matching signal',()=>{
+ assert.equal(monitorRecommendation(row,assessment),'Mantener');
+ assert.equal(monitorRecommendation({...row,recommendation:'RECOMMEND_DISABLE',confirmationCount:2},assessment),'Seguir observando');
+ assert.equal(monitorRecommendation({...row,recommendation:'RECOMMEND_DISABLE',confirmationCount:2},{...assessment,baseSignal:'DISABLE_SIGNAL'}),'Seguir observando');
+ const negative=(w:typeof assessment.windows.cumulative)=>({...w,active:{...metrics(-1),mdd:5},deltaR:-6});
+ const bad={...assessment,baseSignal:'DISABLE_SIGNAL',windows:{cumulative:negative(assessment.windows.cumulative),recent:negative(assessment.windows.recent)}};
+ assert.equal(monitorRecommendation({...row,recommendation:'RECOMMEND_DISABLE',confirmationCount:1},bad),'Seguir observando');
+ assert.match(monitorRecommendation({...row,recommendation:'RECOMMEND_DISABLE',confirmationCount:2},bad),/decisión manual/);
+ assert.equal(monitorRecommendation(row,{...assessment,windows:{...assessment.windows,recent:{...assessment.windows.recent,active:metrics(7,1)}}}),'Datos insuficientes');
+ assert.equal(monitorRecommendation(row,null),'Sin recomendación de rendimiento');
+});
+const candidateSha='f'.repeat(64);
+const triple:NonNullable<MonitorRow['candidateComparison']>={status:'valid',reason:'Ventana común posterior a elección',candidateSha256:candidateSha,threshold:.5,activeModelSha256:deployment.modelSha256,activeEpochId:row.epochId,configFingerprint:assessment.configFingerprint,engineFingerprint:assessment.engineFingerprint,selectedAtMs:START+DAY,firstSelectionObservedMs:START+2*DAY,fromMs:START+2*DAY,toMs:NOW,baseline:metrics(2),active:metrics(3),candidate:metrics(4),deltaActiveR:1,deltaCandidateR:2,evaluatedAt:NOW-1};
+test('candidate/active/OFF triple requires same live epoch and prospective common period',()=>{
+ const r={...row,candidateComparison:triple};
+ assert.equal(currentCandidateForwardComparison(r,assessment,candidateSha,NOW),triple);
+ assert.equal(currentCandidateForwardComparison(r,null,candidateSha,NOW),null);
+ assert.equal(currentCandidateForwardComparison(r,assessment,'e'.repeat(64),NOW),null);
+ for(const change of [{activeEpochId:'old'},{activeModelSha256:'e'.repeat(64)},{configFingerprint:'wrong'},{engineFingerprint:'wrong'},{toMs:NOW-1},{fromMs:START-1},{selectedAtMs:NOW+1},{firstSelectionObservedMs:NOW+1},{deltaCandidateR:10},{evaluatedAt:NOW-9*DAY}])assert.equal(currentCandidateForwardComparison({...r,candidateComparison:{...triple,...change}},assessment,candidateSha,NOW),null);
+ assert.equal(currentCandidateForwardComparison({...r,candidateComparison:{...triple,candidate:metrics(4,10)}},assessment,candidateSha,NOW),null);
+});
