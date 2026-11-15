@@ -92,6 +92,13 @@ NOEVID
 OUT=$(bash "$REC" 2>&1)
 echo "$OUT" | grep -q "reintenta" && ok "failed → reintenta" || bad "no reintentó failed: $OUT"
 
+# 9b) completed ANTIGUO (>5 días) por limpieza demorada (VPS suspendido):
+# debe limpiarse como completed, NO vencerse (regresión: falso "requiere atención").
+new_record completed "run-completada-vieja" 0
+jq -c '.createdAt="2026-10-01T00:00:00Z" | .completedAt="2026-10-01T01:00:00Z"' "$T/weekly_continuation.json" > "$T/x" && mv "$T/x" "$T/weekly_continuation.json"
+OUT=$(TUNE_START_CMD=false bash "$REC" 2>&1); RC=$?
+[ "$RC" = "0" ] && echo "$OUT" | grep -q "ya consumida" && [ ! -f "$T/weekly_continuation.json" ] && ok "completed antiguo → limpia sin vencer (rc=0)" || bad "completed antiguo se venció o no limpió: $OUT"
+
 # 10) vencimiento por antigüedad (>5 días) → expired y exit 1
 new_record pending "run-vieja" 0
 jq -c '.createdAt="2026-10-01T00:00:00Z"' "$T/weekly_continuation.json" > "$T/x" && mv "$T/x" "$T/weekly_continuation.json"

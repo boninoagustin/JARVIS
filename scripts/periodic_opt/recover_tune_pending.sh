@@ -38,8 +38,11 @@ WEEK=$(cont_read '.week')
 CREATED=$(cont_read '.createdAt')
 ATTEMPTS=$(cont_read '.attempts'); ATTEMPTS=${ATTEMPTS:-0}
 
-# vencimiento explícito por antigüedad
-if [ -n "$CREATED" ]; then
+# vencimiento explícito por antigüedad — SOLO obligaciones abiertas.
+# Una obligación ya 'completed' debe limpiarse aunque la limpieza llegue tarde
+# (p. ej. VPS suspendido): vencerla aquí convertía un tune exitoso en una falsa
+# alerta "requiere atención". 'expired' ya es terminal y se reporta más abajo.
+if [ -n "$CREATED" ] && [ "$STATE" != "completed" ] && [ "$STATE" != "expired" ]; then
   CREATED_EPOCH=$(date -u -d "$CREATED" +%s 2>/dev/null || echo "")
   if [ -n "$CREATED_EPOCH" ]; then
     AGE=$(( $(date -u +%s) - CREATED_EPOCH ))
