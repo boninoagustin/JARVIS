@@ -138,6 +138,14 @@ new_record pending "run-consumo" 0
 TUNE_CMD=true bash "$WRAP" >/dev/null 2>&1
 [ "$(state)" = "completed" ] && ok "tune con runId pendiente consume (documentado)" || bad "no consumió la obligación: $(state)"
 
+# 15) sello por semana de INICIO (fix 15-nov-2026): un ciclo W45 que termina el lunes
+# debe sellar W45, no la semana de finalización (que consumía el turno siguiente).
+printf '2026-W45\n' > "$T/weekly_cycle_week"
+rm -f "$T/weekly_cycle_last"
+bash "$CHAIN" >/dev/null 2>&1
+[ "$(cat "$T/weekly_cycle_last" 2>/dev/null)" = "2026-W45" ] && ok "chain sella la semana de inicio" || bad "chain selló '$(cat "$T/weekly_cycle_last" 2>/dev/null)' en vez de 2026-W45"
+jq -r '.week' "$T/weekly_continuation.json" 2>/dev/null | grep -q '2026-W45' && ok "continuación usa la semana de inicio" || bad "continuación con semana de finalización"
+
 rm -rf "$T"
 echo
 [ "$FAIL" = "0" ] && echo "AUTOTEST OK" || { echo "AUTOTEST FALLÓ"; exit 1; }

@@ -18,7 +18,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/weekly_continuation_lib.sh"
 MARK_DIR="${MARK_DIR:-$CONT_DIR}"
 TUNE_START_CMD="${TUNE_START_CMD:-systemctl start --no-block jarvis-detection-tune.service}"
-WEEK=$(date -u +%G-W%V)
+# Semana de ATRIBUCIÓN = la del INICIO del ciclo (la persiste run_weekly_guard.sh).
+# Si falta o es inválida, se conserva el comportamiento previo (semana de finalización).
+WEEK=$(cat "$MARK_DIR/weekly_cycle_week" 2>/dev/null || echo "")
+case "$WEEK" in
+  [0-9][0-9][0-9][0-9]-W[0-9][0-9]) ;;
+  *) WEEK=$(date -u +%G-W%V) ;;
+esac
 RUN_ID=$(wc_uuid)
 NOW=$(wc_now)
 

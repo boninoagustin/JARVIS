@@ -123,6 +123,16 @@ fi
 
 echo "run: ciclo semanal $WEEK (espera scout $((SECONDS - START))s)"
 cd "$REPO" || exit 1
+# Atribución de semana (fix 15-nov-2026): el sello debe corresponder a la semana en
+# la que ARRANCÓ el ciclo, no a la de finalización. Un ciclo largo que cruza el lunes
+# 00:00 UTC marcaba la semana siguiente y consumía su cupo (el ciclo W45 selló W46 el
+# 9-nov, dejando sin turno al viernes 13).
+if ! printf '%s\n' "$WEEK" > "$MARK_DIR/weekly_cycle_week.tmp" 2>/dev/null \
+   || ! mv -f "$MARK_DIR/weekly_cycle_week.tmp" "$MARK_DIR/weekly_cycle_week" 2>/dev/null \
+   || [ "$(cat "$MARK_DIR/weekly_cycle_week" 2>/dev/null)" != "$WEEK" ]; then
+  echo "fail: no se pudo persistir la semana de inicio del ciclo ($WEEK)"
+  exit 1
+fi
 touch "$MARK_DIR/weekly_cycle_keepalive"
 /usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py"
 RC=$?
