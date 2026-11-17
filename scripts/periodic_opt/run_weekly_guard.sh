@@ -121,6 +121,27 @@ if [ -f "$PYDONE" ]; then
   exit 0
 fi
 
+# Reanudación ante timeout/crash (16-nov-2026): si quedó un checkpoint de ciclo
+# incompleto posterior al último sello, se reanuda ESA semana (no la actual) en vez
+# de empezar de cero. run_weekly.py --resume salta por fresco lo ya evaluado.
+RESUME_ARGS=""
+PROGRESS="$REPO/scripts/periodic_opt/opt_out/weekly_progress.json"
+if [ -f "$PROGRESS" ]; then
+  P_STARTED=$(jq -r '.started_at // 0' "$PROGRESS" 2>/dev/null || echo 0)
+  case "$P_STARTED" in ''|*[!0-9]*) P_STARTED=0 ;; esac
+  MARK_NOW=$(cat "$MARK" 2>/dev/null)
+  if [ "$P_STARTED" -gt 0 ] && [ -n "$MARK_NOW" ]; then
+    P_WEEK=$(date -u -d "@$((P_STARTED/1000))" +%G-W%V 2>/dev/null || echo "")
+    P_AGE=$(( $(date -u +%s) - P_STARTED/1000 ))
+    if [ -n "$P_WEEK" ] && [ "$P_WEEK" != "$MARK_NOW" ] \
+       && [ "$P_AGE" -ge 0 ] && [ "$P_AGE" -le $((21*86400)) ]; then
+      WEEK="$P_WEEK"
+      RESUME_ARGS="--resume"
+      echo "resume: ciclo $P_WEEK incompleto (marca $MARK_NOW); se reanuda desde el checkpoint"
+    fi
+  fi
+fi
+
 echo "run: ciclo semanal $WEEK (espera scout $((SECONDS - START))s)"
 cd "$REPO" || exit 1
 # Atribución de semana (fix 15-nov-2026): el sello debe corresponder a la semana en
@@ -134,7 +155,7 @@ if ! printf '%s\n' "$WEEK" > "$MARK_DIR/weekly_cycle_week.tmp" 2>/dev/null \
   exit 1
 fi
 touch "$MARK_DIR/weekly_cycle_keepalive"
-/usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py"
+/usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py" $RESUME_ARGS
 RC=$?
 if [ "$RC" -eq 0 ]; then
   # La marca semanal NO se escribe acá: la escribe el último ExecStartPost (mark_weekly_done.sh)
