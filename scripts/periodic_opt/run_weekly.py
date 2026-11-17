@@ -666,6 +666,27 @@ def main() -> int:
             return 1
     summary = []
     for ticker in tickers:
+        # Reanudación tras timeout/crash (16-nov-2026): un activo ya completado EN ESTE
+        # ciclo tiene su reporte con timestamp >= started_at y su aplicación ya hecha.
+        # Se omite para no repetir horas de hyperopt; un reporte de otro ciclo (timestamp
+        # anterior al inicio) NO habilita el salto y pasa por la reevaluación normal.
+        prior_path = reports_dir / f'{ticker}.json'
+        if args.resume and ticker in done and prior_path.is_file():
+            try:
+                prior_report = json.loads(prior_path.read_text())
+            except Exception:
+                prior_report = None
+            ok_status = isinstance(prior_report, dict) and prior_report.get('status') not in (
+                'ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR')
+            if ok_status and int(prior_report.get('timestamp') or 0) >= started_at:
+                print(f'═══ {ticker} ═══ (reanudado: ya completado en este ciclo, se omite)', flush=True)
+                cycle_outcomes.append({'ticker': ticker, 'timestamp': prior_report.get('timestamp'),
+                                       'outcome': 'evaluated', 'status': prior_report.get('status'),
+                                       'reason': 'reanudado: completado en este ciclo', 'resumed': True,
+                                       'deployment_error': prior_report.get('deployment_error')})
+                summary.append((ticker, prior_report.get('status')))
+                write_cycle_summary()
+                continue
         # Resume is input-aware: old progress alone is never selection evidence.
         # Completed tickers pass the same durable freshness check as normal runs.
         print(f'═══ {ticker} ═══', flush=True)
