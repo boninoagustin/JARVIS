@@ -1,25 +1,25 @@
 {
   "M15": {
     "pivot_len": 21,
-    "wick_pct": 0.7,
+    "wick_pct": 0.3,
     "div_len": 5,
     "z_window": 14
   },
   "H1": {
     "pivot_len": 21,
-    "wick_pct": 0.7,
+    "wick_pct": 0.3,
     "div_len": 5,
     "z_window": 14
   },
   "H4": {
     "pivot_len": 21,
-    "wick_pct": 0.7,
+    "wick_pct": 0.3,
     "div_len": 5,
     "z_window": 14
   },
   "D1": {
     "pivot_len": 21,
-    "wick_pct": 0.7,
+    "wick_pct": 0.3,
     "div_len": 5,
     "z_window": 14
   },
@@ -42,41 +42,43 @@
   },
   "Detection": {
     "pivot_len": 21,
-    "min_sweep_wick_pct": 0.7,
+    "min_sweep_wick_pct": 0.3,
     "div_pivot_len": 5,
     "z_score_window": 14,
-    "require_displacement": true,
-    "require_fvg_after_ob": true,
+    "require_displacement": false,
+    "require_fvg_after_ob": false,
     "strict_breaker": false,
-    "strict_sweep": false,
+    "strict_sweep": true,
     "confirm_close": false,
     "min_ob_body_pct": 0.05,
     "use_body_for_ob": false,
-    "fvg_min_atr": 0.5,
+    "fvg_min_atr": 0.1,
     "wick_invalidates_ob": false
   },
   "DetectionMeta": {
     "source": "detection_tune",
-    "appliedAt": "2026-10-13T04:29:46.133Z",
-    "trainR": 10.45,
-    "oosR": 0.45,
-    "prevTrainR": -9.66,
-    "prevOosR": -11.33,
+    "appliedAt": "2026-11-18T02:01:39.661Z",
+    "trainR": 11.05,
+    "oosR": 2.23,
+    "prevTrainR": 10.96,
+    "prevOosR": 0.48,
     "candidatesTested": 80,
     "params": {
       "pivot_len": 21,
-      "min_sweep_wick_pct": 0.7,
+      "min_sweep_wick_pct": 0.3,
       "div_pivot_len": 5,
       "z_score_window": 14,
-      "require_displacement": true,
-      "require_fvg_after_ob": true,
+      "require_displacement": false,
+      "require_fvg_after_ob": false,
       "strict_breaker": false,
-      "strict_sweep": false,
+      "strict_sweep": true,
       "confirm_close": false,
       "min_ob_body_pct": 0.05,
       "use_body_for_ob": false,
-      "fvg_min_atr": 0.5,
+      "fvg_min_atr": 0.1,
       "wick_invalidates_ob": false
-    }
+    },
+    "presetFingerprint": "c67850e12a28",
+    "configFingerprint": "38d2c86a0348"
   }
 }

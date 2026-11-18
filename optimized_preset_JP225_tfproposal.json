@@ -1,0 +1,82 @@
+{
+  "ticker": "JP225",
+  "generatedAt": "2026-11-17T08:17:26.142Z",
+  "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
+  "baseline": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.5,
+        "div_len": 3,
+        "z_window": 100
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.5,
+        "div_len": 3,
+        "z_window": 100
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.5,
+        "div_len": 3,
+        "z_window": 100
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.5,
+        "div_len": 3,
+        "z_window": 100
+      }
+    },
+    "metrics": {
+      "trades": 409,
+      "wins": 188,
+      "wr": 0.45965770171149145,
+      "pf": 1.1715317427009795,
+      "exp": 0.08922392423027577,
+      "maxDD": 13.87584279213472,
+      "maxAbsR": 1.4999998276669764
+    }
+  },
+  "proposal": {
+    "blocks": {
+      "15": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "60": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "240": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      },
+      "D": {
+        "pivot_len": 3,
+        "wick_pct": 0.1,
+        "div_len": 2,
+        "z_window": 14
+      }
+    },
+    "metrics": {
+      "trades": 409,
+      "wins": 188,
+      "wr": 0.45965770171149145,
+      "pf": 1.1715317427009795,
+      "exp": 0.08922392423027577,
+      "maxDD": 13.87584279213472,
+      "maxAbsR": 1.4999998276669764
+    }
+  },
+  "verdict": "HOLD",
+  "reason": "sin mejora suficiente vs baseline",
+  "elapsedSec": 2141
+}
