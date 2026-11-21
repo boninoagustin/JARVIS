@@ -1,6 +1,6 @@
 {
   "ticker": "JP225",
-  "generatedAt": "2026-11-17T08:17:26.142Z",
+  "generatedAt": "2026-11-21T03:58:42.390Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {
@@ -78,5 +78,5 @@
   },
   "verdict": "HOLD",
   "reason": "sin mejora suficiente vs baseline",
-  "elapsedSec": 2141
+  "elapsedSec": 3176
 }

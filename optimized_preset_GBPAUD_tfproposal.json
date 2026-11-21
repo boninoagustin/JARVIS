@@ -1,6 +1,6 @@
 {
   "ticker": "GBPAUD",
-  "generatedAt": "2026-11-17T07:41:02.135Z",
+  "generatedAt": "2026-11-21T03:04:28.076Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {
@@ -30,12 +30,12 @@
       }
     },
     "metrics": {
-      "trades": 153,
-      "wins": 98,
-      "wr": 0.6405228758169934,
-      "pf": 2.207915788291298,
-      "exp": 0.41350184365574616,
-      "maxDD": 3.1994077161241563,
+      "trades": 159,
+      "wins": 97,
+      "wr": 0.610062893081761,
+      "pf": 1.9930449572940874,
+      "exp": 0.3587323028080753,
+      "maxDD": 5.2125606295274665,
       "maxAbsR": 2.2715740740741808
     }
   },
@@ -67,16 +67,16 @@
       }
     },
     "metrics": {
-      "trades": 153,
-      "wins": 98,
-      "wr": 0.6405228758169934,
-      "pf": 2.207915788291298,
-      "exp": 0.41350184365574616,
-      "maxDD": 3.1994077161241563,
+      "trades": 159,
+      "wins": 97,
+      "wr": 0.610062893081761,
+      "pf": 1.9930449572940874,
+      "exp": 0.3587323028080753,
+      "maxDD": 5.2125606295274665,
       "maxAbsR": 2.2715740740741808
     }
   },
   "verdict": "HOLD",
   "reason": "sin mejora suficiente vs baseline",
-  "elapsedSec": 1061
+  "elapsedSec": 1596
 }
