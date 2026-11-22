@@ -1,6 +1,6 @@
 {
   "ticker": "XBRUSD",
-  "generatedAt": "2026-11-21T00:16:07.500Z",
+  "generatedAt": "2026-11-21T04:28:49.785Z",
   "engine": "motor-TS canónico (export_smc_csv) — mismo mundo que el refresh semanal",
   "baseline": {
     "blocks": {},
@@ -53,5 +53,5 @@
   },
   "verdict": "HOLD",
   "reason": "sin mejora suficiente vs baseline",
-  "elapsedSec": 1417
+  "elapsedSec": 1751
 }

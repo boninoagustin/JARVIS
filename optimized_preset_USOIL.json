@@ -1,27 +1,27 @@
 {
   "M15": {
     "pivot_len": 3,
-    "wick_pct": 0.3,
+    "wick_pct": 0.7,
     "div_len": 3,
-    "z_window": 20
+    "z_window": 100
   },
   "H1": {
     "pivot_len": 3,
-    "wick_pct": 0.3,
+    "wick_pct": 0.7,
     "div_len": 3,
-    "z_window": 20
+    "z_window": 100
   },
   "H4": {
     "pivot_len": 3,
-    "wick_pct": 0.3,
+    "wick_pct": 0.7,
     "div_len": 3,
-    "z_window": 20
+    "z_window": 100
   },
   "D1": {
     "pivot_len": 3,
-    "wick_pct": 0.3,
+    "wick_pct": 0.7,
     "div_len": 3,
-    "z_window": 20
+    "z_window": 100
   },
   "Risk": {
     "slBufferPercent": 0.031332779908950434,
@@ -46,41 +46,43 @@
   },
   "Detection": {
     "pivot_len": 3,
-    "min_sweep_wick_pct": 0.3,
+    "min_sweep_wick_pct": 0.7,
     "div_pivot_len": 3,
-    "z_score_window": 20,
+    "z_score_window": 100,
     "require_displacement": false,
-    "require_fvg_after_ob": true,
+    "require_fvg_after_ob": false,
     "strict_breaker": true,
-    "strict_sweep": false,
+    "strict_sweep": true,
     "confirm_close": true,
-    "min_ob_body_pct": 0.2,
-    "use_body_for_ob": true,
-    "fvg_min_atr": 0.5,
-    "wick_invalidates_ob": true
+    "min_ob_body_pct": 0.05,
+    "use_body_for_ob": false,
+    "fvg_min_atr": 0.3,
+    "wick_invalidates_ob": false
   },
   "DetectionMeta": {
     "source": "detection_tune",
-    "appliedAt": "2026-11-01T05:35:16.233Z",
-    "trainR": 4.68,
-    "oosR": 8.57,
-    "prevTrainR": -3.9,
-    "prevOosR": 3.61,
+    "appliedAt": "2026-11-21T05:06:05.229Z",
+    "trainR": 0.85,
+    "oosR": 1.03,
+    "prevTrainR": -8.67,
+    "prevOosR": -0.26,
     "candidatesTested": 80,
     "params": {
       "pivot_len": 3,
-      "min_sweep_wick_pct": 0.3,
+      "min_sweep_wick_pct": 0.7,
       "div_pivot_len": 3,
-      "z_score_window": 20,
+      "z_score_window": 100,
       "require_displacement": false,
-      "require_fvg_after_ob": true,
+      "require_fvg_after_ob": false,
       "strict_breaker": true,
-      "strict_sweep": false,
+      "strict_sweep": true,
       "confirm_close": true,
-      "min_ob_body_pct": 0.2,
-      "use_body_for_ob": true,
-      "fvg_min_atr": 0.5,
-      "wick_invalidates_ob": true
-    }
+      "min_ob_body_pct": 0.05,
+      "use_body_for_ob": false,
+      "fvg_min_atr": 0.3,
+      "wick_invalidates_ob": false
+    },
+    "presetFingerprint": "9d67ec4d5a6e",
+    "configFingerprint": "25456895880b"
   }
 }
