@@ -30,6 +30,26 @@ new_record() { # $1=state $2=runId $3=attempts
   printf '%s\n' "$rid" > "$T/tune_run_id"
 }
 
+# Every seal now requires an exact bound Python receipt, never a sidecar week.
+export WEEKLY_SUMMARY="$T/summary.json"
+cycle_fixture() {
+  python3 - "$SCRIPTS" "$T" "${1:-60}" <<'PY'
+import json, os, sys, time, uuid
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import weekly_cycle_state as w
+root=Path(sys.argv[2]); now=int(time.time()*1000); start=now-int(sys.argv[3])*1000
+c=dict(version=1, week=w.week_of(start), run_id=str(uuid.uuid4()), started_at=start,
+       tickers=['EURUSD'], invocation_id=os.environ.get('INVOCATION_ID',''))
+s=dict(version=1,cycle_run_id=c['run_id'],cycle_week=c['week'],started_at=start,
+       completed_at=now,status='completed',tickers=c['tickers'],errors=[],error=None,
+       counts=dict(evaluated=1,skipped=0,failed=0),
+       outcomes=[dict(ticker='EURUSD',timestamp=now,outcome='evaluated',status='HOLD')])
+w.atomic_json(root/'weekly_cycle_context.json',c); w.atomic_json(root/'summary.json',s)
+w.atomic_json(root/('weekly_python_done_'+c['week']),w.summary_evidence(c,root/'summary.json',now))
+PY
+}
+cycle_fixture
 # 1) chain → pending + runId + tune_run_id
 bash "$CHAIN" >/dev/null 2>&1
 [ "$(state)" = "pending" ] && ok "chain deja state=pending" || bad "chain no dejó pending"
@@ -140,11 +160,13 @@ TUNE_CMD=true bash "$WRAP" >/dev/null 2>&1
 
 # 15) sello por semana de INICIO (fix 15-nov-2026): un ciclo W45 que termina el lunes
 # debe sellar W45, no la semana de finalización (que consumía el turno siguiente).
-printf '2026-W45\n' > "$T/weekly_cycle_week"
+cycle_fixture $((8*86400))
+EXPECTED_WEEK=$(jq -r '.week' "$T/weekly_cycle_context.json")
+printf '1999-W01\n' > "$T/weekly_cycle_week"  # stale sidecar is not authority
 rm -f "$T/weekly_cycle_last"
 bash "$CHAIN" >/dev/null 2>&1
-[ "$(cat "$T/weekly_cycle_last" 2>/dev/null)" = "2026-W45" ] && ok "chain sella la semana de inicio" || bad "chain selló '$(cat "$T/weekly_cycle_last" 2>/dev/null)' en vez de 2026-W45"
-jq -r '.week' "$T/weekly_continuation.json" 2>/dev/null | grep -q '2026-W45' && ok "continuación usa la semana de inicio" || bad "continuación con semana de finalización"
+[ "$(cat "$T/weekly_cycle_last" 2>/dev/null)" = "$EXPECTED_WEEK" ] && ok "chain sella la semana de inicio" || bad "chain no selló $EXPECTED_WEEK"
+[ "$(jq -r '.week' "$T/weekly_continuation.json")" = "$EXPECTED_WEEK" ] && ok "continuación usa la semana de inicio" || bad "continuación con semana de finalización"
 
 rm -rf "$T"
 echo

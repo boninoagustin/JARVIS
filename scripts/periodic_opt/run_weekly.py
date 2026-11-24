@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -629,12 +630,24 @@ def main() -> int:
     for d in (reports_dir, opt_dir):
         d.mkdir(parents=True, exist_ok=True)
     started_at = int(time.time() * 1000)
+    cycle_identity = {}
+    context_path = os.environ.get('JARVIS_WEEKLY_CONTEXT') if not args.output_dir else None
+    if context_path:
+        from weekly_cycle_state import context as load_cycle_context
+        ctx = load_cycle_context(Path(context_path).parent, started_at)
+        if set(ctx['tickers']) != set(tickers):
+            raise ValueError('runner roster differs from frozen cycle context')
+        cycle_identity = {'cycle_run_id': ctx['run_id'], 'cycle_week': ctx['week']}
+        started_at = ctx['started_at']
     done = set()
     if args.resume and progress_file.exists():
         progress = json.loads(progress_file.read_text())
+        if cycle_identity and (any(progress.get(k) != v for k, v in cycle_identity.items())
+                               or progress.get('started_at') != started_at):
+            raise ValueError('resume checkpoint belongs to another cycle')
         done = set(progress.get('done') or [])
         started_at = progress.get('started_at') or started_at
-    progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}))
+    atomic_json(progress_file, {**cycle_identity, 'started_at': started_at, 'done': sorted(done)})
     cycle_outcomes = []
     def write_cycle_summary(*, completed=False, error=None):
         counts = {key: sum(item['outcome'] == key for item in cycle_outcomes)
@@ -642,7 +655,7 @@ def main() -> int:
         errors = [item['ticker'] for item in cycle_outcomes
                   if item['outcome'] == 'failed' or item['status'] == 'ERROR']
         atomic_json(opt_dir / 'weekly_selection_summary.json', {
-            'version': 1, 'started_at': started_at,
+            'version': 1, **cycle_identity, 'started_at': started_at,
             'completed_at': int(time.time()*1000) if completed else None,
             'status': ('failed' if error or errors else 'completed') if completed else 'running',
             'tickers': tickers, 'outcomes': cycle_outcomes, 'counts': counts,
@@ -666,27 +679,9 @@ def main() -> int:
             return 1
     summary = []
     for ticker in tickers:
-        # Reanudación tras timeout/crash (16-nov-2026): un activo ya completado EN ESTE
-        # ciclo tiene su reporte con timestamp >= started_at y su aplicación ya hecha.
-        # Se omite para no repetir horas de hyperopt; un reporte de otro ciclo (timestamp
-        # anterior al inicio) NO habilita el salto y pasa por la reevaluación normal.
-        prior_path = reports_dir / f'{ticker}.json'
-        if args.resume and ticker in done and prior_path.is_file():
-            try:
-                prior_report = json.loads(prior_path.read_text())
-            except Exception:
-                prior_report = None
-            ok_status = isinstance(prior_report, dict) and prior_report.get('status') not in (
-                'ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR')
-            if ok_status and int(prior_report.get('timestamp') or 0) >= started_at:
-                print(f'═══ {ticker} ═══ (reanudado: ya completado en este ciclo, se omite)', flush=True)
-                cycle_outcomes.append({'ticker': ticker, 'timestamp': prior_report.get('timestamp'),
-                                       'outcome': 'evaluated', 'status': prior_report.get('status'),
-                                       'reason': 'reanudado: completado en este ciclo', 'resumed': True,
-                                       'deployment_error': prior_report.get('deployment_error')})
-                summary.append((ticker, prior_report.get('status')))
-                write_cycle_summary()
-                continue
+        # A timestamp/status-only resume shortcut is NOT selection evidence.
+        # Revalidate data/config inputs below, including already-done tickers. The
+        # certified selection checkpoint can still avoid a redundant search when fresh.
         # Resume is input-aware: old progress alone is never selection evidence.
         # Completed tickers pass the same durable freshness check as normal runs.
         print(f'═══ {ticker} ═══', flush=True)
@@ -862,7 +857,7 @@ def main() -> int:
         write_cycle_summary()
         if report['status'] not in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR'):
             done.add(ticker)
-        progress_file.write_text(json.dumps({'started_at': started_at, 'done': sorted(done)}, indent=2))
+        atomic_json(progress_file, {**cycle_identity, 'started_at': started_at, 'done': sorted(done)})
         print(f"{ticker}: {report['status']} | prospective_certified=False | weekly_rollout={weekly_rollout_allowed(args)}", flush=True)
     if not args.skip_telemetry:
         for script in ('trigger_parity_report.ts', 'ote_vs_directo.ts'):

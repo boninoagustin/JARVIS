@@ -19,12 +19,14 @@
 # Estados del scout: active|activating|reloading|deactivating → se considera "trabajando".
 # Si systemd no responde (error/estado desconocido) → FAIL CLOSED (se asume trabajando).
 set -u
-REPO=/opt/JARVIS
-MARK_DIR=/var/lib/jarvis
+REPO="${REPO:-/opt/JARVIS}"
+MARK_DIR="${MARK_DIR:-/var/lib/jarvis}"
 MARK="$MARK_DIR/weekly_cycle_last"
-LOCK=/tmp/jarvis_weekly_cycle.lock
-# Revisión 5: si Python terminó OK pero un post falló, el reintento NO repite la optimización.
-PYDONE_DIR=/var/lib/jarvis
+LOCK="${WEEKLY_LOCK:-/tmp/jarvis_weekly_cycle.lock}"
+STATE_HELPER="$REPO/scripts/periodic_opt/weekly_cycle_state.py"
+SUMMARY="$REPO/scripts/periodic_opt/opt_out/weekly_selection_summary.json"
+PROGRESS="$REPO/scripts/periodic_opt/opt_out/weekly_progress.json"
+state_args=(--state-dir "$MARK_DIR" --summary "$SUMMARY" --progress "$PROGRESS")
 SCOUT_UNIT=jarvis-asset-scout.service
 SCOUT_WAIT_MAX_SEC=$((3 * 3600))   # 3 h (antes el contador daba 6 min por error de unidades)
 
@@ -41,10 +43,21 @@ done
 WEEK=$(date -u +%G-W%V)
 mkdir -p "$MARK_DIR"
 
-mark_is_current() {
-  [ "$FORCE" = "1" ] && return 1
-  [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$WEEK" ]
-}
+# Only a context + exact receipt + completed summary can deduplicate a cycle.
+# An empty legacy PYDONE or a sidecar week is never completion evidence.
+PLAN_FORCE=()
+[ "$FORCE" = "1" ] && PLAN_FORCE=(--force)
+if ! PLAN=$(python3 "$STATE_HELPER" plan "${state_args[@]}" --week "$WEEK" "${PLAN_FORCE[@]}"); then
+  # ExecCondition rc=1 means a harmless skip to systemd. Invalid evidence must instead
+  # reach ExecStart and fail there, so OnFailure notifies rather than silently skipping.
+  if [ "$MODE" = "--condition" ]; then
+    echo 'run-required: evidencia inválida; ExecStart fallará cerrado y notificará'
+    exit 0
+  fi
+  exit 1
+fi
+PLAN_ACTION=$(printf '%s' "$PLAN" | jq -r '.action')
+mark_is_current() { [ "$PLAN_ACTION" = "skip" ]; }
 
 # Estado del scout. Override para tests: SCOUT_STATE_OVERRIDE=activating
 scout_state() {
@@ -88,8 +101,8 @@ esac
 
 # ── --run ──
 if mark_is_current; then
-  echo "skip: ya corrió la semana $WEEK"
-  exit 0
+  echo "skip: ciclo $WEEK ya certificado; postprocesos bloqueados en ExecStart"
+  exit 1
 fi
 
 START=$SECONDS
@@ -109,66 +122,47 @@ if ! flock -n 9; then
 fi
 
 if mark_is_current; then
-  echo "skip: ya corrió la semana $WEEK"
-  exit 0
-fi
-
-# Reintento tras fallo de un post: la optimización de esta semana ya está hecha.
-PYDONE="$PYDONE_DIR/weekly_python_done_$WEEK"
-if [ -f "$PYDONE" ]; then
-  echo "retry: la optimización de $WEEK ya terminó; se re-ejecutan sólo los postprocesos"
-  ls -1t "$PYDONE_DIR"/weekly_python_done_* 2>/dev/null | tail -n +3 | xargs -r rm -f
-  exit 0
-fi
-
-# Reanudación ante timeout/crash (16-nov-2026): si quedó un checkpoint de ciclo
-# incompleto posterior al último sello, se reanuda ESA semana (no la actual) en vez
-# de empezar de cero. run_weekly.py --resume salta por fresco lo ya evaluado.
-RESUME_ARGS=""
-PROGRESS="$REPO/scripts/periodic_opt/opt_out/weekly_progress.json"
-if [ -f "$PROGRESS" ]; then
-  P_STARTED=$(jq -r '.started_at // 0' "$PROGRESS" 2>/dev/null || echo 0)
-  case "$P_STARTED" in ''|*[!0-9]*) P_STARTED=0 ;; esac
-  MARK_NOW=$(cat "$MARK" 2>/dev/null)
-  if [ "$P_STARTED" -gt 0 ] && [ -n "$MARK_NOW" ]; then
-    P_WEEK=$(date -u -d "@$((P_STARTED/1000))" +%G-W%V 2>/dev/null || echo "")
-    P_AGE=$(( $(date -u +%s) - P_STARTED/1000 ))
-    if [ -n "$P_WEEK" ] && [ "$P_WEEK" != "$MARK_NOW" ] \
-       && [ "$P_AGE" -ge 0 ] && [ "$P_AGE" -le $((21*86400)) ]; then
-      WEEK="$P_WEEK"
-      RESUME_ARGS="--resume"
-      echo "resume: ciclo $P_WEEK incompleto (marca $MARK_NOW); se reanuda desde el checkpoint"
-    fi
-  fi
-fi
-
-echo "run: ciclo semanal $WEEK (espera scout $((SECONDS - START))s)"
-cd "$REPO" || exit 1
-# Atribución de semana (fix 15-nov-2026): el sello debe corresponder a la semana en
-# la que ARRANCÓ el ciclo, no a la de finalización. Un ciclo largo que cruza el lunes
-# 00:00 UTC marcaba la semana siguiente y consumía su cupo (el ciclo W45 selló W46 el
-# 9-nov, dejando sin turno al viernes 13).
-if ! printf '%s\n' "$WEEK" > "$MARK_DIR/weekly_cycle_week.tmp" 2>/dev/null \
-   || ! mv -f "$MARK_DIR/weekly_cycle_week.tmp" "$MARK_DIR/weekly_cycle_week" 2>/dev/null \
-   || [ "$(cat "$MARK_DIR/weekly_cycle_week" 2>/dev/null)" != "$WEEK" ]; then
-  echo "fail: no se pudo persistir la semana de inicio del ciclo ($WEEK)"
+  echo "skip: ciclo $WEEK ya certificado; postprocesos bloqueados en ExecStart"
   exit 1
 fi
-touch "$MARK_DIR/weekly_cycle_keepalive"
-/usr/bin/python3 "$REPO/scripts/periodic_opt/run_weekly.py" $RESUME_ARGS
-RC=$?
-if [ "$RC" -eq 0 ]; then
-  # La marca semanal NO se escribe acá: la escribe el último ExecStartPost (mark_weekly_done.sh)
-  # cuando TODA la unidad terminó bien. Acá sólo se registra que la OPTIMIZACIÓN terminó, para
-  # que un reintento por fallo de un post no repita las 20 h del ciclo.
-  # Persistencia del checkpoint PYDONE: si no se puede escribir, el ciclo FALLA (no se puede
-  # certificar que la optimización terminó → un reintento la repetirá, que es lo seguro).
-  if ! touch "$PYDONE" 2>/dev/null || [ ! -f "$PYDONE" ]; then
-    echo "fail: no se pudo persistir el checkpoint PYDONE ($PYDONE) — ciclo NO certificado"
-    exit 1
-  fi
-  echo "done-python: ciclo $WEEK (optimización terminada; marca final en el último ExecStartPost)"
+
+cd "$REPO" || exit 1
+# Require the actual roster, never the loader's fallback, and freeze it in the context.
+if [ -n "${WEEKLY_ROSTER_JSON:-}" ]; then
+  ROSTER_JSON="$WEEKLY_ROSTER_JSON"  # isolated regression fixtures
 else
-  echo "fail: ciclo $WEEK terminó con código $RC (no se marca la semana)"
+  ROSTER_DOC=$(npx tsx "$REPO/scripts/periodic_opt/get_active_tickers.ts") || exit 1
+  ROSTER_JSON=$(printf '%s' "$ROSTER_DOC" | jq -ce 'select(.source == "firestore") | .tickers') || {
+    echo 'fail: no se pudo verificar el roster Firestore'; exit 1;
+  }
 fi
-exit "$RC"
+BEGIN=$(python3 "$STATE_HELPER" begin "${state_args[@]}" --week "$WEEK" --tickers-json "$ROSTER_JSON" "${PLAN_FORCE[@]}") || exit 1
+ACTION=$(printf '%s' "$BEGIN" | jq -r '.action')
+[ "$ACTION" = "skip" ] && { echo 'skip: ciclo certificado durante la carrera; postprocesos bloqueados'; exit 1; }
+export JARVIS_WEEKLY_CONTEXT="$MARK_DIR/weekly_cycle_context.json"
+WEEK=$(printf '%s' "$BEGIN" | jq -r '.context.week')
+RUN_ID=$(printf '%s' "$BEGIN" | jq -r '.context.run_id')
+# Digest binds to the last actual ExecStart context, not a later harmless condition skip.
+echo "cycle-context: run=$RUN_ID week=$WEEK invocation=${INVOCATION_ID:-}"
+# Compatibility sidecar only; no consumer may use it as proof.
+printf '%s\n' "$WEEK" > "$MARK_DIR/weekly_cycle_week" || exit 1
+if [ "$ACTION" = "posts" ]; then
+  echo "retry: evidencia verificada de $WEEK; sólo postprocesos (misma identidad)"
+  exit 0
+fi
+RESUME_ARGS=()
+[ "$ACTION" = "resume" ] && RESUME_ARGS=(--resume)
+FROZEN_TICKERS=$(printf '%s' "$BEGIN" | jq -r '.context.tickers | join(",")')
+echo "run: ciclo semanal $WEEK ($ACTION, espera scout $((SECONDS - START))s)"
+touch "$MARK_DIR/weekly_cycle_keepalive"
+"${WEEKLY_PYTHON:-/usr/bin/python3}" "$REPO/scripts/periodic_opt/run_weekly.py" --tickers "$FROZEN_TICKERS" "${RESUME_ARGS[@]}"
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  echo "fail: ciclo $WEEK terminó con código $RC (sin recibo ni sello)"
+  exit "$RC"
+fi
+python3 "$STATE_HELPER" complete "${state_args[@]}" || {
+  echo 'fail: Python salió 0 pero el ciclo no acredita resultados completos'; exit 1;
+}
+echo "done-python: ciclo $WEEK con recibo de identidad + resumen SHA256 verificados"
+exit 0
