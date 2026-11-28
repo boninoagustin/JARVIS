@@ -9,6 +9,7 @@ import {resolveSignalPolicy} from '../src/engine/smc/signal_profiles.js';
 import {isValidImpulseCandle} from '../src/engine/smc/math/directional_impulse.js';
 import { parse } from 'csv-parse';
 import { SMCEngine } from '../src/engine/smc/SMCEngine.js';
+import { NATIVE_ZONE_SOURCE } from '../src/engine/smc/zone_protocol.js';
 import { OHLCV, SMCState, OrderBlock } from '../src/engine/smc/types.js';
 import type { DivergenceEvent } from '../src/engine/smc/modules/divergence.js';
 import type {ExecutionBar,ExecutionObservation,ExecutionImpulse,ExecutionFvg} from '../src/engine/ExecutionTypes.js';
@@ -44,7 +45,8 @@ const MEDAL_MAP: Record<string, string> = {
     'Plata': 'PLATA',
     'Bronce': 'BRONCE',
     'CHoCH': 'CHoCH',
-    'GodZone': 'GOD'
+    'GodZone': 'GOD',
+    'Breaker': 'BRK'
 };
 
 function obMedal(ob: OrderBlock): string {
@@ -186,7 +188,7 @@ function formatSyncZones(
     const engineAny = state as any;
     const wBiasStr = engineAny.weeklyBias === 'Bullish' ? 'BUY' : engineAny.weeklyBias === 'Bearish' ? 'SELL' : trend;
     
-    return `SYNC_ZONES | TF: ${tf} | Trend: ${trend} | WBias: ${wBiasStr} | Payload: ${JSON.stringify(zones.slice(0, 20))} | TS: ${timestamp}`;
+    return `SYNC_ZONES | TF: ${tf} | Source: ${NATIVE_ZONE_SOURCE} | Trend: ${trend} | WBias: ${wBiasStr} | Payload: ${JSON.stringify(zones.slice(0, 20))} | TS: ${timestamp}`;
 }
 
 // CSV cell escaping 
@@ -430,7 +432,7 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
         for (const event of events) eventCounts[event.type] = (eventCounts[event.type] ?? 0) + 1;
         const isoLocal = new Date(candle.timestamp - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
         const vwapTag = state.vwapStatus ? ` | VWAP: ${state.vwapStatus}` : '';
-        const tf = period === 'M15' ? '15' : period === 'H1' ? '60' : period === 'H4' ? '240' : period === 'D1' ? 'D' : period;
+        const tf = period === 'M5' ? '5' : period === 'M15' ? '15' : period === 'M30' ? '30' : period === 'H1' ? '60' : period === 'H4' ? '240' : period === 'D1' ? 'D' : period;
         
         if(!excluded)updateDivZones(divZones, candle);
 
@@ -478,7 +480,7 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                 case 'EVENT_DIVERGENCE': {
                     const dir = dirToBot(ev.direction);
                     const rsiDiff = ev.divergence?.rsiDiff ? Math.round(ev.divergence.rsiDiff * 10) / 10 : 0;
-                    const score = ev.divergence?.score ?? 0;
+                    const score = ev.divergence?.score ?? (state.lastDivergence as any)?.score ?? 4;
                     alertMsg = `EVENTO_SMC_DIV | TF: ${tf} | Dir: ${dir} | Score: ${score} | RSI_Diff: ${rsiDiff} | TS: ${closeTs}`;
                     break;
                 }
@@ -486,7 +488,10 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
                 case 'ZONE_BROKEN': {
                     const dir = dirToBot(ev.direction);
                     const medal = MEDAL_MAP[ev.category] ?? ev.category;
-                    alertMsg = `${ev.type} | TF: ${tf} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)} | TS: ${closeTs}`;
+                    const brokenMeta = ev.type === 'ZONE_BROKEN'
+                        ? ` | ZoneDir: ${dir === 'BUY' ? 'LONG' : 'SHORT'} | ZoneTop: ${ev.top} | ZoneBtm: ${ev.bottom}`
+                        : '';
+                    alertMsg = `${ev.type} | TF: ${tf} | Source: ${NATIVE_ZONE_SOURCE} | Dir: ${dir} | Medal: ${medal} | Score: ${ev.score} | Top: ${fmt(ev.top)} | Btm: ${fmt(ev.bottom)}${brokenMeta} | TS: ${closeTs}`;
                     break;
                 }
             }

@@ -146,12 +146,21 @@ export interface TradeMgmtOverrides {
     minimal_roi?: Record<string, number>;
 }
 
+/** Normaliza partialClosePct a fracción [0, 1] (>1 se interpreta como porcentaje 0..100). */
+export function normalizePartialClosePct(value: unknown, fallback = 0.5): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    const normalized = value > 1 ? value / 100 : value;
+    return Math.min(Math.max(normalized, 0), 1);
+}
+
 /** Extrae los genes de gestión tuneados de un trigger config (sin undefined, Firestore-safe) */
 export function extractMgmtOverrides(tfConfig: any): TradeMgmtOverrides | undefined {
     if (!tfConfig) return undefined;
     const o: any = {};
     for (const k of ['partialClosePct', 'slAfterTp1', 'tp15BeEnabled', 'atrTrailEnabled', 'structuralTrailEnabled', 'tp1StructuralMinRR', 'minimal_roi'] as const) {
-        if (tfConfig[k] !== undefined) o[k] = tfConfig[k];
+        if (tfConfig[k] !== undefined) {
+            o[k] = k === 'partialClosePct' ? normalizePartialClosePct(tfConfig[k], 0.5) : tfConfig[k];
+        }
     }
     return Object.keys(o).length > 0 ? o : undefined;
 }

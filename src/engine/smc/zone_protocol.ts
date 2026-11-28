@@ -2,15 +2,17 @@
 const ZONE_MEDALS: Record<string, string> = {
     PLAT: 'Platino', PLATINO: 'Platino', ORO: 'Oro', PLATA: 'Plata',
     BRONCE: 'Bronce', CHOCH: 'CHoCH', GOD: 'GodZone', GODZONE: 'GodZone',
-    BRK: 'Breaker', BREAKER: 'Breaker', LEGACY: 'Legacy', OB: 'OB',
+    GOD_BRK: 'GodZone', BRK: 'Breaker', BREAKER: 'Breaker', LEGACY: 'Legacy', OB: 'OB',
 };
 
 /** Preserve unknown legacy categories; normalize only aliases understood by the radar. */
 export function canonicalZoneMedal(value: unknown): string | undefined {
     if (typeof value !== 'string' || !value.trim()) return undefined;
-    const key = value.trim().toUpperCase();
+    const trimmed = value.trim();
+    const basePart = trimmed.split('|')[0].trim();
+    const key = basePart.toUpperCase();
     if (key === 'UNDEFINED' || key === 'NULL') return undefined;
-    return ZONE_MEDALS[key] ?? value;
+    return ZONE_MEDALS[key] ?? trimmed;
 }
 
 /** The caller already removes EX1/BOOTSTRAP. Accept legacy JSON and the native trailing TS. */

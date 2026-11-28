@@ -4,7 +4,7 @@ import { predict as mlPredict, isMLActive } from './MLFilter.js';
 import { telemetry } from '../services/telemetry.js';
 import { resolveExecutionPolicy, computeExecutionTargets } from './ExecutionMicrostructure.js';
 import { getExecutionSnapshot, buildExecutionObservation } from './ExecutionContext.js';
-import { validateExecutionInstrument } from './ExecutionCosts.js';
+import { validateExecutionInstrument, classifyExecutionRegime } from './ExecutionCosts.js';
 import { getAdrPrice } from './tp2Cap.js';
 import { shouldFreezeRolloverObservation } from './RolloverTriagePolicy.js';
 import type { RolloverFreezeContext } from './RolloverTriagePolicy.js';
@@ -137,28 +137,73 @@ export function resolveOteGate(isChoch: boolean, isBos: boolean, triggerTf: stri
     };
 }
 
-export const getDecimals = (ticker: string) => (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
+function resolveAlphaRegime(ticker: string): 'FOREX' | 'INDICES' | 'METALS' | 'ENERGY' | 'CRYPTO' {
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = classifyExecutionRegime(t);
+    if (regime) return regime;
+    if (t.includes('BTC') || t.includes('ETH')) return 'CRYPTO';
+    if (['US30', 'NAS', 'NDX', 'USTECH', 'US100', 'SPX', 'US500', 'SP500', 'DJI', 'GER', 'DE40', 'DAX',
+        'FRA40', 'FR40', 'ITALY40', 'UK100', 'FTSE', 'SPAIN35', 'ES35', 'NL25', 'EUROPE50', 'EU50',
+        'AUSTRALIA200', 'AUS200', 'JP225', 'JPN225', 'JAPAN225', 'NIKKEI'].some(i => t.includes(i))) return 'INDICES';
+    if (t.includes('XAU') || t.includes('XAG') || t.includes('XPT') || t.includes('XPD') || t.includes('GOLD') || t.includes('SILVER')) return 'METALS';
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('XBR') || t.includes('BRENT') || t.includes('NATGAS') || t.includes('NGAS') || t.includes('XNG')) return 'ENERGY';
+    return 'FOREX';
+}
+
+export const getDecimals = (ticker: string): number => {
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = resolveAlphaRegime(t);
+    if (regime === 'CRYPTO' || regime === 'INDICES') return 2;
+    if (regime === 'METALS') return (t.includes('XAG') || t.includes('SILVER')) ? 3 : 2;
+    if (regime === 'ENERGY') return 3;
+    return t.includes('JPY') ? 3 : 5;
+};
 
 /** Distancia mínima en precio absoluto para que cTrader acepte SL/TP. */
 export function getMinPipDistance(ticker: string): number {
-    const t = ticker.toUpperCase();
-    if (t.includes('BTC') || t.includes('ETH')) return 50;         // crypto: $50
-    if (t.includes('XAU') || t.includes('GOLD')) return 1.0;       // gold: $1
-    if (t.includes('US30') || t.includes('NAS') || t.includes('SPX') || t.includes('US500')) return 5; // índices: 5 pts
-    if (t.includes('USOIL') || t.includes('XTI') || t.includes('WTI')) return 0.10; // oil: 10 cents
-    if (t.includes('JPY')) return 0.10;                             // JPY pairs: 10 pips (0.10)
-    return 0.0010;                                                   // forex majors: 10 pips (0.0010)
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = resolveAlphaRegime(t);
+    if (regime === 'CRYPTO') return 50;
+    if (regime === 'METALS') return (t.includes('XAG') || t.includes('SILVER')) ? 0.05 : 1.0;
+    if (regime === 'INDICES') {
+        if (t.includes('JP225') || t.includes('JPN225') || t.includes('JAPAN225') || t.includes('NIKKEI')) return 25;
+        if (t.includes('NL25')) return 0.5;
+        return 5;
+    }
+    if (regime === 'ENERGY') {
+        if (t.includes('NATGAS') || t.includes('NGAS') || t.includes('XNG')) return 0.01;
+        return 0.10;
+    }
+    if (t.includes('JPY')) return 0.10;
+    return 0.0010;
 }
 
 export function calculateDynamicSlBuffer(ticker: string, originPrice: number, bufferConfig: number): number {
-    const t = ticker.toUpperCase();
-    if (t.includes('JPY')) return bufferConfig * 0.1;
-    const forexPairs = ['EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'CHF'];
-    if (forexPairs.some(fiat => t.includes(fiat)) && !t.includes('BTC') && !t.includes('ETH')) return bufferConfig * 0.001;
-    const indices = ['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI'];
-    if (indices.some(idx => t.includes(idx))) return bufferConfig * 100;
-    if (t.includes('XAU') || t.includes('GOLD')) return bufferConfig * 10;
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = resolveAlphaRegime(t);
+    if (regime === 'FOREX') {
+        return t.includes('JPY') ? bufferConfig * 0.1 : bufferConfig * 0.001;
+    }
+    if (regime === 'INDICES') {
+        const legacyHundredIndices = ['US30', 'NAS', 'NDX', 'USTECH', 'US100', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'];
+        if (legacyHundredIndices.some(idx => t.includes(idx))) return bufferConfig * 100;
+        return originPrice * (bufferConfig / 100);
+    }
+    if (regime === 'METALS') {
+        if (t.includes('XAU') || t.includes('GOLD')) return bufferConfig * 10;
+        return originPrice * (bufferConfig / 100);
+    }
     return originPrice * (bufferConfig / 100);
+}
+
+/** Rango mínimo de impulso estructural |extreme - origin|, fuente única Live ↔ Backtest. */
+export function getMinImpulseRange(ticker: string, actualPrice: number): number {
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = resolveAlphaRegime(t);
+    if (regime === 'CRYPTO') return actualPrice * 0.0005;
+    if (regime === 'INDICES' || regime === 'METALS' || regime === 'ENERGY' || t.includes('DXY')) return actualPrice * 0.0003;
+    if (t.includes('JPY')) return 0.02;
+    return 0.00015;
 }
 
 
@@ -182,6 +227,53 @@ export interface AlphaInsight {
     newTrade?: ActiveTrade;
 }
 
+/**
+ * Extrae el gatillo estructural REAL (familia CHoCH/BOS y TF 3m/5m/15m) que creó el ImpulseLeg,
+ * leyendo desde el final de `chochEvents` para no confundirse con eventos previos de confluencia
+ * (`OB_Oro_15M`, `ZoneTouched_..._15M`, `Sweep_15M`, `BOS_15M`) acumulados en `activeScore`.
+ */
+export function resolveImpulseTriggerIdentity(chochEvents?: string[]): {
+    isChoch: boolean;
+    isBos: boolean;
+    triggerTf: string;
+    execTfNum: string | undefined;
+} {
+    const evs = chochEvents ?? [];
+    for (let i = evs.length - 1; i >= 0; i--) {
+        const e = String(evs[i] ?? '');
+        const m = e.match(/^(?:EVENTO_)?(CHoCH|CHOCH|BOS)(?:🚀|🔨)?_(3M|5M|15M)$/i);
+        if (m) {
+            const famUpper = m[1].toUpperCase();
+            const tfLower = m[2].toLowerCase();
+            return {
+                isChoch: famUpper === 'CHOCH',
+                isBos: famUpper === 'BOS',
+                triggerTf: tfLower,
+                execTfNum: tfLower.replace('m', ''),
+            };
+        }
+    }
+    let isChoch = false;
+    let isBos = false;
+    let triggerTf = '5m';
+    let execTfNum: string | undefined;
+    for (let i = evs.length - 1; i >= 0; i--) {
+        const e = String(evs[i] ?? '');
+        if (!isChoch && !isBos) {
+            if (e.includes('CHOCH') || e.includes('CHoCH')) isChoch = true;
+            else if (e.includes('BOS')) isBos = true;
+        }
+        if (!execTfNum) {
+            const m = e.match(/_(3|5|15)M$/i);
+            if (m) {
+                execTfNum = m[1];
+                triggerTf = `${m[1]}m`;
+            }
+        }
+    }
+    return { isChoch, isBos, triggerTf, execTfNum };
+}
+
 export function evaluateImpulseCore(
     leg: ImpulseLeg | null | undefined, 
     currentPrice: number, 
@@ -202,7 +294,8 @@ export function evaluateImpulseCore(
     const { config, sessionConfig } = ctx;
     const executionPolicy = resolveExecutionPolicy(config.executionPolicy);
     const experimental = executionPolicy.profile === 'microstructure_v1';
-    const executionTf = leg.executionSnapshot?.tf ?? (leg.chochEvents?.find(e => /_(5|15)M$/.test(e))?.match(/_(5|15)M$/)?.[1]);
+    const legIdentity = resolveImpulseTriggerIdentity(leg.chochEvents);
+    const executionTf = leg.executionSnapshot?.tf ?? legIdentity.execTfNum;
     const snapshot = experimental && executionTf ? getExecutionSnapshot(state, executionTf, nowMs) : undefined;
     if (experimental) {
         const q = snapshot?.quote;
@@ -229,13 +322,8 @@ export function evaluateImpulseCore(
     }
 
     // 🆕 Plan B ago-2026: familia/tf del leg para la telemetría de gatillos
-    let _legFam = 'Choch'; let _legTf = '5m';
-    for (const e of leg.chochEvents ?? []) {
-        if (e.includes('BOS')) _legFam = 'Bos';
-        if (e.includes('CHOCH') || e.includes('CHoCH')) _legFam = 'Choch';
-        const m = String(e).match(/_(\d+M)$/);
-        if (m && ['3M', '5M', '15M'].includes(m[1])) _legTf = m[1].toLowerCase();
-    }
+    const _legFam = legIdentity.isBos ? 'Bos' : 'Choch';
+    const _legTf = legIdentity.triggerTf || '5m';
     const _oteKey = `ote${_legFam}${_legTf}`;
 
     // 🔧 FIX 1: Stale leg cleaner — legs de más de 8 horas se invalidan automáticamente (Intradia)
@@ -301,16 +389,9 @@ export function evaluateImpulseCore(
 
     if (!impulseInvalidated) {
         const range = Math.abs(leg.extreme - leg.origin);
-        let isChoch = false, isBos = false, triggerTfStr = '';
-        for (const e of leg.chochEvents ?? []) {
-            if (e.includes('CHOCH') || e.includes('CHoCH')) isChoch = true;
-            if (e.includes('BOS')) isBos = true;
-            if (!triggerTfStr) {
-                const tf = e.substring(e.lastIndexOf('_') + 1);
-                if (tf === '3M' || tf === '5M' || tf === '15M') triggerTfStr = tf;
-            }
-        }
-        let triggerTf = triggerTfStr.toLowerCase(); // "5m" or "15m"
+        const isChoch = legIdentity.isChoch;
+        const isBos = legIdentity.isBos;
+        const triggerTf = legIdentity.triggerTf; // "5m" or "15m"
 
         let activeOteEntryPercent = config.oteEntryPercent || 50;
         if (sessionConfig) {
@@ -572,9 +653,9 @@ export function evaluateImpulseCore(
                 const newTrade: ActiveTrade = {
                     tradeId, ticker, direction: leg.dir,
                     entryPrice: entryFill,
-                    tp1Price: chosenTP1,
-                    tp2Price: fixedTP2,
-                    slPrice: adjustedSL,
+                    tp1Price: parseFloat(tp1),
+                    tp2Price: parseFloat(tp2),
+                    slPrice: parseFloat(stopLoss),
                     tp1Hit: false,
                     tp2Hit: false,
                     score: oteData.points || 0,

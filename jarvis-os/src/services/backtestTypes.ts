@@ -79,8 +79,21 @@ export interface BacktestConfig {
   minBuyPoints: number;
   minSellPoints: number;
   minRR?: number; // Minimum RR required to take a trade
+  fixedRR?: number;
+  maxSmartRiskPercent?: number;
   oteEntryPercent: number;
   entryTrigger: 'CHOCH' | 'OTE' | 'BOTH' | 'SMART';
+  partialClosePct?: number;
+  slAfterTp1?: 'midpoint' | 'breakeven' | 'none';
+  tp15BeEnabled?: boolean;
+  atrTrailEnabled?: boolean;
+  structuralTrailEnabled?: boolean;
+  vwapPts?: number;
+  zoneWeights?: Record<string, Record<string, number>>;
+  sniperCooldownMs?: number;
+  sessionWarmupMin?: number;
+  biasGateStrict?: boolean;
+  biasConfluence?: import('../../../src/engine/Types').BiasConfluenceConfig;
   
   // Session-specific triggers and scores
   sessions?: Record<string, SessionConfig>;
@@ -116,6 +129,8 @@ export interface BacktestConfig {
   mlGate?: { enabled?: boolean; modelPath?: string; trainedAt?: number };
   /** 🛡️ sep-2026: pico de spread en 20:29-21:00 UTC (undefined → default 19; 0 = off) */
   rolloverPeakPips?: number;
+  /** Test-only opt-out for deterministic Live↔Backtest parity suites across all hours. */
+  disableNewsBlackout?: boolean;
   timesfm?: Partial<import('../../../src/engine/TimesfmFilter').TimesfmFilterConfig>;
 }
 
@@ -189,5 +204,4 @@ export const parseTF = (tf: string) => {
 export const getBuffer = (ticker: string, price: number) =>
   (ticker.includes('BTC') || ticker.includes('ETH')) ? price * 0.001 : price * 0.0002;
 
-export const getDecimals = (ticker: string) =>
-  (ticker.includes('BTC') || ticker.includes('ETH') || ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('XAU') || ticker.includes('GOLD')) ? 2 : (ticker.includes('JPY') ? 3 : 5);
+export { getDecimals } from '../../../src/engine/AlphaModel';

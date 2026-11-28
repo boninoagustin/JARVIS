@@ -459,8 +459,8 @@ export default function PeriodicOptPanel() {
         try {
             const GENES: Record<string, Record<string, any>> = {
                 P1: { partialClosePct: 0, tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'none' },
-                P2: { partialClosePct: 50, tp15BeEnabled: true, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'midpoint' },
-                P3: { partialClosePct: 50, tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'none' },
+                P2: { partialClosePct: 0.5, tp15BeEnabled: true, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'midpoint' },
+                P3: { partialClosePct: 0.5, tp15BeEnabled: false, atrTrailEnabled: false, structuralTrailEnabled: false, slAfterTp1: 'none' },
             };
             const ref = doc(db, 'asset_configs', ticker);
             const snap = await getDoc(ref);

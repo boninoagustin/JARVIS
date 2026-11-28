@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { filterWindow, loadEvaluationManifest, readOnlyReplayConfig, modelAvailability } from '../hyperopt/evaluation_protocol.js';
+import { getAssetClass, defaultFrictionConfig } from '../../src/engine/FrictionModel.js';
 import {setMLGateOverride, loadModelFromJSON} from '../../src/engine/MLFilter.js';
 import {validateReplayWindow, type ReplayWindowOptions} from '../../jarvis-os/src/services/replayWindow.js';
 
@@ -44,11 +45,12 @@ export async function readAssetSnapshot(args: any): Promise<any> {
  * TimesFM enabled or synthesize a separate ML gate: the worker resolves one gate.
  */
 export function mapAssetConfig(ticker: string, asset: any, timesfmCache?: string): any {
+  const clsFriction = defaultFrictionConfig[getAssetClass(ticker)] ?? defaultFrictionConfig.FOREX;
   const config = {
     entryTrigger: 'SMART',
     slBufferPercent: 0.1, fixedRR: 2, oteEntryPercent: 50,
     vwapPts: 2, sessions: {}, enabled: true,
-    spreadPips: 0.1, commissionPerLot: 3, tp1StructuralMinRR: 1.2,
+    spreadPips: clsFriction.baseSpreadPips, commissionPerLot: clsFriction.commissionPerLot, tp1StructuralMinRR: 1.2,
     ...JSON.parse(JSON.stringify(asset)), ticker,
     minBuyPoints: asset.minPointsForBuy ?? asset.minBuyPoints ?? 4,
     minSellPoints: asset.minPointsForSell ?? asset.minSellPoints ?? 4,

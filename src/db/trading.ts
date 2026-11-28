@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 
 import { recordMacroImpulse, selectMacroImpulse, updateMacroImpulses } from '../engine/MacroImpulse.js';
 import { z } from 'zod';
-import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema, extractMgmtOverrides, DEFAULT_BIAS_CONFLUENCE, BiasConfluenceConfig } from '../engine/Types.js';
+import { RadarZone, ImpulseLeg, RadarState, ActiveTrade, AssetSessionConfigSchema, GlobalPortfolioConfig, SessionSchema, extractMgmtOverrides, normalizePartialClosePct, DEFAULT_BIAS_CONFLUENCE, BiasConfluenceConfig } from '../engine/Types.js';
 
 type SessionConfig = z.infer<typeof SessionSchema>;
 import { StateStore, createStateStore } from '../engine/StateStore.js';
@@ -26,7 +26,7 @@ export const globalState = createStateStore();
 
 
 import {
-    emptyState, normalizeZone, TF_WEIGHT, evaluateImpulseCore, getDecimals, getMinPipDistance, calculateDynamicSlBuffer, isInsideMacroOteZone,
+    emptyState, normalizeZone, TF_WEIGHT, evaluateImpulseCore, resolveImpulseTriggerIdentity, getDecimals, getMinPipDistance, calculateDynamicSlBuffer, getMinImpulseRange, isInsideMacroOteZone,
     gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK
 } from '../engine/AlphaModel.js';
 
@@ -326,13 +326,13 @@ function buildBotStatus(ticker: string, s: any): any {
     const ba = getLastBidAsk(ticker);
     // Unidad de spread por tipo de activo (1 pip forex = 0.0001, JPY = 0.01,
     // oro/petróleo en centavos, índices en puntos, crypto en USD).
-    const tu = ticker.toUpperCase();
-    let unitSize = 0.0001; let unitLabel = 'pips';
-    if (tu.includes('JPY')) { unitSize = 0.01; unitLabel = 'pips'; }
-    else if (tu.includes('XAU') || tu.includes('XAG')) { unitSize = 0.01; unitLabel = 'cents'; }
-    else if (tu === 'US500' || tu.includes('NAS') || tu.includes('US30') || tu.includes('SPX') || tu.includes('GER') || tu.includes('DE40') || tu.includes('DAX')) { unitSize = 1; unitLabel = 'pts'; }
-    else if (tu.includes('USOIL') || tu.includes('WTI') || tu.includes('OIL')) { unitSize = 0.01; unitLabel = 'cents'; }
-    else if (tu.includes('BTC') || tu.includes('ETH')) { unitSize = 1; unitLabel = 'USD'; }
+    const clsUnit = getAssetClass(ticker);
+    const pipUnit = getPipValue(ticker, s.lastPrice ?? 1);
+    let unitSize = pipUnit;
+    let unitLabel = 'pips';
+    if (clsUnit === 'INDICES') { unitSize = 1; unitLabel = 'pts'; }
+    else if (clsUnit === 'METALS' || clsUnit === 'ENERGY') { unitSize = pipUnit; unitLabel = 'pips'; }
+    else if (clsUnit === 'CRYPTO') { unitSize = 1; unitLabel = 'USD'; }
     return {
         ks: ks.length ? ks : null,
         session,
@@ -1506,7 +1506,7 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
     const currentSession = getCurrentSession(nowMs);
     const sessionConfig = config.sessions?.[currentSession];
     if (leg && policy.smart && (!leg.executionDecision || leg.executionDecision.mode === 'WAIT_DATA')) {
-        const tf = leg.executionSnapshot?.tf ?? leg.chochEvents?.find(e => /_(5|15)M$/.test(e))?.match(/_(5|15)M$/)?.[1];
+        const tf = leg.executionSnapshot?.tf ?? resolveImpulseTriggerIdentity(leg.chochEvents).execTfNum;
         const snapshot = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
         const quote = snapshot?.quote;
         const price = leg.dir === 'BUY' ? quote?.ask : quote?.bid;
@@ -1540,6 +1540,10 @@ function evaluateImpulse(leg: ImpulseLeg | null | undefined, currentPrice: numbe
 
             // 💾 Sincronización en RAM y Firebase del trade modificado por fricción
             (netTrade as any).isBacktest = isBacktest;
+            if (isBacktest && decision.oteData) {
+                decision.oteData.rawEntryPrice = decision.oteData.entryPrice;
+                decision.oteData.entryPrice = netTrade.entryPrice;
+            }
             // New pre-trade only, never infer this for hydrated/adopted positions.
             const capturedTrade = { ...netTrade, initialSlPrice: netTrade.initialSlPrice ?? netTrade.slPrice };
             store.activeTrades.set(netTrade.tradeId, capturedTrade);
@@ -1782,7 +1786,15 @@ export async function processTradingAlert(alertText: string, store: StateStore =
     }
 
     const tfMatch = alertText.match(/TF:\s*([a-zA-Z0-9]+)/i);
-    const eventTf = tfMatch ? tfMatch[1] : 'UNKNOWN';
+    let eventTf = tfMatch ? tfMatch[1].toUpperCase() : 'UNKNOWN';
+    if (eventTf === 'M5') eventTf = '5';
+    else if (eventTf === 'M15') eventTf = '15';
+    else if (eventTf === 'M3') eventTf = '3';
+    else if (eventTf === 'M30') eventTf = '30';
+    else if (eventTf === 'H1') eventTf = '60';
+    else if (eventTf === 'H4') eventTf = '240';
+    else if (eventTf === 'D1' || eventTf === '1D') eventTf = 'D';
+    else if (eventTf === 'W1' || eventTf === '1W') eventTf = 'W';
     const readableTf = parseTF(eventTf);
 
     let currentDirection: 'BUY' | 'SELL' | null = null;
@@ -1919,14 +1931,37 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             // 🔧 FIX: Guardar precio anterior ANTES de actualizar para detectar dirección de entrada
             const previousPrice = state.lastPrice;
 
-            const prevClose = previousPrice ?? currentPrice;
-            const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
-            if (state.atr14 === undefined) {
-                state.atrSeed = (state.atrSeed ?? 0) + tr;
-                state.atrSamples = (state.atrSamples ?? 0) + 1;
-                if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14; // SMA de arranque
+            const atrMatch = alertText.match(/ATR:\s*([0-9.,]+)/i);
+            const explicitAtr = atrMatch ? parseTVPrice(atrMatch[1]) : NaN;
+            if (Number.isFinite(explicitAtr) && explicitAtr > 0) {
+                state.atr14 = explicitAtr;
             } else {
-                state.atr14 = (state.atr14 * 13 + tr) / 14; // suavizado de Wilder
+                // Solo actualizar Wilder ATR en el TF de ejecución primario (5M, o 15M/3M si no hay 5M)
+                // y nunca con velas HTF (1H/4H/D) ni ticks repetidos de la misma vela en formación.
+                const stAny = state as any;
+                if (eventTf === '5') stAny.atrPrimaryTf = '5';
+                const atrPrimaryTf = stAny.atrPrimaryTf ?? ((eventTf === '15' || eventTf === '3') ? eventTf : null);
+                if (atrPrimaryTf && eventTf === atrPrimaryTf) {
+                    const closedKey = (prevHighPrice !== undefined && prevLowPrice !== undefined)
+                        ? `${prevHighPrice}:${prevLowPrice}`
+                        : null;
+                    const shouldAdvanceAtr = closedKey === null || stAny.lastAtrClosedKey !== closedKey;
+                    if (shouldAdvanceAtr) {
+                        if (closedKey !== null) stAny.lastAtrClosedKey = closedKey;
+                        const barH = prevHighPrice ?? highPrice;
+                        const barL = prevLowPrice ?? lowPrice;
+                        const prevClose: number = stAny.atrPrevClose ?? previousPrice ?? currentPrice;
+                        const tr = Math.max(barH - barL, Math.abs(barH - prevClose), Math.abs(barL - prevClose));
+                        if (state.atr14 === undefined) {
+                            state.atrSeed = (state.atrSeed ?? 0) + tr;
+                            state.atrSamples = (state.atrSamples ?? 0) + 1;
+                            if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14;
+                        } else {
+                            state.atr14 = (state.atr14 * 13 + tr) / 14;
+                        }
+                        stAny.atrPrevClose = currentPrice;
+                    }
+                }
             }
 
             // Actualizar después de guardar la referencia
@@ -1998,7 +2033,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const snapshot = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
                             const liveQuote = () => { const q = getLastBidAsk(ticker, Date.now()); return q ? { bid: q.bid, ask: q.ask, timestampMs: q.ts, source: 'broker' as const } : undefined; };
                             const profilePartial = trade.executionPolicy!.targets ? REGIME_PROFILES[trade.executionInstrument!.regime].partialClosePct
-                                : (trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? .5);
+                                : normalizePartialClosePct(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct, 0.5);
                             const reason = await manageExecutionPosition(trade, snapshot, nowMs, profilePartial, {
                                 now: () => Date.now(), quote: liveQuote,
                                 rolloverBlocked: () => {
@@ -2060,7 +2095,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                     // 🆕 Overrides por gatillo (auto-tune): congelados en el trade al entrar; fallback a config raíz
                     const mgmtPartialT = versionedExecution && trade.executionPolicy!.targets && trade.executionInstrument
-                        ? REGIME_PROFILES[trade.executionInstrument.regime].partialClosePct : Math.min(Math.max(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? 0.5, 0), 1);
+                        ? REGIME_PROFILES[trade.executionInstrument.regime].partialClosePct : normalizePartialClosePct(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct, 0.5);
                     const mgmtSlModeT: 'midpoint' | 'breakeven' | 'none' = trade.mgmtOverrides?.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint';
                     const mgmtTp15T = trade.mgmtOverrides?.tp15BeEnabled ?? config.tp15BeEnabled ?? true;
                     const mgmtAtrTrailT = trade.mgmtOverrides?.atrTrailEnabled ?? config.atrTrailEnabled ?? true;
@@ -2715,11 +2750,13 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                         const isPartialClose = trade.tp1Hit;
                         const originalSl = trade.originalSlPrice ?? trade.slPrice;
                         const initialSlLossPct = Math.abs(originalSl - trade.entryPrice) / trade.entryPrice * 100;
-                        const currentSlLossPct = Math.abs(trade.slPrice - trade.entryPrice) / trade.entryPrice * 100;
+                        const slPnlPct = trade.direction === 'BUY'
+                            ? (trade.slPrice - trade.entryPrice) / trade.entryPrice * 100
+                            : (trade.entryPrice - trade.slPrice) / trade.entryPrice * 100;
                         const pnlTp1Pct = Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100;
-                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * mgmtPartialT - currentSlLossPct * (1 - mgmtPartialT)) : -currentSlLossPct;
+                        const finalPnlPct = isPartialClose ? (pnlTp1Pct * mgmtPartialT + slPnlPct * (1 - mgmtPartialT)) : slPnlPct;
                         const rMultiple = initialSlLossPct > 0 ? parseFloat((finalPnlPct / initialSlLossPct).toFixed(4)) : 0;
-                        const finalResult = isPartialClose ? (finalPnlPct >= 0 ? 'BREAKEVEN' : 'LOSS') : 'LOSS';
+                        const finalResult = finalPnlPct > 0 ? 'WIN' : (isPartialClose && finalPnlPct >= 0 ? 'BREAKEVEN' : 'LOSS');
                         const durationMin = Math.round((nowTrade - trade.timestamp) / 60000);
 
                         if (trade.journalId) {
@@ -2931,20 +2968,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             }
                         }
 
-                        // 🛡️ Rango mínimo del impulso: |extreme - origin| debe superar el umbral
-                        // Umbral adaptado por ticker (forex majors ~2 pips, crypto ~0.02%, índices ~0.05%)
+                        // 🛡️ Rango mínimo del impulso: fuente única Live ↔ Backtest (AlphaModel.getMinImpulseRange)
                         const impulseRange = Math.abs(actualPrice - newOrigin);
-                        let minImpulseRange: number;
-                        if (ticker.includes('BTC') || ticker.includes('ETH')) {
-                            minImpulseRange = actualPrice * 0.0005; // 0.05% para crypto
-                        } else if (ticker.includes('JPY')) {
-                            minImpulseRange = 0.02; // 2 pips para pares JPY
-                        } else if (ticker.includes('US30') || ticker.includes('NAS') || ticker.includes('SPX') || ticker.includes('DXY')) {
-                            minImpulseRange = actualPrice * 0.0003; // 0.03% para índices
-                        } else {
-                            // Forex majors (EURUSD, GBPUSD, etc.): ~1-2 pips
-                            minImpulseRange = 0.00015; // 1.5 pips
-                        }
+                        const minImpulseRange = getMinImpulseRange(ticker, actualPrice);
                         if (impulseRange < minImpulseRange) {
                             shouldCreateNew = false;
                             console.log(`[FIBO] ⚠️ ${prefix} ${currentDirection} en ${ticker}: rango ${impulseRange.toFixed(5)} < mínimo ${minImpulseRange.toFixed(5)}`);
@@ -3123,7 +3149,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
             else if (prefix === 'EVENTO_SMC_DIV') {
                 if (!activeScore.events.some((e: any) => e.id === `DIV_${readableTf}`)) {
                     const dynamicScoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
-                    addedPoints = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1]) : 4;
+                    const parsedDivScore = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1], 10) : 4;
+                    addedPoints = parsedDivScore > 0 ? parsedDivScore : 4;
 
                     // Penalización estadística para SMC_DIV en TF Altos (Estadísticamente tóxico en Daily)
                     if (eventTf === 'D') {
@@ -3216,27 +3243,29 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             e.id.includes('ZoneTouched_') || e.id.includes('Silver_Bullet_')
                         );
                         if (hasZoneNow) {
+                            const origStructEvs = (pendingLeg.chochEvents || []).filter((e: string) =>
+                                e.includes('🚀') || e.includes('🔨') || /^(?:EVENTO_)?(?:CHoCH|CHOCH|BOS)_/i.test(e)
+                            );
                             pendingLeg.isValidated = true;
-                            pendingLeg.chochEvents = [...activeScore.events.map((e: any) => e.id), `CHoCH_${readableTf}`];
+                            pendingLeg.chochEvents = [...activeScore.events.map((e: any) => e.id), ...(origStructEvs.length ? origStructEvs : [`CHoCH_${readableTf}`])];
                             console.log(`[RADAR] ✅ Leg ${currentDirection} en ${ticker} VALIDADO tardíamente con confluencia: ${addedPoints} pts de ${prefix}`);
 
                             // 🔧 FIX: Disparar trade INMEDIATAMENTE si el leg tiene puntos suficientes
                             // (Evita el retraso de 1 vela cuando el CHoCH no tenía zona al confirmarse)
                             const lateConfig = getConfigForTicker(ticker, nowMs);
-                            const canFireChoch = lateConfig.entryTrigger === 'CHOCH' || lateConfig.entryTrigger === 'BOTH' || lateConfig.entryTrigger === 'SMART';
+                            const lateLegEvs = pendingLeg.chochEvents || [];
+                            const lateEntryEv = lateLegEvs.find((e: string) => e.includes('🚀') || e.includes('🔨'));
+                            const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(?:EVENTO_)?(?:CHoCH|CHOCH|BOS)_/i.test(e));
+                            const lateLegFam = lateStructEv?.toUpperCase().includes('BOS') ? 'BOS' : 'CHoCH';
+                            const canFireChoch = lateLegFam === 'BOS'
+                                ? (lateConfig.entryTrigger === 'BOTH' || lateConfig.entryTrigger === 'SMART')
+                                : (lateConfig.entryTrigger === 'CHOCH' || lateConfig.entryTrigger === 'BOTH' || lateConfig.entryTrigger === 'SMART');
                             const lateMinPts = currentDirection === 'BUY' ? lateConfig.minPointsForBuy : lateConfig.minPointsForSell;
                             const lateTotalPts = pendingLeg.chochPoints!;
                             const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= lateConfig.sniperCooldownMs;
 
-                            // 🛡️ FIX ago-2026 (gatillos 15m/OTE sin entradas): este path NO respetaba la
-                            // config por gatillo (enabled/minScore) y los eventos 5m copaban las entradas
-                            // en sesiones donde están deshabilitados, consumiendo el cooldown antes del 15m.
-                            // Ahora se consulta el gatillo real de la TF del leg (igual que la Capa 4).
-                            const lateLegEvs = pendingLeg.chochEvents || [];
-                            const lateEntryEv = lateLegEvs.find((e: string) => e.includes('🚀') || e.includes('🔨'));
-                            const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(CHoCH|BOS)_/.test(e));
-                            const lateLegFam = lateStructEv?.includes('BOS') ? 'BOS' : 'CHoCH';
-                            const lateLegTf = (lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/)?.[1] ?? '5m').toLowerCase();
+                            const lateLegTfUpper = lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/i)?.[1]?.toUpperCase() ?? '5M';
+                            const lateLegTf = lateLegTfUpper.toLowerCase();
                             const lateSessionKey = getCurrentSession(nowMs);
                             const lateSessionCfg = (lateConfig.sessions as any)?.[lateSessionKey] ?? (lateConfig.sessions as any)?.['ALL'];
                             const lateTriggerKey = `${lateLegFam === 'BOS' ? 'bos' : 'choch'}${lateLegTf}`;
@@ -3255,8 +3284,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
                             if (canFireChoch && lateConfig.sessionEnabled && lateTriggerEnabled && cooldownOk && lateTotalPts >= lateMinPtsG) {
                                 const dec = getDecimals(ticker);
-                                const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
+                                const rawLateBuf = lateTriggerCfg?.slBuff != null ? lateTriggerCfg.slBuff : (lateSessionCfg?.slBufferPercent ?? lateConfig.slBufferPercent);
+                                let slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, rawLateBuf);
+                                const minPipLate = getMinPipDistance(ticker);
+                                if (slBuf < minPipLate) slBuf = minPipLate;
                                 const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
+                                const lateFixedRR = lateTriggerCfg?.tp2 ?? lateSessionCfg?.fixedRR ?? lateConfig.fixedRR;
                                 const latePolicy = resolveExecutionPolicy(lateConfig.executionPolicy);
                                 const lateSnapshot = latePolicy.profile === 'microstructure_v1' ? getExecutionSnapshot(state, pendingLeg.executionSnapshot?.tf ?? lateLegTf, nowMs) : undefined;
                                 const curPrice = latePolicy.profile === 'microstructure_v1'
@@ -3268,7 +3301,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 if (lateConfig.entryTrigger === 'SMART' && latePolicy.smart) {
                                     const instrument = getLiveExecutionInstrument(ticker) ?? (lateConfig.executionInstrument?.source === 'explicit_model' ? lateConfig.executionInstrument : undefined);
                                     fireNow = routeExecutionSetup(state, pendingLeg, { ...lateConfig, executionInstrument: instrument }, parsedExecution.observation?.tf ?? pendingLeg.executionSnapshot?.tf ?? lateLegTf,
-                                        nowMs, curPrice, adjSL, curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * lateConfig.fixedRR).takeDirectNow;
+                                        nowMs, curPrice, adjSL, curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * lateFixedRR).takeDirectNow;
                                 } else if (lateConfig.entryTrigger === 'SMART') {
                                     const maxRisk = lateConfig.maxSmartRiskPercent !== undefined ? lateConfig.maxSmartRiskPercent : 0.15;
                                     const pctLimit = curPrice * (maxRisk / 100);
@@ -3293,10 +3326,8 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 if (fireNow) {
                                     telemetry.directEntry(ticker, lateSessionKey, lateTriggerKey);
                                     const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
-                                    const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * lateConfig.fixedRR) : curPrice - (rDist * lateConfig.fixedRR);
+                                    const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * lateFixedRR) : curPrice - (rDist * lateFixedRR);
                                     const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
-                                    const legTfMatch = (pendingLeg.chochEvents || []).find((e: string) => e.includes('CHoCH') || e.includes('BOS'));
-                                    const legTf = legTfMatch ? (legTfMatch.match(/(\d+M)/)?.[1] || readableTf) : readableTf;
 
                                     oteData = {
                                         tradeId: tId, direction: currentDirection,
@@ -3309,8 +3340,10 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         bestZone: pendingLeg.bestZone || null,
                                         marketBias: { ...state.marketBias },
                                         isChochEntry: true,
+                                        execTrigger: lateTriggerKey,
+                                        mgmtOverrides: extractMgmtOverrides(lateTriggerCfg),
                                         ...(latePolicy.profile === 'microstructure_v1' ? { executionTf: lateSnapshot?.tf } : {}),
-                                        tf: legTf
+                                        tf: lateLegTfUpper
                                     };
                                     triggerOte = true;
                                     state.lastSniperAlert = nowMs;
@@ -3612,6 +3645,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                 confluenceReport: confluenceReport || '',
                                 bestZone, marketBias: { ...state.marketBias },
                                 isChochEntry: true,
+                                execTrigger: `${triggerType === 'CHoCH🚀' ? 'choch' : 'bos'}${eventTf}m`,
                                 ...(setupPolicy.profile === 'microstructure_v1' ? { executionTf: setupTf } : {}),
                                 tf: readableTf,
                                 // 🆕 genes de gestión tuneados por el auto-tune para ESTE gatillo
@@ -4686,6 +4720,37 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
             return;
         }
 
+        // 🔥 ESCUDO DE FRICCIÓN EN ENTRADAS DIRECTAS / TARDÍAS (paridad 1:1 con OTE y backtestEngine.ts:2388)
+        if (oteData.isChochEntry && executionPolicy.profile !== 'microstructure_v1' && !store.activeTrades.has(oteData.tradeId)) {
+            const directCandidate: ActiveTrade = {
+                tradeId: oteData.tradeId,
+                ticker,
+                direction: oteData.direction as 'BUY' | 'SELL',
+                entryPrice: Number(oteData.entryPrice),
+                tp1Price: parseFloat(oteData.tp1),
+                tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
+                    ? capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', Number(oteData.entryPrice), parseFloat(oteData.stopLoss), parseFloat(oteData.tp2))
+                    : parseFloat(oteData.tp1),
+                slPrice: parseFloat(oteData.stopLoss),
+                tp1Hit: false,
+                tp2Hit: false,
+                score: oteData.points || 0,
+                timestamp: nowMs,
+            };
+            const directFriction = evaluateNetTrade(directCandidate, nowMs);
+            if (!directFriction.approved) {
+                console.log(`[FRICTION] 🛡️ Entrada DIRECTA RECHAZADA en ${ticker}: ${directFriction.reason}`);
+                state.lastGatillo.status = 'BLOCKED_FRICTION';
+                logBlockedSignal('FRICTION', oteData, nowMs);
+                safeSet(state).catch(() => { });
+                return;
+            }
+            if (isBacktest) {
+                oteData.rawEntryPrice = oteData.entryPrice;
+                oteData.entryPrice = directFriction.netTrade.entryPrice;
+            }
+        }
+
         const currentSession = getCurrentSession(nowMs);
         const warmupMin = (config as any).sessionWarmupMin ?? 15;
         if ((currentSession === 'LONDON' || currentSession === 'NY') && minutesSinceSessionOpen(nowMs) < warmupMin) {
@@ -5202,7 +5267,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.rawEntryPrice ?? oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                     slPrice: parseFloat(oteData.stopLoss),
                     initialSlPrice: store.activeTrades.get(oteData.tradeId)?.initialSlPrice ?? parseFloat(oteData.stopLoss),
@@ -5228,7 +5293,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                     entryPrice: oteData.entryPrice,
                     tp1Price: parseFloat(oteData.tp1),
                     tp2Price: oteData.tp2 && oteData.tp2 !== 'Buscando DOL macro...'
-                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.rawEntryPrice ?? oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : oteData.entryPrice * 1.5,
                     slPrice: parseFloat(oteData.stopLoss),
                     initialSlPrice: parseFloat(oteData.stopLoss), // 🛡️ SL estructural original (el PnL R se calcula contra este, no contra el SL vigente)
@@ -5329,7 +5394,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
                                 tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.rawEntryPrice ?? oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                                 tradeId: oteData.tradeId,
                                 beforeExecution: recheckKillswitchesBeforeExecution,
@@ -5394,7 +5459,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                             executedPrice: result.executedPrice, filledAtMs, lots: result.lots,
                                             quote: q ? { bid: q.bid, ask: q.ask, timestampMs: q.ts, source: 'broker' } : undefined });
                                         if (frozen) exTrade.mgmtOverrides = JSON.parse(JSON.stringify({
-                                            partialClosePct: exTrade.mgmtOverrides?.partialClosePct ?? config.partialClosePct ?? .5,
+                                            partialClosePct: normalizePartialClosePct(exTrade.mgmtOverrides?.partialClosePct ?? config.partialClosePct, 0.5),
                                             slAfterTp1: exTrade.mgmtOverrides?.slAfterTp1 ?? config.slAfterTp1 ?? 'midpoint',
                                             tp15BeEnabled: exTrade.mgmtOverrides?.tp15BeEnabled ?? config.tp15BeEnabled ?? true,
                                             atrTrailEnabled: exTrade.mgmtOverrides?.atrTrailEnabled ?? config.atrTrailEnabled ?? true,
@@ -5480,7 +5545,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                 slPrice: parseFloat(oteData.stopLoss),
                                 tp1Price: parseFloat(oteData.tp1),
                                 tp2Price: oteData.tp2 !== 'Buscando DOL macro...' && oteData.tp2
-                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
+                        ? (oteData.executionTargetsChecked ? parseFloat(oteData.tp2) : capTp2Price(ticker, oteData.direction as 'BUY' | 'SELL', oteData.rawEntryPrice ?? oteData.entryPrice, parseFloat(oteData.stopLoss), parseFloat(oteData.tp2)))
                         : undefined,
                                 points: oteData.points,
                                 grade: oteData.points >= 8 ? 'A+' : 'B',

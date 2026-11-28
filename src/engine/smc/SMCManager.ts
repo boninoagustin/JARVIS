@@ -15,6 +15,12 @@ class SMCManager {
     private periodMs(period: string): number {
         return ({M5:300000,M15:900000,M30:1800000,H1:3600000,H4:14400000,D1:86400000,W1:604800000} as Record<string,number>)[period] ?? NaN;
     }
+    private targetHtfFor(period: string): string {
+        if (period === 'H1') return 'D1';
+        if (period === 'M15' || period === 'M30') return 'H4';
+        if (period === 'M5') return 'H1';
+        return 'W1';
+    }
     private applyHTFContext(engine: SMCEngine, ticker: string, targetHTF: string, trend: string, bias: string): void {
         const sources = [this.engines.get(`${ticker}:${targetHTF}`), this.engines.get(`${ticker}:W1`)];
         const timestamps = sources.map(e => e?.lastProcessedTs);
@@ -56,7 +62,7 @@ class SMCManager {
             engine.label = ticker; // 🆕 telemetría de gates: incluir ticker en los logs
             if (['M5', 'M15', 'M30', 'H1', 'H4'].includes(period)) {
                 const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
-                const targetHTF = period === 'H1' ? 'D1' : period === 'M15' || period === 'M30' ? 'H4' : 'W1';
+                const targetHTF = this.targetHtfFor(period);
                 const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
                 this.applyHTFContext(engine, ticker, targetHTF, htfTrend, wBias);
             }
@@ -152,14 +158,15 @@ class SMCManager {
         const htfMap: Record<string, string[]> = {
             'W1': ['D1', 'H4', 'H1', 'M30', 'M15', 'M5'],
             'D1': ['H1'],
-            'H4': ['M30', 'M15']
+            'H4': ['M30', 'M15'],
+            'H1': ['M5']
         };
         if (htfMap[period]) {
             for (const tf of htfMap[period]) {
                 const targetEngine = this.engines.get(`${ticker}:${tf}`);
                 if (targetEngine) {
                     const wBias = this.engines.get(`${ticker}:W1`)?.getState().simpleTrend || 'Neutral';
-                    const targetHTF = tf === 'H1' ? 'D1' : tf === 'M15' || tf === 'M30' ? 'H4' : 'W1';
+                    const targetHTF = this.targetHtfFor(tf);
                     const htfTrend = this.engines.get(`${ticker}:${targetHTF}`)?.getState().simpleTrend || 'Neutral';
                     this.applyHTFContext(targetEngine, ticker, targetHTF, htfTrend, wBias);
                 }
@@ -168,4 +175,5 @@ class SMCManager {
     }
 }
 
+export type { SMCManager };
 export const smcManager = new SMCManager();

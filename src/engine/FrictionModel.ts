@@ -1,5 +1,6 @@
 import type { ActiveTrade } from './Types.js';
 import { getDecimals } from './AlphaModel.js';
+import { classifyExecutionRegime } from './ExecutionCosts.js';
 import { getRolloverCalendar } from './RolloverSpreadGate.js';
 
 export interface FrictionConfig {
@@ -18,34 +19,46 @@ export const defaultFrictionConfig: Record<string, FrictionConfig> = {
 };
 
 export function getAssetClass(ticker: string): string {
-    const t = ticker.toUpperCase();
+    const t = (ticker || '').trim().toUpperCase();
+    const regime = classifyExecutionRegime(t);
+    if (regime) return regime;
     if (t.includes('BTC') || t.includes('ETH')) return 'CRYPTO';
-    if (['US30', 'NAS', 'NDX', 'SPX', 'US500', 'DJI', 'GER', 'DE40', 'DAX'].some(i => t.includes(i))) return 'INDICES';
-    if (t.includes('XAU') || t.includes('GOLD')) return 'METALS';
-    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('BRENT')) return 'ENERGY'; // 🔧 USOIL ya no cae a FOREX
+    if (['US30', 'NAS', 'NDX', 'USTECH', 'US100', 'SPX', 'US500', 'SP500', 'DJI', 'GER', 'DE40', 'DAX',
+        'FRA40', 'FR40', 'ITALY40', 'UK100', 'FTSE', 'SPAIN35', 'ES35', 'NL25', 'EUROPE50', 'EU50',
+        'AUSTRALIA200', 'AUS200', 'JP225', 'JPN225', 'JAPAN225', 'NIKKEI'].some(i => t.includes(i))) return 'INDICES';
+    if (t.includes('XAU') || t.includes('XAG') || t.includes('XPT') || t.includes('XPD') || t.includes('GOLD') || t.includes('SILVER')) return 'METALS';
+    if (t.includes('OIL') || t.includes('XTI') || t.includes('WTI') || t.includes('XBR') || t.includes('BRENT') || t.includes('NATGAS') || t.includes('NGAS') || t.includes('XNG')) return 'ENERGY';
     return 'FOREX';
 }
 
 export function pipValuePerLotUsd(ticker: string, currentPrice?: number, usdjpyRate?: number): number {
-    const cls = getAssetClass(ticker);
+    const t = (ticker || '').trim().toUpperCase();
+    const cls = getAssetClass(t);
     if (cls === 'INDICES') return 1.0;
     if (cls === 'CRYPTO') return (currentPrice || 50000) * 0.0001;
     // 🛡️ FIX sep-2026: pares xxxJPY → 1 pip = 0.01 × 100.000 = 1.000 JPY ÷ USDJPY.
     // Antes devolvía $10 fijo (válido solo para quote=USD) → riesgo inflado ~35% en JPY
     // → rMultiple falso en el diario. usdjpyRate medido (lastBidAsk) cuando está disponible.
-    if (ticker.includes('JPY')) return 1000 / (usdjpyRate && usdjpyRate > 0 ? usdjpyRate : 154);
-    return 10.0; // FOREX (quote USD) and METALS (XAU 1 lote = 100 oz → $10/pip)
+    if (cls === 'FOREX' && t.includes('JPY')) return 1000 / (usdjpyRate && usdjpyRate > 0 ? usdjpyRate : 154);
+    return 10.0; // FOREX (quote USD) and METALS/ENERGY
 }
 
 export function getPipValue(ticker: string, currentPrice: number): number {
-    const assetClass = getAssetClass(ticker);
+    const t = (ticker || '').trim().toUpperCase();
+    const assetClass = getAssetClass(t);
     if (assetClass === 'FOREX') {
-        if (ticker.includes('JPY')) return 0.01;
+        if (t.includes('JPY')) return 0.01;
         return 0.0001;
     }
     if (assetClass === 'INDICES') return 1.0;
-    if (assetClass === 'METALS') return 0.1;
-    if (assetClass === 'ENERGY') return 0.01; // 🔧 USOIL: 1 cent por pip (antes 0.0001 → fricción ≈ 0)
+    if (assetClass === 'METALS') {
+        if (t.includes('XAG') || t.includes('SILVER')) return 0.01;
+        return 0.1;
+    }
+    if (assetClass === 'ENERGY') {
+        if (t.includes('NATGAS') || t.includes('NGAS') || t.includes('XNG')) return 0.001;
+        return 0.01; // 🔧 USOIL / XBRUSD: 1 cent por pip
+    }
     if (assetClass === 'CRYPTO') return currentPrice * 0.0001; // Proxy dinámico
     return 0.0001;
 }

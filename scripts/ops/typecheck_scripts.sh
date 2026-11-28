@@ -3,7 +3,7 @@
 # tsx/esbuild NO chequea tipos: un `ticker` indefinido compila y revienta recién en runtime
 # (bug real de la revisión 3b). Este check es parte del cierre del lote.
 set -u
-cd /opt/JARVIS
+cd "$(cd "$(dirname "$0")/../.." && pwd)"
 FILES="
 scripts/ops/preset_apply_core.ts
 scripts/ops/risk_allocator.ts
@@ -19,6 +19,7 @@ scripts/ops/prospective_test.ts
 scripts/ops/prospective_promote.ts
 scripts/ops/weekly_digest.ts
 scripts/ops/test_weekly_e2e_audit.ts
+scripts/tests/test_live_vs_backtest_parity.ts
 scripts/history_lock.ts
 scripts/fetch_history.ts
 scripts/asset_scout.ts

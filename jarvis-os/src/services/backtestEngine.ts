@@ -3,10 +3,11 @@ import type {
   RadarZone, ImpulseLeg, RadarState, BacktestTrade,
   BacktestConfig, BacktestResult, LogEntry, ParsedAlert,
 } from './backtestTypes';
-import { evaluateImpulseCore, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, calculateDynamicSlBuffer, getMinPipDistance } from '../engine/AlphaModel';
+import { evaluateImpulseCore, isInsideMacroOteZone, gcScore, addScoreEvent, computePoints, structuralInvalidate, refreshScoreCache, TF_RANK, TF_WEIGHT, calculateDynamicSlBuffer, getMinPipDistance, getMinImpulseRange } from '../engine/AlphaModel';
 import { getPipValue, defaultFrictionConfig, getAssetClass, pipValuePerLotUsd } from '../engine/FrictionModel';
 import { capTp2Price, getAdrPrice } from '../../../src/engine/tp2Cap';
-import { DEFAULT_BIAS_CONFLUENCE } from '../../../src/engine/Types';
+import { DEFAULT_BIAS_CONFLUENCE, extractMgmtOverrides, normalizePartialClosePct } from '../../../src/engine/Types';
+import { canonicalZoneMedal, isNativeZoneAlert, parseNativeZoneBreak, matchesNativeBrokenZone, hasLegacyUnresolvedZoneEvidence } from '../../../src/engine/smc/zone_protocol';
 import { recordMacroImpulse, selectMacroImpulse, updateMacroImpulses } from '../../../src/engine/MacroImpulse';
 import { evaluateNetTrade } from '../engine/FrictionModel';
 import { getRolloverCalendar } from '../../../src/engine/RolloverSpreadGate';
@@ -276,6 +277,56 @@ function btBreakevenBuffer(ticker: string, entryPrice: number, direction: 'BUY' 
     const pipSize = getPipValue(ticker, entryPrice);
     const buffer = (defaultFrictionConfig[getAssetClass(ticker)]?.baseSpreadPips ?? 1) * pipSize;
     return direction === 'BUY' ? entryPrice + buffer : entryPrice - buffer;
+}
+
+function resolveTradeTriggerKey(trade: BacktestTrade): string {
+    if (trade.execTrigger) return trade.execTrigger;
+    if (trade.triggerType) return trade.triggerType;
+    const events = trade.events ?? [];
+    const hasOte = events.some(e => e.includes('OTE_Retracement'));
+    const isBos = events.some(e => /(?:^|_|\s)(?:EVENTO_)?BOS/i.test(e) || e.includes('BOS🔨'));
+    const isChoch = events.some(e => /(?:^|_|\s)(?:EVENTO_)?CHOCH/i.test(e) || e.includes('CHoCH'));
+    let tfSuffix = '15m';
+    if (trade.tf) {
+        let extracted = String(trade.tf).toLowerCase();
+        if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+        tfSuffix = extracted.endsWith('m') ? extracted : `${extracted}m`;
+    } else {
+        const tfEvent = events.find(e => e.includes('TF: '));
+        const match = tfEvent?.match(/TF:\s*([a-zA-Z0-9]+)/i);
+        if (match) {
+            let extracted = match[1].toLowerCase();
+            if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
+            tfSuffix = extracted.endsWith('m') ? extracted : `${extracted}m`;
+        }
+    }
+    if (hasOte && isBos) return `oteBos${tfSuffix}`;
+    if (hasOte && isChoch) return `oteChoch${tfSuffix}`;
+    if (isBos && !hasOte) return `bos${tfSuffix}`;
+    if (isChoch && !hasOte) return `choch${tfSuffix}`;
+    return '';
+}
+
+function resolveBacktestMgmt(trade: BacktestTrade, config: BacktestConfig) {
+    const triggerKey = resolveTradeTriggerKey(trade);
+    const sessionName = getSessionForTimestamp(trade.timestamp);
+    const localMgmt = triggerKey ? (config.sessions?.[sessionName] as any)?.[triggerKey] : undefined;
+    const tradeOverrides = (trade as any).mgmtOverrides;
+    const cfgAny = config as any;
+    const partialPct = normalizePartialClosePct(
+        localMgmt?.partialClosePct ?? tradeOverrides?.partialClosePct ?? cfgAny.partialClosePct,
+        0.5,
+    );
+    return {
+        triggerKey,
+        partialPct,
+        remainderPct: 1 - partialPct,
+        slAfterTp1Mode: (localMgmt?.slAfterTp1 ?? tradeOverrides?.slAfterTp1 ?? cfgAny.slAfterTp1 ?? 'midpoint') as 'midpoint' | 'breakeven' | 'none',
+        tp15BeEnabled: Boolean(localMgmt?.tp15BeEnabled ?? tradeOverrides?.tp15BeEnabled ?? cfgAny.tp15BeEnabled ?? true),
+        atrTrailEnabled: Boolean(localMgmt?.atrTrailEnabled ?? tradeOverrides?.atrTrailEnabled ?? cfgAny.atrTrailEnabled ?? true),
+        structuralTrailEnabled: Boolean(localMgmt?.structuralTrailEnabled ?? tradeOverrides?.structuralTrailEnabled ?? cfgAny.structuralTrailEnabled ?? false),
+        minimalRoi: (localMgmt?.minimal_roi ?? tradeOverrides?.minimal_roi ?? config.minimal_roi) as Record<string, number> | undefined,
+    };
 }
 
 export type { BacktestTrade, BacktestResult, BacktestConfig } from './backtestTypes';
@@ -654,7 +705,6 @@ export function runBacktest(
       const pnlDistance = trade.direction === 'BUY'
         ? closingPrice - trade.entryPrice
         : trade.entryPrice - closingPrice;
-      const pct = (pnlDistance / trade.entryPrice) * 100;
       
       const pipSize = getPipValue(config.ticker, closingPrice);
       const riskPips = slDistance / pipSize;
@@ -662,13 +712,15 @@ export function runBacktest(
       const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
       const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, closingPrice)) : 0;
       
-      const applyFullComm = !trade.tp1Hit;
-      const finalCost = applyFullComm ? transactionCostR : (transactionCostR * 0.5);
-      
-      const r = slDistance > 0 ? pnlDistance / slDistance : 0;
-      trade.result = r > 0 ? 'WIN' : r === 0 ? 'BE' : 'LOSS';
-      trade.pnl = pct;
-      trade.rMultiple = (r - finalCost) * (trade.riskMult || 1.0);
+      const censorMgmt = resolveBacktestMgmt(trade, config);
+      const lockedPct = trade.tp1Hit ? Math.abs(trade.tp1Price - trade.entryPrice) / trade.entryPrice * 100 * censorMgmt.partialPct : 0;
+      const openPct = (pnlDistance / trade.entryPrice) * 100 * (trade.tp1Hit ? censorMgmt.remainderPct : 1.0);
+      const slPct = (slDistance / trade.entryPrice) * 100;
+      const grossR = slPct > 0 ? (lockedPct + openPct) / slPct : 0;
+
+      trade.pnl = lockedPct + openPct;
+      trade.rMultiple = (grossR - transactionCostR) * (trade.riskMult || 1.0);
+      trade.result = trade.rMultiple > 0 ? 'WIN' : trade.rMultiple === 0 ? 'BE' : 'LOSS';
       trade.closeTimestamp = lastEntry.ts;
       trade.durationMin = Math.round((lastEntry.ts - trade.timestamp) / 60000);
       updateDailyStatsFromClose(trade, dailyStats, config);
@@ -836,7 +888,6 @@ function processAlert(
   state.densityMedian = state.densityMedian === undefined ? density 
     : state.densityMedian + a * (density - state.densityMedian);
   }
-  const density = state.tickTimes?.length ?? 0;
 
   // Extract VWAP status globally for the event timeframe
   const vwapMatch = upperText.match(/VWAP:\s*(UNDER|OVER)/);
@@ -914,10 +965,16 @@ function processAlert(
     try {
       const rawZones = p.rawZones as Record<string, unknown>[];
       if (!rawZones) return;
-      const parsedZones: RadarZone[] = rawZones.map(normalizeZone).filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
+      const nativeZoneSync = isNativeZoneAlert(alertText)
+        || rawZones.some(rz => !!rz && typeof rz === 'object' && ('t' in rz || 'tf' in rz));
+      const parsedZones: RadarZone[] = rawZones.map(raw => {
+        const z = normalizeZone(raw);
+        z.medal = canonicalZoneMedal(z.medal);
+        return z;
+      }).filter(z => z.top !== undefined && z.btm !== undefined && z.dir !== undefined);
       parsedZones.forEach(z => { z.tf = sourceTf; z.createdAt = nowMs; });
 
-      if (state.lastSyncDate !== todayStr) {
+      if (!nativeZoneSync && state.lastSyncDate !== todayStr) {
         state.zones = [];
         state.lastSyncDate = todayStr;
       }
@@ -950,15 +1007,25 @@ function processAlert(
     state.htfHighLow[eventTf] = [highPrice, lowPrice];
 
     if (!experimental) {
-    const prevClose = rolloverFreeze ? (rolloverCleanCloses.get(state) ?? currentPrice) : (state.lastPrice ?? currentPrice);
-    const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
-    if (state.atr14 === undefined) {
-        state.atrSeed = (state.atrSeed ?? 0) + tr;
-        state.atrSamples = (state.atrSamples ?? 0) + 1;
-        if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14;
-    } else {
-        state.atr14 = (state.atr14 * 13 + tr) / 14;
-    }
+      // 🛡️ Paridad ATR: solo alimentar Wilder-14 con el TF de ejecución primario ('5', o '15'/'3' si no existe '5').
+      // Evita que velas H1/H4/D1 contaminen state.atr14 con rangos multi-día y saltos de prevClose entre TFs.
+      const stAny = state as any;
+      if (eventTf === '5') stAny.atrPrimaryTf = '5';
+      const atrPrimaryTf = stAny.atrPrimaryTf ?? ((eventTf === '15' || eventTf === '3') ? eventTf : null);
+      if (atrPrimaryTf && eventTf === atrPrimaryTf) {
+        const prevClose = rolloverFreeze
+          ? (rolloverCleanCloses.get(state) ?? currentPrice)
+          : (stAny.atrPrevClose ?? state.lastPrice ?? currentPrice);
+        const tr = Math.max(highPrice - lowPrice, Math.abs(highPrice - prevClose), Math.abs(lowPrice - prevClose));
+        if (state.atr14 === undefined) {
+          state.atrSeed = (state.atrSeed ?? 0) + tr;
+          state.atrSamples = (state.atrSamples ?? 0) + 1;
+          if (state.atrSamples >= 14) state.atr14 = state.atrSeed / 14;
+        } else {
+          state.atr14 = (state.atr14 * 13 + tr) / 14;
+        }
+        stAny.atrPrevClose = currentPrice;
+      }
     } else {
       state.atr14 = getExecutionSnapshot(state, p.executionObservation?.tf ?? eventTf, nowMs)?.atr14;
     }
@@ -1018,8 +1085,11 @@ function processAlert(
       const tradeAge = nowMs - trade.timestamp;
       if (tradeAge < 5000) continue;
 
-      // 🆕 ROI TIME-DECAY (paralelo a trading.ts: getEffectiveROI)
-      const roiTable = config.minimal_roi;
+      const mgmt = resolveBacktestMgmt(trade, config);
+      const { partialPct, remainderPct, slAfterTp1Mode, tp15BeEnabled, atrTrailEnabled } = mgmt;
+
+      // 🆕 ROI TIME-DECAY (paridad con trading.ts:2070 per-gatillo → raíz)
+      const roiTable = mgmt.minimalRoi;
       if (roiTable && Object.keys(roiTable).length > 0 && !trade.tp1Hit) {
         const tradeAgeMin = tradeAge / 60000;
         const thresholds = Object.keys(roiTable).map(k => parseInt(k, 10)).sort((a, b) => b - a);
@@ -1060,40 +1130,6 @@ function processAlert(
           trade.slPrice = btBreakevenBuffer(config.ticker, trade.entryPrice, trade.direction);
         }
       }
-
-      // Gestión por gatillo
-      let finalTriggerType = '';
-      const isBos = trade.events?.some(e => e.includes('BOS'));
-      const isChoch = trade.events?.some(e => e.includes('CHOCH') || e.includes('CHoCH'));
-      const hasOte = trade.events?.some(e => e.includes('OTE_Retracement'));
-      
-      // Extraer sufijo TF dinámicamente de eventos
-      let tfSuffix = '15m';
-      const tfEvent = trade.events?.find(e => e.includes('TF: '));
-      if (tfEvent) {
-          const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-          if (match) tfSuffix = match[1].toLowerCase() + 'm';
-      } else if (trade.tf) {
-          tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
-      }
-
-      if (hasOte && isBos) finalTriggerType = `oteBos${tfSuffix}`;
-      else if (hasOte && isChoch) finalTriggerType = `oteChoch${tfSuffix}`;
-      else if (isBos && !hasOte) finalTriggerType = `bos${tfSuffix}`;
-      else if (isChoch && !hasOte) finalTriggerType = `choch${tfSuffix}`;
-
-      const sessionName = getSessionForTimestamp(trade.timestamp);
-      const localMgmt = config.sessions?.[sessionName]?.[finalTriggerType as keyof typeof config.sessions[typeof sessionName]] as any;
-
-      // 🛡️ Normalizar partialClosePct a fracción [0,1] (22-sep): AUDJPY traía 50 (escala %) en
-      // Firestore → remainder = 1-50 = -49 → R inflado (trades de 172R). >1 se interpreta como %.
-      const rawPct = localMgmt?.partialClosePct ?? 0;
-      const partialPct = rawPct > 1 ? rawPct / 100 : rawPct;
-      const remainderPct = 1 - partialPct;
-      const slAfterTp1Mode = localMgmt?.slAfterTp1 ?? 'none';
-      const tp15BeEnabled = localMgmt?.tp15BeEnabled ?? false;
-      const atrTrailEnabled = localMgmt?.atrTrailEnabled ?? false;
-
 
       const MAX_HOLD_MS = config.maxHoldMin ? config.maxHoldMin * 60000 : Infinity;
       if (tradeAge >= MAX_HOLD_MS) {
@@ -1218,17 +1254,19 @@ function processAlert(
 
       // 🔧 FIX conservador: guardar SL antes del trail para detectar si la vela ambigua violó el SL VIEJO (High/Low mismo tick optimista)
       const slBeforeTrail = trade.slPrice;
-      // Complemento PING: trailing continuo post-TP1 por distancia
+      // Complemento PING: trailing continuo post-TP1 por distancia (paridad con trading.ts:2508-2538: cota en entryPrice)
       if (trade.tp1Hit && atrTrailEnabled) {
         const atrThreshold = (state.atr14 ?? 0) * 1.5;
         const ratchetStep = (state.atr14 ?? 0) * 0.25;
         if (trade.direction === 'BUY') {
-          const atrTrailSL = highPrice - atrThreshold;
+          let atrTrailSL = highPrice - atrThreshold;
+          if (atrTrailSL > trade.entryPrice) atrTrailSL = trade.entryPrice;
           if (atrTrailSL > trade.slPrice + ratchetStep) {
             trade.slPrice = atrTrailSL;
           }
         } else {
-          const atrTrailSL = lowPrice + atrThreshold;
+          let atrTrailSL = lowPrice + atrThreshold;
+          if (atrTrailSL < trade.entryPrice) atrTrailSL = trade.entryPrice;
           if (atrTrailSL < trade.slPrice - ratchetStep) {
             trade.slPrice = atrTrailSL;
           }
@@ -1306,8 +1344,8 @@ function processAlert(
 
     }
 
-    // Zone touching (scoring)
-    const buffer = Math.max(getBuffer(ticker, currentPrice), (state.atr14 ?? 0) * 0.25);
+    // Zone touching (scoring — paridad exacta de buffer y guardas con trading.ts:2798-2816)
+    const buffer = getBuffer(ticker, currentPrice);
     const validZones: RadarZone[] = [];
     const touchedThisPing: { zone: RadarZone; eventName: string; pts: number }[] = [];
 
@@ -1322,6 +1360,7 @@ function processAlert(
         if (!isValid && previousPrice !== null) continue;
 
         const activeScore = zone.dir === 'BUY' ? state.scoreBuy : state.scoreSell;
+        if (hasLegacyUnresolvedZoneEvidence(activeScore, zone.tf || eventTf)) continue;
         const zTf = parseTF(zone.tf || '');
         const basePts = zone.score !== undefined ? zone.score : 2;
         
@@ -1408,10 +1447,15 @@ function processAlert(
     // los eventos de TF de igual o menor jerarquía que el gatillo
     structuralInvalidate(oppositeScore, eventTf, nowMs);
 
+    const priceMatchTop = alertText.match(/Precio:\s*([0-9.]+)/i);
+    const actualPriceTop = priceMatchTop ? parseFloat(priceMatchTop[1]) : state.lastPrice || 0;
+    // Paridad con vivo (trading.ts:2906): actualizar state.lastPrice con el cierre de la vela de ruptura
+    // antes de evaluar la entrada directa (en los CSV exportados EVENTO_CHOCH antecede a PING_PRICE).
+    if (priceMatchTop && actualPriceTop) state.lastPrice = actualPriceTop;
+
     if (eventTf === '5' || eventTf === '15') {
       const originMatch = alertText.match(/ORIGIN:\s*([0-9.]+)/i);
-      const priceMatchChoch = alertText.match(/Precio:\s*([0-9.]+)/i);
-      const actualPrice = priceMatchChoch ? parseFloat(priceMatchChoch[1]) : state.lastPrice || 0;
+      const actualPrice = actualPriceTop;
       
       // 🆕 FIX 2.5: Registrar explícitamente el CHOCH/BOS contrario en el score opuesto para permitir invalidación
       // (pts 0: es un marcador estructural, no puntúa; se añade tras structuralInvalidate para sobrevivir)
@@ -1431,7 +1475,7 @@ function processAlert(
         }
 
         const impulseRange = Math.abs(actualPrice - newOrigin);
-        const minRange = ticker.includes('BTC') || ticker.includes('ETH') ? actualPrice * 0.0005 : 0.00015;
+        const minRange = getMinImpulseRange(ticker, actualPrice);
         if (impulseRange < minRange) shouldCreateNew = false;
 
         if (shouldCreateNew) {
@@ -1453,27 +1497,7 @@ function processAlert(
                 }
                 continue;
               }
-              const sn = getSessionForTimestamp(trade.timestamp);
-              const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
-              const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
-              const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
-              let ft = '';
-              let tfSuffix = '15m';
-              if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
-              else {
-                 const tfEvent = trade.events?.find(e => e.includes('TF: '));
-                 if (tfEvent) {
-                     const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-                     if (match) tfSuffix = match[1].toLowerCase() + 'm';
-                 }
-              }
-
-              if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
-              else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
-              else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
-              else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
-              const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
-              const stEnabled = lm?.structuralTrailEnabled ?? false;
+              const stEnabled = resolveBacktestMgmt(trade, config).structuralTrailEnabled;
               if (!stEnabled) continue;
               if (trade.direction === 'BUY' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
@@ -1493,27 +1517,7 @@ function processAlert(
                 }
                 continue;
               }
-              const sn = getSessionForTimestamp(trade.timestamp);
-              const hasOte = trade.events?.some(e => e.includes('OTE_Retracement')) ?? false;
-              const isBos = trade.events?.some(e => e.includes('EVENTO_BOS'));
-              const isChoch = trade.events?.some(e => e.includes('EVENTO_CHOCH'));
-              let ft = '';
-              let tfSuffix = '15m';
-              if (trade.tf) tfSuffix = trade.tf.toLowerCase().endsWith('m') ? trade.tf.toLowerCase() : trade.tf.toLowerCase() + 'm';
-              else {
-                 const tfEvent = trade.events?.find(e => e.includes('TF: '));
-                 if (tfEvent) {
-                     const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-                     if (match) tfSuffix = match[1].toLowerCase() + 'm';
-                 }
-              }
-
-              if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
-              else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
-              else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
-              else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
-              const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
-              const stEnabled = lm?.structuralTrailEnabled ?? false;
+              const stEnabled = resolveBacktestMgmt(trade, config).structuralTrailEnabled;
               if (!stEnabled) continue;
               if (trade.direction === 'SELL' && trade.tp1Hit && !trade.closeTimestamp) {
                 const atrTrail = (state.atr14 ?? Math.abs(actualPrice - newOrigin) * 0.3) * 0.5;
@@ -1541,50 +1545,116 @@ function processAlert(
         recordMacroImpulse(state, eventTf, newMacroLeg);
       }
     }
-    // Paridad con vivo (trading.ts:3048): BOS base 2, no 1.
-    addedPoints = prefix === 'EVENTO_CHOCH' ? 3 : 2;
+    // Paridad con vivo (trading.ts:3049-3050): ponderación por TF_WEIGHT.
+    const basePoints = prefix === 'EVENTO_CHOCH' ? 3 : 2;
+    addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
     addedEventId = `${prefix === 'EVENTO_CHOCH' ? 'CHoCH' : 'BOS'}_${readableTf}`;
   }
   else if (prefix === 'ZONE_BROKEN') {
+    const nativeBroken = parseNativeZoneBreak(alertText);
+    const topMatch = alertText.match(/(?:^|\|)\s*Top:\s*([0-9.+-]+)/i);
+    const btmMatch = alertText.match(/(?:^|\|)\s*Btm:\s*([0-9.+-]+)/i);
+    const explicitTop = topMatch ? Number(topMatch[1]) : NaN;
+    const explicitBtm = btmMatch ? Number(btmMatch[1]) : NaN;
+    const hasExplicitBounds = Number.isFinite(explicitTop) && Number.isFinite(explicitBtm) && explicitTop >= explicitBtm;
+
+    activeScore.events = activeScore.events.filter(e => {
+      if (e.id.includes(`_${readableTf}`) && (
+        e.id.startsWith('OB_') || e.id.startsWith('💎_GOD_ZONE_') ||
+        e.id.startsWith('🎯_Silver_Bullet_') || e.id.startsWith('♻️_Breaker_') ||
+        e.id.startsWith('POC_Volume_') || e.id.startsWith('🎯_ZoneTouched_') ||
+        e.id.startsWith('Breaker_')
+      )) {
+        return false;
+      }
+      return true;
+    });
+    refreshScoreCache(activeScore, nowMs);
+
     state.zones = state.zones.filter(z => {
+      if (nativeBroken) return !matchesNativeBrokenZone(z, eventTf, nativeBroken);
       if (z.tf !== eventTf) return true;
-      if (currentDirection === 'BUY' && z.dir === 'SELL') return true;
-      if (currentDirection === 'SELL' && z.dir === 'BUY') return true;
+      if (hasExplicitBounds) {
+        return !(z.dir === currentDirection && Math.abs(z.top - explicitTop) <= 1e-5 && Math.abs(z.btm - explicitBtm) <= 1e-5);
+      }
+      if (currentDirection === 'BUY' && z.dir === 'BUY') return true;
+      if (currentDirection === 'SELL' && z.dir === 'SELL') return true;
       return false;
     });
     return;
   }
   else if (prefix === 'SWEEP_BROKEN' || prefix === 'DIV_BROKEN') {
-    // Filtrado por id de evento: los puntos se recalculan solos vía caché derivado
     if (prefix === 'SWEEP_BROKEN') {
-      activeScore.events = activeScore.events.filter(e => !e.id.includes(`Sweep_${readableTf}`));
+      activeScore.events = activeScore.events.filter(e => {
+        if (e.id === `🩸_V-Shape_Absorb_${readableTf}` || e.id === `Sweep_${readableTf}_Absorcion`) return false;
+        if (e.id === `Sweep_${readableTf}`) return false;
+        if (e.id === `📉_TL_Sweep_${readableTf}`) return false;
+        if (e.id === `🩸_LIQ_GRAB_${readableTf}`) return false;
+        return !e.id.includes(`Sweep_${readableTf}`);
+      });
     } else {
-      activeScore.events = activeScore.events.filter(e => e.id !== `DIV_${readableTf}`);
+      activeScore.events = activeScore.events.filter(e => !e.id.startsWith(`DIV_${readableTf}`));
     }
     refreshScoreCache(activeScore, nowMs);
     return;
   }
+  else if (prefix === 'TOUCH_ZONE') {
+    const ptMatch = alertText.match(/Puntos:\s*(\d+)/i);
+    const dynamicPts = ptMatch ? parseInt(ptMatch[1], 10) : 0;
+    if (upperText.includes('BREAKER')) {
+      if (!activeScore.events.some(e => e.id === `Breaker_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; addedEventId = `Breaker_${readableTf}`; }
+    } else if (upperText.includes('PLATINO') || upperText.includes('POC')) {
+      if (!activeScore.events.some(e => e.id === `POC_Volume_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 4; addedEventId = `POC_Volume_${readableTf}`; }
+    } else if (upperText.includes('GOD_ZONE') || upperText.includes('ORO')) {
+      if (!activeScore.events.some(e => e.id === `OB_Gold_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 3; addedEventId = `OB_Gold_${readableTf}`; }
+    } else {
+      if (!activeScore.events.some(e => e.id === `OB_${readableTf}`)) { addedPoints = dynamicPts > 0 ? dynamicPts : 2; addedEventId = `OB_${readableTf}`; }
+    }
+  }
   else if (prefix === 'EVENTO_SMC_DIV') {
     if (!activeScore.events.some(e => e.id === `DIV_${readableTf}`)) {
-      // 🆕 sep-2026 (Capa 1): multiplicador DIV × sesión
-      addedPoints = Math.round(2 * zoneWeightMult(config, 'DIV', currentSession));
+      const dynamicScoreMatch = alertText.match(/Score:\s*([0-9]+)/i);
+      const parsedDivScore = dynamicScoreMatch ? parseInt(dynamicScoreMatch[1], 10) : 4;
+      let divPts = parsedDivScore > 0 ? parsedDivScore : 4;
+      if (eventTf === 'D') divPts = 0;
+      else if (eventTf === '240') divPts = Math.min(divPts, 2);
+      addedPoints = Math.round(divPts * zoneWeightMult(config, 'DIV', currentSession));
       addedEventId = `DIV_${readableTf}`;
     }
   }
   else if (prefix === 'EVENTO_SWEEP' || prefix === 'EVENTO_SWEEP_SCALP') {
-    if (!activeScore.events.some(e => e.id === `Sweep_${readableTf}`)) {
-      // 🆕 sep-2026 (Capa 1): multiplicador SWEEP × sesión
+    if (!activeScore.events.some(e => e.id === `Sweep_${readableTf}` || e.id === `🩸_V-Shape_Absorb_${readableTf}`)) {
+      const basePoints = upperText.includes('ABSORCION') ? 6 : 3;
       const sweepMult = zoneWeightMult(config, 'SWEEP', currentSession);
-      if (upperText.includes('ABSORCION') && density >= state.densityMedian) { 
-        addedPoints = Math.round(6 * sweepMult); 
-        addedEventId = `🩸_V-Shape_Absorb_${readableTf}`; 
-      } else if (upperText.includes('ABSORCION')) { 
-        addedPoints = Math.round(3 * sweepMult); 
-        addedEventId = `Sweep_${readableTf}`; // sin confirmación de actividad       
-      } else { 
-        addedPoints = Math.round(3 * sweepMult); 
-        addedEventId = `Sweep_${readableTf}`; 
-      }
+      addedPoints = Math.round(basePoints * (TF_WEIGHT[eventTf] || 1) * sweepMult);
+      addedEventId = upperText.includes('ABSORCION') ? `🩸_V-Shape_Absorb_${readableTf}` : `Sweep_${readableTf}`;
+    }
+  }
+  else if (prefix === 'LIQ_GRAB') {
+    const eventName = `🩸_LIQ_GRAB_${readableTf}`;
+    if (!activeScore.events.some(e => e.id === eventName)) {
+      addedPoints = 4 * (TF_WEIGHT[eventTf] || 1);
+      addedEventId = eventName;
+    }
+  }
+  else if (prefix === 'ZONE_TOUCHED') {
+    const zoneMedal = canonicalZoneMedal(alertText.match(/Medal:\s*([\w🚀♻️💎]+)/i)?.[1]) ?? 'OB';
+    const zoneScore = parseInt(alertText.match(/Score:\s*([0-9]+)/i)?.[1] || '2', 10);
+    const eventName = `🎯_ZoneTouched_${zoneMedal}_${readableTf}`;
+    if (!hasLegacyUnresolvedZoneEvidence(activeScore, eventTf) && !activeScore.events.some(e => e.id === eventName)) {
+      const basePoints = zoneScore >= 9 ? 5 : zoneScore >= 7 ? 4 : zoneScore >= 5 ? 3 : 2;
+      addedPoints = basePoints * (TF_WEIGHT[eventTf] || 1);
+      addedEventId = eventName;
+    }
+  }
+  else if (prefix === 'EVENTO_SWEEP_TL') {
+    if (!activeScore.events.some(e => e.id === `📉_TL_Sweep_${readableTf}`)) {
+      addedPoints = 2;
+      addedEventId = `📉_TL_Sweep_${readableTf}`;
+    }
+    if (oppositeScore.events.some(e => e.id === `📉_TL_Sweep_${readableTf}`)) {
+      oppositeScore.events = oppositeScore.events.filter(e => e.id !== `📉_TL_Sweep_${readableTf}`);
+      refreshScoreCache(oppositeScore, nowMs);
     }
   }
   else if (prefix === 'HEARTBEAT') {
@@ -1593,6 +1663,7 @@ function processAlert(
   }
 
   if (addedPoints > 0 && addedEventId) {
+    if (addedPoints > 50) addedPoints = 50;
     addScoreEvent(activeScore, { id: addedEventId, pts: addedPoints, tf: eventTf, ts: nowMs });
   }
 
@@ -1606,24 +1677,31 @@ function processAlert(
     if (pendingLeg && !pendingLeg.isValidated && pendingLeg.chochPoints) {
       const hasZoneNow = activeScore.events.some(e =>
         e.id.includes('OB_') || e.id.includes('GOD_') || e.id.includes('Breaker_') ||
-        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('Silver_Bullet_')
+        e.id.includes('Sweep_') || e.id.includes('DIV_') || e.id.includes('TL_Sweep_') ||
+        e.id.includes('ZoneTouched_') || e.id.includes('Silver_Bullet_')
       );
       if (hasZoneNow) {
+        const origStructEvs = (pendingLeg.chochEvents || []).filter(e =>
+          e.includes('🚀') || e.includes('🔨') || /^(?:EVENTO_)?(?:CHoCH|CHOCH|BOS)_/i.test(e)
+        );
         pendingLeg.isValidated = true;
-        pendingLeg.chochEvents = [...activeScore.events.map(e => e.id), `CHoCH_${readableTf}`];
-
-        // 🆕 sep-2026 PORT fireNow del live (src/db/trading.ts ~2300-2390): el live, al validar
-        // tardíamente con zona nueva, puede disparar la ENTRADA INMEDIATA (no espera OTE).
-        const canFireChoch = config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART';
-        const lateMinPts = currentDirection === 'BUY' ? ((config as any).minPointsForBuy ?? 4) : ((config as any).minPointsForSell ?? 4);
-        const lateTotalPts = pendingLeg.chochPoints!;
-        const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= ((config as any).sniperCooldownMs ?? 180000);
+        pendingLeg.chochEvents = [...activeScore.events.map(e => e.id), ...(origStructEvs.length ? origStructEvs : [`CHoCH_${readableTf}`])];
 
         const lateLegEvs = pendingLeg.chochEvents || [];
         const lateEntryEv = lateLegEvs.find((e: string) => e.includes('🚀') || e.includes('🔨'));
-        const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(CHoCH|BOS)_/.test(e));
-        const lateLegFam = lateStructEv?.includes('BOS') ? 'BOS' : 'CHoCH';
-        const lateLegTf = (lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/)?.[1] ?? '5m').toLowerCase();
+        const lateStructEv = lateEntryEv ?? lateLegEvs.find((e: string) => /^(?:EVENTO_)?(?:CHoCH|CHOCH|BOS)_/i.test(e));
+        const lateLegFam = lateStructEv?.toUpperCase().includes('BOS') ? 'BOS' : 'CHoCH';
+        const canFireChoch = lateLegFam === 'BOS'
+          ? (config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART')
+          : (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'BOTH' || config.entryTrigger === 'SMART');
+        const lateMinPts = currentDirection === 'BUY'
+          ? (config.minBuyPoints ?? (config as any).minPointsForBuy ?? 4)
+          : (config.minSellPoints ?? (config as any).minPointsForSell ?? 4);
+        const lateTotalPts = pendingLeg.chochPoints!;
+        const cooldownOk = nowMs - (state.lastSniperAlert ?? 0) >= ((config as any).sniperCooldownMs ?? 180000);
+
+        const lateLegTfUpper = lateStructEv?.match(/_(\d+M|1H|4H|D|W)$/i)?.[1]?.toUpperCase() ?? '5M';
+        const lateLegTf = lateLegTfUpper.toLowerCase();
         const lateSessionCfg = (config.sessions as any)?.[currentSession] ?? (config.sessions as any)?.['ALL'];
         const lateTriggerKey = `${lateLegFam === 'BOS' ? 'bos' : 'choch'}${lateLegTf}`;
         const lateTriggerCfg = (lateSessionCfg as any)?.[lateTriggerKey];
@@ -1639,8 +1717,14 @@ function processAlert(
 
         if (canFireChoch && lateSessionEnabled && lateTriggerEnabled && cooldownOk && lateTotalPts >= lateMinPtsG) {
             const dec = getDecimals(ticker);
-            const slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, 0);
+            const rawLateBuf = lateTriggerCfg?.slBuff != null
+              ? lateTriggerCfg.slBuff
+              : (lateSessionCfg?.slBufferPercent ?? config.slBufferPercent ?? 0.1);
+            let slBuf = calculateDynamicSlBuffer(ticker, pendingLeg.origin, rawLateBuf);
+            const minPipLate = getMinPipDistance(ticker);
+            if (slBuf < minPipLate) slBuf = minPipLate;
             const adjSL = currentDirection === 'BUY' ? pendingLeg.origin - slBuf : pendingLeg.origin + slBuf;
+            const fixedRR = lateTriggerCfg?.tp2 ?? lateSessionCfg?.fixedRR ?? (config as any).fixedRR ?? 1.5;
             const curPrice = state.lastPrice ?? pendingLeg.extreme;
             const rDist = Math.abs(curPrice - adjSL);
 
@@ -1648,7 +1732,7 @@ function processAlert(
             let fireNow = true;
             if (experimental && executionPolicy.smart && config.entryTrigger === 'SMART') {
                 const decision = pendingLeg.executionDecision ?? routeModeledSmart(pendingLeg, state, config, eventTf, nowMs, rDist,
-                  curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * ((config as any).fixedRR ?? 1.5), p.executionObservation);
+                  curPrice + (currentDirection === 'BUY' ? 1 : -1) * rDist * fixedRR, p.executionObservation);
                 fireNow = decision.takeDirectNow;
             } else if (config.entryTrigger === 'SMART') {
                 const maxRisk = (config as any).maxSmartRiskPercent !== undefined ? (config as any).maxSmartRiskPercent : 0.15;
@@ -1658,9 +1742,13 @@ function processAlert(
                 if (rDist > (atr > 0 ? atr * 1.5 : pctLimit)) fireNow = false;
             }
 
+            const biasGateLate = (config as any).biasGateStrict === true
+                && (state.marketBias['240'] !== currentDirection && state.marketBias['240'] !== 'NEUTRAL')
+                && (state.marketBias['60'] !== currentDirection && state.marketBias['60'] !== 'NEUTRAL');
+            if (biasGateLate) fireNow = false;
+
             if (fireNow) {
                 const tId = Math.random().toString(36).substring(2, 8).toUpperCase();
-                const fixedRR = (config as any).fixedRR ?? 1.5;
                 if (experimental && (!Number.isFinite(Number(fixedRR)) || Number(fixedRR) <= 0)) return;
                 const fTP1 = currentDirection === 'BUY' ? curPrice + rDist : curPrice - rDist;
                 const fTP2 = currentDirection === 'BUY' ? curPrice + (rDist * fixedRR) : curPrice - (rDist * fixedRR);
@@ -1669,14 +1757,17 @@ function processAlert(
                     entryPrice: curPrice,
                     stopLoss: adjSL.toFixed(dec), tp1: fTP1.toFixed(dec), tp2: fTP2.toFixed(dec),
                     points: lateTotalPts, events: pendingLeg.chochEvents || [],
-                    tf: lateLegTf.replace('m', 'm') || readableTf,
+                    isChochEntry: true,
+                    execTrigger: lateTriggerKey,
+                    mgmtOverrides: extractMgmtOverrides(lateTriggerCfg),
+                    tf: lateLegTfUpper || readableTf,
                 }, nowMs, trades, activeTrades, dailyStats, config, state);
                 // Cooldown y reset idéntico al path directo (y al live)
                 state.lastSniperAlert = nowMs;
                 activeScore.events = []; refreshScoreCache(activeScore, nowMs);
                 const oppScore = currentDirection === 'BUY' ? state.scoreSell : state.scoreBuy;
                 oppScore.events = []; refreshScoreCache(oppScore, nowMs);
-                pendingLeg.oteScored = true;
+                if (config.entryTrigger === 'CHOCH' || config.entryTrigger === 'SMART') pendingLeg.oteScored = true;
             }
         }
       }
@@ -1701,7 +1792,7 @@ function processAlert(
         const fb = tf === 'D' ? (freshBias('D') || freshBias('1D')) : freshBias(tf);
         return fb === currentDirection;
     };
-    const macroAlignedCount = bc.tfs.reduce((acc, tf) => acc + (biasAlignedFor(tf) ? 1 : 0), 0);
+    const macroAlignedCount = bc.tfs.reduce((acc: number, tf: string) => acc + (biasAlignedFor(tf) ? 1 : 0), 0);
     const baseBiasPoints = macroAlignedCount >= bc.minForFull ? bc.fullPts
         : macroAlignedCount >= bc.minForHalf ? bc.halfPts : 0;
     const isDAgainst = mbD !== undefined && mbD !== currentDirection && mbD !== 'NEUTRAL';
@@ -1714,20 +1805,15 @@ function processAlert(
     if (upperText.includes('VWAP: UNDER') && currentDirection === 'BUY') addScoreEvent(activeScore, { id: 'VWAP_Discount', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
     else if (upperText.includes('VWAP: OVER') && currentDirection === 'SELL') addScoreEvent(activeScore, { id: 'VWAP_Premium', pts: VWAP_PTS, tf: eventTf, ts: nowMs });
 
-
-    
+    // Paridad con vivo (trading.ts:3347 & 4830): el MCL direccional se evalúa al crear el trade
+    // (createTrade usa sessionBuyLossStreak / sessionSellLossStreak sin fallback a ALL), no antes de validar el leg.
     const sessionConfig = config.sessions?.[currentSession] ?? config.sessions?.['ALL'];
-    if (currentDirection === 'SELL') {
-      if (sessionConfig?.maxSellLosses !== undefined && sessionConfig.maxSellLosses > 0 && dailyStats.sellLossCount >= sessionConfig.maxSellLosses) return;
-    } else if (currentDirection === 'BUY') {
-      if (sessionConfig?.maxBuyLosses !== undefined && sessionConfig.maxBuyLosses > 0 && dailyStats.buyLossCount >= sessionConfig.maxBuyLosses) return;
-    }
 
-    // Spatial backing
+    // Spatial backing (paridad de buffer con vivo trading.ts:3347)
     const activeLeg = currentDirection === 'BUY' ? state.activeImpulseBuy : state.activeImpulseSell;
     const chOrigin = activeLeg ? activeLeg.origin : null;
     const chExtreme = activeLeg ? activeLeg.extreme : null;
-    const spatialBuffer = Math.max(getBuffer(ticker, chOrigin ?? state.lastPrice ?? 0), (state.atr14 ?? 0) * 0.25);
+    const spatialBuffer = getBuffer(ticker, chOrigin ?? state.lastPrice ?? 0);
 
     let hasSpatialBacking = false;
     let spatialBonus = 0;
@@ -1742,7 +1828,7 @@ function processAlert(
         }
       }
     }
-    if (!hasSpatialBacking && chOrigin && chExtreme) {
+    if (chOrigin !== null && chExtreme !== null) {
       const chLow = Math.min(chOrigin, chExtreme);
       const chHigh = Math.max(chOrigin, chExtreme);
       for (const z of state.zones) {
@@ -1843,14 +1929,14 @@ function processAlert(
         const tfKey = prefix === 'EVENTO_CHOCH' ? `choch${tfSuffix}` : `bos${tfSuffix}`;
         const tfConfig = sessionConfig?.[tfKey as keyof typeof sessionConfig] as any;
         const slBuff = tfConfig?.slBuff;
-        const activeFixedRR = tfConfig?.tp2 ?? 1.5;
+        const activeFixedRR = tfConfig?.tp2 ?? (sessionConfig as any)?.fixedRR ?? (config as any).fixedRR ?? 1.5;
         // Explicit RR zero is not target absence. Reject before price rounding can
         // turn an equal-entry request into a tiny favorable target.
         if (experimental && (!Number.isFinite(Number(activeFixedRR)) || Number(activeFixedRR) <= 0)) return;
 
         // 🔧 FIX: misma fórmula de SL que el vivo (calculateDynamicSlBuffer + piso getMinPipDistance)
-        // Paridad con vivo (trading.ts:3612): slBuff=0 explícito NO cae a config.slBufferPercent.
-        const rawBuffer = slBuff != null ? slBuff : (config.slBufferPercent ?? 0.1);
+        // Paridad con vivo (trading.ts:3576): slBuff=0 explícito NO cae a session/config.slBufferPercent.
+        const rawBuffer = slBuff != null ? slBuff : ((sessionConfig as any)?.slBufferPercent ?? config.slBufferPercent ?? 0.1);
         let slBufferAmt = calculateDynamicSlBuffer(ticker, activeLeg.origin, rawBuffer);
         const minPipDist = getMinPipDistance(ticker);
         if (slBufferAmt < minPipDist) slBufferAmt = minPipDist;
@@ -1936,6 +2022,8 @@ function processAlert(
               stopLoss, tp1, tp2, points: totalPoints, events: [...activeScore.events.map(e => e.id), `${prefix}_${readableTf}`],
               tf: readableTf,
               isChochEntry: true, // paridad con vivo: entrada directa CHoCH/BOS
+              execTrigger: tfKey,
+              mgmtOverrides: extractMgmtOverrides(tfConfig),
             };
             createTrade(oteData, nowMs, trades, activeTrades, dailyStats, config, state);
             
@@ -2007,11 +2095,11 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
   if (dir === 'SELL' && (config as any).maxSellsPerDay > 0 && dailyStats.dailySells >= (config as any).maxSellsPerDay) {
     return; // SELL bloqueado por tope diario de SELLs (paridad con vivo)
   }
-  const sessKey = dailyStats.currentSessionStr.split('-').pop();
+  const sessKey = dailyStats.currentSessionStr.split('-').pop() ?? '';
   // 🛡️ Paridad exacta con el vivo: el check MCL de trading.ts usa SOLO
   // sessions[currentSession] (SIN fallback a ALL — ALL.maxBuyLosses es config muerta
   // en el vivo, no debe cobrar vida en el backtest).
-  const sessCfg = ((config as any).sessions ?? {})[sessKey];
+  const sessCfg = sessKey ? ((config as any).sessions ?? {})[sessKey] : undefined;
   if (sessCfg) {
     const mcl = dir === 'BUY' ? sessCfg.maxBuyLosses : sessCfg.maxSellLosses;
     const streak = dir === 'BUY' ? dailyStats.sessionBuyLossStreak : dailyStats.sessionSellLossStreak;
@@ -2097,7 +2185,7 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
       return;
   }
 
-  if (isNewsBlackout(nowMs)) return;
+  if (!config.disableNewsBlackout && isNewsBlackout(nowMs)) return;
 
   // (c) Guardia al crear el trade + eliminar defaults mágicos
   // El path de gatillo directo pasa `stopLoss` (string); el path OTE pasa `slPrice` (number)
@@ -2114,9 +2202,10 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     // Validate its source and resulting geometry now; never let abs() repair it.
     if (!executionPolicy.targets && (config as any).tp2RR != null) {
       const rr = Number((config as any).tp2RR);
-      overriddenTp2Price = oteData.entryPrice + sign * Math.abs(guardSl - oteData.entryPrice) * rr;
-      if (!Number.isFinite(rr) || rr <= 0 || !Number.isFinite(overriddenTp2Price) || overriddenTp2Price <= 0
-          || sign * (overriddenTp2Price - oteData.entryPrice) <= 0) return;
+      const computedOverrideTp2 = oteData.entryPrice + sign * Math.abs(guardSl - oteData.entryPrice) * rr;
+      if (!Number.isFinite(rr) || rr <= 0 || !Number.isFinite(computedOverrideTp2) || computedOverrideTp2 <= 0
+          || sign * (computedOverrideTp2 - oteData.entryPrice) <= 0) return;
+      overriddenTp2Price = computedOverrideTp2;
     }
   }
 
@@ -2159,29 +2248,9 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
           const commissionPerLot = config.commissionPerLot ?? defaultFrictionConfig[cls].commissionPerLot;
           const transactionCostR = riskPips > 0 ? (commissionPerLot * 2) / (riskPips * pipValuePerLotUsd(config.ticker, currentPrice)) : 0;
 
-          const isChoch = existingTradeForTicker.events?.some(e => e.includes('EVENTO_CHOCH'));
-          const isBos = existingTradeForTicker.events?.some(e => e.includes('EVENTO_BOS'));
-          const hasOte = existingTradeForTicker.events?.some(e => e.includes('OTE_Retracement'));
-
-          let tfSuffix = '15m';
-          if (existingTradeForTicker.tf) tfSuffix = existingTradeForTicker.tf.toLowerCase().endsWith('m') ? existingTradeForTicker.tf.toLowerCase() : existingTradeForTicker.tf.toLowerCase() + 'm';
-          else {
-             const tfEvent = existingTradeForTicker.events?.find(e => e.includes('TF: '));
-             if (tfEvent) {
-                 const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-                 if (match) tfSuffix = match[1].toLowerCase() + 'm';
-             }
-          }
-
-          let ft = '';
-          if (hasOte && isBos) ft = `oteBos${tfSuffix}`;
-          else if (hasOte && isChoch) ft = `oteChoch${tfSuffix}`;
-          else if (isBos && !hasOte) ft = `bos${tfSuffix}`;
-          else if (isChoch && !hasOte) ft = `choch${tfSuffix}`;
-          const sn = getSessionForTimestamp(existingTradeForTicker.timestamp);
-          const lm = config.sessions?.[sn]?.[ft as keyof typeof config.sessions[typeof sn]] as any;
-          const partialPct = lm?.partialClosePct ?? 0.5;
-          const remainderPct = 1 - partialPct;
+          const sarMgmt = resolveBacktestMgmt(existingTradeForTicker, config);
+          const partialPct = sarMgmt.partialPct;
+          const remainderPct = sarMgmt.remainderPct;
           const lockedPct = existingTradeForTicker.tp1Hit ? Math.abs(existingTradeForTicker.tp1Price - existingTradeForTicker.entryPrice) / existingTradeForTicker.entryPrice * 100 * partialPct : 0;
           const openPct = (pnlDist / existingTradeForTicker.entryPrice) * 100 * (existingTradeForTicker.tp1Hit ? remainderPct : 1.0);
           const slPct = (slDist / existingTradeForTicker.entryPrice) * 100;
@@ -2306,37 +2375,11 @@ function createTrade(oteData: any, nowMs: number, trades: BacktestTrade[], activ
     console.warn(`[ML] ⚠️ No se pudieron congelar features del trade ${trade.id}: ${e.message}`);
   }
 
-  // Clasificar triggerType al crear el trade (único punto de verdad)
-  const events = trade.events;
-  const hasOte = events.some((e: string) => e.includes('OTE_Retracement'));
-  const isBos = events.some((e: string) => e.includes('EVENTO_BOS'));
-  const isChoch = events.some((e: string) => e.includes('EVENTO_CHOCH'));
-  let tfSuffix = '15m';
-  if (trade.tf) {
-      let extracted = trade.tf.toLowerCase();
-      if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
-      tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
-  } else {
-     const tfEvent = events.find((e: string) => e.includes('TF: '));
-     if (tfEvent) {
-         const match = tfEvent.match(/TF:\s*([a-zA-Z0-9]+)/i);
-         if (match) {
-             let extracted = match[1].toLowerCase();
-             if (extracted.startsWith('m') && extracted.length > 1) extracted = extracted.substring(1);
-             tfSuffix = extracted.endsWith('m') ? extracted : extracted + 'm';
-         }
-     }
-  }
+  if ((oteData as any).mgmtOverrides) (trade as any).mgmtOverrides = (oteData as any).mgmtOverrides;
 
-  // 🛡️ FIX sep-2026 (etiquetado honesto): si el trade trae execTrigger (el gatillo que
-  // REALMENTE lo ejecutó en evaluateImpulseCore), usar eso. Los eventos del Pine mezclan
-  // TFs (CHoCH_15M + BOS_5M en la misma alerta) y clasificaban mal los gatillos.
-  if ((trade as any).execTrigger) {
-    trade.triggerType = (trade as any).execTrigger;
-  } else if (hasOte && isBos) trade.triggerType = `oteBos${tfSuffix}`;
-  else if (hasOte && isChoch) trade.triggerType = `oteChoch${tfSuffix}`;
-  else if (isBos && !hasOte) trade.triggerType = `bos${tfSuffix}`;
-  else if (isChoch && !hasOte) trade.triggerType = `choch${tfSuffix}`;
+  // Clasificar triggerType al crear el trade (único punto de verdad)
+  const resolvedTrig = resolveTradeTriggerKey(trade);
+  if (resolvedTrig) trade.triggerType = resolvedTrig;
 
   // --- FRICTION MODEL INTERCEPTION ---
   if (experimental) {

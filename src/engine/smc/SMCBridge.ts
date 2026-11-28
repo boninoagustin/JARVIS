@@ -237,14 +237,17 @@ function handleSpotTick(processAlert: AlertFn, baseTicker: string, candle: OHLCV
     if (now - (lastPingSent.get(baseTicker) ?? 0) < PING_THROTTLE_MS) return;
     lastPingSent.set(baseTicker, now);
 
+    const m5Engine = smcManager.getEngines().get(`${baseTicker}:M5`);
     const engine = smcManager.getEngines().get(`${baseTicker}:M15`);
     const vwapStatus = engine?.getState().vwapStatus;
     const vwapTag = vwapStatus ? ` | VWAP: ${vwapStatus}` : '';
+    const closedAtr = m5Engine?.getState().atr || engine?.getState().atr || 0;
+    const atrTag = closedAtr > 0 ? ` | ATR: ${fmt(closedAtr)}` : '';
     // 🛡️ sep-2026 fix OTE: incluir high/low de la última vela CERRADA para que el bot
     // estire el extreme del leg solo con velas cerradas (paridad live↔backtest).
     const prevTag = prevCandle ? ` | PrevHigh: ${fmt(prevCandle.high)} | PrevLow: ${fmt(prevCandle.low)}` : '';
 
-    const alert = `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${prevTag}${vwapTag} | TS: ${now}`;
+    const alert = `PING_PRICE | ${baseTicker} | TF: 15 | Precio: ${fmt(candle.close)} | High: ${fmt(candle.high)} | Low: ${fmt(candle.low)}${prevTag}${atrTag}${vwapTag} | TS: ${now}`;
     dispatch(processAlert, withExecutionContext(alert,baseTicker,period,candle,prevCandle,false,now,period?executionLegs.get(`${baseTicker}:${period}`):undefined));
 }
 
