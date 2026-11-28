@@ -38,6 +38,17 @@ export const config = {
   CTRADER_MARKET_RANGE: (process.env.CTRADER_MARKET_RANGE || 'true').toLowerCase() === 'true',
   // Techo del cap de slippage en pips (el cap efectivo es max(2×spread estructural, 0.2 pip), acotado por este valor)
   CTRADER_MAX_SLIPPAGE_PIPS: parseFloat(process.env.CTRADER_MAX_SLIPPAGE_PIPS || '1'),
+  // 🛡️ Escudo duro monetario Prop Firm (Funding Pips)
+  PROPFIRM_GUARD_ENABLED: (process.env.PROPFIRM_GUARD_ENABLED || 'true').toLowerCase() !== 'false',
+  PROPFIRM_INITIAL_BALANCE: parseFloat(process.env.PROPFIRM_INITIAL_BALANCE || '0'),
+  PROPFIRM_MAX_DAILY_LOSS_PCT: parseFloat(process.env.PROPFIRM_MAX_DAILY_LOSS_PCT || '5'),
+  PROPFIRM_DAILY_ENTRY_STOP_PCT: parseFloat(process.env.PROPFIRM_DAILY_ENTRY_STOP_PCT || '4'),
+  PROPFIRM_MAX_WORST_CASE_DAILY_PCT: parseFloat(process.env.PROPFIRM_MAX_WORST_CASE_DAILY_PCT || '4.5'),
+  PROPFIRM_EMERGENCY_CLOSE_DAILY_PCT: parseFloat(process.env.PROPFIRM_EMERGENCY_CLOSE_DAILY_PCT || '4.5'),
+  PROPFIRM_MAX_TOTAL_DRAWDOWN_PCT: parseFloat(process.env.PROPFIRM_MAX_TOTAL_DRAWDOWN_PCT || '8'),
+  PROPFIRM_TOTAL_ENTRY_STOP_PCT: parseFloat(process.env.PROPFIRM_TOTAL_ENTRY_STOP_PCT || '7'),
+  PROPFIRM_MAX_WORST_CASE_TOTAL_PCT: parseFloat(process.env.PROPFIRM_MAX_WORST_CASE_TOTAL_PCT || '7.5'),
+  PROPFIRM_EMERGENCY_CLOSE_TOTAL_PCT: parseFloat(process.env.PROPFIRM_EMERGENCY_CLOSE_TOTAL_PCT || '7.5'),
 };
 
 // Security Validations

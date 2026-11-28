@@ -233,7 +233,9 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
     } catch {}
 
     // Execute the trade
-    const requestedRiskPercent = effectiveRiskPercentFor(pending.ticker, pending.riskMult);
+    const requestedRiskPercent = typeof effectiveRiskPercentFor === 'function'
+        ? effectiveRiskPercentFor(pending.ticker, pending.riskMult)
+        : Math.min(3, (Number(config.CTRADER_RISK_PERCENT) || 1) * (pending.riskMult ?? 1));
     // H01-b (2ª revisión): reservar el presupuesto EXACTO en RAM antes de enviar. El cap de
     // exposiciones concurrentes lee esta RAM; sin esto usaba el fallback (que ignora
     // riskMult y el factor de sesión). Si la entrada falla, el trade se elimina y libera.
@@ -308,7 +310,9 @@ export async function handleTradeCallback(callbackData: string, chatId: number, 
             if (pending.journalId) await db.collection('trade_journal').doc(pending.journalId).update({
                 ...normPayload, ctraderStatus: 'EXECUTED', ctraderDemo: config.CTRADER_DEMO,
             });
-            await db.collection('active_trades').doc(tradeId).update(normPayload);
+            const existingRam = globalState.activeTrades.get(tradeId);
+            const baseActive = existingRam ? JSON.parse(JSON.stringify(existingRam)) : {};
+            await db.collection('active_trades').doc(tradeId).set({ ...baseActive, ...normPayload }, { merge: true });
         } catch (error: any) {
             await retainExecutionIncident(tradeId, pending.journalId, result);
             console.error(`[CTRADER_CONFIRM] Posición ${result.positionId} ejecutada; contabilidad pendiente:`, error?.message);

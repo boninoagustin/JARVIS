@@ -13,7 +13,7 @@
  */
 
 import { config } from '../config.js';
-import { refreshIfNeeded, startTokenAutoRenewal, refreshCtraderToken } from './ctraderToken.js';
+import { refreshIfNeeded, startTokenAutoRenewal, refreshCtraderToken, syncAccessTokenFromEnv, tokenRemainingMs } from './ctraderToken.js';
 import { TrendbarPeriod, PayloadType, CTraderTrading } from 'ctrader-ts';
 import { db } from '../db/memory.js';
 import { addCandles, OHLCV } from '../db/market_data.js';
@@ -170,14 +170,21 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * Uses lazy initialization — connects on first use.
  */
 export async function connectCTrader(): Promise<boolean> {
+    syncAccessTokenFromEnv();
     if (!config.CTRADER_CLIENT_ID || !config.CTRADER_ACCESS_TOKEN) {
         console.warn('[CTRADER] ⚠️ Credenciales no configuradas en .env. Servicio deshabilitado.');
         return false;
     }
 
-    // 🆕 sep-2026 renovación automática del token: al primer connect se chequea el vencimiento
-    // (renueva si falta <3 días) y se arranca el chequeo periódico cada 12h.
-    void refreshIfNeeded().catch(() => { });
+    // 🆕 sep-2026 renovación automática del token: si ya venció o vence en <5 min, esperar el refresh
+    // antes de abrir el socket; si queda margen, chequear en background y activar timer de 12h.
+    const remMs = tokenRemainingMs();
+    if (remMs !== 0 && remMs < 5 * 60_000) {
+        await refreshIfNeeded().catch(() => { });
+        syncAccessTokenFromEnv();
+    } else {
+        void refreshIfNeeded().catch(() => { });
+    }
     startTokenAutoRenewal();
 
     if (isConnected && ctClient) return true;
@@ -190,6 +197,7 @@ export async function connectCTrader(): Promise<boolean> {
 async function connectWithRetry(): Promise<boolean> {
     for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
         try {
+            syncAccessTokenFromEnv();
             console.log(`[CTRADER] 🔌 Conectando a cTrader Open API (intento ${attempt})...`);
             console.log(`[CTRADER] Modo: ${config.CTRADER_DEMO ? 'DEMO 🧪' : 'LIVE 🔴'}`);
             
@@ -197,16 +205,14 @@ async function connectWithRetry(): Promise<boolean> {
             let timedOut = false;
             // Own the socket BEFORE authentication. SDK connect() loses the client when
             // account auth rejects (e.g. CANT_ROUTE_REQUEST), leaking a socket per retry.
+            // maxReconnectAttempts: 0 desactiva el auto-reconnect paralelo interno del SDK:
+            // handleDisconnectAndReconnect es el ÚNICO dueño determinista de la reconexión.
             const accountId = parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0;
             const pendingClient = new CTrader({
                 host: config.CTRADER_DEMO ? 'demo.ctraderapi.com' : 'live.ctraderapi.com',
                 port: 5035,
                 accountId,
-                onReconnect: async () => {
-                    await pendingClient.raw.auth.authenticateApp(config.CTRADER_CLIENT_ID, config.CTRADER_CLIENT_SECRET);
-                    await pendingClient.raw.auth.authenticateAccount(accountId, config.CTRADER_ACCESS_TOKEN);
-                    await pendingClient.raw.market.restoreSubscriptions();
-                },
+                maxReconnectAttempts: 0,
             });
             const { authenticateOwnedClient } = await import('./ctrader_auth_owned.js');
             const connectPromise = authenticateOwnedClient(pendingClient, {
@@ -289,7 +295,10 @@ let reconnectConsecutiveFailures = 0;
 async function handleDisconnectAndReconnect(oldClient: any): Promise<void> {
     if (reconnectInFlight) return; // ya hay una reconexión en curso
     reconnectInFlight = true;
-    try {
+    // Mantener connectingPromise ocupada durante el backoff + reconexión + re-suscripción
+    // para que ningún caller concurrente (getAccountInfo, modifyStopLoss, executeMarketOrder)
+    // dispare un connectWithRetry paralelo sin re-suscribir el escáner SMC.
+    const cyclePromise = (async (): Promise<boolean> => {
         // 1. Desloguear el cliente caído y limpiar estado
         try { oldClient?.disconnect?.(); } catch { /* noop */ }
         if (ctClient === oldClient) { ctClient = null; isConnected = false; }
@@ -300,14 +309,23 @@ async function handleDisconnectAndReconnect(oldClient: any): Promise<void> {
         console.log(`[CTRADER] 🔄 Reconexión en caliente en ${baseDelay / 1000}s...`);
         await new Promise(r => setTimeout(r, baseDelay));
 
-        // 3. Reintentar conectar (connectWithRetry ya trae su propio backoff interno)
-        connectingPromise = null;
-        const ok = await connectCTrader();
+        // 3. Reintentar conectar directamente con connectWithRetry()
+        const ok = await connectWithRetry();
         if (ok) {
             reconnectConsecutiveFailures = 0;
             console.log('[CTRADER] ✅ Reconexión exitosa. Re-inicializando escáner SMC...');
             try { await initializeScanner(); } catch (e: any) { console.warn('[CTRADER] ⚠️ No se pudo re-inicializar el escáner tras reconexión:', e.message); }
-        } else {
+            return true;
+        }
+        return false;
+    })();
+    connectingPromise = cyclePromise.finally(() => {
+        if (connectingPromise === cyclePromise) connectingPromise = null;
+    });
+
+    try {
+        const ok = await cyclePromise;
+        if (!ok) {
             reconnectConsecutiveFailures++;
             console.error(`[CTRADER] ❌ Reconexión fallida (${reconnectConsecutiveFailures} fallo(s) consecutivos).`);
             // Si falla repetidamente, caer a reinicio de PM2 como último recurso
@@ -315,9 +333,10 @@ async function handleDisconnectAndReconnect(oldClient: any): Promise<void> {
                 console.error('[CTRADER] ⛔ 5 reconexiones fallidas. Cediendo a PM2 (reinicio limpio).');
                 process.exit(1);
             } else {
-                // reintentar de nuevo en caliente
                 reconnectInFlight = false;
+                connectingPromise = null;
                 handleDisconnectAndReconnect(ctClient).catch(() => {});
+                return;
             }
         }
     } catch (e: any) {
@@ -794,44 +813,50 @@ export async function ensureConversionInstruments(tickers: string[]): Promise<vo
     }
 }
 
-export async function initializeScanner() {
-    console.log(`[CTRADER] 🚀 Inicializando Escáner Global SMC (roster: ${scannerRoster.size} activos)...`);
-    
-    if (!isConnected || !ctClient) {
-        const connected = await connectCTrader();
-        if (!connected) {
-            console.error('[CTRADER] No se pudo iniciar el escáner por falta de conexión.');
-            return;
-        }
-    }
+let scannerInitInFlight: Promise<void> | null = null;
 
-    const assets = [...scannerRoster];
-    const timeframes = SCANNER_TFS;
-
-    let successCount = 0;
-    
-    for (const asset of assets) {
-        for (const tf of timeframes) {
-            try {
-                // 1. Obtener historial (que automáticamente alimenta al SMC Engine)
-                await getHistoricalCandles(asset, tf.p, 500);
-                
-                // 2. Suscribirse a ticks en vivo
-                await subscribeToLiveTrendbars(asset, tf.p, tf.str);
-                
-                successCount++;
-                
-                // Pequeño delay para no saturar la API
-                await new Promise(r => setTimeout(r, 100));
-            } catch (err) {
-                console.error(`[CTRADER] ⚠️ Error inicializando escáner para ${asset}:${tf.str}`);
+export async function initializeScanner(): Promise<void> {
+    if (scannerInitInFlight) return scannerInitInFlight;
+    scannerInitInFlight = (async () => {
+        console.log(`[CTRADER] 🚀 Inicializando Escáner Global SMC (roster: ${scannerRoster.size} activos)...`);
+        
+        if (!isConnected || !ctClient) {
+            const connected = await connectCTrader();
+            if (!connected) {
+                console.error('[CTRADER] No se pudo iniciar el escáner por falta de conexión.');
+                return;
             }
         }
-        scannerProcessed.add(asset);
-    }
-    
-    console.log(`[CTRADER] ✅ Escáner SMC Global inicializado. (${successCount}/${assets.length * timeframes.length} streams activos)`);
-    try { await ensureConversionInstruments(assets); } catch (e: any) { console.warn(`[CTRADER] ⚠️ conversión: ${e.message}`); }
+
+        const assets = [...scannerRoster];
+        const timeframes = SCANNER_TFS;
+
+        let successCount = 0;
+        
+        for (const asset of assets) {
+            for (const tf of timeframes) {
+                try {
+                    // 1. Obtener historial (que automáticamente alimenta al SMC Engine)
+                    await getHistoricalCandles(asset, tf.p, 500);
+                    
+                    // 2. Suscribirse a ticks en vivo
+                    await subscribeToLiveTrendbars(asset, tf.p, tf.str);
+                    
+                    successCount++;
+                    
+                    // Pequeño delay para no saturar la API
+                    await new Promise(r => setTimeout(r, 100));
+                } catch (err) {
+                    console.error(`[CTRADER] ⚠️ Error inicializando escáner para ${asset}:${tf.str}`);
+                }
+            }
+            scannerProcessed.add(asset);
+        }
+        
+        console.log(`[CTRADER] ✅ Escáner SMC Global inicializado. (${successCount}/${assets.length * timeframes.length} streams activos)`);
+        try { await ensureConversionInstruments(assets); } catch (e: any) { console.warn(`[CTRADER] ⚠️ conversión: ${e.message}`); }
+    })().finally(() => { scannerInitInFlight = null; });
+    return scannerInitInFlight;
 }
 
 /**
@@ -1187,7 +1212,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                     // horas muy distintas). Se loguea 1 vez por activo y por hora la ventana real
                     // del bróker, para poder auditar si la pausa calculada tiene sentido.
                     const warnKey = `ROLLOVER:${ticker.toUpperCase()}:${now - (now % 3600e3)}`;
-                    if (!rolloverWarnAt.has(warnKey)) {
+                    if (typeof rolloverWarnAt !== 'undefined' && !rolloverWarnAt.has(warnKey)) {
                         rolloverWarnAt.set(warnKey, now);
                         const c = rollGate.calendar;
                         const fmt = (ms: number | null) => (ms == null ? '?' : new Date(ms).toISOString().slice(11, 16) + 'Z');
@@ -1221,7 +1246,7 @@ export async function executeMarketOrder(params: CTraderOrderParams): Promise<CT
                 // 🆕 02-nov-2026: BLOCKED_MIN_VOLUME era un skip silencioso. Se loguea (1 vez
                 // cada 6h por activo) cuánto riesgo exigiría el lote mínimo, para poder decidir
                 // entre subir el riesgo del activo o deshabilitarlo.
-                if (sized.error.startsWith('BLOCKED_MIN_VOLUME')) {
+                if (sized.error.startsWith('BLOCKED_MIN_VOLUME') && typeof sizingWarnAt !== 'undefined') {
                     const warnKey = ticker.toUpperCase();
                     const lastWarn = sizingWarnAt.get(warnKey) ?? 0;
                     if (now - lastWarn > 6 * 3600e3) {
@@ -1996,13 +2021,21 @@ export async function closePartial(positionId: string, percentToClose: number = 
 
         const volumeToClose = Math.floor((totalVolume * (percentToClose / 100)) / step) * step;
 
-        // 🛡️ request directo para leer el errorCode (la lib lo descarta → falsos éxitos)
+        // 🛡️ despacho de intento único vía authorizedBrokerRequest / requestOnce:
+        // connection.request() reintenta automáticamente ante REQUEST_FREQUENCY_EXCEEDED y podría
+        // duplicar un cierre parcial si el primer intento ya redujo volumen en el servidor.
         const sendClose = async (vol: number) => {
-            const res = await (ctClient as any).connection.request(PayloadType.CLOSE_POSITION_REQ, {
+            const payload = {
                 ctidTraderAccountId: parseInt(config.CTRADER_ACCOUNT_ID, 10) || 0,
                 positionId: Number(positionId),
                 volume: vol,
-            });
+            };
+            const conn = (ctClient as any).connection;
+            const res = typeof authorizedBrokerRequest === 'function' && Array.isArray(conn?.requestQueue)
+                ? await authorizedBrokerRequest(conn, PayloadType.CLOSE_POSITION_REQ, payload, () => null, { allowQueue: true })
+                : await (typeof conn.requestOnce === 'function'
+                    ? conn.requestOnce(PayloadType.CLOSE_POSITION_REQ, payload)
+                    : conn.request(PayloadType.CLOSE_POSITION_REQ, payload));
             if (res?.errorCode) {
                 throw new Error(`Broker rechazó el cierre (${res.errorCode}): ${res.description ?? ''}`);
             }
@@ -2180,9 +2213,14 @@ export async function closeAllPositions(): Promise<{ closed: number; failed: num
         for (const pos of positions) {
             const id = String(pos.positionId || pos.id);
             try {
-                await ctClient.close(Number(id));
-                closed++;
-                console.log(`[CTRADER] 🔴 Posición ${id} cerrada (killswitch).`);
+                const ok = await closePosition(id);
+                if (ok) {
+                    closed++;
+                    console.log(`[CTRADER] 🔴 Posición ${id} cerrada y verificada ausente (killswitch).`);
+                } else {
+                    failed++;
+                    console.error(`[CTRADER] ❌ Cierre no verificado en posición ${id} (killswitch).`);
+                }
             } catch {
                 failed++;
                 console.error(`[CTRADER] ❌ No se pudo cerrar posición ${id} (killswitch).`);

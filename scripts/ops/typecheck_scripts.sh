@@ -20,6 +20,9 @@ scripts/ops/prospective_promote.ts
 scripts/ops/weekly_digest.ts
 scripts/ops/test_weekly_e2e_audit.ts
 scripts/tests/test_live_vs_backtest_parity.ts
+scripts/tests/test_p2_ctrader_propfirm_audit.ts
+src/engine/PropFirmGuard.ts
+src/services/ctrader_readonly_client.ts
 scripts/history_lock.ts
 scripts/fetch_history.ts
 scripts/asset_scout.ts

@@ -116,14 +116,17 @@ async function main() {
 
     // Workspace 100% aislado fuera de /opt/JARVIS para jamás tocar logs productivos ni violar assertResearchDestination.
     const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-asset-scout-'));
+    let ctClient: any = null;
     try {
-        let ctClient: any = null;
         if (!SKIP_FETCH && universe.length > 0) {
-            const ctraderMod = await import('../src/services/ctrader.js');
-            const connected = await ctraderMod.connectCTrader();
-            if (!connected) { console.error('❌ No se pudo conectar a cTrader'); process.exit(1); }
-            console.log('✅ cTrader conectado (workspace aislado)');
-            ctClient = (await import('../src/services/ctrader.js')).ctClient ?? ctraderMod.ctClient;
+            const { connectReadOnlyCTraderClient } = await import('../src/services/ctrader_readonly_client.js');
+            try {
+                ctClient = await connectReadOnlyCTraderClient();
+                console.log('✅ cTrader conectado en modo read-only (workspace aislado)');
+            } catch (e: any) {
+                console.error(`❌ No se pudo conectar a cTrader: ${e?.message || e}`);
+                process.exit(1);
+            }
         }
 
         const { runBacktest, prepareEntries } = await import('../jarvis-os/src/services/backtestEngine.js');
@@ -215,6 +218,7 @@ async function main() {
             }
         }
     } finally {
+        try { (ctClient as any)?.disconnect?.(); } catch { /* noop */ }
         fs.rmSync(workRoot, { recursive: true, force: true });
     }
     process.exit(0);

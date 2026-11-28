@@ -25,9 +25,13 @@ LAST_NOTIFY_FILE=/opt/JARVIS/.watchdog_last_notify
 ENV=/opt/JARVIS/.env
 OUTLOG=/root/.pm2/logs/JARVIS-out.log
 # FIX (07-sep-2026): la Open API escucha en 5035 (protobuf) / 5036 (JSON), NO en 443.
-# Doc oficial: help.ctrader.com/open-api → "Connect to endpoints".
-# El puerto 443 nunca responde → falsa alarma de "ruta caída" desde el 07-sep 02:06.
-HOST=demo.ctraderapi.com
+# FIX (28-nov-2026): resolver HOST dinámicamente según CTRADER_DEMO en .env (no hardcodear demo).
+CTRADER_DEMO_RAW=$(grep -m1 -E '^CTRADER_DEMO=' "$ENV" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]' | xargs)
+if [ "$CTRADER_DEMO_RAW" = "false" ]; then
+  HOST=live.ctraderapi.com
+else
+  HOST=demo.ctraderapi.com
+fi
 PORT=5035
 
 ts() { date '+%Y-%m-%d %H:%M:%S %Z'; }
@@ -72,12 +76,18 @@ done
 
 PREV=$(cat "$STATE_FILE" 2>/dev/null || echo "UP")
 
-# ---------- 2) Estado del bot (señales frescas del out.log) ----------
-# FIX (07-sep-2026): 300 líneas era insuficiente con el volumen de trendbars (~50MB/h);
-# se amplía a 5000 (~2-3 min de log) para no quedar en "señales ambiguas".
+# ---------- 2) Estado del bot (healthcheck HTTP :3691 primero, fallback a out.log/error.log) ----------
+ERR_LOG=/root/.pm2/logs/JARVIS-error.log
 BOT_OFFLINE=0; BOT_ONLINE=0
-if tail -n 2000 "$OUTLOG" 2>/dev/null | grep -aq "cTrader no conectado"; then BOT_OFFLINE=1; fi
-if tail -n 5000 "$OUTLOG" 2>/dev/null | grep -aq "Conectado exitosamente"; then BOT_ONLINE=1; fi
+HEALTH_JSON=$(curl -s -m 5 http://127.0.0.1:3691/ 2>/dev/null || true)
+if echo "$HEALTH_JSON" | grep -q '"ctraderConnected":true'; then
+  BOT_ONLINE=1
+elif echo "$HEALTH_JSON" | grep -q '"ctraderConnected":false' && echo "$HEALTH_JSON" | grep -q '"ctraderConfigured":true'; then
+  BOT_OFFLINE=1
+else
+  if tail -n 2000 "$OUTLOG" "$ERR_LOG" 2>/dev/null | grep -aqE "cTrader no conectado|Servicio offline|Feed perdido"; then BOT_OFFLINE=1; fi
+  if tail -n 5000 "$OUTLOG" 2>/dev/null | grep -aqE "Conectado exitosamente|\[ACCOUNT-STATE\] ✅|\[RECONCILE\] run:"; then BOT_ONLINE=1; fi
+fi
 
 # ---------- 3) Trades activos (Firestore) ----------
 trades_count() {

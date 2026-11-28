@@ -314,11 +314,21 @@ async function main() {
                 uptime: Math.round(process.uptime()),
                 activeTrades: 0, // se actualiza abajo
                 lastPing: 0,
+                ctraderConnected: false,
+                ctraderConfigured: false,
+                ctraderDemo: true,
             };
-            // Import dinámico para leer estado desde trading module
-            import('./db/trading.js').then(tm => {
+            // Import dinámico para leer estado desde trading y cTrader modules
+            Promise.all([
+                import('./db/trading.js'),
+                import('./services/ctrader.js'),
+            ]).then(([tm, ct]) => {
                 status.activeTrades = (tm as any).getActiveTradeCount?.() ?? 0;
                 status.lastPing = (tm as any).getLastPingTime?.() ?? 0;
+                const ctSt = ct.getCTraderStatus();
+                status.ctraderConnected = ctSt.connected;
+                status.ctraderConfigured = ctSt.configured;
+                status.ctraderDemo = ctSt.demo;
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(status));
             }).catch(() => {

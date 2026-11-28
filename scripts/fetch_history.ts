@@ -202,15 +202,8 @@ export function parseFetchArgs(argv: string[]) {
 
 async function main() {
     const { tickers: explicitTickers, strict } = parseFetchArgs(process.argv.slice(2));
-    const { connectCTrader, ctClient } = await import('../src/services/ctrader.js');
-    console.log('Connecting to cTrader...');
-    const connected = await connectCTrader();
-    if (!connected) {
-        console.error('Failed to connect to cTrader');
-        process.exit(1);
-    }
-    const client = (await import('../src/services/ctrader.js')).ctClient ?? ctClient;
-    console.log('Connected.');
+    const { withReadOnlyCTraderClient } = await import('../src/services/ctrader_readonly_client.js');
+    console.log('Connecting to cTrader (read-only session)...');
 
     const DEFAULT_FROM = new Date('2026-01-01T00:00:00Z').getTime();
     const toDate = Date.now();
@@ -239,19 +232,22 @@ async function main() {
     console.log(`[Fetch] tickers (${tickers.length}): ${tickers.join(', ')}`);
 
     const failures: string[] = [];
-    for (const ticker of tickers) {
-        for (const tf of timeframes) {
-            try {
-                const lastMs = lastCandleMs(ticker, tf.str);
-                const fromTs = lastMs > 0 ? lastMs - 24 * 3600 * 1000 : DEFAULT_FROM;
-                await fetchHistoricalData(client, ticker, tf.p, tf.str, fromTs, toDate);
-            } catch (err: any) {
-                const msg = `${ticker}/${tf.str}: ${err?.message || err}`;
-                failures.push(msg);
-                console.error(`Error fetching ${msg}`);
+    await withReadOnlyCTraderClient(async (client) => {
+        console.log('Connected (read-only).');
+        for (const ticker of tickers) {
+            for (const tf of timeframes) {
+                try {
+                    const lastMs = lastCandleMs(ticker, tf.str);
+                    const fromTs = lastMs > 0 ? lastMs - 24 * 3600 * 1000 : DEFAULT_FROM;
+                    await fetchHistoricalData(client, ticker, tf.p, tf.str, fromTs, toDate);
+                } catch (err: any) {
+                    const msg = `${ticker}/${tf.str}: ${err?.message || err}`;
+                    failures.push(msg);
+                    console.error(`Error fetching ${msg}`);
+                }
             }
         }
-    }
+    });
 
     if (failures.length > 0) {
         console.error(`[Fetch] Completed with ${failures.length} failure(s): ${failures.join(' | ')}`);

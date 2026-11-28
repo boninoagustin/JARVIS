@@ -578,8 +578,66 @@ export async function reconcileCTraderPositions(): Promise<void> {
 
         for (const trade of [...globalState.activeTrades.values()]) {
             if (trade.isBacktest || !trade.ctraderPositionId) continue;
+            if (openIds.has(String(trade.ctraderPositionId))) {
+                // 🛡️ C01 recovery: si una posición VIVA en el broker tiene riskSnapshot VERIFIED congelado
+                // pero quedó retenida con executionIncidentPending por un fallo transitorio de Firestore
+                // al abrirse (sin ambigüedad de envío), reparar la persistencia ahora sin congelar la cuenta
+                // durante horas hasta el cierre de la posición.
+                if (db && (trade as any).executionIncidentPending === true && (trade as any).executionUncertain !== true
+                    && trade.riskAccountingStatus === 'VERIFIED' && trade.riskSnapshot) {
+                    const livePos = open.find((p: any) => String(p.positionId) === String(trade.ctraderPositionId));
+                    const liveEntry = Number(livePos?.tradeData?.openPrice ?? livePos?.price ?? NaN);
+                    const liveVol = Number(livePos?.tradeData?.volume ?? NaN);
+                    const liveSl = Number(livePos?.stopLoss ?? NaN);
+                    const snap = trade.riskSnapshot;
+                    if (livePos && Number.isFinite(liveEntry) && Math.abs(liveEntry - snap.entryPrice) <= Math.max(1, liveEntry) * 1e-9
+                        && Number.isFinite(liveVol) && liveVol > 0 && liveVol <= snap.filledVolumeCents
+                        && Number.isFinite(liveSl) && liveSl > 0) {
+                        try {
+                            const jid = trade.journalId || trade.tradeId;
+                            const repairFields = {
+                                ctraderPositionId: String(trade.ctraderPositionId),
+                                ctraderStatus: 'EXECUTED',
+                                entryPrice: snap.entryPrice,
+                                initialSlPrice: snap.initialSlPrice,
+                                slPrice: liveSl,
+                                riskSnapshot: snap,
+                                accountCurrency: snap.currency,
+                                riskAmountAccount: snap.riskAmountAccount,
+                                riskAccountingStatus: 'VERIFIED',
+                                riskAccountingProvenance: snap.source,
+                                executionIncidentPending: false,
+                                closeAccountingPending: false,
+                                executionUncertain: false,
+                                executionFillUnverified: false,
+                                ctraderError: null,
+                            };
+                            await db.collection('active_trades').doc(trade.tradeId).set({
+                                ...JSON.parse(JSON.stringify(trade)),
+                                ...repairFields,
+                            }, { merge: true });
+                            if (jid) await db.collection('trade_journal').doc(jid).set(repairFields, { merge: true });
+                            // initialSlPrice y riskSnapshot están sellados con writable:false en RAM;
+                            // mutar únicamente las banderas y el SL vigente.
+                            (trade as any).ctraderStatus = 'EXECUTED';
+                            trade.slPrice = liveSl;
+                            trade.riskAccountingStatus = 'VERIFIED';
+                            trade.riskAccountingProvenance = snap.source;
+                            (trade as any).executionIncidentPending = false;
+                            (trade as any).closeAccountingPending = false;
+                            (trade as any).executionUncertain = false;
+                            (trade as any).executionFillUnverified = false;
+                            (trade as any).ctraderError = null;
+                            invalidateRiskCache();
+                            console.log(`[RECONCILE] 🔧 Incidente de persistencia reparado en vivo para ${trade.ticker} #${trade.tradeId} (posID ${trade.ctraderPositionId}).`);
+                        } catch (repErr: any) {
+                            console.warn(`[RECONCILE] ⚠️ No se pudo reparar persistencia de posID ${trade.ctraderPositionId}: ${repErr.message}`);
+                        }
+                    }
+                }
+                continue;
+            }
             if (Date.now() - trade.timestamp < GRACE_MS) continue; // recién abierto → gracia
-            if (openIds.has(String(trade.ctraderPositionId))) continue;
             console.log(`[RECONCILE] 👻 Posición fantasma ${trade.ticker} #${trade.tradeId} (posID ${trade.ctraderPositionId}) — consultando historial real...`);
             let pnl = 0;
             let result = 'BREAKEVEN';
@@ -591,7 +649,7 @@ export async function reconcileCTraderPositions(): Promise<void> {
                 // 🛡️ 04-nov-2026: si el broker sólo reporta rechazos (sin fill) no hay
                 // posición ni PnL: se finaliza como REJECTED y se limpia el incidente
                 // (antes quedaba pendiente para siempre y bloqueaba todas las entradas).
-                if (await brokerDealsAreRejectedOnly(trade.ctraderPositionId!)) {
+                if (typeof brokerDealsAreRejectedOnly === 'function' && await brokerDealsAreRejectedOnly(trade.ctraderPositionId!)) {
                     const jidRej = trade.journalId;
                     console.warn(`[RECONCILE] 🚫 posID ${trade.ctraderPositionId}: la orden fue RECHAZADA por el broker (sin fill) — se finaliza como REJECTED, sin PnL.`);
                     if (db && jidRej) {
@@ -787,10 +845,29 @@ export async function reconcileCTraderPositions(): Promise<void> {
                 journalId: existingJournalId ?? tradeId,
                 ...Object.fromEntries(Object.entries(existingJournalData ?? {}).filter(([key]) => key.startsWith('rollover'))),
             };
-            // Recover opening evidence, never infer initial risk from the current (possibly trailed) stop.
+            // Recover opening evidence and partial/management state, never infer initial risk from the current stop.
             for (const key of ['riskSnapshot','accountCurrency','riskAmountAccount','riskAccountingStatus','riskAccountingProvenance','riskBudgetAccount','requestedRiskPercent',
-                'initialSlPrice','originalSlPrice','executionUncertain','executionIncidentPending','closeAccountingPending','executionFillUnverified']) {
+                'initialSlPrice','originalSlPrice','executionUncertain','executionIncidentPending','closeAccountingPending','executionFillUnverified',
+                'tp1Hit','slHalfwayHit','roiDecayApplied','tp1PartialAt','tp1PartialPct','tp1PartialPrice','tp1PartialPnlUsd','mgmtOverrides']) {
                 if (existingJournalData?.[key] !== undefined) trade[key] = existingJournalData[key];
+            }
+            if (Number.isFinite(Number(existingJournalData?.tp1Price)) && Number(existingJournalData.tp1Price) > 0) {
+                trade.tp1Price = Number(existingJournalData.tp1Price);
+            }
+            if (Number.isFinite(Number(existingJournalData?.tp2Price)) && Number(existingJournalData.tp2Price) >= 0) {
+                trade.tp2Price = Number(existingJournalData.tp2Price);
+            }
+            // 🛡️ Evidencia real del broker ante crash/reconexión justo después de un cierre parcial:
+            // si cTrader ya registra algún deal de cierre (parcial) en esta posición abierta, tp1Hit=true
+            // para jamás duplicar un segundo cierre parcial del 50% sobre el remanente.
+            if (!trade.tp1Hit) {
+                try {
+                    const posDeals = await getDealsByPosition(pid);
+                    if (Array.isArray(posDeals) && posDeals.some((d: any) => d?.closePositionDetail && Number(d.filledVolume) > 0 && [2, 3].includes(Number(d.dealStatus)))) {
+                        trade.tp1Hit = true;
+                        console.log(`[RECONCILE] 🛡️ Parcial previo detectado en deals reales de cTrader para posID=${pid} → tp1Hit=true (evita doble cierre parcial).`);
+                    }
+                } catch { /* best-effort; si falla, se conserva existingJournalData.tp1Hit */ }
             }
             if (freezeTradeRiskForTrade(trade) && Math.abs(trade.riskSnapshot.entryPrice - entry) <= Math.max(1, entry) * 1e-12) {
                 trade.initialSlPrice = trade.riskSnapshot.initialSlPrice;
@@ -1858,7 +1935,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
 
         // 🧹 GC por TTL por timeframe (sustituye al reset de 48h): caduca eventos viejos
         // y descarta entradas legacy inválidas (strings del formato antiguo en Firebase)
-        migrateZoneProtocolState(state);
+        if (typeof migrateZoneProtocolState === 'function') migrateZoneProtocolState(state);
         gcScore(state.scoreBuy, nowMs);
         gcScore(state.scoreSell, nowMs);
 
@@ -2032,8 +2109,11 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             const tf = (trade as any).executionTf;
                             const snapshot = tf ? getExecutionSnapshot(state, tf, nowMs) : undefined;
                             const liveQuote = () => { const q = getLastBidAsk(ticker, Date.now()); return q ? { bid: q.bid, ask: q.ask, timestampMs: q.ts, source: 'broker' as const } : undefined; };
+                            const rawPartialCfg = trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct;
                             const profilePartial = trade.executionPolicy!.targets ? REGIME_PROFILES[trade.executionInstrument!.regime].partialClosePct
-                                : normalizePartialClosePct(trade.mgmtOverrides?.partialClosePct ?? config.partialClosePct, 0.5);
+                                : (typeof normalizePartialClosePct === 'function'
+                                    ? normalizePartialClosePct(rawPartialCfg, 0.5)
+                                    : (() => { const n = Number(rawPartialCfg); return Number.isFinite(n) ? (n > 1 && n <= 100 ? n / 100 : Math.min(1, Math.max(0, n))) : 0.5; })());
                             const reason = await manageExecutionPosition(trade, snapshot, nowMs, profilePartial, {
                                 now: () => Date.now(), quote: liveQuote,
                                 rolloverBlocked: () => {
@@ -2280,12 +2360,12 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
                                 if (fireDb) {
+                                    // 🛡️ C04: NUNCA escribir closedAt en TP1 mientras la posición sigue abierta.
                                     if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         tp1Hit: true,
                                         tp1Timestamp: nowTrade,
                                         slPrice: trade.slPrice,
                                         originalSlPrice: trade.originalSlPrice,
-                                        closedAt: nowTrade
                                     }).then(() => import('../engine/PortfolioModel.js').then(m => m.invalidateRiskCache())).catch(() => { });
                                 }
                             }
@@ -2484,10 +2564,9 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                             if (trade.journalId) {
                                 const { db: fireDb } = await import('./memory.js');
                                 if (fireDb) {
+                                    // 🛡️ C04: NUNCA escribir closedAt ni asumir slPrice cambiado antes de que cTrader confirme el amend.
                                     if (!trade.isBacktest) fireDb.collection('trade_journal').doc(trade.journalId).update({
                                         slHalfwayHit: true,
-                                        slPrice: trade.entryPrice,
-                                        closedAt: nowTrade
                                     }).then(() => import('../engine/PortfolioModel.js').then(m => m.invalidateRiskCache())).catch(() => { });
                                 }
                             }
@@ -2511,6 +2590,7 @@ export async function processTradingAlert(alertText: string, store: StateStore =
                                         trade.slPrice = trade.targetSlPrice!;
                                         trade.targetSlPending = false;
                                         if (db && !trade.isBacktest) db.collection('active_trades').doc(trade.tradeId).update({ slPrice: trade.slPrice, targetSlPending: false }).catch(() => { });
+                                        if (db && trade.journalId && !trade.isBacktest) db.collection('trade_journal').doc(trade.journalId).update({ slPrice: trade.slPrice }).catch(() => { });
                                         sendTelegramAlert(buildBeMsg(`✅ SL ajustado a precio de entrada: ${trade.entryPrice}\n💡 Operación 100% libre de riesgo.`)).catch(() => { });
                                     } else {
                                         console.log(`[CTRADER] ⚠️ Fallo al modificar SL a ${trade.targetSlPrice}, se reintentará luego.`);
@@ -4524,11 +4604,12 @@ export function hasUnresolvedExecutionIncidents(): boolean {
  */
 export function effectiveRiskPercentFor(ticker: string, riskMult: number | undefined, nowMs = Date.now()): number {
     const cfgRisk = Number((getConfigForTicker(ticker, nowMs) as any).riskPercent);
-    const base = Number.isFinite(cfgRisk) && cfgRisk > 0 ? Math.min(cfgRisk, 3) : envConfig.CTRADER_RISK_PERCENT;
+    const base = Number.isFinite(cfgRisk) && cfgRisk > 0 ? Math.min(cfgRisk, 3) : Math.min(envConfig.CTRADER_RISK_PERCENT, 3);
     if (base !== envConfig.CTRADER_RISK_PERCENT) {
         console.log(`[RISK] ${ticker}: riesgo por activo ${base}% (global ${envConfig.CTRADER_RISK_PERCENT}%)`);
     }
-    return base * (riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(nowMs));
+    const rawEffective = base * (riskMult ?? 1) * getSessionSizingFactor(getCurrentSession(nowMs));
+    return Math.min(3, Math.max(0, rawEffective));
 }
 
 function portfolioCapBlock(ticker: string, thisRisk: number, excludeTradeId?: string): string | null {
@@ -4552,6 +4633,27 @@ function portfolioCapBlock(ticker: string, thisRisk: number, excludeTradeId?: st
     return null;
 }
 
+async function checkLivePropFirmAdmission(ticker: string, nowMs: number, opts: { extraRiskPercent?: number; excludeTradeId?: string }): Promise<string | null> {
+    try {
+        const { evaluateLivePropFirmGate } = await import('./accountState.js');
+        const verdict = await evaluateLivePropFirmGate({
+            activeTrades: globalState.activeTrades as any,
+            fallbackRiskFor: (t) => (Number((getConfigForTicker(t, nowMs) as any).riskPercent) || Number(envConfig.CTRADER_RISK_PERCENT)),
+            requestedRiskPercent: opts.extraRiskPercent,
+            excludeTradeId: opts.excludeTradeId,
+            nowMs,
+        });
+        if (verdict && !verdict.allowed) {
+            console.warn(`[PROPFIRM-GATE] ⛔ ${ticker} bloqueado: ${verdict.reason}`);
+            return verdict.reason ?? 'BLOCKED_PROPFIRM';
+        }
+        return null;
+    } catch (e: any) {
+        console.warn(`[PROPFIRM-GATE] ⚠️ Error evaluando gate Prop Firm (${ticker}): ${e?.message}`);
+        return null;
+    }
+}
+
 export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now(), opts: { extraRiskPercent?: number; excludeTradeId?: string } = {}): Promise<string | null> {
     // Synchronous policy is shared by AUTO and delayed manual approval, including
     // a final read after ledger awaits: latches/settings may change during I/O.
@@ -4571,9 +4673,13 @@ export async function recheckLiveExecutionRisk(ticker: string, nowMs = Date.now(
     if (await evaluateGlobalKillswitch(nowMs, globalState, false)) return 'BLOCKED_GLOBAL';
     if (await evaluateAssetKillswitch(ticker, nowMs, globalState, false)) return 'BLOCKED_ASSET';
     // H01: topes de exposición para TODAS las admisiones (AUTO y aprobación manual).
-    if (Number.isFinite(opts.extraRiskPercent)) {
+    if (Number.isFinite(opts.extraRiskPercent) && typeof portfolioCapBlock === 'function') {
         const capBlock = portfolioCapBlock(ticker, Number(opts.extraRiskPercent), opts.excludeTradeId);
         if (capBlock) return capBlock;
+    }
+    if (typeof checkLivePropFirmAdmission === 'function') {
+        const pfBlock = await checkLivePropFirmAdmission(ticker, nowMs, opts);
+        if (pfBlock) return pfBlock;
     }
     return currentPolicy(Date.now());
 }
@@ -4584,7 +4690,10 @@ export async function retainExecutionIncident(tradeId: string, journalId: string
     // ESTRUCTURADA del productor (filledVolumeCents === 0 y el resultado no es incierto).
     // Antes una regex sobre el mensaje podía degradar una ejecución INCIERTA a "sin
     // incidente" y el caller borraba la identidad del trade.
-    if (isTerminalNoFill(result)) {
+    const terminalNoFill = typeof isTerminalNoFill === 'function'
+        ? isTerminalNoFill(result)
+        : (!!result && !result.success && result.executionUncertain !== true && Number(result.filledVolumeCents) === 0);
+    if (terminalNoFill) {
         console.warn('[EXEC] rechazo terminal sin fill (evidencia estructurada: filledVolumeCents=0, executionUncertain=false)');
         return false;
     }
@@ -4646,9 +4755,13 @@ export async function updateTradePositionId(tradeId: string, positionId: string,
             entryPrice: trade.entryPrice, initialSlPrice: trade.initialSlPrice, originalSlPrice: trade.originalSlPrice, slPrice: trade.slPrice,
             riskAmountAccount: trade.riskSnapshot!.riskAmountAccount, riskAccountingProvenance: trade.riskSnapshot!.source } : {}) };
     // Await this boundary before management: failures remain executed-but-pending, never aborted.
+    // 🛡️ C01: usar set(..., { merge: true }) con la base del trade en RAM (no update()), porque
+    // los pre-trades OTE nacen solo en RAM en evaluateImpulse y un doc ausente en active_trades
+    // tiraba 5 NOT_FOUND → falso incidente de contabilidad y bloqueo global de toda la cuenta.
     const { db } = await import('./memory.js');
     if (!db) throw new Error('Trade risk persistence unavailable');
-    await db.collection('active_trades').doc(tradeId).update(fields);
+    const serializedBase = JSON.parse(JSON.stringify(trade));
+    await db.collection('active_trades').doc(tradeId).set({ ...serializedBase, ...fields }, { merge: true });
     console.log(`[RADAR] 🔗 Enlazado trade #${tradeId} con cTrader posID: ${positionId} en RAM`);
 }
 
@@ -5283,7 +5396,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 }).catch(() => 'ERR');
             }
 
-            // 🧠 REGISTRO EN ACTIVE TRADES SI ES ENTRADA DIRECTA (isChochEntry: true)
+            // 🧠 REGISTRO EN ACTIVE TRADES (TANTO ENTRADAS DIRECTAS COMO OTE PRE-CREADOS EN RAM)
             let activeTrade = store.activeTrades.get(oteData.tradeId);
             if (!activeTrade) {
                 activeTrade = {
@@ -5307,23 +5420,23 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                 const oteMgmt = (oteData as any).mgmtOverrides;
                 if (oteMgmt) activeTrade.mgmtOverrides = oteMgmt;
                 store.activeTrades.set(oteData.tradeId, activeTrade);
-                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).set(activeTrade).catch(() => { });
                 console.log(`[SNIPER] 💾 Registrado trade activo DIRECTO para ${ticker} #${oteData.tradeId}`);
             }
 
             if (mlRegimeShadow !== undefined) {
                 activeTrade.mlRegimeShadow = mlRegimeShadow;
-                // NOT_FOUND (code 5) es esperable: el doc se borra al cerrar el trade y esta
-                // telemetría puede llegar tarde. No ensuciar el log con una carrera normal.
-                if (db && !isBacktest) void db.collection('active_trades').doc(oteData.tradeId).update({ mlRegimeShadow })
-                    .catch((e: any) => { if (e?.code !== 5) console.warn('[ML-REGIME-SHADOW] Active telemetry not persisted:', e?.message); });
             }
             if (journalId && journalId !== 'ERR' && journalId !== 'N/A') {
                 activeTrade.journalId = journalId;
                 if (mlRegimeShadow !== undefined && db && !isBacktest) void db.collection('trade_journal').doc(journalId).update({ mlRegimeShadow })
                     .catch((e: any) => { if (e?.code !== 5) console.warn('[ML-REGIME-SHADOW] Journal telemetry not persisted:', e?.message); });
-                // 💾 Actualizar el journalId en Firebase
-                if (db && !isBacktest) db.collection('active_trades').doc(oteData.tradeId).update({ journalId }).catch(() => { });
+            }
+            // 🛡️ C01: persistir SIEMPRE el documento base en active_trades (OTE y Directo) antes de
+            // despachar la orden a cTrader, evitando 5 NOT_FOUND en updateTradePositionId / rollover.
+            if (db && !isBacktest) {
+                await db.collection('active_trades').doc(oteData.tradeId).set(JSON.parse(JSON.stringify(activeTrade)), { merge: true }).catch((e: any) => {
+                    console.warn(`[SNIPER] ⚠️ No se pudo pre-persistir active_trades/${oteData.tradeId}: ${e?.message}`);
+                });
             }
 
             // 🤖 cTrader: Send trade with confirmation buttons (semi-automatic mode)
@@ -5344,7 +5457,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                             // H01 (auditoría 2026-11-05): una sola fuente de riesgo y de caps para
                             // AUTO y aprobación manual (los caps viven en recheckLiveExecutionRisk).
                             const blocked = await recheckLiveExecutionRisk(ticker, Date.now(), {
-                                extraRiskPercent: frozenRequestedRiskPercent,
+                                extraRiskPercent: typeof frozenRequestedRiskPercent === 'number' ? frozenRequestedRiskPercent : undefined,
                                 excludeTradeId: oteData.tradeId,
                             });
                             if (blocked === 'BLOCKED_ROLLOVER') {
@@ -5414,7 +5527,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                         ...(Number.isFinite((riskTrade as any)?.requestedRiskPercent) ? { requestedRiskPercent: (riskTrade as any).requestedRiskPercent } : {}),
                                     };
                                     if (riskTrade) Object.assign(riskTrade, budgetFields);
-                                    if (db && Object.keys(budgetFields).length) await db.collection('active_trades').doc(oteData.tradeId).update(budgetFields);
+                                    if (db && Object.keys(budgetFields).length) await db.collection('active_trades').doc(oteData.tradeId).set(budgetFields, { merge: true });
                                     if (db && journalId && !isBacktest) await db.collection('trade_journal').doc(journalId).update({
                                         ctraderPositionId: result.positionId, ctraderLots: result.lots,
                                         ctraderExecutedPrice: result.executedPrice, entryPrice: result.executedPrice,
@@ -5473,7 +5586,7 @@ async function dispatchOteSignal(dispatchData: any, state: any, docRef: any, ctx
                                                 executionState: exTrade.executionState, executionLots: result.lots, initialSlPrice: exTrade.initialSlPrice,
                                                 executionTf: (exTrade as any).executionTf, mgmtOverrides: exTrade.mgmtOverrides, entryPrice: result.executedPrice }));
                                             if (journalId) await db.collection('trade_journal').doc(journalId).update(fields);
-                                            await db.collection('active_trades').doc(oteData.tradeId).update(fields);
+                                            await db.collection('active_trades').doc(oteData.tradeId).set(fields, { merge: true });
                                         }
                                     }
                                     exTrade.entryPrice = Number(result.executedPrice) || Number(exTrade.entryPrice);

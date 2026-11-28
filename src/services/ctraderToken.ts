@@ -74,6 +74,71 @@ export function tokenRemainingMs(): number {
 }
 
 /**
+ * Sincroniza `config.CTRADER_ACCESS_TOKEN` desde el `.env` en disco si otro proceso
+ * (ej. un script CLI con lock compartido) rotó el token mientras `JARVIS` estaba vivo.
+ */
+export function syncAccessTokenFromEnv(): string {
+    const diskToken = readEnvValue('CTRADER_ACCESS_TOKEN');
+    if (diskToken && diskToken !== config.CTRADER_ACCESS_TOKEN) {
+        config.CTRADER_ACCESS_TOKEN = diskToken;
+        console.log('[CTRADER-TOKEN] 🔄 Access token recargado en memoria desde .env.');
+    }
+    return diskToken || config.CTRADER_ACCESS_TOKEN || '';
+}
+
+function isPidAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e: any) {
+        return e?.code === 'EPERM';
+    }
+}
+
+async function withCrossProcessTokenLock<T>(fn: () => Promise<T>, maxWaitMs = 25_000): Promise<T> {
+    const lockPath = `${ENV_PATH}.token.lock`;
+    const deadline = Date.now() + maxWaitMs;
+    let acquired = false;
+    while (Date.now() < deadline) {
+        try {
+            const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+            try {
+                fs.writeFileSync(fd, `${process.pid}:${Date.now()}\n`, 'utf8');
+            } finally {
+                fs.closeSync(fd);
+            }
+            acquired = true;
+            break;
+        } catch (e: any) {
+            if (e?.code !== 'EEXIST') throw e;
+            try {
+                const raw = fs.readFileSync(lockPath, 'utf8').trim();
+                const [pidStr, tsStr] = raw.split(':');
+                const lockPid = Number(pidStr);
+                const lockTs = Number(tsStr);
+                const staleAge = Number.isFinite(lockTs) && Date.now() - lockTs > 60_000;
+                const deadOwner = Number.isInteger(lockPid) && lockPid > 0 && lockPid !== process.pid && !isPidAlive(lockPid);
+                if (staleAge || deadOwner) {
+                    try { fs.unlinkSync(lockPath); } catch { /* otro proceso lo limpió */ }
+                    continue;
+                }
+            } catch { /* en tránsito */ }
+            await new Promise((r) => setTimeout(r, 100));
+        }
+    }
+    if (!acquired) {
+        console.warn(`[CTRADER-TOKEN] ⚠️ Timeout esperando lock inter-proceso (${lockPath}); abortando refresh concurrente.`);
+        return false as unknown as T;
+    }
+    try {
+        return await fn();
+    } finally {
+        try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+    }
+}
+
+/**
  * Renueva el access token con el refresh token (POST /apps/token).
  * Actualiza el .env (con backup) y la config EN MEMORIA para que la próxima conexión
  * use el token nuevo sin reiniciar el proceso.
@@ -81,9 +146,9 @@ export function tokenRemainingMs(): number {
 let refreshInFlight: Promise<boolean> | null = null;
 
 /**
- * H11: SINGLEFLIGHT. Varios orígenes llaman al refresh (auto-renewal, connectCTrader,
- * connectWithRetry con force). Todos convergen al MISMO intento en curso: nunca hay dos
- * rotaciones concurrentes, y `force` sólo elude el cooldown, no el dedupe.
+ * H11: SINGLEFLIGHT (en proceso + inter-proceso vía .env.token.lock).
+ * Varios orígenes llaman al refresh (auto-renewal, connectCTrader, scripts CLI).
+ * Todos convergen sin quemar el refresh_token single-use en paralelo.
  */
 export function refreshCtraderToken(force = false): Promise<boolean> {
     if (refreshInFlight) {
@@ -91,12 +156,22 @@ export function refreshCtraderToken(force = false): Promise<boolean> {
         return refreshInFlight;
     }
     if (!force && Date.now() - lastAttemptTs < MIN_RETRY_GAP_MS) return Promise.resolve(false);
+    const prevDiskToken = readEnvValue('CTRADER_ACCESS_TOKEN');
+    const prevIssuedAt = Number(readEnvValue('CTRADER_TOKEN_ISSUED_AT')) || 0;
     lastAttemptTs = Date.now();
-    refreshInFlight = doRefresh().finally(() => { refreshInFlight = null; });
+    refreshInFlight = withCrossProcessTokenLock(() => doRefresh(prevDiskToken, prevIssuedAt)).finally(() => { refreshInFlight = null; });
     return refreshInFlight;
 }
 
-async function doRefresh(): Promise<boolean> {
+async function doRefresh(prevDiskToken = '', prevIssuedAt = 0): Promise<boolean> {
+    // Si otro proceso acaba de rotar el token mientras esperábamos el lock, reutilizar el nuevo .env sin repetir POST.
+    const currentDiskToken = readEnvValue('CTRADER_ACCESS_TOKEN');
+    const currentIssuedAt = Number(readEnvValue('CTRADER_TOKEN_ISSUED_AT')) || 0;
+    if (currentDiskToken && ((prevDiskToken && currentDiskToken !== prevDiskToken) || (currentIssuedAt > prevIssuedAt && currentIssuedAt + TOKEN_TTL_MS - Date.now() >= RENEW_THRESHOLD_MS))) {
+        config.CTRADER_ACCESS_TOKEN = currentDiskToken;
+        console.log('[CTRADER-TOKEN] ↔️ Otro proceso ya renovó el token en .env — adoptado sin re-rotar.');
+        return true;
+    }
     const refreshToken = readEnvValue('CTRADER_REFRESH_TOKEN') || process.env.CTRADER_REFRESH_TOKEN || '';
     if (!refreshToken) {
         console.warn('[CTRADER-TOKEN] ⚠️ No hay CTRADER_REFRESH_TOKEN en .env — renovación automática deshabilitada.');

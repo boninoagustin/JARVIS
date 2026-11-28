@@ -106,9 +106,9 @@ cases.reconcile=async()=>{
  assert.equal(retry.trades.has('T1'),true,'journal rejection cannot delete active trade');assert.equal(held.closeAccountingPending,true);assert.equal(retry.deleted.length,0);
  retry.setReject(false);retry.context.lastReconcileTs=0;await retry.api.reconcileCTraderPositions();assert.equal(retry.trades.has('T1'),false,'retry completes with original identity');
 };
-function exitBranch(kind:'ROI'|'RIDER') {const expression=kind==='ROI'?'currentPnlPct >= effectiveROI * 100':'(lastChoch as any).direction === inverseDir';const branch=nodes(n=>ts.isIfStatement(n)&&n.expression.getText(ast)===expression)[0];assert.ok(branch,kind+' actual branch');return branch.getText(ast);}
+function exitBranch(kind:'ROI'|'RIDER') {const branch=nodes(n=>ts.isIfStatement(n)&&(kind==='ROI'?n.expression.getText(ast)==='currentPnlPct >= effectiveROI * 100':(n.expression.getText(ast)==='(lastChoch as any).direction === inverseDir'||n.expression.getText(ast).startsWith('isRiderExit('))))[0];assert.ok(branch,kind+' actual branch');return branch.getText(ast);}
 for(const kind of ['ROI','RIDER'] as const)cases[kind]=async()=>{
- const make=()=>sandbox(closeFunctions()+`\nexport async function run(){for(const [tradeId,trade]of store.activeTrades){${exitBranch(kind)}}}`,{ticker:'EURUSD',isBacktest:false,isDuplicate:()=>false,nowTrade:now,currentPrice:1.2,currentPnlPct:1,effectiveROI:.001,roiLabel:'30min',tradeAgeMs:900000,lastChoch:{direction:'Bearish'},inverseDir:'Bearish'});
+ const make=()=>sandbox(closeFunctions()+`\nexport async function run(){for(const [tradeId,trade]of store.activeTrades){${exitBranch(kind)}}}`,{ticker:'EURUSD',isBacktest:false,isDuplicate:()=>false,nowTrade:now,currentPrice:1.2,currentPnlPct:1,effectiveROI:.001,roiLabel:'30min',tradeAgeMs:900000,lastChoch:{direction:'Bearish'},inverseDir:'Bearish',positionStartedAt:now-900000,isRiderExit:()=>true});
  const h=make();const trade=seed(h);trade.riderTf='H1';let closes=0;h.broker.closePosition=async()=>{closes++;return true;};
  let release!:()=>void;h.setGate(new Promise<void>(r=>release=r));const running=h.api.run();await flush();assert.equal(h.trades.has('T1'),true,kind+' awaits accounting before RAM deletion');assert.equal(trade.closeAccountingPending,true,kind+' installs RAM hold');
  h.setGate(undefined);release();await running;assert.equal(h.trades.has('T1'),false);
