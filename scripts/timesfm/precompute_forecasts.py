@@ -41,9 +41,9 @@ def norm_tf(tf: str) -> int:
     return int(d) if d else 15
 
 
-def load_series(ticker: str, tf_min: int) -> tuple[np.ndarray, np.ndarray]:
+def load_series(ticker: str, tf_min: int, logs_dir: str | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Devuelve (ts_ms[], closes[]) ordenados por ts. Mismo parser que F0."""
-    hist = REPO_ROOT / "logs" / ticker / "history_exported"
+    hist = Path(logs_dir) if logs_dir else (REPO_ROOT / "logs" / ticker / "history_exported")
     fname = hist / f"pine-logs-SMC Master_M{tf_min}.csv"
     if not fname.exists():
         matches = sorted(hist.glob(f"*M{tf_min}*.csv"))
@@ -72,11 +72,12 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--horizon", type=int, default=24)
     ap.add_argument("--context", type=int, default=512)
+    ap.add_argument("--logs-dir", default=None, help="Directorio de CSVs exportados (snapshot inmutable)")
     args = ap.parse_args()
 
     ticker = args.ticker.lower()
     tf_min = norm_tf(args.tf)
-    ts, closes = load_series(ticker, tf_min)
+    ts, closes = load_series(ticker, tf_min, args.logs_dir)
     idx_of = {int(t): i for i, t in enumerate(ts)}
 
     if args.full:

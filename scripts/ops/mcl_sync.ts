@@ -22,6 +22,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import admin from 'firebase-admin';
 import { applyProposalToSessions } from './mcl_proposal_core.js';
 
@@ -118,10 +119,52 @@ if (APPLY) {
 }
 
 // ── Rama dry-run / --write: compara vivo vs sweep ──
+function verifiedCycleFilter(): { startedAt: number; evaluated: Set<string>; cycleWeek: string; cycleRunId: string } | null {
+  if (!WRITE) return null;
+  const stateDir = process.env.MARK_DIR || '/var/lib/jarvis';
+  const summaryPath = process.env.WEEKLY_SUMMARY || path.join(OPT_OUT, 'weekly_selection_summary.json');
+  const vr = spawnSync('python3', [path.join(REPO, 'scripts/periodic_opt/weekly_cycle_state.py'), 'verify', '--state-dir', stateDir, '--summary', summaryPath], { encoding: 'utf8', timeout: 15_000 });
+  if (vr.status !== 0) {
+    throw new Error(`mcl_sync --write exige ciclo semanal verificado: ${(vr.stderr || vr.stdout || '').trim()}`);
+  }
+  const ctx = JSON.parse(vr.stdout);
+  const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+  const evaluated = new Set<string>(
+    (summary.outcomes || [])
+      .filter((o: any) => o.outcome === 'evaluated' && !o.deployment_error)
+      .map((o: any) => String(o.ticker).toUpperCase()),
+  );
+  return { startedAt: Number(ctx.started_at), evaluated, cycleWeek: ctx.week, cycleRunId: ctx.run_id };
+}
+
+const cycleFilter = verifiedCycleFilter();
+const activeSnap = await db.collection('optimization_config').doc('active_tickers').get();
+const activeSet = new Set<string>(((activeSnap.data()?.tickers as string[]) || []).map((t) => t.toUpperCase()));
+
 function sweepFiles(): Array<[string, any]> {
-  return fs.readdirSync(OPT_OUT)
-    .filter((f) => f.startsWith('directional_mcl_') && f.endsWith('.json'))
-    .map((f) => [f.replace('directional_mcl_', '').replace('.json', ''), JSON.parse(fs.readFileSync(path.join(OPT_OUT, f), 'utf8'))] as [string, any]);
+  if (!fs.existsSync(OPT_OUT)) return [];
+  const out: Array<[string, any]> = [];
+  for (const f of fs.readdirSync(OPT_OUT)) {
+    if (!f.startsWith('directional_mcl_') || !f.endsWith('.json')) continue;
+    const ticker = f.replace('directional_mcl_', '').replace('.json', '').toUpperCase();
+    if (activeSet.size > 0 && !activeSet.has(ticker)) continue;
+    const full = path.join(OPT_OUT, f);
+    const st = fs.statSync(full);
+    if (cycleFilter) {
+      if (!cycleFilter.evaluated.has(ticker)) continue;
+      if (Math.floor(st.mtimeMs) < cycleFilter.startedAt - 1000) continue;
+    } else if (Date.now() - st.mtimeMs > MAX_AGE_MS) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(full, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || !parsed.evaluation_manifest) continue;
+      out.push([ticker, parsed]);
+    } catch {
+      continue;
+    }
+  }
+  return out;
 }
 
 const diffs: Diff[] = [];

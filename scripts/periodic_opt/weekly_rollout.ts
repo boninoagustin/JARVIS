@@ -26,7 +26,8 @@ export function isEvaluationSource(file:string):boolean {
  return !new Set(['scripts/periodic_opt/run_weekly.py','scripts/periodic_opt/apply_weekly.ts',
   'scripts/periodic_opt/weekly_candidate_safety.ts','scripts/periodic_opt/weekly_rollout.ts',
   'scripts/periodic_opt/weekly_followup.ts','scripts/periodic_opt/push_reports.js',
-  'scripts/periodic_opt/update_adr_guarded.ts','scripts/periodic_opt/timesfm_followup_recorder.py']).has(relative);
+  'scripts/periodic_opt/update_adr_guarded.ts','scripts/periodic_opt/timesfm_followup_recorder.py',
+  'scripts/periodic_opt/weekly_cycle_state.py','scripts/periodic_opt/snapshot_isolation.py']).has(relative);
 }
 
 /** Verify actual evaluation inputs, never an invented certificate from a boolean. */

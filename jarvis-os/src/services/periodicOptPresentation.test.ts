@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, MIN_FILTER_SAMPLE, activationRecommendation, reportSummary, reportPlainDetail } from './periodicOptPresentation.ts';
+import { MAX_REPORT_AGE_MS, isFreshReport, reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, mlDiagnostic, filterEvidence, activationRecommendation, reportSummary, reportPlainDetail } from './periodicOptPresentation.ts';
+import { describeReportCycleState } from '../components/periodicOptStatus.ts';
 const now = Date.UTC(2026, 10, 7, 19, 0);
 test('freshness is inclusive at eight days, fails closed for old/missing/future dates', () => {
     assert.equal(isFreshReport(now - MAX_REPORT_AGE_MS, now), true);
@@ -99,10 +100,11 @@ test('report plain detail explains verdict and flags tiny samples', () => {
     assert.match(err.join('\n'), /no aprueba ningún cambio/);
     assert.doesNotMatch(err.join('\n'), /0 con la configuración/);
 });
-test('panel restores freshness-gated feature toggles without duplicating the roster', () => {
+test('panel restores freshness-gated feature toggles without duplicating the roster or re-enabling TimesFM', () => {
     const panel = readFileSync(new URL('../components/PeriodicOptPanel.tsx', import.meta.url), 'utf8');
-    // Feature toggles are actionable again, each gated by fresh evidence + confirmation.
-    for (const h of ['toggleMLGate', 'toggleCorrFilter', 'toggleTimesfm', 'toggleRollover', 'applyExitPolicy', 'applyLoserForTicker', 'promoteTicker']) assert.match(panel, new RegExp(`\\b${h}\\b`));
+    // Feature toggles are actionable again, each gated by fresh evidence + confirmation (TimesFM stays intentionally removed per e118314).
+    for (const h of ['toggleMLGate', 'toggleCorrFilter', 'toggleRollover', 'applyExitPolicy', 'applyLoserForTicker', 'promoteTicker']) assert.match(panel, new RegExp(`\\b${h}\\b`));
+    assert.doesNotMatch(panel, /\btoggleTimesfm\b/);
     assert.match(panel, /confirmAction/);
     assert.match(panel, /isFreshReport\(/);
     assert.match(panel, /setDoc\(/);
@@ -111,8 +113,24 @@ test('panel restores freshness-gated feature toggles without duplicating the ros
     assert.doesNotMatch(panel, /updatedBy: 'panel_activate'|updatedBy: 'panel_disable'/);
     assert.match(panel, /Promise\.allSettled/);
     assert.match(panel, /onClick=\{\(\) => void refreshAll\(\)\}/);
-    for (const collection of ['opt_reports', 'auto_state', 'asset_configs', 'active_tickers', 'health_check', 'ml_gate_evals', 'corr_gate_evals', 'timesfm_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals']) assert.ok(panel.includes(collection));
+    for (const collection of ['opt_reports', 'auto_state', 'asset_configs', 'active_tickers', 'health_check', 'ml_gate_evals', 'corr_gate_evals', 'blocked_signals_evals', 'exits_gate_evals', 'rollover_evals']) assert.ok(panel.includes(collection));
     assert.match(panel, /validez actual no acreditada/);
     assert.match(panel, /sin confirmación de recepción del bot/);
     assert.match(panel, /href="\/assets"/);
+    assert.match(panel, /describeReportCycleState/);
+});
+test('panel cycle state distinguishes historical, new evaluation, skipped, partial and error reports', () => {
+    const active = ['EURUSD', 'EURCHF', 'USDCAD'];
+    assert.equal(describeReportCycleState({ ticker: 'USDCAD', timestamp: now - MAX_REPORT_AGE_MS - 1, status: 'RECOMMEND', selection_outcome: 'evaluated' }, active, now).kind, 'historical');
+    assert.equal(describeReportCycleState({ ticker: 'BTCUSD', timestamp: now, status: 'HOLD', selection_outcome: 'evaluated' }, active, now).kind, 'historical');
+    const ev = describeReportCycleState({ ticker: 'EURUSD', timestamp: now - 1000, status: 'RECOMMEND', selection_outcome: 'evaluated', cycle_week: '2026-W48' }, active, now);
+    assert.equal(ev.kind, 'evaluated');
+    assert.match(ev.badge, /EVALUACIÓN NUEVA \(2026-W48\)/);
+    const sk = describeReportCycleState({ ticker: 'USDCAD', timestamp: now - 1000, status: 'HOLD', selection_outcome: 'skipped' }, active, now);
+    assert.equal(sk.kind, 'skipped');
+    assert.match(sk.badge, /SIN RE-OPTIMIZAR/);
+    assert.equal(describeReportCycleState({ ticker: 'EURCHF', timestamp: now - 1000, status: 'ERROR', selection_outcome: 'failed' }, active, now).kind, 'partial_or_error');
+    assert.equal(describeReportCycleState({ ticker: 'EURCHF', timestamp: now - 1000, status: 'HOLD_SELECTION_ERROR', selection_outcome: 'evaluated' }, active, now).kind, 'partial_or_error');
+    assert.equal(describeReportCycleState({ ticker: 'EURCHF', timestamp: now - 1000, status: 'RECOMMEND', selection_outcome: 'evaluated', deployment_error: 'tx timeout' }, active, now).kind, 'partial_or_error');
+    assert.equal(describeReportCycleState({ ticker: 'EURUSD', timestamp: now - 1000, status: 'HOLD_MC', selection_outcome: 'evaluated' }, active, now).kind, 'evaluated');
 });

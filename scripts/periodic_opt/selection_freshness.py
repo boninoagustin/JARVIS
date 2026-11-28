@@ -74,19 +74,48 @@ def load_checkpoint(path: Path, ticker: str, validate) -> dict | None:
         return None
 
 
+def expected_asset_fingerprints(state: dict | None, latest_report: dict | None = None) -> set[str]:
+    if state is None:
+        return set()
+    watermark = state.get('watermark') or {}
+    candidate = state.get('candidate') or {}
+    if isinstance(watermark.get('expected_asset_fingerprint'), str) and watermark['expected_asset_fingerprint']:
+        return {watermark['expected_asset_fingerprint']}
+    app = (latest_report or {}).get('application') if isinstance(latest_report, dict) else None
+    if (isinstance(latest_report, dict)
+            and latest_report.get('timestamp') == candidate.get('timestamp')
+            and isinstance(app, dict) and app.get('status') == 'APPLIED'
+            and isinstance(candidate.get('final_asset_fingerprint'), str)):
+        return {candidate['final_asset_fingerprint']}
+    prod_fp = candidate.get('production_asset_fingerprint')
+    return {prod_fp} if isinstance(prod_fp, str) and prod_fp else set()
+
+
 def needs_selection(state: dict | None, candle_ms: int, new_trades: int,
-                    min_new_trades: int = 20) -> bool:
+                    min_new_trades: int = 20, *,
+                    current_asset_fingerprint: str | None = None,
+                    latest_report: dict | None = None) -> bool:
     # Unknown candle input is not proof of unchanged data.
-    return (state is None or candle_ms <= 0
+    if (state is None or candle_ms <= 0
             or candle_ms != state['watermark']['candle_ms']
-            or new_trades >= max(1, min_new_trades))
+            or new_trades >= max(1, min_new_trades)):
+        return True
+    if current_asset_fingerprint is not None:
+        expected_fps = expected_asset_fingerprints(state, latest_report)
+        if not expected_fps or current_asset_fingerprint not in expected_fps:
+            return True
+    return False
 
 
-def save_success(path: Path, report: dict, candle_ms: int, validate) -> dict | None:
+def save_success(path: Path, report: dict, candle_ms: int, validate, *,
+                 expected_asset_fingerprint: str | None = None) -> dict | None:
     if not successful_selection(report, validate):
         return None
+    watermark = {'candle_ms': candle_ms, 'journal_since_ms': report['timestamp']}
+    if expected_asset_fingerprint:
+        watermark['expected_asset_fingerprint'] = expected_asset_fingerprint
     state = {'version': 1, 'ticker': report['ticker'],
-             'watermark': {'candle_ms': candle_ms, 'journal_since_ms': report['timestamp']},
+             'watermark': watermark,
              'candidate': copy.deepcopy(report)}
     atomic_json(path, state)
     return state

@@ -175,6 +175,21 @@ async function evaluate(ticker: string) {
   const candOut = runEval(ticker, candSnapFile, manifestFile, path.join(WORK, ticker, 'cand_out.json'));
 
   // train_end = fecha de registro → la partición de validación ES la ventana forward.
+  if (Array.isArray(t.source_files) && t.source_files.length > 0) {
+    const evalSrc = (p: string) => {
+      const rel = p.replace(/^\/opt\/JARVIS\//, '');
+      return /^(src\/|jarvis-os\/src\/(engine|services)\/)/.test(rel) ||
+        ['scripts/hyperopt/jarvis_hyperopt_worker.ts', 'scripts/hyperopt/evaluation_protocol.ts',
+         'scripts/hyperopt/wfa_window.ts', 'scripts/periodic_opt/selection_context.ts',
+         'scripts/periodic_opt/eval_production.ts'].includes(rel);
+    };
+    const nowByPath = new Map((prodOut.provenance?.source_files || []).map((x: any) => [x.path, x.sha256]));
+    const changed = t.source_files.filter((x: any) => evalSrc(String(x.path || '')) && nowByPath.get(x.path) !== x.sha256);
+    if (changed.length > 0) {
+      console.log(`  ${ticker}: motor evaluado cambió desde el registro (${changed.length} archivo(s)) — no se certifica con inputs incompatibles`);
+      return;
+    }
+  }
   const p = digest(prodOut.metrics_validation);
   const c = digest(candOut.metrics_validation);
   let verdict = 'PENDING';
@@ -207,26 +222,40 @@ async function evaluateAll() {
 }
 
 async function autoregister() {
-  // Registra como SHADOW todo RECOMMEND del ciclo vigente que aún no tenga test.
-  const skip = /^(prev_|timesfm|detection|ote_|parity_)/;
-  const files = fs.readdirSync(reportsDir).filter((f) => f.endsWith('.json') && !skip.test(f));
+  // Registra como SHADOW sólo RECOMMEND verificados de la corrida actual y dentro de active_tickers.
+  const stateDir = process.env.MARK_DIR || '/var/lib/jarvis';
+  const summaryPath = process.env.WEEKLY_SUMMARY || path.join(REPO, 'scripts/periodic_opt/opt_out/weekly_selection_summary.json');
+  const vr = spawnSync('python3', [path.join(REPO, 'scripts/periodic_opt/weekly_cycle_state.py'), 'verify', '--state-dir', stateDir, '--summary', summaryPath], { encoding: 'utf8', timeout: 15_000 });
+  if (vr.status !== 0) {
+    throw new Error(`autoregister abortado: ciclo semanal no verificado (${(vr.stderr || vr.stdout || '').trim()})`);
+  }
+  const ctx = JSON.parse(vr.stdout);
+  const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+  const atDoc = await db.collection('optimization_config').doc('active_tickers').get();
+  const activeSet = new Set<string>(((atDoc.data()?.tickers as string[]) || []).map((t) => t.toUpperCase()));
+  const evaluatedTs = new Map<string, number>();
+  for (const o of summary.outcomes || []) {
+    if (o.outcome === 'evaluated' && o.status === 'RECOMMEND' && !o.deployment_error) {
+      evaluatedTs.set(String(o.ticker).toUpperCase(), Number(o.timestamp));
+    }
+  }
+
   let n = 0;
-  for (const f of files) {
-    let rep: any; try { rep = JSON.parse(fs.readFileSync(path.join(reportsDir, f), 'utf8')); } catch { continue; }
-    if (!rep || rep.status !== 'RECOMMEND' || !rep.final_asset_config) continue;
-    if (!rep.timestamp || Date.now() - rep.timestamp > 8 * DAY) continue;
-    const ticker = rep.ticker || f.replace(/\.json$/, '');
+  for (const [ticker, expectedTs] of evaluatedTs) {
+    if (!activeSet.has(ticker)) continue;
+    const f = path.join(reportsDir, `${ticker}.json`);
+    if (!fs.existsSync(f)) continue;
+    let rep: any; try { rep = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { continue; }
+    if (!rep || rep.status !== 'RECOMMEND' || !rep.final_asset_config || !rep.evaluation_certificate) continue;
+    if (rep.timestamp !== expectedTs || rep.timestamp < ctx.started_at || Date.now() - rep.timestamp > 8 * DAY) continue;
+    if (rep.deployment_error) continue;
     const assetDoc = await assetRef(ticker).get();
     const asset = assetDoc.data() as any;
-    // Capa 1 (09-nov-2026): los RECOMMEND de activos apagados también se registran y
-    // evalúan forward (backtest sobre datos futuros, sin operar en cTrader) para certificar
-    // su config; el roster decide aparte si los activa. Esto destraba el círculo
-    // "apagado → sin evidencia → apagado".
     const trading = asset?.enabled === true && !(typeof asset?.disabledReason === 'string' && asset.disabledReason.trim());
     if (!trading) console.log(`[auto] ${ticker}: activo apagado (roster) — se registra igual para certificar su config forward`);
     const ex = await testRef(ticker).get();
     if (ex.exists) continue;
-    console.log(`[auto] ${ticker}: RECOMMEND sin test → registrando`);
+    console.log(`[auto] ${ticker}: RECOMMEND verificado (${ctx.week}) sin test → registrando`);
     await register(ticker);
     n++;
   }

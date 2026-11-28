@@ -24,6 +24,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import admin from 'firebase-admin';
 import { configFingerprint } from '../hyperopt/evaluation_protocol.js';
 import { AssetSessionConfigSchema } from '../../src/engine/Types.js';
@@ -102,6 +103,36 @@ for (const doc of tests.docs) {
     console.log(`  ${ticker}: el candidato no pasa AssetSessionConfigSchema, se omite (evita bloquear el activo)`);
     continue;
   }
+  if (Array.isArray(t.source_files) && t.source_files.length > 0) {
+    const evalSrc = (p: string) => {
+      const rel = p.replace(/^\/opt\/JARVIS\//, '');
+      return /^(src\/|jarvis-os\/src\/(engine|services)\/)/.test(rel) ||
+        ['scripts/hyperopt/jarvis_hyperopt_worker.ts', 'scripts/hyperopt/evaluation_protocol.ts',
+         'scripts/hyperopt/wfa_window.ts', 'scripts/periodic_opt/selection_context.ts',
+         'scripts/periodic_opt/eval_production.ts'].includes(rel);
+    };
+    const drift = t.source_files.filter((x: any) => {
+      if (!evalSrc(String(x.path || ''))) return false;
+      if (!fs.existsSync(x.path)) return true;
+      return createHash('sha256').update(fs.readFileSync(x.path)).digest('hex') !== x.sha256;
+    });
+    if (drift.length > 0) {
+      console.log(`  ${ticker}: motor evaluado cambió desde el registro (${drift.length} archivo(s)), se omite`);
+      continue;
+    }
+  }
+  const openCheck = await db.collection('active_trades').where('ticker', '==', ticker).limit(1).get();
+  if (!openCheck.empty) {
+    console.log(`  ${ticker}: hay operaciones abiertas en active_trades, se omite hasta el próximo ciclo`);
+    continue;
+  }
+  const autoRefPre = db.collection('optimization_config').doc('auto_state');
+  const autoPre = ((await autoRefPre.get()).data() as any) || {};
+  const existingApplied = autoPre.applied?.[ticker];
+  if (existingApplied?.policy_version === 2 && (existingApplied.confirmation_pending === true || !['KEEP', 'ROLLBACK'].includes(existingApplied.followup?.status))) {
+    console.log(`  ${ticker}: hay seguimiento v2 pendiente en auto_state, se omite para no pisar su revisión`);
+    continue;
+  }
 
   const at = Date.now();
   const prevPath = path.join(REPORTS_DIR, `prev_${ticker}_${new Date(at).toISOString().slice(0, 10)}_${at}.json`);
@@ -115,6 +146,8 @@ for (const doc of tests.docs) {
   const beforeFp = fp(current);
   await db.runTransaction(async (tx: any) => {
     const latest = await tx.get(assetRef);
+    const openInTx = await tx.get(db.collection('active_trades').where('ticker', '==', ticker).limit(1));
+    if (!openInTx.empty) throw new Error(`${ticker}: operación abierta detectada antes del commit`);
     const latestData = latest.exists ? latest.data() : {};
     if (fp(latestData) !== beforeFp) throw new Error(`${ticker}: producción cambió antes del commit`);
     tx.set(assetRef, exactWrite);

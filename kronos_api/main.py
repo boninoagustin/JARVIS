@@ -194,25 +194,37 @@ async def backtest_export_csv(ticker: str, tfs: str = "M5,M15,H1,H4,D1"):
     env = os.environ.copy()
     env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
 
-    import glob
-    for d in glob.glob("/tmp/tsx-*") + glob.glob("/tmp/esbuild-*"):
-        shutil.rmtree(d, ignore_errors=True)
-    shutil.rmtree("/root/.cache/esbuild", ignore_errors=True)
+    # No borrar caches globales /tmp/tsx-* ni esbuild en caliente: compite con workers tsx activos.
+    tf_list = [tf.strip().upper() for tf in tfs.split(",") if tf.strip()]
+    if not tf_list:
+        raise HTTPException(status_code=400, detail="tfs vacío")
 
     results = {}
-    for tf in tfs.split(","):
-        tf = tf.strip()
-        try:
-            result = subprocess.run(
-                ["npx", "tsx", script, ticker, "--timeframes", tf],
-                capture_output=True, text=True, timeout=300,
-                cwd=JARVIS_DIR, env=env,
+    try:
+        # Una sola invocación atómica bajo el lock por ticker en export_smc_csv.ts
+        result = subprocess.run(
+            ["npx", "tsx", script, ticker, "--timeframes", ",".join(tf_list), "--quiet"],
+            capture_output=True, text=True, timeout=900,
+            cwd=JARVIS_DIR, env=env,
+        )
+        output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout or "")
+        out_dir = os.path.join(JARVIS_DIR, "logs", ticker.lower(), "history_exported")
+        for tf in tf_list:
+            csv_path = os.path.join(out_dir, f"pine-logs-SMC Master_{tf}.csv")
+            valid_file = (
+                result.returncode == 0
+                and os.path.isfile(csv_path)
+                and os.path.getsize(csv_path) > len("Fecha,Mensaje\n")
             )
-            output = result.stdout if result.returncode == 0 else (result.stderr or result.stdout or "")
-            results[tf] = {"ok": result.returncode == 0, "output": output[-200:]}
-        except subprocess.TimeoutExpired:
+            results[tf] = {
+                "ok": valid_file,
+                "output": output[-200:] if valid_file else (output[-300:] or f"CSV vacío o ausente: {csv_path}"),
+            }
+    except subprocess.TimeoutExpired:
+        for tf in tf_list:
             results[tf] = {"ok": False, "error": "timeout"}
-        except Exception as e:
+    except Exception as e:
+        for tf in tf_list:
             results[tf] = {"ok": False, "error": str(e)}
 
     return {"status": "ok", "ticker": ticker, "results": results}

@@ -15,7 +15,13 @@ scripts/ops/live_sample_core.ts
 scripts/ops/health_freshness_core.ts
 scripts/ops/mcl_proposal_core.ts
 scripts/ops/mcl_sync.ts
+scripts/ops/prospective_test.ts
+scripts/ops/prospective_promote.ts
 scripts/ops/weekly_digest.ts
+scripts/ops/test_weekly_e2e_audit.ts
+scripts/history_lock.ts
+scripts/fetch_history.ts
+scripts/asset_scout.ts
 scripts/ops/test_detection_apply.ts
 scripts/ops/test_risk_allocator.ts
 scripts/ops/test_live_sample.ts

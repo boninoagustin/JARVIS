@@ -16,6 +16,8 @@ const WORKER = `${REPO}/scripts/hyperopt/jarvis_hyperopt_worker.ts`;
 const ticker = (process.argv[2] || 'EURUSD').toUpperCase();
 const outArg = process.argv.find((a, i) => process.argv[i - 1] === '--out');
 const outPath = outArg || `${REPO}/logs/${ticker.toLowerCase()}/forecasts/triggers_m5.jsonl`;
+const logsDirArg = process.argv.find((a, i) => process.argv[i - 1] === '--logs-dir');
+const logsDir = logsDirArg || `logs/${ticker.toLowerCase()}/history_exported`;
 
 // ─── Worker NDJSON (mismo protocolo que eval_production.ts / run_ab.py) ───────
 class RpcWorker {
@@ -104,7 +106,7 @@ async function main() {
     try {
         // El worker exige ticker en MAYÚSCULA (init falla con minúscula y antes quedaba
         // enmascarado por process.exit(0) → "0 orígenes" silencioso desde ~oct-2026).
-        await w.call('init', { ticker, log_dir: `logs/${ticker.toLowerCase()}/history_exported` });
+        await w.call('init', { ticker, log_dir: logsDir });
         const t0 = Date.now();
         const result: any = await w.call('collect_origins', { config, collectPath: outPath });
         const n = result?.trade_count ?? '?';

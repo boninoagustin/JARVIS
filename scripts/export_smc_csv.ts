@@ -3,6 +3,7 @@ import path from 'path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {parseSmcExportArgs,assertResearchDestination,assertFrozenInputIsolation,type SmcExportArgs} from './smc_export_context.js';
+import {withTickerHistoryLock} from './history_lock.js';
 import {loadOptimizedPreset,type SMCPresetLoadOptions} from '../src/engine/smc/smc_config.js';
 import {resolveSignalPolicy} from '../src/engine/smc/signal_profiles.js';
 import {isValidImpulseCandle} from '../src/engine/smc/math/directional_impulse.js';
@@ -332,6 +333,9 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
     }
 
     records.sort((a, b) => a.timestamp - b.timestamp);
+    if (!isolated && records.length === 0) {
+        throw new Error(`Refusing to export empty candle history: ${inputFile}`);
+    }
     if(policy.experimental || executionContext || rolloverPolicy?.profile === 'rollover_triage_v1' || mlRegimeShadow){
         for(let i=0;i<records.length;i++)if(!isValidImpulseCandle(records[i])||(i>0&&records[i].timestamp<=records[i-1].timestamp))
             throw new Error('Invalid or duplicate OHLC candle in '+inputFile);
@@ -344,8 +348,12 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
     let executionImpulse:ExecutionImpulse|undefined;
     let executionBreakOpen:number|undefined;
     const executionFvgs = new Map<string,ExecutionFvg>();
-    const outStream = fs.createWriteStream(outputFile,{flags:isolated?'wx':'w'});
-    await new Promise<void>((resolve,reject)=>{outStream.once('open',()=>resolve());outStream.once('error',reject);});
+    const writeTarget = isolated
+        ? outputFile
+        : path.join(path.dirname(outputFile), `.${path.basename(outputFile)}.${process.pid}.${Date.now()}.tmp`);
+    const outStream = fs.createWriteStream(writeTarget,{flags:'wx'});
+    let outFd: number | null = null;
+    await new Promise<void>((resolve,reject)=>{outStream.once('open',(fd)=>{outFd=fd;resolve();});outStream.once('error',reject);});
     const eventCounts:Record<string,number> = {};
     let excludedSignalBars=0;
     const mlRegimeShadowPath=mlRegimeShadow?outputFile+'.ml-regime-shadow.v1.jsonl':undefined;
@@ -511,8 +519,30 @@ async function processHistoryFile(inputFile: string, outputFile: string, ticker:
         }
     }
 
-    await new Promise<void>((resolve,reject)=>{outStream.once('error',reject);outStream.end(resolve);});
+    await new Promise<void>((resolve,reject)=>{
+        outStream.once('error',reject);
+        outStream.end(()=>{
+            try {
+                if (outFd !== null) { try { fs.fsyncSync(outFd); } catch {} }
+                resolve();
+            } catch (err) { reject(err as Error); }
+        });
+    });
     if(shadowStream)await new Promise<void>((resolve,reject)=>{shadowStream.once('error',reject);shadowStream.end(resolve);});
+    if (!isolated) {
+        try {
+            const stat = fs.statSync(writeTarget);
+            if (records.length > 0 && stat.size <= 'Fecha,Mensaje\n'.length) {
+                throw new Error(`Export produced empty CSV for non-empty history: ${outputFile}`);
+            }
+            fs.renameSync(writeTarget, outputFile);
+            const dirFd = fs.openSync(path.dirname(outputFile), 'r');
+            try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        } catch (err) {
+            if (fs.existsSync(writeTarget)) { try { fs.unlinkSync(writeTarget); } catch {} }
+            throw err;
+        }
+    }
     console.log(`[EXPORT] ✅ Finalizado. Guardado en ${outputFile} (${records.length} velas procesadas).`);
     return {timeframe:period,path:outputFile,sha256:shaFile(outputFile),candles:records.length,
         from_ms:records[0]?.timestamp ?? null,to_ms:records.length?records[records.length-1].timestamp+(TF_CLOSE_MS[period]??0):null,
@@ -605,10 +635,17 @@ async function main() {
     const sources=args.isolated?sourceHashes(args.executionContext):{};
     fs.mkdirSync(outputDir,{recursive:true});
     const exports:Awaited<ReturnType<typeof processHistoryFile>>[]=[];
-    for(const {file,period} of selected){
-        const inFile=path.join(inputDir,file),outFile=path.join(outputDir,`pine-logs-SMC Master_${period}.csv`);
-        const htfManager=await loadHTFContext(inputDir,period,ticker,options,args.executionContext,rolloverPolicy,args.mlRegimeShadow);
-        exports.push(await processHistoryFile(inFile,outFile,ticker,period,htfManager,options,args.isolated,args.executionContext,rolloverPolicy,args.mlRegimeShadow));
+    const runExportLoop = async () => {
+        for(const {file,period} of selected){
+            const inFile=path.join(inputDir,file),outFile=path.join(outputDir,`pine-logs-SMC Master_${period}.csv`);
+            const htfManager=await loadHTFContext(inputDir,period,ticker,options,args.executionContext,rolloverPolicy,args.mlRegimeShadow);
+            exports.push(await processHistoryFile(inFile,outFile,ticker,period,htfManager,options,args.isolated,args.executionContext,rolloverPolicy,args.mlRegimeShadow));
+        }
+    };
+    if (args.isolated) {
+        await runExportLoop();
+    } else {
+        await withTickerHistoryLock(ticker, runExportLoop, { timeoutSec: 900, shared: false });
     }
     if(args.manifestPath){
         for(const [p,hash] of Object.entries(inputHashes))if(shaFile(p)!==hash)throw new Error('Frozen input changed: '+p);

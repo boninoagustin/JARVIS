@@ -81,6 +81,12 @@ const acCurrency = String(accountState.currency || 'USD');
 const health = await db.collection('detection_health').get();
 const cfgs = await db.collection('asset_configs').get();
 const shutdown = await db.collection('shutdown_proposals').get();
+const activeSnap = await db.collection('optimization_config').doc('active_tickers').get();
+const activeTickers: string[] = Array.isArray(activeSnap.data()?.tickers)
+  ? (activeSnap.data()!.tickers as string[]).map((t) => String(t).trim().toUpperCase()).filter(Boolean)
+  : [];
+const healthMap = new Map(health.docs.filter((d) => d.id !== '_GLOBAL').map((d) => [d.id.toUpperCase(), d.data() as any]));
+const missingActiveHealth = activeTickers.filter((t) => !healthMap.has(t) || !isHealthFresh(healthMap.get(t)));
 const cfgMap = new Map(cfgs.docs.map((d) => [d.id, d.data() as any]));
 const shutMap = new Map(shutdown.docs.map((d) => [d.id, d.data() as any]));
 
@@ -221,6 +227,10 @@ for (const v of ['TRADE', 'WATCH', 'PARKED', 'OFF'] as const) {
 console.log(`\nTRADE ${RO.TRADE.length} · WATCH ${RO.WATCH.length} · PARKED ${RO.PARKED.length} · OFF ${RO.OFF.length}`);
 
 if (WRITE) {
+  if (missingActiveHealth.length > 0 && !process.argv.includes('--allow-incomplete')) {
+    console.error(`❌ Cobertura de detection_health incompleta para active_tickers (${missingActiveHealth.length}): ${missingActiveHealth.join(', ')} — no se publica propuesta incompleta`);
+    process.exit(1);
+  }
   const at = new Date().toISOString();
   for (const r of rows) {
     await db.collection('roster_proposals').doc(r.ticker).set({

@@ -26,7 +26,9 @@ REPO = Path("/opt/JARVIS")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from selection_freshness import (atomic_json, load_checkpoint, needs_selection,
-                                 save_success, previous_selection)
+                                 save_success, previous_selection, successful_selection)
+from snapshot_isolation import (SnapshotPreflightError, freeze_ticker_snapshot,
+                                freeze_forecast_cache, prune_unreferenced_snapshots)
 sys.path.insert(0, str(REPO / 'scripts' / 'hyperopt'))
 from objective_adapter import canonicalize_result, canonical_metrics
 VENV_PY = REPO / "scripts" / "hyperopt" / ".venv" / "bin" / "python"
@@ -128,25 +130,35 @@ def last_candle_ms(ticker: str) -> int:
 
 
 def refresh_csvs(ticker: str) -> dict:
-    """Regenera los CSVs SMC del ticker vía Kronos. Devuelve {ok, tfs, newest_mtime_ms}."""
-    url = (f"{KRONOS}/api/backtest/export-csv?"
-           + urllib.parse.urlencode({"ticker": ticker, "tfs": "M5,M15,H1,H4,D1"}))
+    """Regenera los CSVs SMC del ticker de forma atómica bajo lock por ticker.
+    Equivale a {KRONOS}/api/backtest/export-csv sin pasar por la instancia HTTP en memoria."""
     t0 = time.time()
-    req = urllib.request.Request(url, method="POST")
+    tfs = "M5,M15,H1,H4,D1"
+    env = os.environ.copy()
+    env["PATH"] = "/root/.nvm/versions/node/v24.19.0/bin:" + env.get("PATH", "")
     try:
-        with urllib.request.urlopen(req, timeout=60 * 40) as r:
-            res = json.loads(r.read())
+        r = subprocess.run(
+            ["npx", "tsx", str(REPO / "scripts" / "export_smc_csv.ts"), ticker, "--timeframes", tfs, "--quiet"],
+            cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60 * 30,
+        )
     except Exception as e:
-        return {"ok": False, "error": f"refresh HTTP: {e}"}
-    ok = all(v.get("ok") for v in (res.get("results") or {}).values()) if isinstance(res, dict) else False
+        return {"ok": False, "error": f"refresh exec: {e}"}
     d = REPO / "logs" / ticker.lower() / "history_exported"
+    ok = r.returncode == 0
+    missing = []
+    for tf in tfs.split(","):
+        p = d / f"pine-logs-SMC Master_{tf}.csv"
+        if not p.is_file() or p.stat().st_size <= len("Fecha,Mensaje\n"):
+            ok = False
+            missing.append(tf)
     newest = 0
     if d.exists():
         for f in d.iterdir():
             if f.is_file():
                 newest = max(newest, int(f.stat().st_mtime * 1000))
-    print(f"    refresh OK ({time.time()-t0:.0f}s) | newest CSV: {datetime.fromtimestamp(newest/1000, tz=timezone.utc):%Y-%m-%d %H:%M} UTC" if ok else f"    ❌ refresh: {res}", flush=True)
-    return {"ok": ok, "newest_mtime_ms": newest, "detail": res if not ok else None}
+    detail = None if ok else {"returncode": r.returncode, "missing_or_empty": missing, "stderr": (r.stderr or r.stdout or "")[-400:]}
+    print(f"    refresh OK ({time.time()-t0:.0f}s) | newest CSV: {datetime.fromtimestamp(newest/1000, tz=timezone.utc):%Y-%m-%d %H:%M} UTC" if ok else f"    ❌ refresh: {detail}", flush=True)
+    return {"ok": ok, "newest_mtime_ms": newest, "detail": detail, "error": None if ok else f"export_smc_csv failed: {detail}"}
 
 
 def count_new_trades(api_key: str, ticker: str, since_ts: int) -> int:
@@ -182,15 +194,20 @@ def load_last_report(ticker: str) -> dict:
     return {}
 
 
-def collect_and_precompute(ticker: str) -> dict:
+def collect_and_precompute(ticker: str, *, logs_dir: Path | None = None,
+                           snapshot_dir: Path | None = None) -> dict:
     """F4: 1 pasada collectOnly del backtest (config laxa) + precompute de forecasts
     TimesFM en los orígenes colectados (look-ahead cero). Devuelve stats del cache."""
     t_lower = ticker.lower()
-    triggers_p = REPO / "logs" / t_lower / "forecasts" / "triggers_m5.jsonl"
-    forecasts_p = REPO / "logs" / t_lower / "forecasts" / "forecasts_m5.jsonl"
-    forecasts_p.parent.mkdir(parents=True, exist_ok=True)
+    work_dir = (snapshot_dir.parent / f".forecasts_work_{t_lower}") if snapshot_dir else (REPO / "logs" / t_lower / "forecasts")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    triggers_p = work_dir / "triggers_m5.jsonl"
+    forecasts_p = work_dir / "forecasts_m5.jsonl"
     t0 = time.time()
-    r = subprocess.run(["npx", "tsx", str(COLLECT_TS), ticker], cwd=str(REPO),
+    collect_cmd = ["npx", "tsx", str(COLLECT_TS), ticker, "--out", str(triggers_p)]
+    if logs_dir is not None:
+        collect_cmd += ["--logs-dir", str(logs_dir)]
+    r = subprocess.run(collect_cmd, cwd=str(REPO),
                        capture_output=True, text=True, timeout=30 * 60)
     if r.returncode != 0:
         raise RuntimeError(f"colecta exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
@@ -202,20 +219,26 @@ def collect_and_precompute(ticker: str) -> dict:
         raise RuntimeError("colecta devolvió 0 orígenes — nada que forecastear")
 
     t0 = time.time()
-    r = subprocess.run(
-        [str(VENV_TIMESFM), str(PRECOMPUTE), "--ticker", t_lower, "--tf", "M5",
-         "--triggers", str(triggers_p), "--out", str(forecasts_p),
-         "--horizon", "12", "--context", "512"],
-        cwd=str(REPO), capture_output=True, text=True, timeout=90 * 60)
+    pre_cmd = [
+        str(VENV_TIMESFM), str(PRECOMPUTE), "--ticker", t_lower, "--tf", "M5",
+        "--triggers", str(triggers_p), "--out", str(forecasts_p),
+        "--horizon", "12", "--context", "512",
+    ]
+    if logs_dir is not None:
+        pre_cmd += ["--logs-dir", str(logs_dir)]
+    r = subprocess.run(pre_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=90 * 60)
     if r.returncode != 0:
         raise RuntimeError(f"precompute exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
     forecasts = 0
     if forecasts_p.exists():
         forecasts = sum(1 for _ in forecasts_p.open() if _.strip())
     skipped = origins - forecasts
+    final_cache = forecasts_p
+    if snapshot_dir is not None and forecasts > 0:
+        final_cache = freeze_forecast_cache(forecasts_p, snapshot_dir)
     print(f"    precompute OK ({time.time()-t0:.0f}s) | {forecasts}/{origins} forecasts ({skipped} skipped)", flush=True)
     return {"origins": origins, "forecasts": forecasts, "skipped": skipped,
-            "cache": str(forecasts_p)}
+            "cache": str(final_cache)}
 
 
 def run_montecarlo_gate(ticker: str, oos_r: list) -> dict | None:
@@ -555,6 +578,58 @@ def command_json(cmd: list[str], *, timeout: int = 900) -> dict:
     raise RuntimeError(f"command returned no JSON: {cmd}")
 
 
+def read_live_asset_fingerprint(ticker: str) -> str | None:
+    """Read live Firestore asset_configs/{ticker} and compute canonical JS fingerprint."""
+    script = (
+        "const fs=require('fs'),crypto=require('crypto'),admin=require('firebase-admin');"
+        "const c=x=>x===null||typeof x!=='object'?JSON.stringify(x):Array.isArray(x)?'['+x.map(c).join(',')+']':'{'+Object.keys(x).sort().map(k=>JSON.stringify(k)+':'+c(x[k])).join(',')+'}';"
+        "(async()=>{"
+        "const sa=JSON.parse(fs.readFileSync('/opt/JARVIS/service-account.json','utf8'));"
+        "if(!admin.apps.length)admin.initializeApp({credential:admin.credential.cert(sa)});"
+        "const snap=await admin.firestore().collection('asset_configs').doc(process.argv[1]).get();"
+        "const data=snap.exists?(snap.data()||{}):{};"
+        "process.stdout.write(crypto.createHash('sha256').update(c(data)).digest('hex'));"
+        "process.exit(0);"
+        "})().catch(e=>{process.stderr.write(String(e));process.exit(1);});"
+    )
+    r = subprocess.run(['node', '-e', script, ticker], cwd=str(REPO), capture_output=True, text=True, timeout=30)
+    if r.returncode != 0 or len((r.stdout or '').strip()) != 64:
+        return None
+    return r.stdout.strip()
+
+
+def aggregate_loser_triggers_proposal(reports_dir: Path, tickers: list[str], cycle_identity: dict) -> None:
+    disables, enables, per_ticker = [], [], {}
+    for t in tickers:
+        rp = reports_dir / f'{t}.json'
+        if not rp.exists():
+            continue
+        try:
+            rep = json.loads(rp.read_text())
+        except Exception:
+            continue
+        lt = rep.get('loser_triggers')
+        if not isinstance(lt, dict):
+            continue
+        for d in lt.get('disables') or []:
+            disables.append({'ticker': t, **{k: v for k, v in d.items() if k != 'ticker'}})
+        for e in lt.get('enables') or []:
+            enables.append({'ticker': t, **{k: v for k, v in e.items() if k != 'ticker'}})
+        pt = (lt.get('perTicker') or {}).get(t)
+        if pt is not None:
+            per_ticker[t] = pt
+    payload = {
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        **cycle_identity,
+        'status': 'PROPUESTA' if (disables or enables) else 'HOLD',
+        'selection_partition': 'train',
+        'disables': disables,
+        'enables': enables,
+        'perTicker': per_ticker,
+    }
+    atomic_json(reports_dir / 'loser_triggers_proposal.json', payload)
+
+
 def weekly_rollout_allowed(args) -> bool:
     return AUTO_APPLY_ENABLED and not any(getattr(args, key, False) for key in (
         'verification', 'config_file', 'output_dir', 'wfa_shadow', 'no_apply',
@@ -573,7 +648,7 @@ def main() -> int:
     ap.add_argument('--no-apply', action='store_true', help='Generate proposals only; no deployment or followup writes')
     ap.add_argument('--tickers', default=None)
     ap.add_argument('--min-new-trades', type=int, default=MIN_NEW_TRADES)
-    for flag in ('skip-fetch', 'skip-refresh', 'skip-hyperopt', 'skip-timesfm', 'skip-telemetry', 'skip-aux', 'skip-ml', 'force', 'resume', 'verification'):
+    for flag in ('skip-fetch', 'skip-refresh', 'skip-hyperopt', 'skip-timesfm', 'skip-telemetry', 'skip-aux', 'skip-ml', 'force', 'resume', 'verification', 'freeze-snapshot'):
         ap.add_argument('--' + flag, action='store_true')
     ap.add_argument('--study-suffix', default='')
     ap.add_argument('--config-file', help='Single ticker asset fixture; no Firebase/key/journal/network reads')
@@ -672,190 +747,276 @@ def main() -> int:
             return 1
     api_key = None if args.config_file else get_api_key()
     if FETCH_ENABLED and not args.skip_fetch and not args.skip_refresh:
-        r = subprocess.run(['npx', 'tsx', str(FETCH_HISTORY)], cwd=str(REPO), capture_output=True, text=True, timeout=9000)
+        r = subprocess.run(['npx', 'tsx', str(FETCH_HISTORY), '--tickers', ','.join(tickers), '--strict'],
+                           cwd=str(REPO), capture_output=True, text=True, timeout=9000)
         if r.returncode:
             print(f'fetch_history failed: {(r.stderr or r.stdout)[-300:]}', flush=True)
             write_cycle_summary(completed=True, error=f'fetch_history failed: {(r.stderr or r.stdout)[-300:]}')
             return 1
+    snapshots_root = opt_dir / 'snapshots'
+    run_tag = f"{cycle_identity.get('cycle_run_id') or 'standalone'}_{started_at}"
+    is_live_roots = (context_path is not None) or (reports_dir.resolve() == (HERE / 'reports').resolve() and not args.output_dir)
     summary = []
     for ticker in tickers:
-        # A timestamp/status-only resume shortcut is NOT selection evidence.
-        # Revalidate data/config inputs below, including already-done tickers. The
-        # certified selection checkpoint can still avoid a redundant search when fresh.
-        # Resume is input-aware: old progress alone is never selection evidence.
-        # Completed tickers pass the same durable freshness check as normal runs.
+        # Resume is input- and config-aware: old progress alone is never selection evidence.
+        # If a ticker already completed in THIS cycle_run_id and neither candles, journal,
+        # nor live asset_configs changed, preserve its certified cycle report without
+        # clobbering RECOMMEND/APPLIED into a HOLD/skipped stub or repeating deployment.
         print(f'═══ {ticker} ═══', flush=True)
+        existing_report_path = reports_dir / f'{ticker}.json'
+        existing_report = None
+        if existing_report_path.exists():
+            try:
+                existing_report = json.loads(existing_report_path.read_text())
+            except Exception:
+                existing_report = None
         report = {'ticker': ticker, 'timestamp': int(time.time()*1000), 'status': 'HOLD', 'apply_eligible': False}
         state_path = reports_dir / 'selection_state' / f'{ticker}.json'
         state = load_checkpoint(state_path, ticker, validate_certified_report)
         report['last_successful_selection'] = previous_selection(state, state_path)
         selection_ran = False
+        reused_in_cycle = False
         candle_ms = 0
         try:
             last_ts = state['watermark']['journal_since_ms'] if state else 0
-            refresh = {'ok': True}
-            if not args.skip_refresh:
-                refresh = refresh_csvs(ticker)
-            report['data_refreshed_at'] = refresh.get('newest_mtime_ms')
-            if not refresh.get('ok'):
-                raise RuntimeError(f"refresh failed: {refresh.get('error') or refresh.get('detail')}")
-            if weekly_rollout_allowed(args):
-                review = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=True),
-                                        cwd=str(REPO), capture_output=True, text=True, timeout=3600)
-                print(f"{ticker} seguimiento: {(review.stdout or review.stderr)[-1500:]}", flush=True)
-                if review.returncode:
-                    raise RuntimeError(f'followup dispatch failed: {(review.stderr or review.stdout)[-500:]}')
             new_trades = 0 if args.config_file else count_new_trades(api_key, ticker, last_ts)
             candle_ms = last_candle_ms(ticker)
-            report['selection_inputs'] = {'candle_ms': candle_ms, 'new_trades': new_trades,
-                                          'journal_since_ms': last_ts, 'min_new_trades': args.min_new_trades}
-            if (not args.force and not args.verification and not args.config_file
-                    and not needs_selection(state, candle_ms, new_trades, args.min_new_trades)):
-                report['selection_outcome'] = 'skipped'
-                report['reason'] = 'no fresh candles/journal: selection skipped (anti-overfit)'
-                report['application'] = {'status': 'UNCHANGED', 'at': report['timestamp'],
-                    'reason': 'Selección omitida: datos ya evaluados; no se intentó aplicar cambios'}
+            live_asset_fp = None
+            if is_live_roots and not args.force and not args.verification and not args.config_file and state is not None:
+                live_asset_fp = read_live_asset_fingerprint(ticker)
+            fresh_skip = (
+                not args.force and not args.verification and not args.config_file
+                and not needs_selection(
+                    state, candle_ms, new_trades, args.min_new_trades,
+                    current_asset_fingerprint=live_asset_fp,
+                    latest_report=existing_report,
+                )
+            )
+            can_preserve_cycle_eval = (
+                args.resume and ticker in done and fresh_skip
+                and isinstance(existing_report, dict)
+                and existing_report.get('ticker') == ticker
+                and isinstance(existing_report.get('timestamp'), int)
+                and existing_report['timestamp'] >= started_at
+                and existing_report.get('selection_outcome') == 'evaluated'
+                and not existing_report.get('deployment_error')
+                and successful_selection(existing_report, validate_certified_report)
+            )
+            if can_preserve_cycle_eval:
+                reused_in_cycle = True
+                report = existing_report
+                print(f'    resume: reutilizando evaluación certificada del mismo ciclo ({report.get("status")})', flush=True)
+                if weekly_rollout_allowed(args) and not isinstance(report.get('application'), dict):
+                    deployment = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=False),
+                                                cwd=str(REPO), capture_output=True, text=True, timeout=300)
+                    print(f"{ticker} aplicación pendiente en resume: {(deployment.stdout or deployment.stderr)[-1500:]}", flush=True)
+                    report = json.loads(existing_report_path.read_text())
+                    if deployment.returncode:
+                        report['deployment_error'] = (deployment.stderr or deployment.stdout)[-1000:]
+                        atomic_json(existing_report_path, report)
+                        report['status'] = 'ERROR'
             else:
-                selection_ran = True
-                report['selection_outcome'] = 'evaluating'
-                cache_p = None
-                if not args.skip_timesfm:
-                    try:
-                        info = collect_and_precompute(ticker)
-                        report['timesfm_cache'] = info
-                        cache_p = Path(info['cache'])
-                    except Exception as e:
-                        report['timesfm_cache_error'] = str(e)[:300]
-                logs_dir = Path(args.logs_dir).resolve() if args.logs_dir else REPO / 'logs' / ticker.lower() / 'history_exported'
-                asset_file = opt_dir / f'production_asset_{ticker}.json'
-                manifest_file = opt_dir / f'evaluation_manifest_{ticker}.json'
-                base_file = opt_dir / f'production_backtest_{ticker}.json'
-                prod_file = opt_dir / f'production_result_{ticker}.json'
-                # This is the sole Firestore asset read. Snapshot-only also resolves
-                # the worker's effective config and production metrics exactly once.
-                snapshot_cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--snapshot-only', '--snapshot-out', str(asset_file), '--manifest-out', str(manifest_file), '--logs-dir', str(logs_dir), '--save', str(prod_file)]
-                if args.config_file:
-                    snapshot_cmd += ['--config-file', args.config_file]
-                if args.evaluation_manifest:
-                    snapshot_cmd += ['--evaluation-manifest', args.evaluation_manifest]
-                if cache_p:
-                    snapshot_cmd += ['--timesfm-cache', str(cache_p)]
-                prod = canonicalize_result(command_json(snapshot_cmd))
-                production_asset = json.loads(asset_file.read_text())
-                manifest = json.loads(manifest_file.read_text())
-                production_config = prod['config']
-                report['production_backtest_config'] = production_config
-                base_file.write_text(json.dumps(production_config, indent=2))
-                cs_file = opt_dir / f'current_sessions_{ticker}.json'
-                cs_file.write_text(json.dumps({**production_asset, 'ticker':ticker, 'sessions':production_asset.get('sessions') or {}, 'mlGateEnabled':production_asset.get('mlGateEnabled') is True}, indent=2))
-                prop = {}
-                if not args.skip_hyperopt:
-                    hp_out = opt_dir / f'{ticker}.json'
-                    hp_cmd = [str(VENV_PY), str(HYPEROPT), ticker, '--study-name', f'jarvis_{ticker}_weekly_protocol1{args.study_suffix}', '--n-trials', str(n_trials), '--n-startup', str(min(50, n_trials)), '--output', str(hp_out), '--evaluation-manifest', str(manifest_file), '--current-sessions', str(cs_file), '--base-config', str(base_file), '--log-dir', str(logs_dir)]
-                    if args.output_dir:
-                        hp_cmd += ['--storage', str(opt_dir / 'study.db')]
-                    if cache_p:
-                        hp_cmd += ['--timesfm-cache', str(cache_p)]
-                    r = subprocess.run(hp_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=9000)
-                    if r.returncode:
-                        raise RuntimeError(f'hyperopt exit {r.returncode}: {(r.stderr or r.stdout)[-500:]}')
-                    prop = json.loads(hp_out.read_text())
-                    report['best_config'] = prop.get('best_config') or {}
-                    report['objective_comparison'] = prop.get('objective_comparison')
-                    report['session_apply'] = sessions_apply_map(report['best_config'])
-                    if cache_p and 'minScoreToOverrideReject' in (prop.get('best_params') or {}):
-                        report['timesfm_apply'] = {'minScoreToOverrideReject': prop['best_params']['minScoreToOverrideReject']}
-                if not args.skip_aux:
-                    selectors = []
-                    if TRIGGER_TUNE_ENABLED:
-                        selectors.append(('trigger_tune', PER_TRIGGER_TUNE, ['--budget', str(trigger_budget), '--concurrency', '1' if args.verification else '2']))
-                    selectors += [('ks_proposal', KS_TUNE, []), ('directional_mcl', REPO/'scripts/directional_mcl_tune.ts', []), ('bias_confluence', BIAS_CF_TUNE, [])]
-                    if LOSER_TRIGGERS_ENABLED:
-                        selectors.append(('loser_triggers', LOSER_TRIGGERS_PROPOSAL, []))
-                    if SIZING_PROPOSAL_ENABLED:
-                        selectors.append(('sizing_proposal', SIZING_PROPOSAL, []))
-                    for key, script, extra in selectors:
-                        save_file = opt_dir / f'{key}_{ticker}.json'
-                        cmd = selection_command(script, ticker, manifest_file, asset_file, logs_dir, '--backtest-config-file', base_file, '--save', save_file, *extra)
-                        if key == 'sizing_proposal':
-                            if args.trades_file:
-                                cmd += ['--trades-file', args.trades_file]
-                            elif args.config_file:
-                                # Fixture mode never reads journal; an empty explicit
-                                # snapshot gives an honest insufficient-sample HOLD.
-                                empty = opt_dir / f'journal_{ticker}.json'
-                                empty.write_text('[]')
-                                cmd += ['--trades-file', str(empty)]
-                            else:
-                                cmd += ['--allow-journal-read']
-                        try:
-                            selected = command_json(cmd, timeout=14400)
-                            report[key] = selected
-                            if key == 'trigger_tune':
-                                report['session_apply'] = selected.get('sessions') or {}
-                                report['session_apply_replace'] = True
-                        except Exception as e:
-                            report[key + '_error'] = str(e)[:500]
-                candidate_file = opt_dir / f'final_backtest_{ticker}.json'
-                def evaluate(candidate):
-                    candidate_file.write_text(json.dumps(candidate, indent=2))
-                    cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--evaluation-manifest', str(manifest_file), '--config-file', str(asset_file), '--backtest-config-file', str(candidate_file), '--logs-dir', str(logs_dir), '--save', str(opt_dir/f'final_result_{ticker}.json')]
-                    if cache_p:
-                        cmd += ['--timesfm-cache', str(cache_p)]
-                    return canonicalize_result(command_json(cmd))
-                certify_report(report, production_config, production_asset, prod, manifest, evaluate, montecarlo=run_montecarlo_gate)
-                selection_errors = [k for k in report if k.endswith('_error') and k != 'timesfm_cache_error']
-                if selection_errors:
-                    report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False)
-                report['dsr'] = run_dsr_gate(ticker, report.get('final_validation_r') or [], prop.get('n_trials') or 0)
-                if DSR_ENFORCE and report['status'] == 'RECOMMEND' and report['dsr'].get('verdict') == 'BELOW':
-                    report['status'] = 'HOLD_DSR'
-                if not args.skip_ml:
-                    ml_config = dict(production_config)
-                    ml_config.pop('mlGate', None)  # trainer explicitly collects unfiltered paired labels
-                    ml_config_file = opt_dir / f'ml_unfiltered_config_{ticker}.json'
-                    ml_config_file.write_text(json.dumps(ml_config, indent=2))
-                    ml_cmd = [str(VENV_PY), str(HERE/'train_ml_weekly.py'), '--tickers', ticker, '--dry-run', '--evaluation-manifest', str(manifest_file), '--config', str(ml_config_file), '--log-dir', str(logs_dir), '--output-dir', str(opt_dir/'ml_candidates')]
-                    ml = subprocess.run(ml_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=10800)
-                    report['ml_training'] = {'dry_run': True, 'exit_code': ml.returncode, 'output': (ml.stdout or ml.stderr)[-2000:]}
-                    if ml.returncode not in (0, 2):
-                        report.update(status='HOLD_ML_ERROR', apply_eligible=False)
-                if not args.skip_telemetry:
-                    report['shadow_week'] = shadow_week(ticker)
-                report['selection_outcome'] = 'evaluated'
-                saved = save_success(state_path, report, candle_ms, validate_certified_report)
-                if saved is None:
-                    report['selection_outcome'] = 'failed'
-                    if report['status'] in ('HOLD', 'RECOMMEND', 'HOLD_MC', 'HOLD_DSR'):
-                        report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False,
-                                      reason='selection incomplete or missing valid evaluation evidence; successful checkpoint unchanged')
+                if ticker in done:
+                    done.discard(ticker)
+                    atomic_json(progress_file, {**cycle_identity, 'started_at': started_at, 'done': sorted(done)})
+                refresh = {'ok': True}
+                if not args.skip_refresh:
+                    refresh = refresh_csvs(ticker)
+                report['data_refreshed_at'] = refresh.get('newest_mtime_ms')
+                if not refresh.get('ok'):
+                    raise RuntimeError(f"refresh failed: {refresh.get('error') or refresh.get('detail')}")
+                if weekly_rollout_allowed(args):
+                    review = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=True),
+                                            cwd=str(REPO), capture_output=True, text=True, timeout=3600)
+                    print(f"{ticker} seguimiento: {(review.stdout or review.stderr)[-1500:]}", flush=True)
+                    if review.returncode:
+                        raise RuntimeError(f'followup dispatch failed: {(review.stderr or review.stdout)[-500:]}')
+                    if is_live_roots and not args.force and not args.verification and not args.config_file and state is not None:
+                        live_asset_fp = read_live_asset_fingerprint(ticker)
+                        fresh_skip = not needs_selection(
+                            state, candle_ms, new_trades, args.min_new_trades,
+                            current_asset_fingerprint=live_asset_fp,
+                            latest_report=existing_report,
+                        )
+                report['selection_inputs'] = {'candle_ms': candle_ms, 'new_trades': new_trades,
+                                              'journal_since_ms': last_ts, 'min_new_trades': args.min_new_trades,
+                                              'live_asset_fingerprint': live_asset_fp}
+                if fresh_skip:
+                    report['selection_outcome'] = 'skipped'
+                    report['reason'] = 'no fresh candles/journal/config: selection skipped (anti-overfit)'
+                    report['application'] = {'status': 'UNCHANGED', 'at': report['timestamp'],
+                        'reason': 'Selección omitida: datos y configuración ya evaluados; no se intentó aplicar cambios'}
                 else:
-                    report['successful_selection_watermark'] = saved['watermark']
+                    selection_ran = True
+                    report['selection_outcome'] = 'evaluating'
+                    raw_logs_dir = Path(args.logs_dir).resolve() if args.logs_dir else REPO / 'logs' / ticker.lower() / 'history_exported'
+                    should_freeze = args.freeze_snapshot or (is_live_roots and not args.config_file and (not args.skip_refresh or raw_logs_dir.exists()))
+                    snapshot_dir = None
+                    if should_freeze:
+                        snap_manifest = freeze_ticker_snapshot(
+                            ticker,
+                            raw_logs_dir,
+                            snapshots_root,
+                            cycle_run_id=cycle_identity.get('cycle_run_id'),
+                            cycle_week=cycle_identity.get('cycle_week'),
+                            started_at=started_at,
+                            min_m5_close_ms=candle_ms if not args.logs_dir else 0,
+                        )
+                        logs_dir = Path(snap_manifest['snapshot_dir'])
+                        snapshot_dir = logs_dir
+                        report['snapshot_manifest'] = {
+                            'snapshot_dir': snap_manifest['snapshot_dir'],
+                            'created_at_ms': snap_manifest['created_at_ms'],
+                            'm5_sha256': snap_manifest['files']['M5']['sha256'],
+                            'm5_rows': snap_manifest['files']['M5']['rows'],
+                        }
+                    else:
+                        logs_dir = raw_logs_dir
+                    cache_p = None
+                    if not args.skip_timesfm:
+                        try:
+                            info = collect_and_precompute(ticker, logs_dir=logs_dir, snapshot_dir=snapshot_dir)
+                            report['timesfm_cache'] = info
+                            cache_p = Path(info['cache'])
+                        except Exception as e:
+                            report['timesfm_cache_error'] = str(e)[:300]
+                    asset_file = opt_dir / f'production_asset_{ticker}.json'
+                    manifest_file = opt_dir / f'evaluation_manifest_{ticker}.json'
+                    base_file = opt_dir / f'production_backtest_{ticker}.json'
+                    prod_file = opt_dir / f'production_result_{ticker}.json'
+                    # This is the sole Firestore asset read. Snapshot-only also resolves
+                    # the worker's effective config and production metrics exactly once.
+                    snapshot_cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--snapshot-only', '--snapshot-out', str(asset_file), '--manifest-out', str(manifest_file), '--logs-dir', str(logs_dir), '--save', str(prod_file)]
+                    if args.config_file:
+                        snapshot_cmd += ['--config-file', args.config_file]
+                    if args.evaluation_manifest:
+                        snapshot_cmd += ['--evaluation-manifest', args.evaluation_manifest]
+                    if cache_p:
+                        snapshot_cmd += ['--timesfm-cache', str(cache_p)]
+                    prod = canonicalize_result(command_json(snapshot_cmd))
+                    production_asset = json.loads(asset_file.read_text())
+                    manifest = json.loads(manifest_file.read_text())
+                    production_config = prod['config']
+                    report['production_backtest_config'] = production_config
+                    base_file.write_text(json.dumps(production_config, indent=2))
+                    cs_file = opt_dir / f'current_sessions_{ticker}.json'
+                    cs_file.write_text(json.dumps({**production_asset, 'ticker':ticker, 'sessions':production_asset.get('sessions') or {}, 'mlGateEnabled':production_asset.get('mlGateEnabled') is True}, indent=2))
+                    prop = {}
+                    if not args.skip_hyperopt:
+                        hp_out = opt_dir / f'{ticker}.json'
+                        hp_cmd = [str(VENV_PY), str(HYPEROPT), ticker, '--study-name', f'jarvis_{ticker}_weekly_protocol1{args.study_suffix}', '--n-trials', str(n_trials), '--n-startup', str(min(50, n_trials)), '--output', str(hp_out), '--evaluation-manifest', str(manifest_file), '--current-sessions', str(cs_file), '--base-config', str(base_file), '--log-dir', str(logs_dir)]
+                        if args.output_dir:
+                            hp_cmd += ['--storage', str(opt_dir / 'study.db')]
+                        if cache_p:
+                            hp_cmd += ['--timesfm-cache', str(cache_p)]
+                        r = subprocess.run(hp_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=9000)
+                        if r.returncode:
+                            raise RuntimeError(f'hyperopt exit {r.returncode}: {(r.stderr or r.stdout)[-500:]}')
+                        prop = json.loads(hp_out.read_text())
+                        report['best_config'] = prop.get('best_config') or {}
+                        report['objective_comparison'] = prop.get('objective_comparison')
+                        report['session_apply'] = sessions_apply_map(report['best_config'])
+                        if cache_p and 'minScoreToOverrideReject' in (prop.get('best_params') or {}):
+                            report['timesfm_apply'] = {'minScoreToOverrideReject': prop['best_params']['minScoreToOverrideReject']}
+                    if not args.skip_aux:
+                        selectors = []
+                        if TRIGGER_TUNE_ENABLED:
+                            selectors.append(('trigger_tune', PER_TRIGGER_TUNE, ['--budget', str(trigger_budget), '--concurrency', '1' if args.verification else '2']))
+                        selectors += [('ks_proposal', KS_TUNE, []), ('directional_mcl', REPO/'scripts/directional_mcl_tune.ts', []), ('bias_confluence', BIAS_CF_TUNE, [])]
+                        if LOSER_TRIGGERS_ENABLED:
+                            selectors.append(('loser_triggers', LOSER_TRIGGERS_PROPOSAL, []))
+                        if SIZING_PROPOSAL_ENABLED:
+                            selectors.append(('sizing_proposal', SIZING_PROPOSAL, []))
+                        for key, script, extra in selectors:
+                            save_file = opt_dir / f'{key}_{ticker}.json'
+                            cmd = selection_command(script, ticker, manifest_file, asset_file, logs_dir, '--backtest-config-file', base_file, '--save', save_file, *extra)
+                            if key == 'sizing_proposal':
+                                if args.trades_file:
+                                    cmd += ['--trades-file', args.trades_file]
+                                elif args.config_file:
+                                    empty = opt_dir / f'journal_{ticker}.json'
+                                    empty.write_text('[]')
+                                    cmd += ['--trades-file', str(empty)]
+                                else:
+                                    cmd += ['--allow-journal-read']
+                            try:
+                                selected = command_json(cmd, timeout=14400)
+                                report[key] = selected
+                                if key == 'trigger_tune':
+                                    report['session_apply'] = selected.get('sessions') or {}
+                                    report['session_apply_replace'] = True
+                            except Exception as e:
+                                report[key + '_error'] = str(e)[:500]
+                    candidate_file = opt_dir / f'final_backtest_{ticker}.json'
+                    def evaluate(candidate):
+                        candidate_file.write_text(json.dumps(candidate, indent=2))
+                        cmd = ['npx', 'tsx', str(EVAL_PROD), ticker, '--evaluation-manifest', str(manifest_file), '--config-file', str(asset_file), '--backtest-config-file', str(candidate_file), '--logs-dir', str(logs_dir), '--save', str(opt_dir/f'final_result_{ticker}.json')]
+                        if cache_p:
+                            cmd += ['--timesfm-cache', str(cache_p)]
+                        return canonicalize_result(command_json(cmd))
+                    certify_report(report, production_config, production_asset, prod, manifest, evaluate, montecarlo=run_montecarlo_gate)
+                    selection_errors = [k for k in report if k.endswith('_error') and k != 'timesfm_cache_error']
+                    if selection_errors:
+                        report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False)
+                    report['dsr'] = run_dsr_gate(ticker, report.get('final_validation_r') or [], prop.get('n_trials') or 0)
+                    if DSR_ENFORCE and report['status'] == 'RECOMMEND' and report['dsr'].get('verdict') == 'BELOW':
+                        report['status'] = 'HOLD_DSR'
+                    if not args.skip_ml:
+                        ml_config = dict(production_config)
+                        ml_config.pop('mlGate', None)
+                        ml_config_file = opt_dir / f'ml_unfiltered_config_{ticker}.json'
+                        ml_config_file.write_text(json.dumps(ml_config, indent=2))
+                        ml_cmd = [str(VENV_PY), str(HERE/'train_ml_weekly.py'), '--tickers', ticker, '--dry-run', '--evaluation-manifest', str(manifest_file), '--config', str(ml_config_file), '--log-dir', str(logs_dir), '--output-dir', str(opt_dir/'ml_candidates')]
+                        ml = subprocess.run(ml_cmd, cwd=str(REPO), capture_output=True, text=True, timeout=10800)
+                        report['ml_training'] = {'dry_run': True, 'exit_code': ml.returncode, 'output': (ml.stdout or ml.stderr)[-2000:]}
+                        if ml.returncode not in (0, 2):
+                            report.update(status='HOLD_ML_ERROR', apply_eligible=False)
+                    if not args.skip_telemetry:
+                        report['shadow_week'] = shadow_week(ticker)
+                    report['selection_outcome'] = 'evaluated'
+                    saved = save_success(state_path, report, candle_ms, validate_certified_report,
+                                         expected_asset_fingerprint=report.get('production_asset_fingerprint'))
+                    if saved is None:
+                        report['selection_outcome'] = 'failed'
+                        if report['status'] in ('HOLD', 'RECOMMEND', 'HOLD_MC', 'HOLD_DSR'):
+                            report.update(status='HOLD_SELECTION_ERROR', apply_eligible=False,
+                                          reason='selection incomplete or missing valid evaluation evidence; successful checkpoint unchanged')
+                    else:
+                        report['successful_selection_watermark'] = saved['watermark']
         except Exception as e:
+            reused_in_cycle = False
             report.update(status='ERROR', selection_outcome='failed', apply_eligible=False, reason=str(e)[:1000])
             print(f'ERROR {ticker}: {e}', flush=True)
-        if report.get('selection_outcome') == 'failed':
-            report['application'] = {'status': 'BLOCKED', 'at': report['timestamp'],
-                                    'reason': 'Evaluación fallida; no aplicación'}
-        atomic_json(reports_dir/f'{ticker}.json', report)
-        if weekly_rollout_allowed(args) and selection_ran and report.get('selection_outcome') == 'evaluated':
-            deployment = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=False),
-                                        cwd=str(REPO), capture_output=True, text=True, timeout=300)
-            print(f"{ticker} aplicación: {(deployment.stdout or deployment.stderr)[-1500:]}", flush=True)
-            if deployment.returncode:
-                # A deployment error may occur after commit. Preserve the file/state
-                # written by the applicator and mark the cycle failed, never claim no write.
-                report = json.loads((reports_dir/f'{ticker}.json').read_text())
-                report['deployment_error'] = (deployment.stderr or deployment.stdout)[-1000:]
-                (reports_dir/f'{ticker}.json').write_text(json.dumps(report, indent=2, allow_nan=False, default=str))
-                report['status'] = 'ERROR'
+        if not reused_in_cycle:
+            if report.get('selection_outcome') == 'failed':
+                report['application'] = {'status': 'BLOCKED', 'at': report['timestamp'],
+                                        'reason': 'Evaluación fallida; no aplicación'}
+            if cycle_identity:
+                report.update(cycle_identity)
+            atomic_json(reports_dir/f'{ticker}.json', report)
+            if weekly_rollout_allowed(args) and selection_ran and report.get('selection_outcome') == 'evaluated':
+                deployment = subprocess.run(weekly_rollout_command(ticker, reports_dir, followup_only=False),
+                                            cwd=str(REPO), capture_output=True, text=True, timeout=300)
+                print(f"{ticker} aplicación: {(deployment.stdout or deployment.stderr)[-1500:]}", flush=True)
+                if (reports_dir/f'{ticker}.json').exists():
+                    try:
+                        report = json.loads((reports_dir/f'{ticker}.json').read_text())
+                    except Exception:
+                        pass
+                if deployment.returncode:
+                    report['deployment_error'] = (deployment.stderr or deployment.stdout)[-1000:]
+                    atomic_json(reports_dir/f'{ticker}.json', report)
+                    report['status'] = 'ERROR'
+                elif (report.get('application') or {}).get('status') == 'APPLIED':
+                    save_success(state_path, report, candle_ms, validate_certified_report,
+                                 expected_asset_fingerprint=report.get('final_asset_fingerprint'))
         summary.append((ticker, report['status']))
         cycle_outcomes.append({'ticker': ticker, 'timestamp': report['timestamp'],
                                'outcome': report.get('selection_outcome', 'failed'),
                                'status': report['status'], 'reason': report.get('reason'),
                                'deployment_error': report.get('deployment_error')})
         write_cycle_summary()
-        if report['status'] not in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR'):
+        if report['status'] not in ('ERROR', 'HOLD_SELECTION_ERROR', 'HOLD_INTEGRITY', 'HOLD_ML_ERROR') and not report.get('deployment_error'):
             done.add(ticker)
         atomic_json(progress_file, {**cycle_identity, 'started_at': started_at, 'done': sorted(done)})
         print(f"{ticker}: {report['status']} | prospective_certified=False | weekly_rollout={weekly_rollout_allowed(args)}", flush=True)
@@ -868,6 +1029,16 @@ def main() -> int:
     write_cycle_summary(completed=True)
     if errors:
         return 1
+    if LOSER_TRIGGERS_ENABLED and not args.config_file and not args.wfa_shadow:
+        try:
+            aggregate_loser_triggers_proposal(reports_dir, tickers, cycle_identity)
+        except Exception as e:
+            print(f'warn: loser_triggers aggregation failed: {e}', flush=True)
+    if not args.config_file and not args.output_dir:
+        try:
+            prune_unreferenced_snapshots(snapshots_root, reports_dir, keep_run_tag=run_tag)
+        except Exception as e:
+            print(f'warn: snapshot retention prune skipped: {e}', flush=True)
     progress_file.unlink(missing_ok=True)
     return 0
 

@@ -8,6 +8,7 @@ import { db } from '../firebase';
 import { useToast } from './Toast';
 import { Rocket, RefreshCw, Clock, HeartPulse } from 'lucide-react';
 import { reportScope, reportMetrics, metricDelta, pnlChangeLabel, reportVerdict, isFreshReport, filterEvidence, activationRecommendation, reportSummary, reportPlainDetail } from '../services/periodicOptPresentation';
+import { describeReportCycleState } from './periodicOptStatus';
 
 // ─── Tipos de los reportes del Centro de Optimización (opt_reports) ────────────
 interface OosMetrics {
@@ -273,7 +274,7 @@ export default function PeriodicOptPanel() {
     const [assetEnabled, setAssetEnabled] = useState<Record<string, boolean>>({});
     const [promoting, setPromoting] = useState<string | null>(null);
     const [exitApplying, setExitApplying] = useState<string | null>(null);
-    const [appliedExitPolicies, setAppliedExitPolicies] = useState<Record<string, string>>({});
+    const [, setAppliedExitPolicies] = useState<Record<string, string>>({});
     const [loserApplied, setLoserApplied] = useState<Record<string, number>>({});
     const [mlMonitorRefs, setMlMonitorRefs] = useState<Record<string, MonitorReference>>({});
 
@@ -429,8 +430,9 @@ export default function PeriodicOptPanel() {
     const toggleCorrFilter = async (ticker: string, on: boolean) => {
         const ev = corrEvals[ticker];
         const delta = (Number(ev?.blk?.usd) || 0) + (Number(ev?.rp?.usd) || 0);
-        const advice = on ? activationRecommendation(ev?.evaluatedAt, ev?.n, delta) : filterEvidence(ev?.evaluatedAt, ev?.n);
-        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, on ? { actionable: advice.recommend, reason: advice.reason } : advice,
+        const onAdvice = activationRecommendation(ev?.evaluatedAt, ev?.n, delta);
+        const offAdvice = filterEvidence(ev?.evaluatedAt, ev?.n);
+        if (!confirmAction(`Filtro correlación ${on ? 'ON' : 'observa'} — ${ticker}`, on ? { actionable: onAdvice.recommend, reason: onAdvice.reason } : offAdvice,
             `correlationFilter.shadow=${!on}. ${on ? 'Bloquea y aplica risk-parity' : 'Solo observa'}.`)) return;
         try {
             await setDoc(doc(db, 'asset_configs', ticker), { correlationFilter: { shadow: !on } }, { merge: true });
@@ -529,9 +531,12 @@ export default function PeriodicOptPanel() {
                 {' '}La selección del optimizador y los contrafactuales no son garantía de rendimiento futuro ni confirman recepción del bot.
             </p>
             {stateError && <div role="alert" style={{ color: '#ffaa00' }}>{stateError}</div>}
-            <div>Reportes vigentes (≤8 días y active_tickers): {reports.filter(r => reportScope(r, activeList).current).length}.
-                {' '}Candidatas de investigación vigentes: {reports.filter(r => reportScope(r, activeList).current && r.status === 'RECOMMEND').length}.
-                {' '}Los históricos quedan excluidos de este recuento.</div>
+            <div>Reportes vigentes (≤8 días y active_tickers): {reports.filter(r => reportScope(r, activeList).current).length}
+                {' '}(evaluaciones nuevas: {reports.filter(r => describeReportCycleState(r as any, activeList).kind === 'evaluated').length},
+                {' '}sin re-optimizar por datos iguales: {reports.filter(r => describeReportCycleState(r as any, activeList).kind === 'skipped').length},
+                {' '}parciales/errores: {reports.filter(r => describeReportCycleState(r as any, activeList).kind === 'partial_or_error').length},
+                {' '}históricos/vencidos: {reports.filter(r => describeReportCycleState(r as any, activeList).kind === 'historical').length}).
+                {' '}Candidatas de investigación vigentes: {reports.filter(r => reportScope(r, activeList).current && r.status === 'RECOMMEND').length}.</div>
 
             {/* 🩺 Health-check del sistema (health_check/latest) */}
             {health && (
@@ -570,9 +575,13 @@ export default function PeriodicOptPanel() {
                 const metrics = reportMetrics(r);
                 const snapshot = configMetadata[r.ticker]?.currentSnapshot as any;
                 const trading = snapshot?.enabled === true && !String(snapshot?.disabledReason || '').trim();
+                const cycleState = describeReportCycleState(r as any, activeList);
                 return (
                 <div key={`${r.ticker}:${r.timestamp}`} style={{ ...card, borderLeft: `4px solid ${reportSummary(r.status, reportScope(r, activeList).current, trading).color}` }}>
-                    <div style={{ color: reportScope(r, activeList).current ? '#aaa' : '#ffaa00', marginBottom: 8 }}>{reportScope(r, activeList).label}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                        <span style={{ color: reportScope(r, activeList).current ? '#aaa' : '#ffaa00' }}>{reportScope(r, activeList).label}</span>
+                        <span title={cycleState.detail} style={{ ...badge, color: cycleState.color, borderColor: cycleState.color }}>{cycleState.badge}</span>
+                    </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                         <h3 style={{ margin: 0, color: '#e6e6e6', fontSize: '1.1rem' }}>{r.ticker}</h3>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

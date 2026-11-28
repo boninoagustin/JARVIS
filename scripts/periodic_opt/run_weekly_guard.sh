@@ -89,11 +89,12 @@ case "$MODE" in
     ;;
   --check)
     echo "semana: $WEEK"
+    echo "plan: $PLAN_ACTION"
     echo "marca: $( [ -f "$MARK" ] && cat "$MARK" 2>/dev/null || echo '(ninguna)' )$( [ "$FORCE" = "1" ] && echo ' (ignorada por --force)' )"
     echo "scout: $(scout_state)"
     echo "lock: $( cmp -s /dev/null /dev/null && ( exec 8>"$LOCK"; if flock -n 8; then echo libre; else echo ocupado; fi ) )"
     if mark_is_current; then echo "decisión: skip (marca)"; else
-      if scout_is_running; then echo "decisión: esperaría al scout"; else echo "decisión: correría"; fi
+      if scout_is_running; then echo "decisión: esperaría al scout ($PLAN_ACTION)"; else echo "decisión: correría ($PLAN_ACTION)"; fi
     fi
     exit 0
     ;;

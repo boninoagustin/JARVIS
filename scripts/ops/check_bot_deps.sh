@@ -37,6 +37,10 @@ scripts/periodic_opt/run_detection_health.sh
 scripts/periodic_opt/tune_run_wrapper.sh
 scripts/periodic_opt/chain_mark_and_tune.sh
 scripts/periodic_opt/recover_tune_pending.sh
+scripts/periodic_opt/run_scout_guard.sh
+scripts/periodic_opt/snapshot_isolation.py
+scripts/periodic_opt/weekly_cycle_state.py
+scripts/history_lock.ts
 scripts/blocked_signals_eval.ts
 scripts/corr_gate_eval.ts
 scripts/exits_gate_eval.ts

@@ -1,9 +1,8 @@
 #!/bin/bash
-# Health de detección de TODO el pool (todos los tickers con history/): evalúa el baseline
+# Health de detección de TODO el pool (active_tickers ∪ logs/*/history): evalúa el baseline
 # actual de cada uno y escribe Firestore detection_health/{ticker} (lo lee el panel).
-# Sin búsqueda (rápido, ~30-60s/ticker) — la optimización va a demanda vía el panel/Kronos.
 export PATH="/root/.nvm/versions/node/v24.19.0/bin:$PATH"
-cd /opt/JARVIS
+cd /opt/JARVIS || exit 1
 
 exec 9>"/tmp/detection_health.lock"
 flock 9
@@ -13,29 +12,36 @@ if [ -n "$BOTPID" ]; then
   echo -1000 > "/proc/$BOTPID/oom_score_adj" 2>/dev/null
 fi
 
-# Pool = todos los directorios de logs/ con history (excluye test/tickerfake).
-# HEALTH_POOL permite acotarlo en tests.
+DEFAULT_HEALTH_CMD="npx tsx scripts/periodic_opt/smc_detection_search.ts"
+HEALTH_CMD="${HEALTH_CMD:-$DEFAULT_HEALTH_CMD}"
+
 POOL="${HEALTH_POOL:-}"
 if [ -z "$POOL" ]; then
+  POOL_TMP=""
   for d in logs/*/history; do
     t=$(basename "$(dirname "$d")")
-    case "$t" in test|tickerfake) continue;; esac
-    [ -f "$d/history_M15.csv" ] && POOL="$POOL ${t^^}"
+    case "$t" in test|tickerfake|_scout) continue ;; esac
+    [ -f "$d/history_M15.csv" ] && POOL_TMP="$POOL_TMP ${t^^}"
   done
+  ACTIVE_JSON=$(npx tsx scripts/periodic_opt/get_active_tickers.ts 2>/dev/null || echo "")
+  ACTIVE_LIST=$(printf '%s\n' "$ACTIVE_JSON" | jq -r '.tickers[]? // empty' 2>/dev/null || echo "")
+  POOL=$(printf '%s\n%s\n' $POOL_TMP $ACTIVE_LIST | awk 'NF && !seen[$0]++' | sort | tr '\n' ' ')
 fi
-echo "Pool de salud:$(echo "$POOL" | tr ' ' '\n' | sort | tr '\n' ' ')"
+echo "Pool de salud:$(echo "$POOL" | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')"
 
 ERRLOG="${HEALTH_ERRLOG:-/tmp/detection_health_errors.log}"
-# HEALTH_CMD permite inyectar un comando falso en tests (sin Firestore ni velas).
-HEALTH_CMD="${HEALTH_CMD:-npx tsx scripts/periodic_opt/smc_detection_search.ts}"
-# H07: si algún activo no deja HEALTH_SAVED (Firestore caído, OOM, sin resultado), el job
-# termina != 0 para que systemd NO dispare las propuestas (risk/shutdown/roster --write).
 FAILED=0
 for t in $POOL; do
   echo "=== $(date +%H:%M:%S) HEALTH $t ==="
-  # 03-nov-2026: el stderr iba a /dev/null y un OOM por activo (AUDCAD) quedaba
-  # invisible: el panel mostraba SIN_DATOS sin explicación. Ahora se guarda por activo
-  # y, si no hubo HEALTH_, queda un HEALTH_FAIL en el resumen.
+  if [ "$HEALTH_CMD" = "$DEFAULT_HEALTH_CMD" ]; then
+    H_M15="logs/${t,,}/history/history_M15.csv"
+    if [ ! -s "$H_M15" ] || [ "$(wc -l < "$H_M15" 2>/dev/null || echo 0)" -lt 2 ]; then
+      echo "HEALTH_FAIL $t (sin $H_M15 válido; ver $ERRLOG)"
+      echo "--- $t $(date +%H:%M:%S) missing_or_empty $H_M15 ---" >> "$ERRLOG"
+      FAILED=$((FAILED+1))
+      continue
+    fi
+  fi
   OUT=$(NODE_OPTIONS="--max-old-space-size=2560" $HEALTH_CMD "$t" health 0 2>>"$ERRLOG")
   RC=$?
   echo "$OUT" | grep -a "HEALTH_"

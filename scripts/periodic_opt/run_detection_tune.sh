@@ -40,6 +40,14 @@ find /tmp -maxdepth 1 -name 'detection_tune_*.log' -mtime +1 -delete 2>/dev/null
 
 for t in $ROSTER; do
   echo "=== $(date +%H:%M:%S) TUNE $t ===" >> "$SUMMARY"
+  H_DIR="/opt/JARVIS/logs/${t,,}/history"
+  if [ ! -s "$H_DIR/history_M5.csv" ] || [ ! -s "$H_DIR/history_M15.csv" ] \
+     || [ "$(wc -l < "$H_DIR/history_M5.csv" 2>/dev/null || echo 0)" -lt 2 ] \
+     || [ "$(wc -l < "$H_DIR/history_M15.csv" 2>/dev/null || echo 0)" -lt 2 ]; then
+    echo "TUNE_FAILED: $t preflight=missing_or_empty_history" | tee -a "$SUMMARY"
+    FAILED=$((FAILED + 1))
+    continue
+  fi
   BEFORE=$(wc -l < "$SUMMARY")
   # Heap 2560: los trials no necesitan más (el pico real está en la generación del M5) y
   # evita el OOM que tumbó el sistema con heap 4096.
